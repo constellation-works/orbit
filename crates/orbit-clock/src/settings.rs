@@ -7,7 +7,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::path::home_dir;
 
-pub use crate::application::contracts::{
+pub use crate::clock_settings::{
     ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
     save_clock_settings,
 };

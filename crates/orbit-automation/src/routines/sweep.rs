@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-/// Cooperative budget for a host scheduler tick. The native manager supplies
-/// an independent hard ceiling for an operation that never returns.
-pub const TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Cooperative budget for a host scheduler tick, owned by the clock whose
+/// health judges an overdue tick against it [ORB-22688].
+pub use orbit_clock::TICK_DEADLINE;
 
 /// How many missed `skip` slots one tick records. Due math stays O(1); the
 /// cursor must not jump past a slot this pass did not record, so a longer

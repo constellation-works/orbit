@@ -1989,6 +1989,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "orbit-clock",
  "orbit-common",
  "orbit-store",
  "orbit-types",
@@ -2041,6 +2042,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "yaml_serde",
+]
+
+[[package]]
+name = "orbit-clock"
+version = "0.45.1"
+dependencies = [
+ "libc",
+ "orbit-common",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -2125,6 +2138,7 @@ dependencies = [
  "git2",
  "libc",
  "orbit-automation",
+ "orbit-clock",
  "orbit-common",
  "orbit-config",
  "orbit-core",

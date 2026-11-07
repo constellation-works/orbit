@@ -4,6 +4,7 @@ members = [
   "crates/orbit-auth",
   "crates/orbit-automation",
   "crates/orbit-cli",
+  "crates/orbit-clock",
   "crates/orbit-cmd",
   "crates/orbit-common",
   "crates/orbit-config",

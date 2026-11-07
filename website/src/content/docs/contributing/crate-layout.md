@@ -14,7 +14,8 @@ sidebar:
 | `orbit-core` | Runtime composition, default asset seeding, application use cases, and adapters. Provides the `OrbitRuntime` wrapper to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
 | `orbit-runtime` | Runtime kernel: stores, engine handles, policy and tool execution, audit, workspace binding, and host probes. Core wraps its `RuntimeKernel`; kernel callbacks reach application use cases through `ApplicationPort`, with no dependency back on Core. |
 | `orbit-config` | Owns `config.toml`: the fixed-key registry, workspace-over-global layering, source provenance, resolved views, comment-preserving edits, and default-config seeding. Depends only on `orbit-types` and `orbit-common`. |
-| `orbit-automation` | Scheduling for routines and auto-tasks: definition discovery and validation, due evaluation, overlap and retry coordination, and the shared before-PR review coverage rules. Depends only on `orbit-store`, `orbit-common`, and `orbit-types`. |
+| `orbit-automation` | Scheduling for routines and auto-tasks: definition discovery and validation, due evaluation, overlap and retry coordination, and the shared before-PR review coverage rules. Depends only on `orbit-store`, `orbit-clock` (for the tick budget), `orbit-common`, and `orbit-types`. |
+| `orbit-clock` | The host's sweep clock: `clock.toml` settings and the tick budget, launchd/systemd unit rendering and install, pause and resume, cadence, unit convergence and inspection, and clock health. Depends only on `orbit-common`, so it builds beside `orbit-store` rather than inside `orbit-core`. |
 | `orbit-registry` | This machine's identity, the logical workspace catalog, task-publication bindings, and the registered remote hosts, with validation and atomic file persistence. |
 | `orbit-web` | HTTP API, embedded dashboard UI, dashboard mutations, and the SSH web connection, built on Core and Registry. |
 | `orbit-engine` | Activity and job execution, template rendering, and retry. Owns the CLI agent subprocess runner, which uses `orbit-agent::{Agent, AgentConfig}` directly. |
@@ -51,6 +52,9 @@ flowchart LR
   Core --> Engine["orbit-engine"]
   Core --> Exec["orbit-exec"]
   Core --> Automation["orbit-automation"]
+  Core --> Clock["orbit-clock"]
+  Automation --> Clock
+  Clock --> Common
   Automation --> Store
   Automation --> Common["orbit-common"]
   Automation --> Types["orbit-types"]

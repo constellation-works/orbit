@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/init/**"
   - "crates/orbit-cli/src/command/mcp/**"
   - "crates/orbit-cli/src/command/clock/**"
-  - "crates/orbit-core/src/application/routines/clock/**"
+  - "crates/orbit-clock/**"
   - "crates/orbit-exec/src/**"
 related_features: [policy-sandbox, executors, routines]
 related_artifacts: []

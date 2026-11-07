@@ -7,7 +7,7 @@ use super::super::manager::{
     ClockCommandRunner, ClockPlatform, ManagerCommand, ManagerCommandOutput,
 };
 use super::super::status::{LaunchdHealthProbe, clock_status_with, doctor_clock_not_running_issue};
-use orbit_automation::routines::sweep::TICK_DEADLINE;
+use crate::TICK_DEADLINE;
 use orbit_common::OrbitError;
 
 struct Manager {

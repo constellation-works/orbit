@@ -12,6 +12,7 @@ stability = "internal"
 workspace = true
 
 [dependencies]
+orbit-clock = { path = "../orbit-clock" }
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-store = { path = "../orbit-store" }

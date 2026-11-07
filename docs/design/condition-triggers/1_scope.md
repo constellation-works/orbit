@@ -47,7 +47,7 @@ about missing predicates or edge state describe the motivation, not current gaps
   The only configurable predicate is `PreparationEligibility`, a fixed struct of
   statuses, required tags, excluded tags and task types.
 - **One clock and one store.** `orbit clock tick` runs once per
-  `cadence_seconds` (default 60, `crates/orbit-core/src/application/routines/clock/settings.rs`).
+  `cadence_seconds` (default 60, `crates/orbit-clock/src/clock_settings.rs`).
   It visits each registered owner checkout on the host
   (`crates/orbit-automation/src/routines/loader.rs`) and evaluates routines and
   auto-tasks under a 5-minute `TICK_DEADLINE`

@@ -16,7 +16,9 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::RoutineStoreBackend;
 
-pub mod clock;
+/// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
+/// path is kept for existing consumers.
+pub use orbit_clock as clock;
 mod leases;
 pub use orbit_automation::routines::due;
 pub mod loader;

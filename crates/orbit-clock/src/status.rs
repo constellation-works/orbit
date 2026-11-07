@@ -333,13 +333,12 @@ fn systemd_service_health(output: &str, now_usec: Option<u64>) -> SystemdService
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
         && let Some(elapsed) = now_usec.and_then(|now| now.checked_sub(start))
-        && std::time::Duration::from_micros(elapsed)
-            >= orbit_automation::routines::sweep::TICK_DEADLINE
+        && std::time::Duration::from_micros(elapsed) >= crate::TICK_DEADLINE
     {
         issues.push(format!(
             "tick has been running for {}s, exceeding its {}s deadline",
             elapsed / 1_000_000,
-            orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+            crate::TICK_DEADLINE.as_secs()
         ));
     }
     if let Some(result) =
@@ -907,8 +906,8 @@ fn launchd_doctor_activity_issue(status: &ClockStatus, global_root: &Path) -> Op
 fn sweep_log_tick_issue(global_root: &Path, cadence_seconds: u64) -> Option<String> {
     let path = super::install::sweep_log_path(global_root);
     let displayed = path.display().to_string();
-    let freshness_limit = std::time::Duration::from_secs(cadence_seconds)
-        .saturating_add(orbit_automation::routines::sweep::TICK_DEADLINE);
+    let freshness_limit =
+        std::time::Duration::from_secs(cadence_seconds).saturating_add(crate::TICK_DEADLINE);
     let meta = match std::fs::metadata(&path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -923,7 +922,7 @@ fn sweep_log_tick_issue(global_root: &Path, cadence_seconds: u64) -> Option<Stri
                 }
                 Ok(Some(_)) => Some(format!(
                     "{displayed} was rotated and has not been recreated within the {cadence_seconds}s tick interval plus the {}s tick deadline",
-                    orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+                    crate::TICK_DEADLINE.as_secs()
                 )),
                 Ok(None) => Some(format!("{displayed} has not been written")),
                 Err(error) => Some(format!(
@@ -946,7 +945,7 @@ fn sweep_log_tick_issue(global_root: &Path, cadence_seconds: u64) -> Option<Stri
     if age > freshness_limit {
         Some(format!(
             "{displayed} is older than the {cadence_seconds}s tick interval plus the {}s tick deadline",
-            orbit_automation::routines::sweep::TICK_DEADLINE.as_secs()
+            crate::TICK_DEADLINE.as_secs()
         ))
     } else {
         None

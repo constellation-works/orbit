@@ -122,7 +122,8 @@ source scan, enforces the runtime direction.
 | Kernel application port implementation | `crates/orbit-core/src/composition/application_port.rs` | — |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
-| Clock settings and schedule display state below `routines` | `crates/orbit-core/src/application/contracts/clock_settings.rs`, `contracts/schedule_display.rs` | [ORB-22623] |
+| Clock settings and schedule display state below `routines` | `crates/orbit-clock/src/clock_settings.rs` (re-exported from `contracts`), `crates/orbit-core/src/application/contracts/schedule_display.rs` | [ORB-22623], [ORB-22688] |
+| Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned port to the precedent consumer | `crates/orbit-core/src/application/task/precedent_decision_port.rs`, implemented in `precedent_decision/task_port.rs`; its records are in `contracts/precedent_assist.rs` | [ORB-22313] |
@@ -359,8 +360,9 @@ edges leave or enter it from outside the order:
 `routines` sits above `automation` and `auto_tasks` [ORB-22623]: the sweep
 calls automation's evaluation and the auto-task scheduler, and reaches `review`,
 `pull_drain` and the forecast. The clock settings `automation` reads for a
-condition hold's continuity limit are in `contracts::clock_settings`, the one
-contract that reads and writes a file, under a root its caller names. The
+condition hold's continuity limit are owned by the `orbit-clock` crate below
+Core [ORB-22688] and named through `contracts`, the one contract that reads and
+writes a file, under a root its caller names. The
 `ScheduleDisplayState` `auto_tasks` projects is in `contracts::schedule_display`.
 `routines::clock` and `routines::status` re-export them for outer consumers, a
 compatibility shim whose retirement is a follow-up. The guard checks direct
@@ -430,6 +432,7 @@ cut only the edges into `visual_delivery` from `task`, `job`, `review` and
 - [ORB-22416] — cut the distributed → experiment capture edge through `distributed::DistributedExperimentPort`, implemented by `experiment`, and guarded the direction.
 - [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
 - [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
+- [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
