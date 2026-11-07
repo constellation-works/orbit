@@ -350,8 +350,10 @@ impl TaskJobPort for OrbitRuntime {
 
     fn live_delivery_runs_carrying_task(&self, task_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         let delivery_jobs = self.task_delivery_job_ids()?;
+        // Ownership must consider every matching run: a live delivery can
+        // outlast arbitrarily many newer, unrelated completed jobs.
         let runs = self.list_job_runs(super::JobRunListParams {
-            limit: Some(200),
+            task_id: Some(task_id.to_string()),
             ..Default::default()
         })?;
         Ok(runs

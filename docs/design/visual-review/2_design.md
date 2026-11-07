@@ -160,7 +160,10 @@ refusal on that task.
   replace its own specification.
 - **Frozen per delivery.** `visual_capture` reads the mocks' digests at delivery admission,
   records them in `visual/capture.json`, and compares against those bytes. A mock replaced
-  during a delivery takes effect from the next delivery.
+  during a delivery takes effect from the next delivery. An explicit ship's frozen
+  admission identity remains owned by its live delivery at workflow admission, regardless
+  of how many newer unrelated runs have completed. Active retries keep that baseline;
+  once its delivery is terminal, a later delivery may freeze the replacement mock.
 - **Replacing a mock** is writing the same artifact path again. The artifact store keeps the
   replaced bytes' provenance, and `capture.json` names the digest compared, so a review can
   always be traced to the mock it used.
