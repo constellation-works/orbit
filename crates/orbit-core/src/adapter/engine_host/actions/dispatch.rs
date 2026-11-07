@@ -16,11 +16,8 @@ use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
-use crate::application::sweep_filing::rule_findings as rule_findings_filing;
 use crate::application::task::pilot as task_pilot;
-use crate::application::task::{
-    blocked_recovery, escalation_triage_steps, finding_verification_steps,
-};
+use crate::application::task::{blocked_recovery, escalation_triage_steps};
 use crate::application::workspace_auto;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
@@ -66,8 +63,6 @@ pub(crate) fn run_deterministic(
         deterministic_action,
         CoreDeterministicAction::PrepareTaskPilot
             | CoreDeterministicAction::ApplyTaskPilotResults
-            | CoreDeterministicAction::PrepareFindingVerification
-            | CoreDeterministicAction::ApplyFindingVerification
             | CoreDeterministicAction::PrepareEscalationTriage
     ) {
         crate::application::automation::members::require_claim_owner(
@@ -196,18 +191,6 @@ pub(crate) fn run_deterministic(
             dependabot_filing::file_dependabot_alert_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
-        // Keep one task per rule-result fingerprint from a results document
-        // any workspace script wrote; surface-agnostic by schema.
-        // Read-only owner context: the defect groups open owners track, so
-        // the producer reports every observation of those groups.
-        CoreDeterministicAction::PrepareRuleFindings => {
-            rule_findings_filing::prepare_rule_findings(runtime)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
-        }
-        CoreDeterministicAction::FileRuleFindings => {
-            rule_findings_filing::file_rule_findings(runtime, input, owner_run_id(&tool_context))
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
-        }
         // Attach an earlier script step's verified output files to a task,
         // by the set the dispatching run's own checkpoint holds.
         CoreDeterministicAction::AttachScriptFiles => {
@@ -274,20 +257,6 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
-        // Select and assign review findings to verifiers, then record each
-        // validated verdict; both run at one pinned source revision.
-        CoreDeterministicAction::PrepareFindingVerification => finding_verification_steps::prepare(
-            runtime,
-            action,
-            input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
-        ),
-        CoreDeterministicAction::ApplyFindingVerification => finding_verification_steps::apply(
-            runtime,
-            action,
-            input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
-        ),
         // Select the held pilot assessments an escalation triage run reads
         // and draw each one's hard-tier triager; the triager records its own
         // decision through `orbit.task.block_triage`.
@@ -295,24 +264,8 @@ pub(crate) fn run_deterministic(
             runtime,
             action,
             input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
+            step_run_id(owner_run_id(&tool_context), input),
         ),
-        // Freeze this pass's measured candidates, then apply advisory drafts
-        // as proposed tasks. The owning run, never input, binds the workspace.
-        CoreDeterministicAction::EvolutionRank | CoreDeterministicAction::EvolutionApply => {
-            let run_id = owner_run_id(&tool_context).ok_or_else(|| {
-                DispatchError::action_failed(action, "evolution step needs its owning run")
-            })?;
-            let result = if deterministic_action == CoreDeterministicAction::EvolutionRank {
-                runtime.rank_evolution_pass(run_id)
-            } else {
-                runtime.apply_evolution_pass(
-                    run_id,
-                    input.get("proposals").cloned().unwrap_or(Value::Null),
-                )
-            };
-            result.map_err(|error| DispatchError::action_failed(action, error.to_string()))
-        }
         // Take the resident cycle lease for this run's mandate (recovering a
         // dead predecessor) and build the brief; then close the cycle. The run
         // is the trusted reservation owner, never step input.
@@ -589,4 +542,17 @@ fn reconciliation_step(
     result: Result<Value, orbit_common::OrbitError>,
 ) -> Result<Value, DispatchError> {
     result.map_err(|error| DispatchError::action_failed(action, error.to_string()))
+}
+
+/// The run a deterministic action executes for: the reservation owner the
+/// dispatcher passes, else the run id the engine put in its input.
+fn step_run_id<'a>(owner: Option<&'a str>, input: &'a Value) -> Option<&'a str> {
+    owner
+        .or_else(|| {
+            ["job_run_id", "run_id"]
+                .into_iter()
+                .find_map(|key| input.get(key).and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
 }

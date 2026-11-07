@@ -1273,7 +1273,8 @@ The **Reviewers** tab ranks the reviewers of the review gate, and the review
 jobs that file findings as tasks, by how their verdicts turned out. A reviewer
 earns for findings and fixes that held: fixes that passed revalidation, open
 findings on a reject whose cited files the next run changed, and filed
-findings that finding verification confirmed, each weighted by severity. It
+findings that finding verification confirmed (recorded before that job was
+removed), each weighted by severity. It
 loses for findings that were disposed or rejected by verification, for false
 rejects (the next run changed none of the cited files and the next review
 accepted), for fixes that failed revalidation, for `review_missed` regressions

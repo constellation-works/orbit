@@ -235,14 +235,10 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
     ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
-        if let Some(hold) = self.unverified_finding_hold_in(task, history)? {
-            return Ok(Some(PilotAdmissionHold::UnverifiedFinding(hold)));
-        }
         // [ORB-21238] An operator's `no-pilot` skip bypasses stale assessments
         // and ordinary pilot findings. A current host-operational hold is
         // checked below first because skipping a pilot cannot resolve the
-        // owner-side condition it recorded. The unverified finding above is a
-        // review gate, not an assessment, and still holds.
+        // owner-side condition it recorded.
         let material = validation_material(task);
         let mut legacy_override = false;
         // Atomic pilot application persists the full assessment in a

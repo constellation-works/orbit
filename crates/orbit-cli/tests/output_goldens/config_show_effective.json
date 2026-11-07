@@ -889,41 +889,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "resident.evolution.max_proposals": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.min_cost_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.min_distinct_cycles": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.min_distinct_mandates": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.min_occurrences": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "resident.evolution.window_days": {
       "scope": "built-in",
       "state": "default",
@@ -1015,13 +980,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "review.verify_findings": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "runtime.log_max_file_mb": {
       "scope": "built-in",
       "state": "default",
@@ -1068,48 +1026,6 @@
       "scope": "built-in",
       "state": "unset",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.disabled": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.file_at": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.max_new_tasks": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.runner": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.surfaces": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ux_rules.ui_base_url": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

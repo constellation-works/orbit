@@ -47,10 +47,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/apply_blocked_task_recovery.yaml"),
     ),
     (
-        "apply_finding_verification",
-        include_str!("../../orbit-core/assets/activities/apply_finding_verification.yaml"),
-    ),
-    (
         "apply_task_pilot_results",
         include_str!("../../orbit-core/assets/activities/apply_task_pilot_results.yaml"),
     ),
@@ -125,14 +121,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "file_dependabot_alert_tasks",
         include_str!("../../orbit-core/assets/activities/file_dependabot_alert_tasks.yaml"),
-    ),
-    (
-        "prepare_rule_findings",
-        include_str!("../../orbit-core/assets/activities/prepare_rule_findings.yaml"),
-    ),
-    (
-        "file_rule_findings",
-        include_str!("../../orbit-core/assets/activities/file_rule_findings.yaml"),
     ),
     (
         "attach_script_files",
@@ -255,18 +243,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
     (
-        "evolution_rank",
-        include_str!("../../orbit-core/assets/activities/evolution_rank.yaml"),
-    ),
-    (
-        "evolution_draft",
-        include_str!("../../orbit-core/assets/activities/evolution_draft.yaml"),
-    ),
-    (
-        "evolution_apply",
-        include_str!("../../orbit-core/assets/activities/evolution_apply.yaml"),
-    ),
-    (
         "resident_observe",
         include_str!("../../orbit-core/assets/activities/resident_observe.yaml"),
     ),
@@ -281,10 +257,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "prepare_escalation_triage",
         include_str!("../../orbit-core/assets/activities/prepare_escalation_triage.yaml"),
-    ),
-    (
-        "prepare_finding_verification",
-        include_str!("../../orbit-core/assets/activities/prepare_finding_verification.yaml"),
     ),
     (
         "prepare_task_pilot",
@@ -339,10 +311,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/validate_bundles.yaml"),
     ),
     (
-        "verify_finding",
-        include_str!("../../orbit-core/assets/activities/verify_finding.yaml"),
-    ),
-    (
         "worktree_setup",
         include_str!("../../orbit-core/assets/activities/worktree_setup.yaml"),
     ),
@@ -386,24 +354,12 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
     ),
     (
-        "ux_rules_pipeline",
-        include_str!("../../orbit-core/assets/jobs/ux_rules_pipeline.yaml"),
-    ),
-    (
-        "evolution_pass_pipeline",
-        include_str!("../../orbit-core/assets/jobs/evolution_pass_pipeline.yaml"),
-    ),
-    (
         "resident_cycle_pipeline",
         include_str!("../../orbit-core/assets/jobs/resident_cycle_pipeline.yaml"),
     ),
     (
         "escalation_triage_pipeline",
         include_str!("../../orbit-core/assets/jobs/escalation_triage_pipeline.yaml"),
-    ),
-    (
-        "finding_verification_pipeline",
-        include_str!("../../orbit-core/assets/jobs/finding_verification_pipeline.yaml"),
     ),
     (
         "review_evidence_fulfilment_pipeline",

@@ -259,8 +259,8 @@ rated it (`filer`, `verified`, `operator`, `backfill`, `default`). The screened
 `orbit.task.add` and `orbit.task.update` writes require `severity` on a new
 classified link; a link the task already holds may be re-sent without one and
 keeps its recorded rating. A severity given alone records source `filer`, and
-only finding verification records `verified`, when it confirms the finding
-that carries the link. A classified link stored before severity existed reads
+only finding verification recorded `verified`, when it confirmed the finding
+that carries the link (that job was removed in [ORB-22844]; older links keep it). A classified link stored before severity existed reads
 as `medium` with source `default`, and is written back that way. Binaries
 before this field refuse a payload that carries it (the payload is
 `deny_unknown_fields`), so hosts sharing a store upgrade together.

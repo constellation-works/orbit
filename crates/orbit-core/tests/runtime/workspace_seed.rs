@@ -767,8 +767,8 @@ crate::scenario_table!(
 );
 
 /// Blocked-task triage is retired: a fresh workspace seeds no
-/// `blocked_task_triage` routine while its sibling pilot-warning routine still
-/// seeds, and a full sync retires an unedited copy an earlier release wrote
+/// `blocked_task_triage` routine, nor its sibling pilot-warning routine since
+/// [ORB-22844], and a full sync retires an unedited copy an earlier release wrote
 /// instead of keeping a routine on the retired `block_escalated` trigger.
 #[test]
 fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_sync() {
@@ -781,8 +781,8 @@ fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_
         "a fresh workspace seeds no blocked-task triage routine"
     );
     assert!(
-        catalog.join("pilot_warning_triage.yaml").exists(),
-        "pilot-warning triage still seeds"
+        !catalog.join("pilot_warning_triage.yaml").exists(),
+        "a fresh workspace seeds no pilot-warning triage routine"
     );
 
     let earlier = include_str!("../../assets/routines/retired/blocked_task_triage.yaml");

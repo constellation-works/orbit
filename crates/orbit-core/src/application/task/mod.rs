@@ -37,7 +37,6 @@ pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
-pub(crate) mod finding_verification_steps;
 mod grants;
 mod handoff_claim;
 mod helpers;
@@ -143,14 +142,13 @@ pub use final_recovery::{
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
 };
 pub(crate) use finding_verification::{
-    AnalyzedFinding, InvalidFinding, UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite,
-    VerifierAssignment, crew_named_by, finding_fingerprint, latest_verification,
-    needs_verification, next_tier,
+    AnalyzedFinding, InvalidFinding, VerdictWrite, crew_named_by, finding_fingerprint,
+    latest_verification,
 };
 pub use finding_verification::{
     FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence, FindingRejection, FindingVerdict,
     FindingVerification, REVIEW_FINDING_TAGS, RejectionReason, VerdictConfidence, VerdictSource,
-    VerifierReport, VerifierVerdict, is_review_finding,
+    VerifierVerdict, is_review_finding,
 };
 use job_port::CrewPools;
 pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};

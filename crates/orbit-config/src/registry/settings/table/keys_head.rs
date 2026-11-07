@@ -435,13 +435,6 @@ macro_rules! assemble_config_settings {
         detail: "Never applies to an unreadable path diff.",
         resolve: |raw: Option<String>| operation::selective_unknown_risk_parse(raw.as_deref().unwrap_or("review")).map(|value| value.as_str().to_string()),
     },
-    review_verify_findings: bool => bool {
-        key: "review.verify_findings", value_type: "bool",
-        description: "Refuse approval until a review-filed bug has a confirmed verification.",
-        section: ConfigSection::Review, order: 40,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     retention_audit_days: u32 => u32 {
         key: "retention.audit_days", value_type: "integer",
         description: "Days orbit gc audit keeps command and run audit rows.",

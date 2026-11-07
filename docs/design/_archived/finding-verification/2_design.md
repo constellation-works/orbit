@@ -3,18 +3,28 @@ title: Finding Verification — Design
 owner: claude
 last_updated: 2026-11-07
 last_validated: 2026-11-05
-status: Implemented
+status: Deprecated
 feature: finding-verification
 doc_role: design
 type: design
 summary: How review findings are rejected by the task pilot or the implementer by default, and how the opt-in finding_verification_pipeline selects them, draws verifier crews from the complexity pools, validates and records verdicts, escalates doubtful ones, and gates promotion and drain admission.
 tags: [finding-verification, review, automation, admission]
-paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/application/task/finding_verification_steps/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
 related_artifacts: [ORB-15662]
 ---
 
 # Finding Verification — Design
+
+Retired in [ORB-22844] (2026-11-07): the `finding_verification` routine was removed with
+its `finding_verification_pipeline` job and the `prepare_finding_verification`,
+`verify_finding` and `apply_finding_verification` activities. No verifier crew judges review
+findings any more, and the `unverified_review_finding` hold on approval, promotion and drain
+admission is gone. `finding_unverified` loads as a retired trigger kind that observes nothing,
+and `review.verify_findings` loads with a deprecation warning and is ignored until 2026-12-07.
+The default rejection routes stay: the task pilot's `finding_invalid` result and an
+implementer's `finding-invalid.json` still reject an invalid review finding with a REJECTED
+verdict, recorded as `finding_rejected` history and shown by `orbit task show`. Verdicts the
+removed job wrote still load. The text below is the record of the design as it stood.
 
 This doc covers the current implementation: which tasks are findings, the
 job, the verdict schema and how it is recorded, crew selection and
@@ -72,7 +82,7 @@ A verifier returns one **report** per task:
 | `task_id` | string | Matches a task of the partition. |
 | `verdict` | `CONFIRMED` \| `REJECTED` | Required. |
 | `confidence` | `high` \| `medium` \| `low` | Required. |
-| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. Records written by the retired visual review's in-line verifier ([visual-review §11.2](../_archived/visual-review/2_design.md#112-verification)) may cite an image region, `<image>#<x>,<y>,<w>,<h>`, instead; they still load, but a new report must cite `path:line` [ORB-22807]. |
+| `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. Records written by the retired visual review's in-line verifier ([visual-review §11.2](../visual-review/2_design.md#112-verification)) may cite an image region, `<image>#<x>,<y>,<w>,<h>`, instead; they still load, but a new report must cite `path:line` [ORB-22807]. |
 | `reasoning` | string | Non-empty. |
 | `reproduction` | string? | Optional. |
 | `severity` | `critical` \| `high` \| `medium` \| `low` \| `nit` | Required for CONFIRMED. |

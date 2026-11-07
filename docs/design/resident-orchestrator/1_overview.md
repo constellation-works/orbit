@@ -91,8 +91,9 @@ resident that quietly works around a gap hides it. The evolution loop
 - **Escalation** — a question the resident must not answer itself, raised to the human through the
   decision channel ([2_design.md §8](./2_design.md#8-escalation)).
 - **Cost event and evolution record** — a structured note of a workaround or manual step, and the
-  per-signature record that counts them across residents for the evolution pass
-  ([specs/evolution-ledger.md](./specs/evolution-ledger.md)).
+  per-signature record that counts them across residents; the manager digest reads them
+  ([specs/evolution-ledger.md](./specs/evolution-ledger.md)). The evolution pass that turned
+  records into proposals was removed in [ORB-22844].
 
 Terms are defined in [references/glossary.md](./references/glossary.md).
 
@@ -108,7 +109,7 @@ Planned code locations are in [2_design.md §12](./2_design.md#12-placement-in-t
 | Fires, the cycle job, authority-scoped tools | [2_design.md §4–§5](./2_design.md#4-lifecycle) | [ORB-21244] |
 | Manager ↔ resident channel, control, `resident` toolset | [specs/manager-channel.md](./specs/manager-channel.md) | [ORB-21245] |
 | Metrics that gate widening | [2_design.md §9](./2_design.md#9-metrics-that-gate-widening) | [ORB-21247] |
-| Cost events, evolution records, evolution pass, digest | [specs/evolution-ledger.md](./specs/evolution-ledger.md) | [ORB-21248], [ORB-21249] |
+| Cost events, evolution records, digest (evolution pass removed [ORB-22844]) | [specs/evolution-ledger.md](./specs/evolution-ledger.md) | [ORB-21248], [ORB-21249] |
 | Manager and resident skill references | [2_design.md §10](./2_design.md#10-migration-and-pilot) | [ORB-21250] |
 | Pilot against an interactive baseline | [2_design.md §10](./2_design.md#10-migration-and-pilot) | [ORB-21251] |
 | Removed design, rejected alternatives, standing rules | [4_decisions.md](./4_decisions.md) | [ORB-21229] |

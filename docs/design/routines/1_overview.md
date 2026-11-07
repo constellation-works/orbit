@@ -41,16 +41,18 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > the scheduler kernels, with Core supplying task facts, dispatch and status assembly.
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
-`resident_cycle`, `evolution_pass`, `worktree_gc`, `store_gc`,
-`task_publication` and `ux-rules`) under
+`dependabot_alert_sweep`, `task_pilot`, `resident_cycle`, `worktree_gc`, `store_gc` and
+`task_publication`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
 seeded enabled in a newly initialized workspace [ORB-22802]; a workspace seeded earlier keeps
 its `enabled` value, because a template refresh never changes it. Other defaults are
 `enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
 with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited
-copy. [ORB-18378] added disabled weekly
+copy. `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` were
+retired in [ORB-22844]: their templates moved to `assets/routines/retired/`, so
+`orbit workspace sync` retires a seeded copy, and a definition targeting a removed job (or the
+`finding_unverified` or `pilot_warnings_held` trigger) loads as retired. [ORB-18378] added disabled weekly
 `task_publication` (Sunday 04:47 host-local time), which publishes only its own
 owner workspace and skips an unbound publication target. Other scheduled work
 requires an explicit checkout-local opt-in through `enabled: true`. Re-init
@@ -67,11 +69,11 @@ workspace's base branch. It assesses new/materially edited eligible tasks in
 bounded batches and stays quiet for fresh assessments, including unready ones.
 See [State routines and task-pilot configuration](./2_design.md#11-state-routines-and-task-pilot-configuration)
 for the loadable YAML, eligibility/freshness controls and preview commands.
-`finding_verification` uses `finding_unverified`, `pilot_warning_triage` uses
-`pilot_warnings_held`, and `resident_cycle` uses `resident_due`
-([resident orchestrator](../resident-orchestrator/2_design.md#51-slice-3-as-implemented)), added by [ORB-21244]; [ORB-21249] added the disabled weekly `evolution_pass` cron routine (Monday 05:17 host-local time); the retired `block_escalated` and failed-run triage's
-`execution_failed` kinds are retained for compatibility, and a routine that uses
-`block_escalated` loads inert (final recovery decides blocked tasks).
+`resident_cycle` uses `resident_due`
+([resident orchestrator](../resident-orchestrator/2_design.md#51-slice-3-as-implemented)), added by [ORB-21244]. The retired `block_escalated`, failed-run triage's
+`execution_failed`, `finding_unverified` and `pilot_warnings_held` kinds are retained for
+compatibility, and a routine that uses one loads inert (final recovery decides blocked tasks;
+pilot-warning triage runs from the dashboard's Triage action).
 Delivery routine configuration and evidence requirements are in
 [Delivery routines](./2_design.md#12-delivery-routines).
 
@@ -151,7 +153,7 @@ fragmentation this feature exists to end.
 | Per-user definitions, seeded through init/sync | `crates/orbit-core/src/application/routines/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
 | Replica-local cron GC | `crates/orbit-core/src/application/routines/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
 | Hourly performance refresh (retired [ORB-22804]) and weekly publication defaults | `crates/orbit-core/assets/routines/retired/crew_performance_refresh.yaml`, `crates/orbit-core/assets/routines/task_publication.yaml` | Done — [ORB-17816], [ORB-18378] |
-| Resident cycle and weekly evolution-pass defaults | `crates/orbit-core/assets/routines/resident_cycle.yaml`, `crates/orbit-core/assets/routines/evolution_pass.yaml` | Done — [ORB-21244], [ORB-21249] |
+| Resident cycle default; weekly evolution pass (retired [ORB-22844]) | `crates/orbit-core/assets/routines/resident_cycle.yaml`, `crates/orbit-core/assets/routines/retired/evolution_pass.yaml` | Done — [ORB-21244], [ORB-21249] |
 
 ---
 
@@ -181,5 +183,6 @@ fragmentation this feature exists to end.
 - [ORB-21244] added the `resident_due` state trigger and the seeded `resident_cycle` routine.
 - [ORB-21249] added the seeded disabled weekly `evolution_pass` routine and manager digest.
 - [ORB-22802] seeded `worktree_gc` and `task_pilot` enabled in newly initialized workspaces.
+- [ORB-22844] retired the `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` routines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

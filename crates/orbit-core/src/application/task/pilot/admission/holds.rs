@@ -6,8 +6,6 @@ use orbit_types::task::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::super::finding_verification::UnverifiedFindingHold;
-
 use super::backlog::{criteria_digest, host_operational_material, validation_material};
 
 /// A finding in the latest applied assessment that requires an operator decision.
@@ -22,10 +20,6 @@ pub(crate) enum PilotAdmissionHold {
     /// pilot required this owner's machine. It holds a host by
     /// [`NativeOsHold::wait_on`], so a capable host may still start the task.
     NativeOs(NativeOsHold),
-    /// A review-filed bug without a CONFIRMED verification verdict, while the
-    /// workspace sets `[review] verify_findings`. Ranked first: until the
-    /// finding is confirmed, no assessment of it is acted on.
-    UnverifiedFinding(UnverifiedFindingHold),
 }
 
 /// Operator-side work that no managed lane can perform, scoped to the material

@@ -284,11 +284,11 @@ policy:
 
 `owner_machine` is required and only that machine admits new work. State routines
 require `overlap: forbid` and the job fixed by their kind:
-`preparation_eligible` targets `job:task_pilot_pipeline`;
-`finding_unverified` targets `job:finding_verification_pipeline` and uses the
-[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
-`pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
-[pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+`preparation_eligible` targets `job:task_pilot_pipeline`.
+`finding_unverified` ([finding verification](../_archived/finding-verification/2_design.md#7-state-trigger))
+and `pilot_warnings_held` ([pilot warning holds](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held))
+are retired [ORB-22844]: they still parse, observe nothing, and a routine on either loads as
+retired.
 `resident_due` targets `job:resident_cycle_pipeline`, takes `batch_size: 1` only and uses the
 [resident cycle rule](../resident-orchestrator/2_design.md#51-slice-3-as-implemented).
 `block_escalated` is retired: [ORB-17744] moved blocked-task triage from an
@@ -322,8 +322,7 @@ Optional `freshness` resolves each key from the routine, then
 `source_sensitivity: ignore`. Thus an ordinary branch-head move or retagging
 does not change the default material fingerprint. `context_files` and `any` are
 the other source sensitivities. These fields guard preparation/apply drift;
-a certified `description` or `criteria` change queues a fresh routine pilot for an already assessed task unless a live execution claim or an unresolved failed pilot holds it; changes to the other fields never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Neither
-block configures finding verification. See
+a certified `description` or `criteria` change queues a fresh routine pilot for an already assessed task unless a live execution claim or an unresolved failed pilot holds it; changes to the other fields never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). See
 [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
 
@@ -380,9 +379,10 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
-`resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
+`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
 and `task_publication.yaml` with workspace-unique names and `enabled: false`.
+[ORB-22844] retired `finding_verification.yaml`, `pilot_warning_triage.yaml`,
+`evolution_pass.yaml` and `ux-rules.yaml` (templates under `routines/retired/`).
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
 enabled hourly; [ORB-22804] retired it (template under `routines/retired/`, its
 `crew_performance_refresh_pipeline` job in `RETIRED_ROUTINE_JOBS`) with crew-performance
@@ -395,9 +395,8 @@ seed time, so two hosts initializing the same workspace name write byte-identica
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
 [ORB-12745]; a state trigger names the one machine that evaluates it, so its
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
-registered base branch — the only host-dependent bytes a seed writes. `finding_verification.yaml`
-is a `finding_unverified` state routine rendered the same way [ORB-15662]. The two
-triage state routines render the same owner and branch placeholders. The
+registered base branch — the only host-dependent bytes a seed writes. `resident_cycle.yaml`
+renders the same owner and branch placeholders. The
 prepare/apply drift contract is `[workflow.task_pilot_freshness]` in `config.toml`
 (default: title, description, criteria, plan and selectors; head moves ignored),
 overridable by the routine's optional `trigger.state.freshness` block [ORB-13638].
@@ -595,8 +594,8 @@ Every task-pilot run, not only a sweep's, may also judge a review-filed bug wron
 `finding_invalid` result with `path:line` evidence at the pinned revision is never promoted
 (drain approval holds it as `finding_invalid`), and after the pilot write apply records a
 REJECTED finding verdict and rejects the task. The same result on any other task is an invalid
-assessment
-([finding verification §8](../finding-verification/2_design.md#8-default-rejection-routes)).
+assessment. This default rejection route outlived the finding-verification job removed in
+[ORB-22844] ([archived design §8](../_archived/finding-verification/2_design.md#8-default-rejection-routes)).
 
 Publication shares that release boundary. A job can fail because the repository already
 records a version, tag, or artifact its operator has not published or promoted yet; the
@@ -1106,6 +1105,7 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-14173] allowed replica-local scheduled worktree GC.
 - [ORB-14449] implemented task-prefix routing and --host selection.
 - [ORB-15662] added review-finding verification and its finding_unverified state trigger.
+- [ORB-22844] retired finding verification, scheduled pilot-warning triage, the evolution pass and the ux-rules routine.
 - [ORB-16354] enabled replica-local store GC.
 - [ORB-17744] moved blocked-task triage onto the block_escalated state routine.
 - [ORB-20629] retired that routine and the `block_escalated` trigger; final recovery decides blocked tasks.

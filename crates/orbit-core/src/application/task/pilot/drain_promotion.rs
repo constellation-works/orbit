@@ -35,7 +35,7 @@ use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
 use crate::application::task::{
     AdmissionClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision, TaskAutomationPort, TaskJobPort,
-    UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff,
+    VerifiedNoDiff,
 };
 
 use super::apply::admission::{AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask};
@@ -442,11 +442,6 @@ pub(super) fn approve(
                     classification: auto_approval_hold_classification(&task.tags),
                     evidence: Value::Null,
                 }
-            } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
-                Approval::Held {
-                    classification: UNVERIFIED_REVIEW_FINDING,
-                    evidence: json!(hold.detail()),
-                }
             } else if let Some((reason, detail)) =
                 assessed_material_drift(runtime, &task, snapshot, validated, policy)
             {
@@ -848,9 +843,6 @@ fn promotable_reuse(
     }
     if !no_diff && !task.complexity.is_some_and(TaskComplexity::is_assessed) {
         return Ok(hold("unassessed_complexity"));
-    }
-    if runtime.unverified_finding_hold(task)?.is_some() {
-        return Ok(hold(UNVERIFIED_REVIEW_FINDING));
     }
     Ok(ExplicitAssessmentReuse::Promote {
         operation_id: operation_id.to_string(),

@@ -225,9 +225,8 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
-| `review.verify_findings` | **Advanced.** Default `false`; gates review-filed bug findings on a confirmed verification for their current material before approval, promotion or drain admission. Does not enable the verification routine. |
 | `review.baseline_commands` | Default `[]`; commands the owner trusts review settlement to rerun on the host for a reviewer's red-base claim, in addition to required validation commands. Entries are trimmed strings; blank entries are dropped. A configured command is binding during settlement. |
-| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review finding verification and owed host evidence](#review-finding-verification-and-owed-host-evidence). |
+| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review baseline commands and owed host evidence](#review-baseline-commands-and-owed-host-evidence). |
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
@@ -412,7 +411,7 @@ use `orbit config show --json` for per-key path provenance. A workspace value
 overrides the global one. Use `orbit config show --scope workspace` to inspect
 one file's values without inheriting the other layer.
 
-## Fleet notices, attention, evolution pass and failing jobs
+## Fleet notices, attention, evolution ledger and failing jobs
 
 These settings are ordinary layered settings: a workspace value overrides
 the global value, and the built-in default fills the rest. Set one for a
@@ -436,32 +435,30 @@ orbit config get jobs.failure_streak_warn
 orbit config show
 ```
 
-### Resident evolution pass: `resident.evolution.*`
+### Resident evolution ledger: `resident.evolution.*`
 
-Every threshold below must be met for a capability gap to be ranked. Cost
-includes minutes plus slot minutes within the window; distinct cycle and
-mandate counts exclude entries without those identifiers. Decline
-suppression still ends early only when window cost doubles.
+Resident checkpoints record capability gaps in the evolution ledger, which
+`orbit evolution` and `orbit resident digest` read. Nothing files evolution
+proposal tasks automatically: the weekly evolution pass was removed.
+A declined record reopens early only when its cost inside the window doubles.
 
 | Key | Type | Default | Range | What it changes |
 |---|---|---|---|---|
-| `resident.evolution.window_days` | integer | `14` | `1`–`3650` | Evidence window, in days, the evolution pass ranks over. |
-| `resident.evolution.min_occurrences` | integer | `3` | `1`–`1000000` | Minimum occurrences of a gap inside the window. |
-| `resident.evolution.min_distinct_cycles` | integer | `3` | `1`–`1000000` | Minimum distinct cycles a gap appears in. |
-| `resident.evolution.min_distinct_mandates` | integer | `1` | `1`–`1000000` | Minimum distinct mandates a gap appears under. |
-| `resident.evolution.min_cost_minutes` | integer | `60` | `1`–`1000000000` | Minimum cost, in minutes, a gap must carry inside the window. |
-| `resident.evolution.max_proposals` | integer | `3` | `1`–`100` | Most design-task proposals one pass drafts. |
-| `resident.evolution.decline_suppress_days` | integer | `30` | `1`–`3650` | Days a declined proposal suppresses the same gap. |
+| `resident.evolution.window_days` | integer | `14` | `1`–`3650` | Days of ledger cost the resident digest reads by default and a decline measures. |
+| `resident.evolution.decline_suppress_days` | integer | `30` | `1`–`3650` | Days a record stays declined after its proposal task is rejected. |
 
 ```bash
 orbit config set resident.evolution.window_days 14
-orbit config set resident.evolution.max_proposals 3
 orbit config get resident.evolution.window_days
 orbit config show --all
 ```
 
 In TOML the same values live under `[resident.evolution]`, for example
 `window_days = 14`. Workspace settings override the global layer.
+`min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`,
+`min_cost_minutes` and `max_proposals` belonged to the removed pass: they load
+with a deprecation warning, are ignored, and stop being recognised after
+2026-12-07. Delete them.
 
 ### Fleet notices: `notice.*`
 
@@ -883,34 +880,20 @@ can read its private shadow evidence through its library join
 absence is the intended seal, not a missing result. A grant by itself authorizes
 no paid or live call.
 
-## Review finding verification and owed host evidence
+## Review baseline commands and owed host evidence
 
-These settings govern review findings and the checks an owner may owe after a
-claimed review. They do not turn on before-PR or before-landing review; set
+These settings govern the checks review settlement may rerun and the checks an
+owner may owe after a claimed review. They do not turn on before-PR or before-landing review; set
 `review.timing` separately when that review workflow is wanted.
 
 ### Set the policy
 
-`review.verify_findings` is an advanced boolean, default `false`. When true,
-a review-filed task of type `bug` tagged `code-review`,
-`delivery-code-review`, `security-review` or `qa-sweep` must
-have a `CONFIRMED` finding-verification verdict for its current material before it
-can be approved, promoted to `backlog` or admitted by a drain. Until then,
-readiness reports the `unverified_review_finding` hold. A `REJECTED` verdict
-still rejects the task even when verification is not required. The gate reads
-this setting each time it checks, so an authorized configuration change applies
-to a running drain without a restart.
-
-This switch does not enable or run `finding_verification_pipeline`. The seeded
-`finding-verification` routine is a separate, disabled-by-default schedule
-that picks up findings still owed a verdict. Inspect its workspace-specific
-name and state with `orbit routine list` and `orbit routine show <name>`.
-To run a verdict on demand, use
-`orbit run job finding_verification_pipeline --input 'task_ids=["<task-id>"]'`.
-For automatic runs, enable the routine definition separately as described in
-[Automation](automation.md#turning-the-scheduler-on); routine enablement and a
-host-local pause are separate controls. A disabled routine does not prevent a
-manual job run.
+`review.verify_findings` was removed with the finding-verification routine in
+this release. It loads with a deprecation warning and is ignored until
+2026-12-07, and nothing holds a review-filed bug as
+`unverified_review_finding`. An invalid finding is still rejected by the task
+pilot's `finding_invalid` result or an implementer's `finding-invalid.json`,
+which record a REJECTED verdict.
 
 `review.baseline_commands` is an array of owner-trusted commands, default
 `[]`. Review settlement may use them, along with
@@ -922,10 +905,9 @@ settles incomplete; the list is therefore binding policy, not a hint. These
 commands also count as required validation gates an implementer may hand off
 when its sandbox deferred only an admitted sandbox-dependent test.
 
-Both settings can be written with `orbit config set`, for example:
+`review.baseline_commands` can be written with `orbit config set`, for example:
 
 ```sh
-orbit config set review.verify_findings true
 orbit config set review.baseline_commands '["cargo test -p service --test api"]'
 ```
 
@@ -937,7 +919,6 @@ ones that exist in your project:
 
 ```toml
 [review]
-verify_findings = true
 baseline_commands = ["cargo test -p service --test api"]
 
 [[review.host_evidence]]
@@ -992,20 +973,14 @@ current policy at acceptance, the handoff fails closed and needs a fresh claim.
 ### Verify the effective policy and its effect
 
 Run `orbit config show --all` to inspect the effective values and provenance
-for `review.verify_findings` and `review.baseline_commands`. Use
+for `review.baseline_commands`. Use
 `orbit config keys --json` to confirm which settings the installed version
 supports; `review.host_evidence` is TOML-only and is not a `config set` key.
 Check the global and workspace config files when reviewing host-evidence
 rules, since a workspace list replaces the global one, and run `orbit doctor`
 to catch configuration errors before a claim.
 
-Use `orbit run readiness --json` or `orbit doctor` to see an
-`unverified_review_finding` hold while a qualifying finding lacks a current
-confirmation. After a verification job runs, `orbit run show <run-id>`
-reports the run and `orbit task show <task-id>` shows the task status and
-`finding_verified` history. A confirmed verdict for current material clears
-that verification hold; changing claim or evidence selectors makes the old
-verdict stale. For a claimed review, inspect the
+For a claimed review, inspect the
 task's `review-gate.json` artifact with
 `orbit task artifact get <task-id> review-gate.json --out <file>`:
 `owed_evidence` records checks the reviewer did not run and are pending host
@@ -1435,7 +1410,7 @@ provider.
 ### `inspection_args`: tools for pinned-source inspection runs
 
 The arguments appended to the executor's argv for an inspection run (task
-pilot, finding verification, escalation triage), so the CLI's own file-read
+pilot, escalation triage), so the CLI's own file-read
 and shell tools work unattended. An empty list means the static `args`
 already enable those tools; omitting the field means no known inspection
 surface. Inspection draws skip crews without it, and an explicit crew that

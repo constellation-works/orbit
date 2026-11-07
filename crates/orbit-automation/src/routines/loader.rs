@@ -52,6 +52,21 @@ pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
         "crew-performance weighting and the scorecard snapshot it refreshed were removed; \
          workflow.type_complexity_crews routes by type with no snapshot",
     ),
+    (
+        "evolution_pass_pipeline",
+        "the weekly evolution pass was removed; resident checkpoints still feed the evolution \
+         ledger, and `orbit.evolution.add` records a proposal by hand",
+    ),
+    (
+        "ux_rules_pipeline",
+        "the scheduled ux-rules filer was removed; run `scripts/ux-rules/run.mjs` by hand to \
+         measure UI rules",
+    ),
+    (
+        "finding_verification_pipeline",
+        "finding verification was removed; a review-filed bug is approved and promoted like any \
+         other task, and the task pilot still closes an invalid finding",
+    ),
 ];
 
 /// Why a routine targeting `job` is retired, when that job is one a prior
@@ -87,23 +102,49 @@ pub fn manual_retirement_advice(path: &Path) -> String {
     )
 }
 
-/// Why a state routine on the retired `block_escalated` trigger is skipped.
-/// The job it targets still ships (pilot-warning triage), so the trigger, not
-/// the job, is what retired.
-const RETIRED_BLOCK_TRIGGER_REASON: &str = "blocked-task triage is retired: final recovery is the \
-     single decider for a blocked task and opens its decision request itself";
+/// State-trigger kinds a prior release shipped routines on and this one
+/// retired, each with its trigger token and why. The job they target
+/// (`escalation_triage_pipeline`) still ships for the dashboard's manual
+/// triage, so the trigger, not the job, is what retired.
+const RETIRED_STATE_TRIGGERS: &[(StateTriggerKind, &str, &str)] = &[
+    (
+        StateTriggerKind::BlockEscalated,
+        "block_escalated",
+        "blocked-task triage is retired: final recovery is the single decider for a blocked \
+         task and opens its decision request itself",
+    ),
+    (
+        StateTriggerKind::PilotWarningsHeld,
+        "pilot_warnings_held",
+        "scheduled pilot-warning triage is retired; triage a held task from the dashboard's \
+         Triage action, which still runs escalation_triage_pipeline",
+    ),
+];
 
-/// Compose the reason for a routine on the retired `block_escalated` trigger,
-/// then the single step that clears the file.
-pub fn retired_block_trigger_reason(advice: &str) -> String {
-    format!(
-        "trigger 'state:block_escalated' is retired in this Orbit ({RETIRED_BLOCK_TRIGGER_REASON}); {advice}"
-    )
+/// Whether `kind` is a retired state trigger.
+pub fn is_retired_state_trigger(kind: StateTriggerKind) -> bool {
+    RETIRED_STATE_TRIGGERS
+        .iter()
+        .any(|(retired, ..)| *retired == kind)
 }
 
-/// Whether `reason` was composed by [`retired_block_trigger_reason`].
-pub fn is_retired_block_trigger_reason(reason: &str) -> bool {
-    reason.starts_with("trigger 'state:block_escalated' is retired")
+/// Compose the reason for a routine on a retired state trigger, then the
+/// single step that clears the file.
+pub fn retired_trigger_reason(kind: StateTriggerKind, advice: &str) -> String {
+    let (_, token, why) = RETIRED_STATE_TRIGGERS
+        .iter()
+        .find(|(retired, ..)| *retired == kind)
+        .copied()
+        .unwrap_or((kind, "unknown", "this trigger is retired"));
+    format!("trigger 'state:{token}' is retired in this Orbit ({why}); {advice}")
+}
+
+/// The retired trigger whose [`retired_trigger_reason`] composed `reason`.
+pub fn retired_trigger_of_reason(reason: &str) -> Option<StateTriggerKind> {
+    RETIRED_STATE_TRIGGERS
+        .iter()
+        .find(|(_, token, _)| reason.starts_with(&format!("trigger 'state:{token}' is retired")))
+        .map(|(kind, ..)| *kind)
 }
 
 /// Where a routine definition was found on disk. The directory decides; git
@@ -615,14 +656,15 @@ fn load_routine_file(
         });
     }
 
-    // A routine on the retired `block_escalated` trigger loads inert: the job
-    // it targets still ships for pilot warnings, so it would otherwise run
-    // with a trigger that observes nothing.
-    if definition
+    // A routine on a retired state trigger loads inert: the job it targets
+    // still ships for manual triage, so it would otherwise run with a trigger
+    // that observes nothing.
+    if let Some(kind) = definition
         .trigger
         .state
         .as_ref()
-        .is_some_and(|state| state.kind == StateTriggerKind::BlockEscalated)
+        .map(|state| state.kind)
+        .filter(|kind| is_retired_state_trigger(*kind))
     {
         return Ok(RoutineLoadOutcome {
             routine: RoutineLoad::Retired(RetiredRoutine {
@@ -631,7 +673,7 @@ fn load_routine_file(
                 source_workspace: source.workspace.clone(),
                 path: path.to_path_buf(),
                 job: definition.target.job_name().to_string(),
-                reason: retired_block_trigger_reason(&sync_retirement_advice(&source.workspace)),
+                reason: retired_trigger_reason(kind, &sync_retirement_advice(&source.workspace)),
                 skipped: false,
             }),
             catalog_error: None,

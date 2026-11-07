@@ -7,8 +7,8 @@ pub use orbit_automation::routines::loader::{
     RoutineOrigin, RoutineSource,
 };
 use orbit_automation::routines::loader::{
-    ROUTINES_DIR, is_retired_block_trigger_reason, manual_retirement_advice,
-    retired_block_trigger_reason, retired_routine_job_reason, retired_routine_reason,
+    ROUTINES_DIR, manual_retirement_advice, retired_routine_job_reason, retired_routine_reason,
+    retired_trigger_of_reason, retired_trigger_reason,
 };
 use orbit_common::OrbitError;
 use orbit_types::workflow::RoutineDefinition;
@@ -327,8 +327,8 @@ fn narrow_retired_advice(sources: &[RoutineSource], collection: &mut RoutineColl
         if sync_retires_routine(routines_dir, &retired.path) {
             continue;
         }
-        if is_retired_block_trigger_reason(&retired.reason) {
-            retired.reason = retired_block_trigger_reason(&manual_retirement_advice(&retired.path));
+        if let Some(kind) = retired_trigger_of_reason(&retired.reason) {
+            retired.reason = retired_trigger_reason(kind, &manual_retirement_advice(&retired.path));
             continue;
         }
         let Some(retirement) = retired_routine_job_reason(&retired.job) else {

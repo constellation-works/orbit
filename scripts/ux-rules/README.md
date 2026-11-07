@@ -1,6 +1,6 @@
 # UX rules
 
-Runner for the CLI and UI rule sets. The runner is a scheduled measurement, not a repository test and not a merge gate.
+Runner for the CLI and UI rule sets. It is a hand-run QA and development tool, not a repository test and not a merge gate. The `ux-rules` routine that ran it on a schedule and filed tasks from its results was removed [ORB-22844], with its `step.mjs` script adapter and the rule-findings filer; the QA full sweep's `ux-measurement-browser` scenario still runs the rule tests.
 
 ## Run
 
@@ -140,111 +140,17 @@ The fingerprint is `rule id`, the target id, and the target argv (or the target 
 | `cli.mcp-description-length` | Tool descriptions at most 1000 bytes. Field descriptions at most 800 bytes. |
 | `cli.mcp-cli-parity` | A tool and its CLI command agree on required inputs. `model` and `agent` are provenance on both sides and are ignored. A required MCP field that the CLI exposes as a global option, including `workspace`, is not a mismatch. For `auto-task add` only, `schedule` is `--cron`, `--every-minutes`, or `--deliveries-landed` (the usage line cannot show that one-of group), and `template` is required `--title` when the tool describes `title` as a required template member. Other commands are compared by field name. Defaults are compared only when both sides state one. A tool with no CLI command is `skipped`. |
 
-## Filing and the routine
+## Report, owner context and raw archive
 
-The deterministic `file_rule_findings` activity turns one results document into tasks: one proposed bug task per new failing defect group (or unannotated fingerprint) (the fingerprint is stored in the task's `rule_fingerprint` field, with the measurements, the evidence and a reproduce command naming `--rule` and the target), a comment on the open owner when measurements change, exactly one comment when the fingerprint passes again (never a status change), and one task per rule for `error` results, tagged `ux-rules-error`. New tasks per run are capped by `ux_rules.max_new_tasks` (default 10, highest severity first); results below `ux_rules.file_at` (default `low`) or for rules in `ux_rules.disabled` are recorded in the run output only. The filer is generic: any script that writes this schema can feed it.
-
-A producer can add `defect: {"version": 1, "key": "stable-cause"}` to each member result. The filer scopes this opaque key by surface, rule and version and groups before owner lookup and the new-task cap. It retains every member's original fingerprint, target, status, severity, measurements and evidence in the owner's `rule-findings/state.json` artifact. UI reporting retains the aggregate target fingerprint as `original_fingerprint`; the member fingerprint additionally distinguishes the measured element or cause. Unannotated results retain their existing fingerprint behavior.
-
-UI cause identity belongs to the rules and browser producer. Layout members need a verified unique element identity and a fixed check discriminator; view, state and theme scope the identity unless an explicit shared component supplies cross-page evidence. Console members use observed method, endpoint, failure class and source context; meaningful URL query values remain part of the endpoint. Generic 503 text, nonunique selectors and unknown causes do not justify merging. A disappeared exception or element with no directly measured passing member stays unresolved.
-
-The maximum severity selects a group's priority; every variant and screenshot survives selection. Existing open owners receive new evidence as well as changed measurements. Ownership and updates are serialized with the existing bounded workspace advisory lock, including across independent processes. Identical reports do not append comments or rewrite identical artifacts. Initial descriptions retain a registry seed so replay can repair an interrupted artifact attachment. Only proposed, backlog, in-progress, review and blocked tasks own active findings. Matching terminal tasks remain read-only history, listed in `historical_references`; matching open legacy owners bind deterministically, and other matching open tasks are listed in `legacy_duplicates` for operator disposition. The filer never changes task status.
-
-A grouped repair comment requires every known member to appear and pass in the current report. A partial pass, missing member, skipped measurement or error gives no repair credit. Repeated complete passes comment once. `observation_count` is the producer's raw observation count (its `summary.observations`), `reported_count` and `counts` describe the results in the filing report, `defect_group_count` counts the report's producer-declared groups, and `filed_count` counts newly created tasks.
-
-### Filing report, owner context and raw archive
-
-A full UI sweep measures tens of thousands of member observations, far over the adapter's 4 MiB surface report and the 1 MiB script stdout budget. `ux-rules.json` is therefore the filing report, and the complete raw report is archived beside it. The filing report holds every `fail`, `error` and `skipped` observation; every observation, passing ones included, of a defect group that fails anywhere in this run or that an open owner tracks; every result that declares no members (CLI results, runner errors); and one compact record per expanded aggregate target that did not fail, under its aggregate fingerprint, so a legacy aggregate owner keeps its pass semantics. An aggregate whose members include a non-passing observation (an incomplete console capture, say) gets no aggregate pass record. A failure with no stable cause identity (an element with no unique id, `data-key` or `data-testid` anchor) is not reported as its own member: its aggregate is reported as `fail` under the aggregate fingerprint with `measurements.ambiguous_failures`, so a legacy aggregate owner keeps receiving it and no task is minted from a DOM-order occurrence. Once an owner tracks a group, the filer ignores ungrouped passes on that owner, and a group bound to a legacy owner cannot pass while that fingerprint holds ambiguous failures. Untracked passing members are counted in `summary.omitted_untracked_passing`, never listed. Filed measurements keep scalar values and small objects; larger shared values are named under `measurements.archived`. Console measurements use port-normalized endpoints and sources; the actual URLs stay under `provenance`, which only the archive keeps, so repeated fixture runs file identical measurements.
+A full UI sweep measures tens of thousands of member observations. `ux-rules.json` is therefore a compact report in the filing format, and the complete raw report is archived beside it. The filing report holds every `fail`, `error` and `skipped` observation; every observation, passing ones included, of a defect group that fails anywhere in this run or that an open owner tracks; every result that declares no members (CLI results, runner errors); and one compact record per expanded aggregate target that did not fail, under its aggregate fingerprint, so a legacy aggregate owner keeps its pass semantics. An aggregate whose members include a non-passing observation (an incomplete console capture, say) gets no aggregate pass record. A failure with no stable cause identity (an element with no unique id, `data-key` or `data-testid` anchor) is not reported as its own member: its aggregate is reported as `fail` under the aggregate fingerprint with `measurements.ambiguous_failures`, so a legacy aggregate owner keeps receiving it and no task is minted from a DOM-order occurrence. Untracked passing members are counted in `summary.omitted_untracked_passing`, never listed. Filed measurements keep scalar values and small objects; larger shared values are named under `measurements.archived`. Console measurements use port-normalized endpoints and sources; the actual URLs stay under `provenance`, which only the archive keeps, so repeated fixture runs file identical measurements.
 
 `summary` counts every raw observation by status, plus `observations`, `defect_groups`, `reported`, `reported_aggregates`, `omitted_untracked_passing`, `ambiguous_failures`, `absence_credits`, `tracked_groups` and `tracked_groups_unobserved`. `archive` describes `archive/observations.partNN.gz`: one gzip stream of the compact raw report (every expanded member and every aggregate result, with full measurements and its declared observations before member deduplication, so repeated failures of one identity are kept), split into parts of at most 1 MiB. Concatenating the parts in order and inflating them reproduces the bytes `uncompressed_sha256` names; the descriptor also records `uncompressed_bytes`, `gzip_bytes`, `gzip_sha256`, `observation_count`, `aggregate_count` and each part's `bytes` and `sha256`.
 
-`--owner-context <file>` reads the owner context the `prepare_rule_findings` activity returns: `{schema_version, groups: [{surface, rule, defect: {version, key}, members}]}` for the groups open owners track, where `members` lists the aggregate fingerprints the group's observations were recorded under. Their observations are reported in full, so a tracked group can be found repaired only when every known member is measured passing. A console or page-error cause is never re-observed once fixed, so when a page's console scope completes with nothing but passes, each tracked group member last recorded under that aggregate gets a pass with its own identity (`measurements.observation.cause_absent`, counted in `summary.absence_credits`). Element rules make no such absence claim: a vanished element earns no credit. An owner created after that snapshot is not tracked: its passing members are omitted, stay missing for the filer and receive no pass credit.
-
-`step.mjs` writes the step's `owner_context` input to its scratch directory and passes it to each surface. It exports each archive part through the same confined read as evidence, checks it against the descriptor, names it by digest and counts it against the same 64-output limit as screenshots. The merged document carries one `archives` entry per surface, with that surface's raw `summary`; its own `summary` adds `observations`, `defect_groups` and `reported`. A merged document over 1 MiB, an archive part that does not match its descriptor, or more than 64 outputs refuses the step with a message; nothing is truncated. The filer never inflates an archive: with a bound producer it checks every part is one of the producer's persisted outputs with the declared size and digest, and its output lists each archive's summary and part names under `archives`.
+`--owner-context <file>` reads an owner context, the shape the removed `prepare_rule_findings` activity returned: `{schema_version, groups: [{surface, rule, defect: {version, key}, members}]}` for the groups open owners track, where `members` lists the aggregate fingerprints the group's observations were recorded under. Their observations are reported in full, so a tracked group can be found repaired only when every known member is measured passing. A console or page-error cause is never re-observed once fixed, so when a page's console scope completes with nothing but passes, each tracked group member last recorded under that aggregate gets a pass with its own identity (`measurements.observation.cause_absent`, counted in `summary.absence_credits`). Element rules make no such absence claim: a vanished element earns no credit.
 
 ### Console diagnostics
 
-Failures and successes are kept apart. Failed responses keep method, endpoint, status, failure class and the initiator stack; failed requests keep their initiator. A response with status below 400 is never a diagnostic: it is a passing observation of its request cause, which is how a repaired endpoint credits a known group. Successes are deduplicated by method, URL and initiator in their own list of at most 100 per page (`counts.successful_responses`); further ones are counted in `counts.successful_responses_omitted` and only withhold credit from the causes they would have repaired. Request contexts are retired when the request finishes, so static resources cannot exhaust the bounded lists. More than 100 requests in flight, or more than 100 failures of one kind, mark the list dropped. That is a real coverage gap: the rule records a `diagnostic-limit` error observation, and that target earns no pass credit. The existing evidence confinement, digest checks and 64-file / 1 MiB per-file limits remain unchanged; the bounded registry also fits within one 1 MiB task artifact.
-
-`ux_rules_pipeline` runs the shipped `step.mjs` adapter, then the filer. It uses `--fixture` for UI; `ui_base_url` is ignored because a network-none script cannot reach the host dashboard. The merged results retain each result's surface for filing. Surface startup failures become `error` results with the runner's diagnostic. Before scratch cleanup the adapter exports evidence into `ORBIT_SCRIPT_OUT`, rebases each reference to a SHA-256 file name, and deduplicates equal content across results and surfaces. It accepts at most 64 unique regular files, each at most 1 MiB. Missing, malformed, escaped, symlinked or oversized evidence fails the step explicitly; no successful report claims missing attachments. Reduce captures or split the run when this finite budget is exhausted. Fingerprints remain unchanged. The adapter pins each surface directory before launching the runner and opens evidence through pinned directory handles with no-follow and bounded reads. This requires the Linux script profile’s existing `/proc/self/fd`; other hosts refuse explicitly. Names use a lowercase ASCII extension of at most 10 characters (`.jpeg` normalizes to `.jpg`); identical bytes with conflicting extensions refuse rather than acquire a type from result order.
-
-The job binds `evidence_step: run` and `evidence_files: "{{ steps.run.files }}"`. The generic filer selects only that unique direct preceding script step in its executing definition and consumer checkpoint, requires a successful matching results document, and verifies the output set against the producer record, workspace, current/resumed run lineage and digests. It attaches only named members to newly filed findings after script scratch is gone. Missing checkpoints and substituted descriptors refuse filing. Loop/parallel evidence producers are unsupported and refuse explicitly. Standalone `results_file`/`evidence_dir` filing confines evidence reads to the workspace and also reports invalid evidence rather than silently dropping it.
-
-Existing installations must update the manifest output limits below and explicitly regrant `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` before running the pipeline. The changed manifest invalidates the previous grant; no sandbox or network roots need widening.
-
-To set up the workspace, copy the following template to `.orbit/resources/scripts/ux_rules_runner.yaml`. Replace the absolute paths with the host's actual Node interpreter, Orbit binary, and browser kit root, keeping each path identical in `interpreter`/`args` and in `requests.read_roots`. The kit root is the root `orbit config browser-kit` installs (it holds `kit/node_modules/playwright/index.mjs` and `browsers/`). The Orbit binary and Node must be executable in the sandbox, including their shared libraries. Do not request `env_pass`: this build's script profile refuses any granted step that requests environment passthrough, and it clears the environment instead. Granted read roots are bound at their host paths inside the sandbox, so the adapter finds the Orbit binary and the browser kit from the manifest `args` below (a step input `orbit` or `browser_kit` overrides them) and passes `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` to its own runner child. From the same kit root it also initializes the child's `LD_LIBRARY_PATH` (the kit's unpacked `root/usr/lib/*-linux-gnu` and `root/lib/*-linux-gnu` directories, ahead of any inherited value) and `FONTCONFIG_FILE` (`<kit>/fonts.conf`, unless one is already set), mirroring what the kit's `env.sh` exports without evaluating it. A kit with no unpacked `root/` or `fonts.conf` (system libraries, macOS) sets neither, and an explicit `--playwright-module` / `--playwright-browsers-path` still wins. Scratch uses its provided `TMPDIR`; no extra write root is needed.
-
-```yaml
-schemaVersion: 1
-kind: Script
-metadata:
-  name: ux_rules_runner
-spec:
-  description: Measure configured UX rule surfaces.
-  entry: scripts/ux-rules/step.mjs
-  interpreter: [/opt/node/bin/node]
-  args: [--orbit, /opt/orbit/bin/orbit, --browser-kit, /opt/browser-kit]
-  input_schema_json:
-    type: object
-    required: [surfaces]
-    properties:
-      surfaces: {type: array, items: {type: string}}
-      ui_base_url: {type: string}
-      runner: {type: string}
-      orbit: {type: string}
-      browser_kit: {type: string}
-      playwright_module: {type: string}
-      playwright_browsers_path: {type: string}
-  output_schema_json:
-    type: object
-    required: [schema_version, surface, results]
-    properties:
-      schema_version: {type: integer}
-      surface: {type: string}
-      results: {type: array}
-  files:
-    outputs:
-      max_files: 64
-      max_file_bytes: 1048576
-  requests:
-    network: none
-    read_roots: [/opt/orbit/bin/orbit, /opt/browser-kit]
-    write_roots: []
-    timeout_seconds: 3600
-```
-
-1. Copy and adapt the manifest as above.
-2. Set surfaces with `orbit config set ux_rules.surfaces '["cli", "ui"]'`.
-3. An operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576`, then `orbit run job ux_rules_pipeline`. Check `orbit run show` for counts and filed tasks before enabling the disabled daily routine.
-
-The fixture server starts inside the script network namespace and needs a working loopback interface, the browser kit, and the Orbit binary. A direct Linux fixture run works with those host prerequisites, but it does not prove the Bubblewrap profile: an unprivileged-namespace denial prevented a sandbox run on the implementation host. Verify the script step on a host where Bubblewrap is available; if its isolated loopback is down, the fixture server cannot bind and UI results report errors. `faketime` is optional: without it server-relative ages can drift, as described above.
-
-## Isolated evidence replay
-
-`node --test scripts/ux-rules/tests/step.test.mjs` reproduces adapter evidence loss on
-the old adapter and verifies retention, deduplication and explicit invalid/budget failures.
-On Linux, the public engine/filer regression runs the real adapter and output publisher
-with a fixture launcher, disposable user state, and a valid PNG:
-
-```sh
-ORBIT_UX_EVIDENCE_REPORT_DIR="$PWD/.orbit/tmp/ux-evidence-replay" \
-  scripts/build-budget.py -- cargo test -p orbit-core --lib \
-  ux_evidence_survives_script_job_filer_cleanup_and_checkpoint_reuse -- --nocapture
-```
-
-The report directory receives `attached.png` read back from the finding task after script
-scratch cleanup, and a digest/producer receipt. The same test proves identical-run dedup,
-child checkpoint reuse, unrelated-run and descriptor substitution refusal, missing
-checkpoints, invalid names, size limits and changed producer bytes. To perform the private
-real-script replay on an owner where the unchanged Bubblewrap profile can start, add
-`ORBIT_UX_EVIDENCE_CONTAINED=1` to that command. This selects Core’s real script launcher;
-it changes no sandbox, network, program or path grants. Keep its receipt distinct from
-the fixture-launcher receipt. The parent operator owns that contained proof and the real
-dashboard replay before merge; fixture-launcher evidence makes neither claim.
-
-## Handoff: ux-review auto-tasks after the routine (phase 3)
-
-Once the routine runs, `ux-review-ui` and `ux-review-cli` stop running the runner themselves: each pass reads the latest `ux_rules_pipeline` run's filing output (counts, filed and commented tasks) and the open `ux-rules`-tagged tasks, treats every filed fingerprint as known, and keeps only judgement findings. With measurement gone they drop to `medium` complexity and a weekly cadence (`every_minutes` 10080). These are operator-configuration changes (this lane is not granted `orbit.auto_task.update`); apply them on the owner workspace as field-scoped patches alongside the phase-1/2 handoffs below: set `complexity` to `medium`, `every_minutes` to 10080, and replace each "Run the … rules first" section with "Read the latest ux-rules routine results first" wording that names `orbit run show` on the newest `ux_rules_pipeline` run and the open tasks tagged `ux-rules`.
+Failures and successes are kept apart. Failed responses keep method, endpoint, status, failure class and the initiator stack; failed requests keep their initiator. A response with status below 400 is never a diagnostic: it is a passing observation of its request cause, which is how a repaired endpoint credits a known group. Successes are deduplicated by method, URL and initiator in their own list of at most 100 per page (`counts.successful_responses`); further ones are counted in `counts.successful_responses_omitted` and only withhold credit from the causes they would have repaired. Request contexts are retired when the request finishes, so static resources cannot exhaust the bounded lists. More than 100 requests in flight, or more than 100 failures of one kind, mark the list dropped. That is a real coverage gap: the rule records a `diagnostic-limit` error observation, and that target earns no pass credit.
 
 ## Handoff: ux-review-cli auto-task update
 

@@ -163,9 +163,6 @@ impl OrbitRuntime {
                         admission_holds.insert(task.id.clone(), wait);
                     }
                 }
-                Some(PilotAdmissionHold::UnverifiedFinding(hold)) => {
-                    admission_holds.insert(task.id.clone(), hold.detail());
-                }
                 _ => {}
             }
             // Exclude unsatisfiable requirements before candidate bundle reads;
@@ -270,7 +267,6 @@ impl OrbitRuntime {
                     Some(PilotAdmissionHold::StaleAssessment(detail)) => Ok(Some(detail)),
                     Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                     Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                    Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),
                     Some(PilotAdmissionHold::NativeOs(hold)) => {
                         Ok(hold.wait_on(task, request.os, machine_id))
                     }

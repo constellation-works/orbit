@@ -199,8 +199,8 @@ moved the backlog forecast out of `task` to its own place in the order:
 - **Ports.** A lower module that needs behaviour from a higher one owns a
   trait. The higher module implements it on `OrbitRuntime`, so composing the
   runtime binds it, and the lower module never names the higher one.
-  `task::TaskAutomationPort` gives task-pilot, finding-verification and
-  escalation-triage steps the state claim, staleness, fingerprints and live
+  `task::TaskAutomationPort` gives task-pilot and
+  escalation-triage steps (finding-verification steps too, until [ORB-22844]) the state claim, staleness, fingerprints and live
   holders, and since [ORB-17943] also atomic pilot task reservation and a
   bounded Git reader (`task::SourceGit`, which `automation`'s `Source`
   implements), and `automation` implements it. `job::ReviewAdmissionHook` gives job submission, replay and

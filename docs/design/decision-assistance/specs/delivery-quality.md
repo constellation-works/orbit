@@ -101,7 +101,8 @@ probability is not evidence of calibration.
 
 Use narrow predicates or comparisons where labels show that the ordinal
 question is unreliable. Do not infer verified defects or severity from a low
-grade. The existing finding-verification path still owns those decisions.
+grade. Review-finding verdicts (the task pilot's and the implementer's invalid-finding
+routes) still own those decisions.
 
 ## Evidence packet and coverage
 

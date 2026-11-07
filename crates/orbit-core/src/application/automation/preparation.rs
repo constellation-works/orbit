@@ -664,17 +664,6 @@ pub(crate) fn active_task_pilot_preparations(
     Ok(prepared_by_task)
 }
 
-/// Tasks held by active finding verification runs, by their successful
-/// preparation checkpoints.
-pub(crate) fn active_finding_verifications(
-    runtime: &OrbitRuntime,
-) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    active_preparations(
-        runtime,
-        crate::application::contracts::FINDING_VERIFICATION_JOB,
-    )
-}
-
 pub(crate) fn active_escalation_triages(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {

@@ -60,7 +60,7 @@ set, a covered requirement refuses the run before launch. `final_recovery`,
 `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
 `review_reconciliation_review` and `task_pilot` drop that
 requirement from the requested list and record a note; it stays out of the
-callable set. The shipped `verify_finding`,
+callable set. The shipped
 `image_input_probe`, `resident_cycle` and `triage_escalation` activities use
 the same non-implementer rule.
 
@@ -291,14 +291,9 @@ An empty block publishes `[]`. The errors array is retained in successful
 compound checkpoints and restored on resume. Choose an errors key distinct
 from the step's id and collect alias.
 
-The shipped finding verification job passes these errors into apply as
-`partition_errors`. A failed partition stays unverified with `verifier_failed`
-and its crew and diagnostic; a successful verifier that omits a task's verdict
-still reports `missing_verdict`. Native pinned-source inspection supports
-Codex and Claude, so verifiers are drawn only from crews of those providers;
-a tier without one passes to the next tier and then the default crew. A
-verifier that still fails, for any reason, keeps its refusal alongside
-successful partitions' verdicts.
+The shipped escalation triage job publishes its triagers' errors this way
+(`errors: triage_errors`), so one failed partition does not hide its
+siblings' results.
 
 ## Fan-out and fan-in
 
@@ -307,22 +302,22 @@ once per item, with bounded concurrency. A fan-out step always pairs
 `fan_out` with `fan_in` on the same step:
 
 ```yaml
-- id: verifiers
+- id: triagers
   when: "{{ steps.prepare.output.partition_count }} != 0"
   fan_out:
     items: "{{ steps.prepare.output.partitions }}"
     max_workers: 5
     worker:
-      id: verifier
-      target: activity:verify_finding
+      id: triager
+      target: activity:triage_escalation
       default_input:
         task_ids: "{{ item.task_ids }}"
         partition_index: "{{ item.partition_index }}"
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
   fan_in:
     join: { mode: any }
-    collect: verdict_results
-    errors: verdict_errors
+    collect: triage_results
+    errors: triage_errors
 ```
 
 - `fan_out.items` is a template that must render to a JSON array; text
@@ -339,7 +334,7 @@ once per item, with bounded concurrency. A fan-out step always pairs
 - `fan_in.join` decides the step's success from the workers' results (see
   the join modes above). `fan_in.collect` additionally publishes the
   collected outputs under that pipeline key, readable downstream as
-  `{{ steps.verdict_results.output }}`; the outputs are always recorded
+  `{{ steps.triage_results.output }}`; the outputs are always recorded
   under the fan-out step's own `id` too. `fan_in.errors` publishes the
   position-aligned error array described above.
 
@@ -347,11 +342,14 @@ Downstream steps then consume the collection like any other step output:
 
 ```yaml
 - id: apply
-  target: activity:apply_finding_verification
+  target: activity:apply_triage
   default_input:
-    results: "{{ steps.verdict_results.output }}"
-    partition_errors: "{{ steps.verdict_errors.output }}"
+    results: "{{ steps.triage_results.output }}"
+    partition_errors: "{{ steps.triage_errors.output }}"
 ```
+
+(`apply_triage` stands for your own apply activity; the shipped triage job
+records its results without one.)
 
 When to choose fan-out over `parallel`: `parallel` names a fixed set of
 different branches in the YAML; fan-out derives its branches at runtime

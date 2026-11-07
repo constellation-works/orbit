@@ -758,7 +758,6 @@ fn pilot_hold_classification(hold: &PilotAdmissionHold) -> &'static str {
         PilotAdmissionHold::OperatorValidation(_) => "operator_validation",
         PilotAdmissionHold::HostOperational(_) => "host_operational",
         PilotAdmissionHold::NativeOs(_) => "native_os",
-        PilotAdmissionHold::UnverifiedFinding(_) => "unverified_review_finding",
     }
 }
 

@@ -716,7 +716,7 @@ fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
     );
 }
 
-/// A state-triggered routine shaped like the seeded triage definitions.
+/// A state-triggered routine shaped like the seeded task-pilot definition.
 fn state_routine(name: &str, kind: &str) -> LoadedRoutine {
     let yaml = format!(
         r#"schemaVersion: 1
@@ -733,7 +733,7 @@ trigger:
     batch_size: 5
     retries: 1
     deadline_minutes: 90
-target: job:escalation_triage_pipeline
+target: job:task_pilot_pipeline
 policy:
   timeout_minutes: 90
   overlap: forbid
@@ -757,19 +757,19 @@ fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates(
     let store = Store::open_in_memory().expect("in-memory store");
     let temporal_and_state = collection(vec![
         routine_spec(
-            "temporal-triage",
+            "temporal-pilot",
             "0 * * * *",
             "skip",
             "allow",
-            "escalation_triage_pipeline",
+            "task_pilot_pipeline",
             (0, 1),
             30,
         ),
-        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+        state_routine("task-pilot", "preparation_eligible"),
     ]);
     let same_kind = collection(vec![
-        state_routine("pilot-warning-triage", "pilot_warnings_held"),
-        state_routine("pilot-warning-copy", "pilot_warnings_held"),
+        state_routine("task-pilot", "preparation_eligible"),
+        state_routine("task-pilot-copy", "preparation_eligible"),
     ]);
 
     for coll in [temporal_and_state, same_kind] {

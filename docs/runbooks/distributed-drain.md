@@ -393,10 +393,12 @@ to stderr and includes them in JSON `warnings`. A newer clean assessment clears
 the warning text; ordinary comments do not.
 
 **Pilot warning holds.** A holding warning finding waits in `proposed` until
-an operator decides it. The seeded `pilot-warning-triage-<workspace>` routine
-(state trigger `pilot_warnings_held`, job `escalation_triage_pipeline`) ships
-disabled; enabled on the owner, it reads each held assessment once with a
-hard-tier crew other than the one that wrote it, and records either a decision
+an operator decides it. The dashboard's Triage action on a held task runs
+`escalation_triage_pipeline` on the owner (the scheduled
+`pilot-warning-triage` routine and its `pilot_warnings_held` trigger were
+removed [ORB-22844]). It reads the held assessment with a crew from
+`workflow.purpose_crews.pilot_warning_triage`, else the hard tier, other than
+the one that wrote it, and records either a decision
 proposal (two or three options and a recommendation) or the human action that
 settles the hold. Each is one system comment headed `pilot_warning_triage`,
 quoting the holding findings, plus a `pilot_warning_triaged` history marker
@@ -405,7 +407,6 @@ approves, promotes, clears the hold or edits the task, and an agent's
 `task-pilot-admission:` comment decides nothing. Inspect before acting:
 
 ```bash
-orbit routine list                       # find pilot-warning-triage-<workspace>
 orbit tool run orbit.task.block_triage \
   --input '{"action":"candidates","subject":"pilot_warning"}'
 orbit task show <task-id>                # latest assessment and the triage comment

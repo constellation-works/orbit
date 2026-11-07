@@ -157,7 +157,6 @@ pub(super) fn project_readiness_tasks(
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff
                     | BacklogTaskExclusionReason::NativeOsRequired
-                    | BacklogTaskExclusionReason::UnverifiedReviewFinding
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
                     | BacklogTaskExclusionReason::AwaitingExclusiveSlot

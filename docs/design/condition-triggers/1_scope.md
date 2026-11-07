@@ -40,8 +40,9 @@ about missing predicates or edge state describe the motivation, not current gaps
   unknown fields.
 - **Typed state kinds.** `StateTriggerKind`
   (`crates/orbit-types/src/workflow/automation/members.rs`) has these kinds:
-  `preparation_eligible`, `finding_unverified`, `pilot_warnings_held`,
-  `decision_requested`, and the retired `block_escalated` and `execution_failed`. Each
+  `preparation_eligible`, `decision_requested`, and the retired `block_escalated`,
+  `execution_failed`, `finding_unverified` and `pilot_warnings_held` (the last two retired
+  in [ORB-22844]). Each
   kind has one Core observation rule
   (`crates/orbit-core/src/application/automation/members/member_host/observation.rs`).
   The only configurable predicate is `PreparationEligibility`, a fixed struct of
@@ -175,14 +176,15 @@ express:
   ([automation-triggers §3–5](../automation-triggers/2_design.md#3-delivery-identity-and-captured-coverage)).
   "Some deliveries landed" is easy to write as an expression. "Every landed commit
   was examined exactly once" is not.
-- **`preparation_eligible` and `finding_unverified` stay typed.** They key members on
-  a material fingerprint and settle each member through an accepted assessment or
-  verdict. A boolean can't supply a fingerprint or a receipt.
+- **`preparation_eligible` stays typed.** It keys members on
+  a material fingerprint and settles each member through an accepted assessment
+  (`finding_unverified`, which settled through a verdict, was retired in [ORB-22844]). A boolean can't supply a fingerprint or a receipt.
 - **`cron` and `every_minutes` stay typed.** They carry a slot identity and the
   `missed_run` policy. A `now`-based condition fires on an edge, not a slot, so it
   can't say "the 09:00 slot was missed".
-- **`pilot_warnings_held` is a preset candidate** (`block_escalated`, its
-  `triage_candidacy` sibling, is retired). It has a one-rule membership, the
+- **`pilot_warnings_held` was a preset candidate** (`block_escalated`, its
+  `triage_candidacy` sibling, is retired, and [ORB-22844] retired `pilot_warnings_held`
+  itself; pilot-warning triage now starts from the dashboard's Triage action). It has a one-rule membership, the
   shared promotion predicate, and settles from a marker
   ([automation-triggers §6.1](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held)).
   It could become a shipped condition preset. Three things are needed
@@ -1347,7 +1349,7 @@ target: job:media_ingest_pipeline    # workspace-defined
 6. **Later.** Each of these is filed only when needed:
    - task dirty-ID hints and OS file notifications;
    - notices from a follower-evaluated condition, relayed to the owner;
-   - a preset for `pilot_warnings_held` (§1);
+   - a preset for pilot-warning holds (§1), should scheduled triage return;
 
 ## Open questions
 

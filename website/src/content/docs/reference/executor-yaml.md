@@ -217,7 +217,7 @@ of your hosts.
 
 ## Inspection runs: `inspection_args`
 
-Task pilot, finding verification and escalation triage inspect pinned source
+Task pilot and escalation triage inspect pinned source
 with the provider CLI's own file-read and shell tools. `inspection_args` names
 the arguments appended to that executor's `args` for those runs only:
 

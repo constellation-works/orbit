@@ -38,7 +38,7 @@ shipping its machinery. Configuration keys are in
 [1_scope.md › Configuration](./1_scope.md#configuration).
 
 The view manifest (§3) and browser-context settings (§4.2) landed in [ORB-19975],
-on the [UX rules](../../ux-rules/1_scope.md) runner; its UI rules are this design's
+on the [UX rules](../ux-rules/1_scope.md) runner; its UI rules are this design's
 deterministic checks (§7).
 
 ## 1. Placement in delivery
@@ -610,7 +610,7 @@ otherwise. The review step does not need the kit, so it may run wherever its cre
 `visual_checks` runs before any model call, on the candidate captures' live pages (the
 driver keeps each context open until its checks have run). Two kinds of check:
 
-- **The workspace's UI rules.** Every [UX rule](../../ux-rules/1_scope.md) with surface `ui`
+- **The workspace's UI rules.** Every [UX rule](../ux-rules/1_scope.md) with surface `ui`
   whose targets include the mock's view, run at the mock's state, theme and width. A rule's
   `fail` is a finding with the rule's severity, measurements and region. The same rules the
   scheduled routine runs; no second implementation.
@@ -825,7 +825,7 @@ Every finding, check findings included, is verified in-line by `visual_verify` w
 other than the reviewer's (§9.4), before `visual_settle`. In-line, not through the
 asynchronous `finding_verification_pipeline`, because a blocking finding must be settled
 before the code review starts, and the images are already staged. The verifier uses the
-existing verdict schema ([finding verification §3](../../finding-verification/2_design.md#3-verdict-schema)),
+existing verdict schema ([finding verification §3](../finding-verification/2_design.md#3-verdict-schema)),
 with one extension: an evidence location may be an image region (`visual/<…>.png#x,y,w,h` or
 `mocks/<…>.png#x,y,w,h`) from this delivery instead of `path:line`. It returns CONFIRMED or
 REJECTED, a confidence, and for CONFIRMED a severity, which may differ from the reviewer's.

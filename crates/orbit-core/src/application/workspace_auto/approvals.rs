@@ -37,25 +37,19 @@
 //! `pilot_verified_no_diff` with the pilot's evidence. An approval pass
 //! archives one Orbit automation filed once its cited commits are proven on
 //! the base branch; the read-only readiness view only reports it.
-//!
-//! While the workspace sets `[review] verify_findings`, a review-filed bug
-//! without a CONFIRMED verification verdict is held as
-//! `unverified_review_finding` before it costs a pilot: approval would refuse
-//! it anyway, and the detail names the verification job.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskStatus, TaskType};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskStatus};
 use orbit_types::workflow::{DrainHoldFinding, DrainWaitingTask};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskAutomationPort, TaskListFilter,
-    UNVERIFIED_REVIEW_FINDING, metadata_task,
+    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskAutomationPort, TaskListFilter, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
@@ -197,16 +191,6 @@ pub(super) fn approval_snapshot(
         }
         if let Some(reason) = disqualified {
             snapshot.held.push(held(reason, None, Vec::new()));
-            continue;
-        }
-        if task.task_type == TaskType::Bug
-            && let Some(hold) = runtime.unverified_finding_hold(&runtime.get_task(&task.id)?)?
-        {
-            snapshot.held.push(held(
-                UNVERIFIED_REVIEW_FINDING,
-                Some(hold.detail()),
-                Vec::new(),
-            ));
             continue;
         }
         let history = runtime.get_task_history(&task.id)?;

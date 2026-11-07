@@ -101,12 +101,6 @@ impl TaskAutomationPort for OrbitRuntime {
         preparation::active_task_pilot_preparations(self)
     }
 
-    fn finding_verification_holders(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-        preparation::active_finding_verifications(self)
-    }
-
     fn escalation_triage_holders(&self) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
         preparation::active_escalation_triages(self)
     }

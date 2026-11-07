@@ -287,7 +287,50 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "workflow.purpose_crews.visual_review",
         VISUAL_REVIEW_REMOVED_NOTE,
     ),
+    // [ORB-22844] The evolution-pass, ux-rules and finding-verification
+    // routines were removed on 2026-11-07. Each key loads, warns and is
+    // ignored; code-health-sweep deletes these entries after 2026-12-07, when
+    // they become ordinary unknown settings.
+    (
+        "resident.evolution.min_occurrences",
+        EVOLUTION_PASS_REMOVED_NOTE,
+    ),
+    (
+        "resident.evolution.min_distinct_cycles",
+        EVOLUTION_PASS_REMOVED_NOTE,
+    ),
+    (
+        "resident.evolution.min_distinct_mandates",
+        EVOLUTION_PASS_REMOVED_NOTE,
+    ),
+    (
+        "resident.evolution.min_cost_minutes",
+        EVOLUTION_PASS_REMOVED_NOTE,
+    ),
+    (
+        "resident.evolution.max_proposals",
+        EVOLUTION_PASS_REMOVED_NOTE,
+    ),
+    ("ux_rules.surfaces", UX_RULES_REMOVED_NOTE),
+    ("ux_rules.runner", UX_RULES_REMOVED_NOTE),
+    ("ux_rules.ui_base_url", UX_RULES_REMOVED_NOTE),
+    ("ux_rules.max_new_tasks", UX_RULES_REMOVED_NOTE),
+    ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
+    ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
+    ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
 ];
+
+const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
+     removed; resident.evolution.window_days and decline_suppress_days still apply to the \
+     evolution ledger. Delete the key. This key stops being recognised after 2026-12-07";
+
+const UX_RULES_REMOVED_NOTE: &str = "ignored: the ux-rules routine and its findings filer were \
+     removed; run scripts/ux-rules/run.mjs by hand and delete the [ux_rules] table. This key \
+     stops being recognised after 2026-12-07";
+
+const VERIFY_FINDINGS_REMOVED_NOTE: &str = "ignored: finding verification was removed, so a \
+     review-filed bug is approved and promoted like any other task; delete the key. This key \
+     stops being recognised after 2026-12-07";
 
 const REGRESSION_RISK_REMOVED_NOTE: &str = "ignored: regression-risk prompt marks were removed; \
      task riskiness scores use a fixed 30-day window and a minimum support of 5. Delete the \

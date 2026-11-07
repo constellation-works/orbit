@@ -180,35 +180,6 @@ impl SourceSnapshot {
         }
     }
 
-    /// How many lines the file at repository-relative `path` holds at the
-    /// pinned revision, or `None` when no file is there.
-    pub(crate) fn file_line_count(
-        &self,
-        action: &str,
-        workspace: &Path,
-        path: &str,
-    ) -> Result<Option<usize>, DispatchError> {
-        if self.path_kind(action, workspace, Path::new(path))? != GitPathKind::Blob {
-            return Ok(None);
-        }
-        let output = git(
-            action,
-            workspace,
-            &[
-                "cat-file",
-                "blob",
-                &format!("{}:{path}", self.source_revision),
-            ],
-        )?;
-        if !output.success {
-            return Err(DispatchError::action_failed(
-                action,
-                format!("read {path} at the pinned source: {}", output.stderr.trim()),
-            ));
-        }
-        Ok(Some(output.stdout.lines().count()))
-    }
-
     /// Text of the blob at repository-relative `path` at the pinned revision.
     ///
     /// `None` when the path is not a safe repository-relative blob path or no
@@ -328,19 +299,6 @@ pub(crate) struct InspectionProofError {
 }
 
 impl InspectionProofError {
-    /// The stable reason code. `inspection_proof_missing`: the result
-    /// reported no complete proof, the mark of a crew whose native tools
-    /// never ran (a misconfigured executor). `inspection_revision_mismatch`:
-    /// it reported a pair that is not the pinned revision's, the mark of a
-    /// wrong checkout.
-    pub(crate) fn reason(&self) -> &'static str {
-        if self.missing {
-            "inspection_proof_missing"
-        } else {
-            "inspection_revision_mismatch"
-        }
-    }
-
     pub(crate) fn message(&self) -> &str {
         &self.message
     }

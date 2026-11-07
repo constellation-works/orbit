@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (11)
+### Building (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -127,7 +127,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Apply ORB-19976's operator handoff so UX reviews consume routine results | claude |
 
 ### Designing (4)
 
@@ -138,7 +137,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (37)
+### Shipped (36)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -152,7 +151,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
-| [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | — | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
@@ -217,7 +215,6 @@ a conservative title/status fallback.
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
-| [Finding Verification](./design/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Implemented | claude |
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data | Draft | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Implemented | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
@@ -250,7 +247,6 @@ a conservative title/status fallback.
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Implemented | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | Draft | Orbit |
 
@@ -264,7 +260,9 @@ They are reference only and are not authoritative.
 | [Crew Ladder](./design/_archived/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Deprecated | claude |
 | [Crew Performance](./design/_archived/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Deprecated | claude |
 | [Explore Brief](./design/_archived/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Deprecated | claude |
+| [Finding Verification](./design/_archived/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Deprecated | claude |
 | [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |
+| [Ux Rules](./design/_archived/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work | Deprecated | claude |
 | [Visual Review](./design/_archived/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Deprecated | claude |
 
 Folder layout, frontmatter, ADR, and ownership rules live in

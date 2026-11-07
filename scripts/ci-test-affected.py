@@ -115,18 +115,14 @@ FILE_READERS = (
     # The `claude plugin eval` suite runs outside CI. No Cargo test, guard
     # or CI job reads its cases, graders or mocks.
     (Path("plugin/evals"), ()),
-    # orbit-core's visual-capture driver loads scripts/ux-rules/ui/*.mjs, and
-    # every UI rule imports lib/ui-context.mjs. The rule-findings sweep reads
-    # README.md and copies step.mjs. The CLI rules, cli-context.mjs,
-    # manifest.mjs and the Node tests under tests/ have no Cargo reader, and
-    # no CI job runs those Node tests. run.mjs is not listed: nothing here
+    # The UX rules are a hand-run QA tool since the ux-rules routine and its
+    # filer were removed [ORB-22844]: the UI and CLI rules, their lib helpers,
+    # README.md and the Node tests under tests/ have no Cargo reader, and no
+    # CI job runs those Node tests. run.mjs is not listed: nothing here
     # executes the checkout's copy, and an undeclared path stays a full run.
-    # A parent scripts/ux-rules prefix would also select orbit-core for the
-    # CLI and test files.
-    (Path("scripts/ux-rules/ui"), ("orbit-core",)),
-    (Path("scripts/ux-rules/lib/ui-context.mjs"), ("orbit-core",)),
-    (Path("scripts/ux-rules/README.md"), ("orbit-core",)),
-    (Path("scripts/ux-rules/step.mjs"), ("orbit-core",)),
+    (Path("scripts/ux-rules/ui"), ()),
+    (Path("scripts/ux-rules/lib/ui-context.mjs"), ()),
+    (Path("scripts/ux-rules/README.md"), ()),
     (Path("scripts/ux-rules/lib/cli-context.mjs"), ()),
     (Path("scripts/ux-rules/lib/manifest.mjs"), ()),
     (Path("scripts/ux-rules/cli"), ()),

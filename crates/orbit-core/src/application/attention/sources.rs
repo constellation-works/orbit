@@ -129,9 +129,6 @@ fn hold_description(hold: &PilotAdmissionHold) -> (&'static str, Option<String>)
         }
         PilotAdmissionHold::HostOperational(hold) => ("host_operational", Some(hold.detail())),
         PilotAdmissionHold::NativeOs(_) => ("native_os", None),
-        PilotAdmissionHold::UnverifiedFinding(hold) => {
-            ("unverified_review_finding", Some(hold.detail()))
-        }
     }
 }
 fn decision_answers(subject: &Subject<'_>, request: &DecisionRequest) -> Vec<AttentionNext> {

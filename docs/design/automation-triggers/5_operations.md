@@ -745,24 +745,18 @@ excluded landings with their certificate and assurance label.
 ## State preparation [ORB-11331]
 
 > Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
-> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible`,
-> `finding_unverified` and `pilot_warnings_held` schedule work.
+> trigger kind still parses but has no shipped target and fires nothing. `finding_unverified` and
+> `pilot_warnings_held` are retired the same way [ORB-22844]. `preparation_eligible` schedules work.
 
-The same routine sweep now accepts `trigger.state` with one of four kinds.
-`finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
-It observes review-filed bug findings (type `bug` tagged `code-review`,
+The same routine sweep accepts `trigger.state`. `finding_unverified` [ORB-15662]
+targeted `job:finding_verification_pipeline` until [ORB-22844] removed that job; the kind
+still parses, observes nothing, and a routine on it loads as retired. It observed review-filed bug findings (type `bug` tagged `code-review`,
 `delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
-`someday` or `backlog` that carry no CONFIRMED verdict. Its fingerprint is the
-finding as filed: title, description, criteria, tags, type and selectors. It
-takes no `eligibility` or `freshness` block. The seeded
-`finding_verification.yaml` ships `enabled: false`, with the same
-seed-time `owner_machine` and `branch` as `task_pilot.yaml`. See
-[finding-verification](../finding-verification/2_design.md#7-state-trigger).
-`pilot_warnings_held` targets `job:escalation_triage_pipeline`: it observes
-proposed tasks whose latest task-pilot assessment holds promotion on warnings
-and records one triage marker per assessment. The seeded
-`pilot_warning_triage.yaml` also ships `enabled: false` with the same seed-time
-`owner_machine` and `branch`; see
+`someday` or `backlog` that carried no CONFIRMED verdict. See
+[archived finding verification](../_archived/finding-verification/2_design.md#7-state-trigger).
+`pilot_warnings_held` targeted `job:escalation_triage_pipeline` and is retired with its seeded
+`pilot_warning_triage.yaml` [ORB-22844]; the dashboard's Triage action still runs that job for
+one held task. See
 [Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held).
 `block_escalated` is retired: final recovery decides blocked tasks, so the
 seeded `blocked_task_triage.yaml` is gone and the loader skips a routine on that
@@ -893,7 +887,7 @@ Due members are admitted in batches [ORB-12746]. One pass claims up to
 `1..=min(50, max_items)`; the default is capped by `max_items`) that Core admits
 and that share one pinned source, oldest first, into a single attempt, and
 dispatches one pipeline run carrying every member's task id as an explicit
-`task_ids` entry. Finding verification also requires one stored `task.crew`
+`task_ids` entry. Finding verification (removed in [ORB-22844]) also required one stored `task.crew`
 [ORB-12761], so a member whose crew disagrees stays pending for the next
 admission. Task-pilot preparation admits every due crew in that batch
 ([ORB-16839]): prepare partitions the run by each task's stored crew and then

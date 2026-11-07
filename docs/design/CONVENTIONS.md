@@ -268,7 +268,6 @@ Retired features are removed from this table along with their folder.
 | Experiments | [docs/design/experiments/](./experiments/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
-| Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
 | Fleet Notices | [docs/design/fleet-notices/](./fleet-notices/) | claude |
 | Hidden Acceptance (archived) | [docs/design/_archived/hidden-acceptance/](./_archived/hidden-acceptance/) | claude |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
@@ -307,7 +306,6 @@ Retired features are removed from this table along with their folder.
 | Scheduled Tasks | [docs/design/scheduled-tasks/](./scheduled-tasks/) | claude |
 | Script Steps | [docs/design/script-steps/](./script-steps/) | claude |
 | Task Risk | [docs/design/task-risk/](./task-risk/) | codex |
-| UX Rules | [docs/design/ux-rules/](./ux-rules/) | claude |
 | Web Terminal | [docs/design/web-terminal/](./web-terminal/) | claude |
 | Workspace Agent Corpus | [docs/design/workspace-agent-corpus/](./workspace-agent-corpus/) | Orbit |
 

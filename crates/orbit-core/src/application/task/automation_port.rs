@@ -107,11 +107,6 @@ pub(in crate::application) trait TaskAutomationPort {
     /// with the holding run IDs.
     fn pilot_preparation_holders(&self) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError>;
 
-    /// Tasks live finding-verification runs hold, with the holding run IDs.
-    fn finding_verification_holders(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError>;
-
     /// Tasks live escalation-triage runs hold, with the holding run IDs.
     fn escalation_triage_holders(&self) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError>;
 
