@@ -92,9 +92,9 @@ def main():
     root = parser.parse_args().root.resolve()
     try:
         sources, reachable = scanner.scan(root, "macos")
-        failures = [f"{path.relative_to(root)}:{line}: immutable openpty argument: {argument}"
-                    for path in sorted(reachable)
-                    for line, argument in findings(sources[path])]
+        failures = sorted({f"{context.path.relative_to(root)}:{line}: immutable openpty argument: {argument}"
+                           for context in reachable
+                           for line, argument in findings(sources[context])})
     except (OSError, ValueError) as error:
         print(f"openpty portability: {error}", file=sys.stderr)
         return 1

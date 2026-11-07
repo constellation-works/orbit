@@ -104,6 +104,52 @@ class LinuxGatedTestItemTests(unittest.TestCase):
         files[SUITE] = f"{LINUX}\n" + files[SUITE].replace("mod linux;", f"{LINUX}\nmod linux;")
         self.check_tree(files, 0)
 
+    def test_redirected_descendants_keep_gates_and_loading_contexts(self):
+        incident = '#![cfg(test)]\nuse std::fs;\n' + linux_test('fs::read("x");')
+        for declaration, child in (("mod child;", "helpers/child.rs"),
+                                   ("mod nested { mod child; }", "helpers/nested/child.rs")):
+            with self.subTest(declaration=declaration):
+                files = {"crates/example/src/lib.rs": f'{LINUX} #[path = "helpers/provider.rs"] mod helper;',
+                         "crates/example/src/helpers/provider.rs": declaration,
+                         "crates/example/src/" + child: incident}
+                self.check_tree(files, 0)
+                files["crates/example/src/lib.rs"] = '#[path = "helpers/provider.rs"] mod helper;'
+                self.check_tree(files, 1, child + ":2:", "import `fs`")
+
+        files = {"crates/example/src/lib.rs": f'{LINUX} mod provider;\n'
+                 '#[path = "provider.rs"] mod redirected;',
+                 "crates/example/src/provider.rs": "mod child;",
+                 "crates/example/src/provider/child.rs": incident,
+                 "crates/example/src/child.rs": "pub fn portable() {}"}
+        self.check_tree(files, 0)
+        files["crates/example/src/lib.rs"] = 'mod provider;\n' + f'{LINUX} #[path = "provider.rs"] mod redirected;'
+        self.check_tree(files, 1, "provider/child.rs:2:")
+        files["crates/example/src/provider/child.rs"] = "pub fn portable() {}"
+        files["crates/example/src/child.rs"] = incident
+        self.check_tree(files, 0)
+        files["crates/example/src/lib.rs"] = files["crates/example/src/lib.rs"].replace(LINUX, "")
+        self.check_tree(files, 1, "src/child.rs:2:")
+
+    def test_redirected_descendant_use_keeps_parent_import_live(self):
+        files = {SUITE: 'use std::fs;\n#[path = "helpers/provider.rs"] mod helper;\n'
+                 + linux_test('fs::read("x");'),
+                 "crates/example/tests/helpers/provider.rs": "mod child;",
+                 "crates/example/tests/helpers/child.rs":
+                 '#[test]\nfn portable() { crate::fs::read("y"); }'}
+        self.check_tree(files, 0)
+        files["crates/example/tests/helpers/child.rs"] = LINUX + "\n" + files["crates/example/tests/helpers/child.rs"]
+        self.check_tree(files, 1, "import `fs`")
+
+    def test_redirected_child_remains_reachable_as_a_cargo_target(self):
+        files = {"crates/example/Cargo.toml": MANIFEST + '[[test]]\nname = "child"\n'
+                 'path = "src/helpers/child.rs"\n',
+                 "crates/example/src/lib.rs": f'{LINUX} #[path = "helpers/provider.rs"] mod helper;',
+                 "crates/example/src/helpers/provider.rs": "mod child;",
+                 "crates/example/src/helpers/child.rs": '#![cfg(test)]\nuse std::fs;\n' + linux_test('fs::read("x");')}
+        self.check_tree(files, 1, "helpers/child.rs:2:")
+        files["crates/example/Cargo.toml"] = MANIFEST
+        self.check_tree(files, 0)
+
     def test_glob_import_with_no_code_compiled_on_macos_is_reported(self):
         files = {SUITE: "mod probes;\n",
                  "crates/example/tests/suite/probes.rs": "use super::*;\n\n" + linux_test("helper();")}
