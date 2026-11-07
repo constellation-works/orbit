@@ -1,11 +1,11 @@
 ---
 title: "Scope: human decision channel"
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: shipped
-next: "Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed"
+next: "Operator may enable a precedent category after shadow evidence; channel shipped"
 feature: human-decision-channel
 doc_role: scope
 type: design
@@ -214,20 +214,20 @@ Slice 7 hardening is done in core ([ORB-18308]) and in the plugin ([ORB-18309]).
 Later extensions of the same record, also done: final-recovery `decide`
 ([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
 
-Proposed, not built: precedent-answered decisions ([ORB-21089]). Requests gain a
+Implemented, default-off: precedent-answered decisions ([ORB-21089]). Requests gain a
 per-answer risk tier and a stored category, a model answer is recorded as
 `answered_by: model` with a veto digest, and the channel consults the
 decision-assistance consumer before notifying. Only `routine` and `reversible`
 requests in operator-enabled categories can be answered without the human.
 [2_design.md](./2_design.md) §11 holds the channel changes; the
 [consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
-rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are proposed.
+rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are done.
 
-Proposed, not built: resident orchestrators use this channel as their human path
+Resident orchestrators use this channel as their human path
 ([resident-orchestrator](../resident-orchestrator/2_design.md#3-authority)). A new
 `resident_authority` gate carries a manager-relayed authority grant, quoted verbatim, and the
 grant applies only when the human answers it. Resident escalations compose the existing
-agent-raised requests on human-crew tasks. Slice [ORB-21242] is proposed.
+agent-raised requests on human-crew tasks. Slice [ORB-21242] is done.
 
 ## Open questions
 
@@ -263,10 +263,10 @@ agent-raised requests on human-crew tasks. Slice [ORB-21242] is proposed.
 
 ## Task References
 
-- [ORB-21242] — resident-orchestrator slice 1: proposes the `resident_authority` decision gate
-- [ORB-21097] — proposes category enablement, self-answer and the notification wait for precedent decisions.
-- [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
-- [ORB-21091] — proposes per-answer risk tier and a stored category on decision requests.
+- [ORB-21242] — resident-orchestrator slice 1: implements the `resident_authority` decision gate
+- [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
+- [ORB-21092] — implements model-answer provenance, the `model_answer_review` gate and veto.
+- [ORB-21091] — implements per-answer risk tier and a stored category on decision requests.
 - [ORB-21089] — designs precedent-answered decisions (2_design.md §11).
 - [ORB-20736] — adds agent-raised multiple-choice questions on human-crew tasks.
 - [ORB-20629] — makes final recovery the one decider for a blocked task, with a self-contained `decide` request.

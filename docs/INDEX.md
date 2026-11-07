@@ -122,7 +122,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials) | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Review precedent-decision consumer; slices ORB-21091..21097 proposed; old rollout parked | codex |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Operator evidence review before enabling any precedent category; rollout parked | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
@@ -160,7 +160,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | — | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
-| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed | claude |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Operator may enable a precedent category after shadow evidence; channel shipped | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |

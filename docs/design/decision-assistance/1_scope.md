@@ -1,11 +1,11 @@
 ---
 title: "Scope: bounded decision assistance"
 owner: codex
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: building
-next: "Review precedent-decision consumer; slices ORB-21091..21097 proposed; old rollout parked"
+next: "Operator evidence review before enabling any precedent category; rollout parked"
 feature: decision-assistance
 doc_role: scope
 type: design
@@ -31,11 +31,11 @@ durable ledger and public application boundary. A new
 offline evaluation candidate. Its offline contract and a default-off owner-clock shadow
 runtime are in the repository; this design does not activate it or authorize adoption.
 A [precedent-decision consumer](specs/precedent-decisions.md) ([ORB-21089]) is
-proposed as a separate design. Its labels are real human answers to decision
+implemented and default-off. Its labels are real human answers to decision
 requests, measured in shadow per category against a prospective holdout. It
 may answer on its own only in categories the operator enables after a measured
 pass, and never for irreversible, authority, spending or unknown-tier requests.
-Nothing in it is implemented or activated.
+Nothing self-answers until the operator enables a category.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -389,12 +389,14 @@ design and authorized no implementation by itself.
    and its own adoption decision. Any automatic application of annotations or descriptive tags needs its own evidence
    and action contract. Keep execution-bearing tags (`ui`, `os:`, `crew-purpose:`,
    approval/review skips and instruction mappings) outside that automatic scope.
-5. **Precedent-answered decisions — proposed** ([ORB-21089]). The
-   [consumer spec](specs/precedent-decisions.md) files seven slices as proposed
-   tasks ([ORB-21091]–[ORB-21097]): request risk tier and category, model-answer
+5. **Precedent-answered decisions — implemented, default-off** ([ORB-21089]). The
+   [consumer spec](specs/precedent-decisions.md) filed seven slices
+   ([ORB-21091]–[ORB-21097]): request risk tier and category, model-answer
    provenance and veto, the precedent-provider contract, packet-bound choices in
    the service, the shadow consumer, evaluator contract `/4`, and per-category
-   enablement with demotion. None is approved to build.
+   enablement with demotion. All seven are done; [ORB-22313] routes task precedent
+   assistance through a task-owned port. Nothing self-answers until the operator
+   enables a category after a measured pass.
 
 ## Open questions
 
@@ -433,13 +435,14 @@ design and authorized no implementation by itself.
 
 ## Task References
 
-- [ORB-21097] — proposes category enablement, self-answer, holdback and demotion for precedent decisions.
-- [ORB-21096] — proposes the `decision-assistance-eval/4` evaluator contract.
-- [ORB-21095] — proposes the shadow precedent-decision consumer.
-- [ORB-21094] — proposes packet-bound choice questions in the assistance service.
-- [ORB-21093] — proposes the precedent-provider contract and built-in provider.
-- [ORB-21092] — proposes model-answer provenance, the review gate and veto.
-- [ORB-21091] — proposes risk tier and category on decision requests.
+- [ORB-22313] — routes task precedent assistance through a task-owned port.
+- [ORB-21097] — implements category enablement, self-answer, holdback and demotion for precedent decisions.
+- [ORB-21096] — implements the `decision-assistance-eval/4` evaluator contract.
+- [ORB-21095] — implements the shadow precedent-decision consumer.
+- [ORB-21094] — implements packet-bound choice questions in the assistance service.
+- [ORB-21093] — implements the precedent-provider contract and built-in provider.
+- [ORB-21092] — implements model-answer provenance, the review gate and veto.
+- [ORB-21091] — implements risk tier and category on decision requests.
 - [ORB-21089] — designs the precedent-answered decision consumer.
 - [ORB-20006] — implements the default-off delivery-quality shadow runtime.
 - [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.

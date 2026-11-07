@@ -9,8 +9,8 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 ---
 
 # Scope: performance-weighted crew selection
@@ -96,7 +96,8 @@ raw(cell) = 100 + Σ term [weight(term) × (actual − expected) × 100 / term_u
 
 Review terms contribute zero when the cell has no reviewed tasks. Both actual
 and expected review rates use the same reviewed population, so different
-review coverage alone gives no credit or penalty.
+review coverage alone gives no credit or penalty ([ORB-21946] scores implementer
+review terms against reviewed deliveries).
 
 100 means the crew matches the fleet on that type in that tier. Sparse `(tier, type)` fleet
 cells, under 30 observations, fall back to the tier's rate, as sparse tiers already pool today.
@@ -339,6 +340,7 @@ changes no draws, pools, weights or configuration, and no routine runs it.
 - [ORB-17818] — adds shadow modes and the share comparison report.
 - [ORB-17824] — classifies a `symbol:` context file by its backing path.
 - [ORB-18143] — adds the offline decision-tree report that suggests type-list entries.
+- [ORB-21946] — scores implementer review terms against reviewed deliveries.
 - [ORB-20391] — keeps snapshot cells on execution scope `all` while token metrics stay managed-only.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
