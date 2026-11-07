@@ -1,8 +1,8 @@
 ---
 title: Symbol Risk Index — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-11-05
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 feature: symbol-risk-index
 doc_role: design
@@ -100,9 +100,10 @@ manifest-declared filesystem and network permissions, after operator consent
 removed fail-closed ([ORB-00374]).
 [Script steps](../script-steps/1_scope.md), designed by [ORB-19294], now have manifests and
 grants ([ORB-19983]) and granted Linux execution under `linux-bwrap-script-v1`
-([ORB-19985]) and declared file inputs on Linux ([ORB-21297]); macOS execution remains a later
-phase. A granted script can now receive declared files on Linux, but it still has to meet the
-indexer's proposed file contract before it can replace the plugin tool.
+([ORB-19985]), declared file inputs on Linux ([ORB-21297]) and the macOS script sandbox
+profile `macos-sandbox-script-v1` ([ORB-21298]). A granted script can now receive declared
+files on Linux and macOS, but it still has to meet the indexer's proposed file contract before
+it can replace the plugin tool.
 
 **Invocation.** The routine's job calls the tool through the existing deterministic
 `plugin.tool_call` action, the one orbit-graph's own sync jobs use. Input:
@@ -546,5 +547,6 @@ same protocol and margin; the rerun has to clear it again from scratch.
 - [ORB-19983] — added script manifests, parsing and digest-bound grants
 - [ORB-19985] — executed granted script steps on Linux under the script sandbox profile
 - [ORB-21297] — admitted declared script file inputs on Linux, bound read-only at `in/<as>`
+- [ORB-21298] — added the macOS script sandbox profile, so granted script steps run on macOS
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
