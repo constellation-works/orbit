@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::PilotTaskReservation;
 use crate::application::task::TaskListFilter;
 use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
@@ -473,7 +474,7 @@ pub(crate) fn prepare(
     // Selection read the holders before any work. This re-check and this
     // run's reservation are one critical section of the commit boundary, so
     // of two runs preparing one task at once exactly one keeps it.
-    let held = runtime
+    let reservation = runtime
         .reserve_pilot_tasks(
             run_id,
             &retained
@@ -484,6 +485,28 @@ pub(crate) fn prepare(
         .map_err(|error| {
             DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
         })?;
+    let (held, reservation_deferred) = match reservation {
+        PilotTaskReservation::Reserved(held) => (held, None),
+        PilotTaskReservation::Deferred { reason } => {
+            for (task_id, snapshot, _) in retained.drain(..) {
+                excluded.record(&task_id, "pilot_reservation_lock_busy", &BTreeMap::new());
+                // Supersede this preparation attempt, not the task material.
+                // Apply carries these outcomes so state-triggered members are
+                // observed afresh instead of recorded as failed assessments.
+                superseded_during_preparation.push(json!({
+                    "task_id": task_id,
+                    "outcome": "superseded",
+                    "reason": "pilot_reservation_lock_busy",
+                    "status": snapshot["status"],
+                    "detail": reason,
+                }));
+            }
+            (
+                BTreeMap::new(),
+                Some(json!({"code": "lock_busy", "reason": reason})),
+            )
+        }
+    };
     let held_reason = if explicit_mode {
         "already_preparing"
     } else {
@@ -591,6 +614,7 @@ pub(crate) fn prepare(
         "partition_size": max_partition_size,
         "partition_count": partitions.len(),
         "partitions": partitions,
+        "reservation_deferred": reservation_deferred,
         "excluded": excluded.sample,
         "excluded_total": excluded.total,
         "excluded_by_reason": excluded.by_reason,

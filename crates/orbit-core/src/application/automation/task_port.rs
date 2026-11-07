@@ -13,6 +13,7 @@ use super::source::Source;
 use super::{members, pilot_reservation, preparation};
 use crate::OrbitRuntime;
 use crate::application::contracts::PilotFingerprints;
+use crate::application::contracts::PilotTaskReservation;
 use crate::application::task::{SourceGit, TaskAutomationPort};
 
 impl SourceGit for Source<'_> {
@@ -34,7 +35,7 @@ impl TaskAutomationPort for OrbitRuntime {
         &self,
         run_id: Option<&str>,
         task_ids: &[String],
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    ) -> Result<PilotTaskReservation, OrbitError> {
         pilot_reservation::reserve(self, run_id, task_ids)
     }
 

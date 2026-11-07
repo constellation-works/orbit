@@ -45,6 +45,8 @@ mod post_deploy;
 mod provider_hold;
 mod races;
 mod recheck;
+#[cfg(unix)]
+mod reservation_busy;
 mod review_evidence;
 mod settlement;
 mod source_moves;

@@ -17,6 +17,7 @@ use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::PilotTaskReservation;
 use crate::application::job::JobDrainPort;
 
 use super::preparation::active_task_pilot_preparations;
@@ -59,11 +60,13 @@ pub(super) fn reserve(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     task_ids: &[String],
-) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+) -> Result<PilotTaskReservation, OrbitError> {
     if task_ids.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(PilotTaskReservation::Reserved(BTreeMap::new()));
     }
-    runtime.owner_commit_boundary()?.with_admission(|| {
+    let mut operation_started = false;
+    let result = runtime.owner_commit_boundary()?.with_admission(|| {
+        operation_started = true;
         let mut held = active_task_pilot_preparations(runtime)?;
         held.retain(|task_id, holders| {
             if let Some(run_id) = run_id {
@@ -93,7 +96,19 @@ pub(super) fn reserve(
         }
         write(runtime, &reservations)?;
         Ok(held)
-    })
+    });
+    match result {
+        Ok(held) => Ok(PilotTaskReservation::Reserved(held)),
+        // Only a typed acquisition timeout before entering the reservation
+        // operation is safe to defer. A later error may follow writes, even
+        // when it also reports lock contention. Never replay that operation.
+        Err(error) if !operation_started && error.file_lock_timeout().is_some() => {
+            Ok(PilotTaskReservation::Deferred {
+                reason: error.to_string(),
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn run_is_live(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {

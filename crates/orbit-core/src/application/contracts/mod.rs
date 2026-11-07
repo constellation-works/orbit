@@ -43,8 +43,8 @@ pub(crate) use filing_tags::{
 pub(crate) use host_provider_hold::{HostProviderHold, canonical_provider};
 pub(crate) use jobs::LOCAL_ROUTE_JOB;
 pub use jobs::{ESCALATION_TRIAGE_JOB, FINDING_VERIFICATION_JOB, PULL_DRAIN_JOB};
-pub(crate) use pilot::PilotFingerprints;
 pub(in crate::application) use pilot::SUPERSEDED_BY_SOURCE;
+pub(crate) use pilot::{PilotFingerprints, PilotTaskReservation};
 pub use precedent_assist::{
     PrecedentAssistDemotion, PrecedentAssistEnablement, PrecedentAssistEnd, PrecedentAssistOutcome,
     PrecedentAssistOutcomeSource, PrecedentAssistState,
