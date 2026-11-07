@@ -170,6 +170,11 @@ fn status_request_wake_between_observe_and_publication_reaches_the_admitted_cycl
 
 #[test]
 fn invalid_mandate_refuses_control_except_stop_without_history() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::control_admission::invalid_mandate_refuses_control_except_stop_without_history",
+    ) {
+        return;
+    }
     let fx = fixture();
     let invalid = fx
         .runtime

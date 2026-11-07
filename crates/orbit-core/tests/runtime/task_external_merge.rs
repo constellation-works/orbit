@@ -669,6 +669,11 @@ impl Fixture {
 
 #[test]
 fn released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref",
+    ) {
+        return;
+    }
     for held in [true, false] {
         let fx = Fixture::new();
         // The captured branch remains authoritative when workspace config differs.
@@ -711,6 +716,11 @@ fn released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref()
 
 #[test]
 fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch",
+    ) {
+        return;
+    }
     for held in [true, false] {
         for rejected in [
             "open",
@@ -790,6 +800,11 @@ fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_capture
 
 #[test]
 fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::a_live_leaf_carrying_a_released_claim_task_prevents_settlement",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task = fx.released_pr(104, true, &fx.base);
     fx.forge.merge_recent(104, &task, BOT, &fx.base);
@@ -823,6 +838,11 @@ fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
 
 #[test]
 fn external_merge_settlement_refuses_every_ineligible_status() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::external_merge_settlement_refuses_every_ineligible_status",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     for status in [
         TaskStatus::Proposed,
@@ -861,6 +881,11 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
 
 #[test]
 fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_its_files() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_its_files",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     // ORB-16371: the operator merged the blocked task's delivery PR while
     // another task's run held a claim on the same files.
@@ -966,6 +991,11 @@ fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_
 
 #[test]
 fn the_operator_settles_one_task_from_a_merge_older_than_the_listing() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::the_operator_settles_one_task_from_a_merge_older_than_the_listing",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let reviewed = fx.add_task("Approved on the forge", TaskStatus::Review, &[70, 71]);
     let claimed = fx.add_task("Claimed by its own run", TaskStatus::Blocked, &[80]);
@@ -1166,6 +1196,11 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
 
 #[test]
 fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit",
+    ) {
+        return;
+    }
     for owner_pass in [false, true] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4930, Authority::Revoked);
@@ -1258,6 +1293,11 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
 
 #[test]
 fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path",
+    ) {
+        return;
+    }
     for authority in [Authority::Stopped, Authority::Revoked] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4939, authority);
@@ -1286,6 +1326,11 @@ fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
 
 #[test]
 fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged",
+    ) {
+        return;
+    }
     for (case, authority, reason) in [
         (
             "unapproved",
@@ -1349,6 +1394,11 @@ fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merg
 
 #[test]
 fn external_merge_recovery_suggestions_include_the_observed_claim_phase() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::external_merge_recovery_suggestions_include_the_observed_claim_phase",
+    ) {
+        return;
+    }
     for phase in ["claimed", "running", "repair_pending"] {
         let fx = Fixture::new();
         let task = fx.add_task("Live claim refusal", TaskStatus::InProgress, &[4935]);
@@ -1404,6 +1454,11 @@ fn external_merge_recovery_suggestions_include_the_observed_claim_phase() {
 
 #[test]
 fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither",
+    ) {
+        return;
+    }
     fn settle(
         fx: &Fixture,
         handoff: &Handoff,
@@ -1487,6 +1542,11 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
 /// or naming only a longer id does not.
 #[test]
 fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::a_template_body_without_a_task_placeholder_still_settles_an_external_merge",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task = fx.add_task("Fix the widget", TaskStatus::Review, &[61]);
     let bare = fx.add_task("Template text only", TaskStatus::Review, &[62]);
@@ -1646,6 +1706,11 @@ fn tick(fx: &Fixture, dry_run: bool, replica: bool) -> SweepOutcome {
 
 #[test]
 fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::clock_tick_settles_blocked_and_review_tasks_without_a_drain",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let blocked = fx.add_task("Tick blocked", TaskStatus::Blocked, &[601]);
     let reviewed = fx.add_task("Tick reviewed", TaskStatus::Review, &[602]);
@@ -1687,6 +1752,11 @@ fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
 
 #[test]
 fn clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let live = fx.add_task("Tick live run", TaskStatus::InProgress, &[611]);
     let claimed = fx.add_task("Tick claimed", TaskStatus::Blocked, &[612]);
@@ -1710,6 +1780,11 @@ fn clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled() {
 
 #[test]
 fn clock_tick_forge_failure_does_not_fail_the_tick() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::clock_tick_forge_failure_does_not_fail_the_tick",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task = fx.add_task("Tick forge down", TaskStatus::Blocked, &[621]);
     fx.forge.merge_recent(621, &task, BOT, &fx.base);
@@ -1726,7 +1801,7 @@ fn clock_tick_forge_failure_does_not_fail_the_tick() {
 }
 
 fn settlement_git(repo: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git_test_support::command()
         .args([
             "-c",
             "user.name=Fixture",
@@ -1754,6 +1829,11 @@ fn settlement_revision(repo: &Path, reference: &str) -> SourceRevision {
 
 #[test]
 fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
+    if !super::dispatch_admission::isolated(
+        "task_external_merge::stopped_handoff_settles_a_deleted_branch_after_two_operator_updates",
+    ) {
+        return;
+    }
     for foreign in [false, true] {
         let fx = Fixture::with_config(
             "[workflow]\nbase_branch = \"release-landing\"\ndistributed_completion = \"done\"\n",
@@ -1843,7 +1923,7 @@ fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
             &repo,
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
-        let absent = std::process::Command::new("git")
+        let absent = crate::git_test_support::command()
             .args(["cat-file", "-e", &head])
             .current_dir(&repo)
             .output()

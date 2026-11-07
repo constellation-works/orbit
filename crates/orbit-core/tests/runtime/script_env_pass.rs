@@ -130,6 +130,11 @@ fn files_holding(root: &Path, needle: &[u8]) -> Vec<PathBuf> {
 
 #[test]
 fn a_network_request_beyond_the_grant_refuses_before_spawn() {
+    if !super::dispatch_admission::isolated(
+        "script_env_pass::a_network_request_beyond_the_grant_refuses_before_spawn",
+    ) {
+        return;
+    }
     let fixture = fixture(
         "    network: any\n",
         ScriptGrantOptions {

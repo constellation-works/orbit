@@ -294,6 +294,10 @@ fn stored_script_grant_timeout_checks() {
 
 #[test]
 fn script_grant_request_scenarios() {
+    if !super::dispatch_admission::isolated("script_grant_request::script_grant_request_scenarios")
+    {
+        return;
+    }
     a_missing_grant_raises_one_request_and_a_repeat_refusal_reuses_it();
     a_human_answer_grants_the_reviewed_digest_and_the_step_passes_the_grant_gate();
     a_stale_grant_raises_a_request_with_both_digests_and_the_diff();

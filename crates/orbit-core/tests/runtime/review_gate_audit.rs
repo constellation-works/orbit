@@ -369,6 +369,11 @@ impl Fixture {
 /// names the pool as its source.
 #[test]
 fn a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task() {
+    if !super::dispatch_admission::isolated(
+        "review_gate_audit::a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task",
+    ) {
+        return;
+    }
     let mut fixture = Fixture::review_pool();
     fixture.admit();
     let admission = &fixture.input["admission"];

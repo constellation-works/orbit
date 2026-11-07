@@ -84,6 +84,11 @@ fn request() -> ScriptStepRequest {
 
 #[test]
 fn a_grant_refuses_a_root_that_fails_its_probe() {
+    if !super::dispatch_admission::isolated(
+        "script_roots::a_grant_refuses_a_root_that_fails_its_probe",
+    ) {
+        return;
+    }
     let fixture = fixture("");
     let missing = fixture.outbox.join("not-yet");
 
@@ -109,6 +114,11 @@ fn a_grant_refuses_a_root_that_fails_its_probe() {
 
 #[test]
 fn a_granted_root_missing_at_run_time_refuses_before_spawn() {
+    if !super::dispatch_admission::isolated(
+        "script_roots::a_granted_root_missing_at_run_time_refuses_before_spawn",
+    ) {
+        return;
+    }
     let fixture = fixture("");
     grant_outbox(&fixture, fixture.outbox.clone()).expect("an existing write root is granted");
     std::fs::remove_dir(&fixture.outbox).unwrap();
@@ -155,6 +165,11 @@ fn mkfifo(path: &std::path::Path) {
 #[cfg(unix)]
 #[test]
 fn a_grant_refuses_a_fifo_read_root_and_grants_nothing() {
+    if !super::dispatch_admission::isolated(
+        "script_roots::a_grant_refuses_a_fifo_read_root_and_grants_nothing",
+    ) {
+        return;
+    }
     let fixture = fixture("");
     let fifo = fixture._root.path().join("fifo");
     mkfifo(&fifo);
@@ -191,6 +206,11 @@ fn a_grant_refuses_a_fifo_read_root_and_grants_nothing() {
 #[cfg(unix)]
 #[test]
 fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
+    if !super::dispatch_admission::isolated(
+        "script_roots::a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn",
+    ) {
+        return;
+    }
     let fixture = fixture("");
     let data = fixture._root.path().join("data.txt");
     std::fs::write(&data, "data").unwrap();
@@ -232,6 +252,11 @@ fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
 #[cfg(target_os = "macos")]
 #[test]
 fn strict_containment_refuses_every_script_step_on_macos() {
+    if !super::dispatch_admission::isolated(
+        "script_roots::strict_containment_refuses_every_script_step_on_macos",
+    ) {
+        return;
+    }
     let fixture = fixture("[machine]\nworker_containment = \"strict\"\n");
     grant_outbox(&fixture, fixture.outbox.clone()).expect("grant");
 
