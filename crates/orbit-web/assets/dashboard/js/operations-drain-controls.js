@@ -55,8 +55,8 @@ function drainFieldHead(label, help, { warn = false, id = null } = {}) {
   return head;
 }
 
-// Why a control is unavailable stays visible text: a disabled control with no
-// reason in view reads as broken.
+// Why Start is unavailable stays visible text in the footer: a disabled button
+// with no reason in view reads as broken.
 function drainFieldRefusal(text, id = null) {
   if (!text) return null;
   const note = el("p", { class: "drain-field-hint warn", text });
@@ -65,6 +65,9 @@ function drainFieldRefusal(text, id = null) {
 }
 
 // An on/off choice: the label and its hint on the left, a switch on the right.
+// [ORB-22789] A refusal leads the hint text and turns the hint amber, rather
+// than sitting as amber text under the label; the amber hint marks the row and
+// the switch's description still carries the refusal for a screen reader.
 function drainSwitchField({ id, label, help, warn = false, checked, disabled = false, title = "", refusal = "", extraClass = "", onChange }) {
   const input = el("input", { class: "drain-switch", role: "switch" });
   input.id = id;
@@ -73,12 +76,13 @@ function drainSwitchField({ id, label, help, warn = false, checked, disabled = f
   input.disabled = disabled;
   input.dataset.drainFocus = id;
   if (title) input.title = title;
-  input.setAttribute("aria-describedby", refusal ? `${id}-reason ${id}-help` : `${id}-help`);
+  const hint = refusal && refusal !== help ? `${refusal}\n\n${help}` : help;
+  input.setAttribute("aria-describedby", `${id}-help`);
   input.addEventListener("change", () => onChange(input.checked));
   const name = el("label", { class: "drain-field-label", text: label });
   name.htmlFor = id;
   return el("div", { class: `drain-field drain-field-row${extraClass ? ` ${extraClass}` : ""}` }, [
-    el("div", { class: "drain-field-text" }, [drainFieldHead(name, help, { warn, id: `${id}-help` }), drainFieldRefusal(refusal, `${id}-reason`)]),
+    el("div", { class: "drain-field-text" }, [drainFieldHead(name, hint, { warn: warn || Boolean(refusal), id: `${id}-help` })]),
     input,
   ]);
 }
@@ -186,8 +190,8 @@ function autoDrainCompletionControl(payload, reasons) {
 }
 
 // Approving proposed tasks, off by default; on acts on work nobody has looked
-// at yet, so its hint turns amber. The qualification rule is in the hint and
-// a refusal stays visible.
+// at yet, so its hint turns amber. The qualification rule and any refusal are
+// in the hint.
 function autoDrainApproveControl(payload, reasons) {
   return drainSwitchField({
     id: "auto-drain-approve",
@@ -512,7 +516,8 @@ export function autoDrainStopNote(payload) {
 // The Tasks dock's Start card: window length, parallel tasks and admission
 // control, then what happens after a task ships (completion, proposed tasks,
 // auto-fix, review). Each choice explains itself in an info hint beside its
-// label; a refusal is visible text under the control.
+// label; a switch's refusal leads its hint, which turns amber, and Start's
+// refusal is visible text in the footer.
 // A sunk footer sums the window up, warns when a throttle will hold its
 // admissions, and holds Start.
 // The fold lives on the card, which polls do not rebuild, so an open form stays open.
