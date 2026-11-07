@@ -43,6 +43,23 @@
 .plugin-toggle:disabled { opacity: 0.5; cursor: wait; }
 .plugin-change-error { margin: 0; color: var(--status-open); font-size: 12px; overflow-wrap: anywhere; }
 .plugin-tools, .plugin-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.plugin-tool-inventory { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.plugin-tools-bar { display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; }
+.plugin-tools-filter {
+  flex: 1 1 9rem; min-width: 0; max-width: 16rem; box-sizing: border-box; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg);
+  color: var(--fg); font: 12px/1.4 var(--font-mono);
+}
+.plugin-tools-filter:focus-visible, .plugin-tools-toggle:focus-visible, .plugin-tools-scroll:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.plugin-tools-toggle {
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg);
+  color: var(--accent); padding: 4px 8px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.plugin-tools-toggle:hover { border-color: var(--accent); }
+.plugin-tools-status { color: var(--fg-mute); font-size: 11px; }
+.plugin-tools-scroll { max-height: 9rem; overflow-y: auto; align-content: flex-start; overscroll-behavior: contain; }
 .plugin-link-tile {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
   border: 1px solid var(--border); border-radius: 2px; background: var(--bg);
