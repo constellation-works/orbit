@@ -1,13 +1,12 @@
 //! The live execution claims behind a lock wait [ORB-15514].
 //!
-//! A claimed task is `in-progress` on the owner, so the drain and readiness
-//! already see its footprint as an ordinary held lock. What they could not
-//! say is that a follower holds it: the remedy is that claim settling, on
-//! another machine, not a local run finishing. This names the claim wherever
-//! a wait names its blocking task.
+//! Frozen claim footprints remain authoritative independently of the owner's
+//! task envelopes and local leaf runs. Admission and readiness include those
+//! surfaces and name the claim behind each lock wait.
 
 use std::collections::BTreeMap;
 
+use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutionClaim;
 use serde_json::{Value, json};
 
@@ -20,22 +19,39 @@ pub(crate) struct ClaimHolders {
 }
 
 impl ClaimHolders {
-    /// The claims that protect a footprint now. Diagnostic only: a journal
-    /// that cannot be read leaves the waits unannotated rather than failing
-    /// the drain pass or the readiness read that would report them.
+    /// Diagnostic claim annotations. An unavailable journal leaves waits
+    /// unannotated; admission uses the strict read below for its lock map.
     pub(crate) fn read(runtime: &OrbitRuntime) -> Self {
-        match runtime.inspect_execution_claims() {
-            Ok(claims) => Self {
-                by_task: claims
-                    .into_iter()
-                    .map(|inspection| inspection.claim)
-                    .filter(|claim| claim.phase.protects_footprint())
-                    .map(|claim| (claim.task_id.clone(), claim))
-                    .collect(),
-            },
+        match Self::read_for_admission(runtime) {
+            Ok(claims) => claims,
             Err(error) => {
                 tracing::warn!("lock waits do not name execution claims: {error}");
                 Self::default()
+            }
+        }
+    }
+
+    /// Read protecting claims without treating an unavailable ledger as empty.
+    pub(crate) fn read_for_admission(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
+        Ok(Self {
+            by_task: runtime
+                .inspect_execution_claims()?
+                .into_iter()
+                .map(|inspection| inspection.claim)
+                .filter(|claim| claim.phase.protects_footprint())
+                .map(|claim| (claim.task_id.clone(), claim))
+                .collect(),
+        })
+    }
+
+    /// Include frozen surfaces even when no active task envelope holds them.
+    pub(crate) fn extend_lock_holders(&self, holders: &mut BTreeMap<String, Vec<String>>) {
+        for claim in self.by_task.values() {
+            for selector in &claim.footprint {
+                let tasks = holders.entry(selector.clone()).or_default();
+                if let Err(index) = tasks.binary_search(&claim.task_id) {
+                    tasks.insert(index, claim.task_id.clone());
+                }
             }
         }
     }
