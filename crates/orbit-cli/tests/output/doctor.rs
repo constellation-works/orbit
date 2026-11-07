@@ -1433,13 +1433,16 @@ fn doctor_warns_when_routine_last_success_is_stale() {
     let db = Connection::open(root.join("orbit.db")).expect("host database");
     db.execute("INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) VALUES (?1, ?2, ?2, ?2)", rusqlite::params![name, rfc(chrono::Duration::hours(5))]).expect("cursor");
     db.execute("INSERT INTO routine_fires (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) VALUES (?1, ?2, 1, 'succeeded', 'jrun-fresh', 'routine-freshness', NULL, ?3, ?4)", rusqlite::params![name, rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(4))]).expect("old success");
-    let before = rows(&run_root(&["doctor", "--json"]));
-    expect_status(&before, "routine-freshness", "ok");
     // With `--root`, this host keeps seeded routines in the global catalog.
     let definition = root.join("routines/worktree_gc.yaml");
-    let yaml = read_str(&definition);
-    has(&yaml, "enabled: false");
-    let enabled_yaml = yaml.replacen("enabled: false", "enabled: true", 1);
+    let enabled_yaml = read_str(&definition);
+    has(&enabled_yaml, "enabled: true");
+    put(
+        &definition,
+        &enabled_yaml.replacen("enabled: true", "enabled: false", 1),
+    );
+    let before = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&before, "routine-freshness", "ok");
     put(&definition, &enabled_yaml);
     let stale = rows(&run_root(&["doctor", "--json"]));
     expect_status(&stale, "routine-freshness", "warning");

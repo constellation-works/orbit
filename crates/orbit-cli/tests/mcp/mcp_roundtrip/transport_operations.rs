@@ -327,6 +327,15 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         return;
     }
     let workspace = McpWorkspace::init();
+    // The unset-mode draw below reads the configured mode; pin it so the
+    // check does not depend on what `orbit init` seeds.
+    workspace.run_ok(&[
+        "config",
+        "set",
+        "machine.auto_concurrency.mode",
+        "off",
+        "--global",
+    ]);
     let selector = workspace.work.to_str().unwrap();
     let id = "jrun-stdio-pull-workers";
     let runtime = seeded_run(
@@ -1474,6 +1483,13 @@ fn a_fixture_auto_drain_worker_does_not_outlive_the_test() {
         return;
     }
     let workspace = McpWorkspace::init();
+    workspace.run_ok(&[
+        "config",
+        "set",
+        "machine.auto_concurrency.mode",
+        "off",
+        "--global",
+    ]);
     let selector = workspace.work.to_str().unwrap();
     let jobs = workspace.home.join(".orbit/resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();

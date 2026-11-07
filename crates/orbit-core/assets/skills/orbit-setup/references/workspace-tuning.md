@@ -241,8 +241,8 @@ usage limit or failure hold redraws inside the pool instead of stalling it.
 
 Orbit's own work: `task_pilot`, `failure_recovery`, `final_recovery`,
 `auto_fix`, `review`, `pre_landing_review`, `baseline_red_repair`,
-`sweep_tasks`. `orbit init` writes them as explicit copies of the
-complexity pools, so editing a complexity pool later does **not** move them:
+`sweep_tasks`. `orbit init` writes most of them as fixed lists of the
+enabled crews, so editing a complexity pool later does **not** move them:
 revisit each one whenever you retune the tiers. Guidance:
 
 - `task_pilot`, `auto_fix`: cheap, fast crews; the pilot also
