@@ -232,6 +232,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `review.baseline_commands` | Default `[]`; commands the owner trusts review settlement to rerun on the host for a reviewer's red-base claim, in addition to required validation commands. Entries are trimmed strings; blank entries are dropped. A configured command is binding during settlement. |
 | `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review finding verification and owed host evidence](#review-finding-verification-and-owed-host-evidence). |
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
+| `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.agent_stall_minutes` | **Advanced.** Default `30`; integer `0..=1440` minutes. A provider with no stdout/stderr and no CPU use for this long fails its step as stalled, entering normal retry/recovery. `0` disables this check; the wall-clock timeout remains. Verify a stalled step's failure in `orbit run show` and provider logs; do not induce a production stall. |
 | `execution.proc_spawn_max_timeout_minutes` | **Advanced.** Default `45`; integer `1..=1440` minutes. Ceiling for one `proc.spawn` call inside a managed activity, also capped at the activity's remaining wall-clock budget. Outside an activity the ceiling is 60 seconds. Verify `timeout_ceiling_ms` and its source in the tool result. |
@@ -304,6 +305,53 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `operation.review_repair_cycles` are ignored with a warning; delete them.
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
+
+## Distributed-drain completion policy
+
+`workflow.distributed_completion` decides how far the owner takes an accepted
+distributed-drain handoff. It admits only `review` (the default) or `done`;
+any other value fails config load. The value in force is always the owner's
+own configuration: admission captures it into the claim, acceptance records
+it as the handoff's authorization, and the landing pipeline rechecks it
+before merging. A follower cannot grant itself this authority, and nothing a
+follower sends changes what the owner requires.
+
+| Value | Behavior |
+|---|---|
+| `review` | Every accepted handoff waits for an operator's **Approve handoff** on the owner's dashboard before anything lands. |
+| `done` | Acceptance authorizes the handoff and the owner's landing pipeline merges and completes it, as `--complete` does for owner tasks. |
+
+Set it in the owner's workspace, from the owner's registered checkout:
+
+```bash
+orbit config set workflow.distributed_completion done
+```
+
+Stay on the default until the drain and its landing path are routinely clean,
+then opt in one workspace at a time. Reverting is the same write with
+`review`; because landing rechecks the key, withdrawing `done` stops every
+handoff that has not landed yet.
+
+`done` changes only who authorizes completion. It skips none of the gates
+captured at admission: the owner's required validation commands, any review
+gate in effect, and owed post-deploy criteria still hold — a handoff with
+outstanding post-deploy measurements still settles in `review` until an
+operator records each criterion met. For execution mechanics, see
+[Distributed drain](../../orbit/references/setup/distributed-drain.md).
+
+Verify the readback and the effective layer with its source:
+
+```bash
+orbit config get workflow.distributed_completion
+orbit config get --scope workspace workflow.distributed_completion
+orbit config show
+orbit config show --all
+```
+
+`orbit config show` annotates the row with `workspace`, `global` or
+`built-in` and the file it came from; a workspace value overrides the global
+one. Use `orbit config show --scope workspace` to inspect one file's values
+without inheriting the other layer.
 
 ## Fleet notices, attention, evolution pass and failing jobs
 
