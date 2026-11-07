@@ -10,8 +10,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Protocol major the host speaks. A manifest whose `requires.host_api`
-/// differs is registered inactive with a diagnostic rather than loaded.
+/// Protocol major the host speaks. A manifest whose `requires.host_api` is
+/// neither this major nor the one before it is registered inactive with a
+/// diagnostic rather than loaded; the previous major still loads, with a
+/// deprecation notice.
 pub const PLUGIN_HOST_API: u32 = 1;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
