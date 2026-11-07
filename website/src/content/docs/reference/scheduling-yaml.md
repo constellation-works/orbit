@@ -148,7 +148,9 @@ If the ref or the cursor cannot be read, no completed sweep matches, or the prob
 
 A completion contract is opt-in. A job step that targets the definition must set
 `require_result` to the same `contract`; without a matching declaration and a
-granted adapter, the step waits and mints nothing. The contract name and `form`
+granted adapter, the step waits and mints nothing. `release-readiness/v1` is
+the only registered `require_result` value; the job loader refuses any other
+contract name. The contract name and `form`
 are labels shared by the definition, step and adapter. Orbit does not decide
 what a form means: the adapter applies the workspace's policy.
 
@@ -175,7 +177,7 @@ template:
     - Attach the evidence files and the completion manifest.
   task_type: chore
 completion:
-  contract: example-evidence/v1
+  contract: release-readiness/v1
   adapter: evidence-check
   form: review-summary
   evidence_artifact: completion-evidence.json
@@ -188,7 +190,7 @@ completion:
 dedupe: skip_if_open
 ```
 
-Set a job step's `require_result` to `example-evidence/v1` and its target to
+Set a job step's `require_result` to `release-readiness/v1` and its target to
 `auto-task:example-evidence-check`. A definition that declares completion
 requires the matching `require_result`; a different or missing contract holds
 the step. See [Auto-task steps](../activity-job-yaml/#auto-task-steps).
@@ -232,7 +234,7 @@ adapter receives fields shaped like this:
 ```json
 {
   "schema_version": 1,
-  "contract": "example-evidence/v1",
+  "contract": "release-readiness/v1",
   "form": "review-summary",
   "trusted": {
     "workspace_id": "<workspace id>",
@@ -248,7 +250,7 @@ adapter receives fields shaped like this:
   "evidence": {
     "manifest": {
       "schema_version": 1,
-      "contract": "example-evidence/v1",
+      "contract": "release-readiness/v1",
       "binding": {
         "workspace_id": "<workspace id>",
         "definition": "example-evidence-check",
@@ -295,7 +297,7 @@ named by `evidence_artifact` (`completion-evidence.json` in this example) with
 ```json
 {
   "schema_version": 1,
-  "contract": "example-evidence/v1",
+  "contract": "release-readiness/v1",
   "binding": {
     "workspace_id": "<workspace id from Required evidence>",
     "definition": "example-evidence-check",
@@ -330,7 +332,7 @@ passing verdict is:
 ```json
 {
   "schema_version": 1,
-  "contract": "example-evidence/v1",
+  "contract": "release-readiness/v1",
   "form": "review-summary",
   "task_id": "<task id from trusted input>",
   "source_revision": "<pinned revision from trusted input>",
