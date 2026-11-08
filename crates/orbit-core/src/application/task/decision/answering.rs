@@ -13,7 +13,7 @@ use super::super::params::{TaskAddParams, TaskUpdateParams};
 use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{
-    PilotAdmissionHold, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
+    PilotAdmissionHold, TaskCorpusPort, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
 };
 
 /// What an answer's comment says when its rewrite discarded the task's
@@ -117,7 +117,7 @@ impl OrbitRuntime {
                     operation_id: Some(request.id.clone()),
                     decision: None,
                 };
-                let corpus_append = self.decision_corpus_append(&request, &resolution)?;
+                let corpus_append = self.task_corpus_append_for_decision(&request, &resolution)?;
                 self.stores().task_records().update(
                     &task_id,
                     TaskRecordUpdateParams {

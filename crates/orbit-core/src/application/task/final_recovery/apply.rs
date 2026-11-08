@@ -25,7 +25,7 @@ use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
 use super::{FINAL_RECOVERY_REQUEUED_EVENT, FINAL_RECOVERY_RESUMED_EVENT};
 use crate::OrbitRuntime;
-use crate::application::task::{TaskJobPort, TaskRecords};
+use crate::application::task::{TaskCorpusPort, TaskJobPort, TaskRecords};
 
 pub(in super::super) const FINAL_RECOVERY_COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
@@ -607,7 +607,7 @@ impl OrbitRuntime {
         let corpus_appends = plan
             .infra
             .as_ref()
-            .map(|infra| self.recovery_corpus_appends(&task.id, infra, "escalated"))
+            .map(|infra| self.task_corpus_appends_for_recovery(&task.id, infra, "escalated"))
             .transpose()?
             .unwrap_or_default();
         self.with_mutation(|| {

@@ -10,8 +10,9 @@ use orbit_types::workflow::{
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::tag_instructions::read_blob_at;
 use crate::OrbitRuntime;
+use crate::application::task::TaskCorpusPort;
+use crate::application::task::base_revision::read_blob_at;
 use crate::application::task::decision_rules::{
     CorpusDigest, CorpusRuleDependency, citable_decision_rules, corpus_config_digest,
     corpus_content_digest, parse_decision_rules,
@@ -19,6 +20,33 @@ use crate::application::task::decision_rules::{
 
 const ROW_PREFIX: &str = "<!-- agent-corpus-row ";
 pub(crate) const CORPUS_APPEND_EVENT: &str = "agent_corpus_append";
+
+impl TaskCorpusPort for OrbitRuntime {
+    fn task_corpus_append_for_decision(
+        &self,
+        request: &DecisionRequest,
+        resolution: &DecisionResolution,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.decision_corpus_append(request, resolution)
+    }
+
+    fn task_corpus_digest_at_revision(
+        &self,
+        revision: &str,
+        dependency: &CorpusRuleDependency,
+    ) -> CorpusDigest {
+        self.corpus_digest_at_revision(revision, dependency)
+    }
+
+    fn task_corpus_appends_for_recovery(
+        &self,
+        task_id: &str,
+        infra: &TransientInfraBlock,
+        outcome: &str,
+    ) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        self.recovery_corpus_appends(task_id, infra, outcome)
+    }
+}
 
 impl OrbitRuntime {
     pub(crate) fn agent_corpus_for_activity(

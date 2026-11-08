@@ -21,6 +21,7 @@ pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;
 mod context_widening;
+mod corpus_port;
 mod decision;
 mod decision_channel;
 use decision::raise as decision_raise;
@@ -113,6 +114,7 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
+pub(in crate::application) use corpus_port::TaskCorpusPort;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
 pub(crate) use decision::decision_request_json;

@@ -29,8 +29,8 @@ use super::rules::{
     match_auto_decision_rule, parse_decision_rules, set_rule_auto_in_markdown,
 };
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
 use crate::application::task::base_revision::{list_blob_paths_at, read_blob_at};
+use crate::application::task::{TaskCorpusPort, TaskRecords};
 
 const CORPUS_REL: &str = "docs/agents/corpus";
 
@@ -455,7 +455,7 @@ impl OrbitRuntime {
                     }) {
                         continue;
                     }
-                    digests.push(self.corpus_digest_at_revision(revision, &dependency));
+                    digests.push(self.task_corpus_digest_at_revision(revision, &dependency));
                 }
             }
         }
