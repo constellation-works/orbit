@@ -260,6 +260,11 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             };
             (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
         }
+        orbit_core::OrbitError::TaskPilotRefused { code, message } => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": message, "code": code.as_str()})),
+        )
+            .into_response(),
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),

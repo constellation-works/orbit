@@ -168,7 +168,7 @@ function openDraftNodes(body) {
   }
   return drafts;
 }
-// The pane beside the list: a head naming the task with its close, back and
+// The pane beside the list: a head naming the task with its close and
 // full-page controls, then the task's detail. A pinned resolver result shows
 // here too, marked as outside the list.
 export function renderTaskPane(filtered, context) {
@@ -266,13 +266,13 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
-  const back = el("button", {
+  const back = page ? el("button", {
     class: "action task-pane-back",
     type: "button",
-    text: page ? "Back to list" : "Back",
-    title: page ? "Back to the task list at this task (Esc)" : "Back to the task list (Esc)",
-  });
-  back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+    text: "Back to list",
+    title: "Back to the task list at this task (Esc)",
+  }) : null;
+  if (back) back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
   // Icon buttons: the glyph is CSS, the accessible name is the label.
   const full = page ? null : el("button", {
     class: "task-pane-icon task-pane-full",
@@ -299,7 +299,7 @@ function buildPaneHead(task, pinned, context) {
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
       ? [id, spacer, back]
-      : [id, spacer, full, close, back]),
+      : [id, spacer, full, close]),
     title,
   ]);
   head.dataset.key = key;

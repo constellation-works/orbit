@@ -41,7 +41,7 @@ The **Context files** tab lists the files and directories the task expects to
 change. Orbit locks them for the run, so an overlapping task waits its turn.
 Markdown files are shared rather than locked by default.
 
-![The Tasks list: a proposed task under Awaiting approval with Approve, a task in progress with its host and View run, and backlog tasks with Ship.](../../../assets/dashboard/dashboard-approve-ship.png)
+![Task cards showing a proposed task with Approve, an in-progress task with View run, and backlog tasks with Ship.](../../../assets/dashboard/dashboard-approve-ship.png)
 
 You can also tell your agent to approve it. Either way, approval is an
 explicit step, recorded in the task's history; nothing approves a task on its
@@ -55,7 +55,7 @@ the change. Click **View run** to follow each step live. A second agent reviews
 the change only when review is turned on: `review.timing` is off by default, and
 [Review layers](../../concepts/tasks/#review-layers) explains how to enable it.
 
-![A finished ship run: its job, task, state, duration, and host, and a step timeline from worktree through implement, validate, review gate, and push to pr_open.](../../../assets/dashboard/dashboard-run-detail.png)
+![A synthetic successful task_pr_pipeline run for Update the dashboard walkthrough, with a Jobs › History back link and a 21-step timeline.](../../../assets/dashboard/dashboard-run-detail.png)
 
 Asking your agent to ship it starts the same run. In the default `pr` ship
 mode, the run ends by opening a pull request.

@@ -282,16 +282,7 @@ fn inspect_auto_task_inner(
     now: DateTime<Utc>,
     has_open_instance: impl FnOnce() -> Result<bool, OrbitError>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
-    let AutoTaskSchedule::Deliveries {
-        deliveries_landed: declared,
-        ..
-    } = &definition.schedule
-    else {
-        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
-    };
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
     let admission_deferred = definition.dedupe == DedupePolicy::SkipIfOpen && has_open_instance()?;
 
     inspect(
@@ -343,17 +334,8 @@ fn inspect_routine_status(
         return super::members::evaluate_with_cache(runtime, definition, true, now, Some(cache));
     }
 
-    let declared = definition
-        .trigger
-        .deliveries_landed
-        .as_ref()
-        .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let mut effective_trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::routine_epoch(definition, &effective_trigger)?;
-
-    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
+    let (ownership, effective_trigger, epoch) =
+        ownership::resolve_delivery_routine(runtime, definition)?;
 
     inspect(
         runtime,

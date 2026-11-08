@@ -102,11 +102,11 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 .get("full")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let response = runtime
+            let submission = runtime
                 .submit_explicit_task_pilot_in_mode(&id, caller.agent.as_deref(), trigger, full)
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                .map_err(OrbitError::from)?;
             Ok((
-                serde_json::to_value(response)
+                serde_json::to_value(submission)
                     .map_err(serialize_error("serialize pilot submission"))?,
                 Some(id),
             ))
