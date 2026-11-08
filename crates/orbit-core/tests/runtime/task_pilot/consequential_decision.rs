@@ -151,6 +151,27 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
     );
     assert_public_hold(&workspace, &different_choice, "the policy choice");
 
+    let unrelated_policy = filed(
+        &workspace,
+        "The retry policy is undecided. Preserve the current security policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &unrelated_policy, json!([])),
+        "the policy choice",
+        "ORB-23288: a different policy must not clear the open retry policy",
+    );
+    assert_public_hold(&workspace, &unrelated_policy, "the policy choice");
+
+    let resolved_policy = filed(
+        &workspace,
+        "The retry policy is undecided. Preserve the current retry policy.",
+    );
+    assert_no_consequential_hold(
+        &assess(&workspace, &resolved_policy, json!([])),
+        "ORB-23288: a later resolution of the same policy must clear its hold",
+    );
+    assert_public_clear(&workspace, &resolved_policy);
+
     let split_sentence = filed(
         &workspace,
         "Document the ownership policy. The format is undecided.",
