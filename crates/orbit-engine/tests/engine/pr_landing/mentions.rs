@@ -126,6 +126,28 @@ fn pr_open_neutralizes_mentions_at_url_and_link_boundaries() {
 }
 
 #[test]
+fn pr_open_neutralizes_mentions_in_unclosed_markdown_destinations() {
+    isolated(
+        "mentions::pr_open_neutralizes_mentions_in_unclosed_markdown_destinations",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["body"] = json!(
+                "see [note](@maintainer for details; valid [a](@auto) and [pkg](https://www.npmjs.com/package/@orbit-tools/cli)"
+            );
+            action_ok(&host, "pr_open", &input);
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(
+                body.contains(
+                    "see [note](@\u{200d}maintainer for details; valid [a](@auto) and [pkg](https://www.npmjs.com/package/@orbit-tools/cli)"
+                ),
+                "{body}"
+            );
+        },
+    );
+}
+
+#[test]
 fn pr_open_leaves_at_signs_inside_urls_unchanged() {
     isolated(
         "mentions::pr_open_leaves_at_signs_inside_urls_unchanged",

@@ -3,8 +3,8 @@
 /// Keep the visible wording and Markdown intact by separating `@` from a
 /// mention name with a zero-width joiner. The same representation works in
 /// plain-text titles/commit subjects and prose, and repeated rendering is safe.
-/// Emails with a dotted domain, `scheme://` URLs, Markdown link destinations,
-/// co-author trailers and Markdown code are kept.
+/// Emails with a dotted domain, `scheme://` URLs, closed Markdown link
+/// destinations, co-author trailers and Markdown code are kept.
 pub(super) fn neutralize_mentions(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut fence = None;
@@ -40,10 +40,11 @@ pub(super) fn neutralize_mentions(text: &str) -> String {
 /// Backtick runs pair only with a run of the same length. Backslashes escape
 /// openers in prose, but are literal within code spans. Unmatched runs remain
 /// prose so an agent's stray backtick cannot suppress mention protection.
-/// An `@` inside a bare `scheme://` URL or a Markdown link destination `](...)`
-/// is part of an address rather than a mention, so it is left unchanged. A
-/// destination only starts after a matched `[label]`, a bare URL only after a
-/// valid scheme, and both exemptions end when their span closes, so a mention
+/// An `@` inside a bare `scheme://` URL or a closed Markdown link destination
+/// `](...)` is part of an address rather than a mention, so it is left
+/// unchanged. A destination only starts after a matched `[label]` and a
+/// closing parenthesis before whitespace, a bare URL only after a valid
+/// scheme, and both exemptions end when their span closes, so a mention
 /// immediately after a closed destination (or in malformed prose such as
 /// `://@x` or `](@x)`) is still neutralized.
 fn append_neutralized_prose(prose: &str, output: &mut String) {
@@ -75,7 +76,11 @@ fn append_neutralized_prose(prose: &str, output: &mut String) {
             rest = &rest[run..];
             continue;
         }
-        if destination_depth == 0 && label_depth > 0 && rest.starts_with("](") {
+        if destination_depth == 0
+            && label_depth > 0
+            && rest.starts_with("](")
+            && markdown_destination_has_closing_paren(&rest[2..])
+        {
             output.push_str("](");
             destination_depth = 1;
             label_depth -= 1;
@@ -144,6 +149,37 @@ fn append_neutralized_prose(prose: &str, output: &mut String) {
         }
         rest = &rest[character.len_utf8()..];
     }
+}
+
+/// Whether a Markdown destination opened with `](` closes before whitespace.
+/// Escaped parentheses are skipped and nested parentheses must also close.
+fn markdown_destination_has_closing_paren(destination: &str) -> bool {
+    let mut rest = destination;
+    let mut depth = 1_usize;
+    while !rest.is_empty() {
+        let Some(character) = rest.chars().next() else {
+            break;
+        };
+        if character.is_whitespace() {
+            return false;
+        }
+        if character == '\\' && rest[1..].starts_with(['`', '\\', '[', ']', '(', ')']) {
+            rest = &rest[2..];
+            continue;
+        }
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        rest = &rest[character.len_utf8()..];
+    }
+    false
 }
 
 /// Whether the `:` at `colon` in `text` is preceded by a URL scheme: a
