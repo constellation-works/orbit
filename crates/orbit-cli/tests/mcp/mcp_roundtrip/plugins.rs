@@ -81,7 +81,7 @@ fn install_enabled_plugin(workspace: &McpWorkspace, source: &Path) {
 fn serve_plugin_with_debug_log(workspace: &McpWorkspace, log_path: &Path) -> McpClient {
     let log = std::fs::File::create(log_path).expect("server log");
     let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["mcp", "serve"])
+        .args(["mcp", "serve", "--toolset", "plugins"])
         .env("RUST_LOG", "orbit.mcp.plugin=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -246,7 +246,10 @@ fn check_brokered_plugin_audit(scope: &str) {
         serde_json::from_slice::<Value>(&derived.stdout).expect("derived JSON"),
         direct
     );
-    let mut client = workspace.serve_with_args_and_env(&[], &[("ORBIT_PLUGIN_BROKER", socket)]);
+    let mut client = workspace.serve_with_args_and_env(
+        &["--toolset", "plugins"],
+        &[("ORBIT_PLUGIN_BROKER", socket)],
+    );
     assert_eq!(client.call_tool_ok("brokerfixture_echo", json!({})), direct);
     let error = client.call_tool_err("brokerfixture_echo", json!({}));
     assert_eq!(
@@ -421,7 +424,7 @@ fn managed_global_plugin_tool_refusals_are_audited() {
 
     // A non-managed MCP session ignores the server's stray activity envelope.
     let mut interactive = workspace.serve_with_args_and_env(
-        &[],
+        &["--toolset", "plugins"],
         &[
             ("ORBIT_TASK_ACTOR_KIND", "agent"),
             ("ORBIT_ACTIVITY_TOOLS", "orbit.task.show"),
@@ -438,7 +441,7 @@ fn managed_global_plugin_tool_refusals_are_audited() {
     ];
     let mut env = base_env.to_vec();
     env.push(("ORBIT_ACTIVITY_TOOLS", "policyglobal.echo"));
-    let mut allowed = workspace.serve_with_args_and_env(&[], &env);
+    let mut allowed = workspace.serve_with_args_and_env(&["--toolset", "plugins"], &env);
     let output = allowed.call_tool_ok("policyglobal_echo", json!({}));
     assert_eq!(output["plugin"], "policyglobal");
     drop(allowed);
@@ -457,7 +460,7 @@ fn managed_global_plugin_tool_refusals_are_audited() {
     {
         let mut env = base_env.to_vec();
         env.extend(policy_env);
-        let mut client = workspace.serve_with_args_and_env(&[], &env);
+        let mut client = workspace.serve_with_args_and_env(&["--toolset", "plugins"], &env);
         let refused = client.call_tool_err("policyglobal_echo", json!({}));
         assert_eq!(refused["code"], "policy_denied", "{refused}");
         let reason = refused["message"].as_str().expect("policy refusal reason");
@@ -552,7 +555,7 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
         std::fs::write(plugins.join(".orbit-brokered"), "masked")
             .expect("lay the plugin state mask");
 
-        let mut client = workspace.serve();
+        let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
         let error = client.call_tool_err("unbrokered_echo", json!({}));
         assert_eq!(
             error["code"], "plugin_broker_unavailable",
@@ -607,7 +610,7 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
     );
     run_orbit(&workspace, &["plugin", "enable", "pluginerror"]);
 
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let error = client.call_tool_err("pluginerror_echo", json!({}));
     assert_eq!(
         error,
@@ -631,7 +634,7 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
 
     // Installed but not enabled: nothing on the surface yet.
     run_orbit(&workspace, &["plugin", "add", source]);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let names = advertised_tool_names(&mut client);
     assert!(
         !names.iter().any(|name| name == "roundtrip_echo"),
@@ -641,7 +644,7 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
 
     run_orbit(&workspace, &["plugin", "enable", "roundtrip"]);
 
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let names = advertised_tool_names(&mut client);
     assert!(
         names.iter().any(|name| name == "roundtrip_echo"),
@@ -710,7 +713,7 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
     }
 
     run_orbit(&workspace, &["plugin", "disable", "roundtrip"]);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let names = advertised_tool_names(&mut client);
     assert!(
         !names.iter().any(|name| name == "roundtrip_echo"),
@@ -872,7 +875,8 @@ fn a_live_session_refreshes_definition_admission_and_membership() {
     let mut client = serve_plugin_with_debug_log(&workspace, &log_path);
     let assert_surface = |client: &mut McpClient, active: bool| {
         let names = advertised_tool_names(client);
-        let fresh = advertised_tool_names(&mut workspace.serve());
+        let fresh =
+            advertised_tool_names(&mut workspace.serve_with_args(&["--toolset", "plugins"]));
         let has_tool = |names: &[String]| names.iter().any(|name| name == "definitionscache_echo");
         assert_eq!(has_tool(&fresh), active, "fresh admission: {fresh:?}");
         assert_eq!(
@@ -917,7 +921,7 @@ fn a_live_session_refreshes_definition_admission_and_membership() {
             .expect("restore mtime");
         assert_surface(&mut client, false);
         // Also warm a server while the contribution is already invalid.
-        let mut initially_refused = workspace.serve();
+        let mut initially_refused = workspace.serve_with_args(&["--toolset", "plugins"]);
         assert_surface(&mut initially_refused, false);
         std::fs::write(&path, body).expect("repair definition");
         assert_surface(&mut client, true);
@@ -981,7 +985,7 @@ fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_h
 
     // One server for the whole test: every change below must show without a
     // restart, through the cached workspace runtime and tools/list cache.
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let names = advertised_tool_names(&mut client);
     assert!(names.iter().any(|name| name == "toggled_echo"), "{names:?}");
     assert!(names.iter().any(|name| name == "toggled_ping"), "{names:?}");
@@ -1494,7 +1498,7 @@ fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
             command.env(key, value);
         }
         let child = command
-            .args(["mcp", "serve"])
+            .args(["mcp", "serve", "--toolset", "plugins"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1750,7 +1754,7 @@ fn an_mcp_backend_plugin_is_advertised_and_proxied() {
         &source,
     );
     install_enabled_plugin(&workspace, &source);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let names = advertised_tool_names(&mut client);
     assert!(
         names.iter().any(|name| name == "mcpdemo_echo"),
@@ -1835,7 +1839,7 @@ fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it(
         MCP_SECRET,
     );
 
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let result = client.call_tool("mcpdemo_echo", json!({ "message": "hi" }));
     assert_eq!(result["isError"], false, "{result}");
     let secrets = &result["structuredContent"]["meta"]["orbit"]["secrets"];
@@ -1929,7 +1933,7 @@ fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value(
         MCP_ROTATION_SECRET,
     );
 
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "plugins"]);
     let delivered_version = |result: &Value| {
         result["structuredContent"]["meta"]["orbit"]["secrets"]["refresh_token"]["version"]
             .as_str()

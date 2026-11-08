@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn mcp_missing_records_name_a_recovery_tool_or_field() {
     let workspace = McpWorkspace::init();
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "decisions"]);
     let task_id = client.add_task("Delivery lookup", "Missing-run recovery fixture");
     for (tool, input, code, hint) in [
         (

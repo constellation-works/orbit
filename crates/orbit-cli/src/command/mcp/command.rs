@@ -37,8 +37,8 @@ pub enum McpSubcommand {
     /// binding; remove the entry first to replace it with agent authority.
     /// `--federated` instead adds a separate client entry for the
     /// session-unbound mux and preserves the default v1 entry. For the
-    /// operator-authorized bootstrap integration (workflow dispatch,
-    /// `orbit.command.exec`), use `orbit workspace init --mcp` instead.
+    /// operator-authorized integration (workflow dispatch and
+    /// `orbit.command.exec`), pass `--operator` or use `orbit workspace init --mcp`.
     Init(InitArgs),
     /// Remove MCP client integration for the current workspace
     Remove(RemoveArgs),
@@ -133,7 +133,7 @@ pub struct ServeArgs {
         requires = "remote_caller_machine_id"
     )]
     pub worker_host: bool,
-    /// Serve sessions with operator authority for governed operations
+    /// Serve the operator profile with operator authority for governed operations
     #[arg(long)]
     pub operator: bool,
     /// Bind sessions to a registered workspace: name, `ws_*` ID or checkout path
@@ -191,7 +191,7 @@ impl ServeArgs {
                     authority: requested_authority(self.operator),
                     toolsets: resolve_mcp_toolsets(
                         &global_root,
-                        self.role.as_deref(),
+                        self.role.as_deref().or(self.operator.then_some("operator")),
                         self.toolset.as_deref(),
                     )?,
                 })?
@@ -205,7 +205,7 @@ impl ServeArgs {
                 }
                 let toolsets = resolve_mcp_toolsets(
                     &global_root,
-                    self.role.as_deref(),
+                    self.role.as_deref().or(self.operator.then_some("operator")),
                     self.toolset.as_deref(),
                 )?;
                 super::server::serve_mcp_federated_stdio(
@@ -227,7 +227,7 @@ impl ServeArgs {
                 } else {
                     resolve_mcp_toolsets(
                         &global_root,
-                        self.role.as_deref(),
+                        self.role.as_deref().or(self.operator.then_some("operator")),
                         self.toolset.as_deref(),
                     )?
                 };
@@ -252,8 +252,8 @@ impl ServeArgs {
 
 /// The toolsets a server advertises: the role (`--role`, else the
 /// `machine.mcp.role` host config) or the default surface without one, plus
-/// the named toolsets (`--toolset`, else `machine.mcp.toolsets`), plus any a
-/// managed run's dispatch stamped in `ORBIT_ACTIVITY_MCP_TOOLSETS`.
+/// the named toolsets (`--toolset`, else `machine.mcp.toolsets`). A managed
+/// run uses its dispatch stamp instead of host configuration.
 ///
 /// An unreadable host config or stamp falls back without it, with a warning,
 /// rather than refusing to serve: a role or toolset trims context, it grants
@@ -263,13 +263,13 @@ pub(super) fn resolve_mcp_toolsets(
     role_flag: Option<&str>,
     toolset_flag: Option<&str>,
 ) -> Result<McpToolsetSelection, OrbitError> {
-    let selection = configured_mcp_toolsets(global_root, role_flag, toolset_flag)?;
     let Some(stamped) = std::env::var(ACTIVITY_MCP_TOOLSETS_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
     else {
-        return Ok(selection);
+        return configured_mcp_toolsets(global_root, role_flag, toolset_flag);
     };
+    let selection = McpToolsetSelection::default_only();
     match selection.clone().with_names(stamped.split(',')) {
         Ok(stamped) => Ok(stamped),
         Err(error) => {

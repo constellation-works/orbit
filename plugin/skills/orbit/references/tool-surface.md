@@ -364,17 +364,18 @@ subprocess, and external authentication checks.
   long-lived MCP connection outlives a model switch in the client, so pass
   `orchestrator` on the individual call, or restart the connection with a new
   value, when the orchestrating crew actually changes.
-- `--role <ROLE>` serves only one role's toolsets: `operator` (every toolset),
+- `--role <ROLE>` serves only one role's toolsets: `operator` (the operator profile),
   `manager`, `resident`, `agent` or `reader`. It replaces the
   `machine.mcp.role` host config. A role limits what is advertised and
   callable over MCP; it grants no authority. `orbit tool list --role <ROLE>`
   lists a role's tools and size.
 - Only `core` is always advertised. Without a configured role, the default
-  tier (tasks, workflows and runs, automation, decision list and show,
-  codebase, friction, search, and command execution)
-  is advertised. Named toolsets and toolsets stamped for a managed activity
-  add to the selected role or default tier. `decision-channel` tools may be
-  called only by the bound channel plugin or the operator.
+  tier (tasks, artifacts, friction, search and attention) is advertised.
+  `--operator` selects the operator profile and authority; `--role` can
+  select a narrower profile. Managed workers use core plus their admitted
+  activity allowlist, required and granted tools, independent of host
+  configuration. `decision-channel` tools may be called only by the bound
+  channel plugin or the operator.
 - `--toolset` takes a comma-separated list (`experiments`,
   `analytics`, `decision-channel`, `notice`, `resident`,
   `tasks-write`, `dispatch`; `default` names the default surface and `all`
@@ -391,7 +392,7 @@ subprocess, and external authentication checks.
 the opt-in toolsets the host enables: `experiments` (experiment tools),
 `analytics` (agent scorecards, orchestrator scorecard and show),
 `decision-channel` (decision submit and digest; decision
-list and show stay default), `notice`
+list and show use the decisions toolset), `notice`
 (`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
 mandates; widening their authority from an MCP session raises a decision
 request for the human). Enable them per server with
@@ -402,7 +403,7 @@ replaces the config. A call to a tool outside the server's toolsets is refused
 config key. A federated mux filters every row the same way. The toolset of each
 tool is in `orbit tool show <name> --json` (`mcp_toolset`).
 
-Toolsets change only what an MCP server lists. `orbit tool run`, CLI commands,
+Toolsets change what an MCP server lists and dispatches. `orbit tool run`, CLI commands,
 activity `required_tools` and task grants, and a decision-channel plugin's
 callback session reach every tool regardless.
 
@@ -703,8 +704,8 @@ audit row with target type `notice`. The limits and caps are fixed.
 
 A managed `agent_implement`, `agent_review_repair` or `final_recovery` run
 carries `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` in
-its tool baseline, and its MCP server is stamped with the `notice` toolset
-when a notice tool is granted, whatever `machine.mcp.toolsets` says. Such a
+its tool baseline. Use `orbit tool run` unless a notice tool is an admitted
+requirement or grant on the MCP surface. Such a
 run posts only for a problem outside its task that affects other agents,
 with a linked task (prefer the fix) or evidence, after checking the brief's
 open notices; re-posting the same subject corroborates it.

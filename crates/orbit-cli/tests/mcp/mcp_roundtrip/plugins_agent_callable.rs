@@ -71,11 +71,11 @@ fn consented_mutations_reach_agent_cli_and_mcp_without_operator_authority() {
 
         let mut client = if scope == "global" {
             let child = McpWorkspace::orbit_command(&workspace.home, &workspace.home)
-                .args(["mcp", "serve"])
+                .args(["mcp", "serve", "--toolset", "plugins"])
                 .spawn_piped();
             McpClient::initialized(child, McpClient::initialize_params("agent-plugin", None)).0
         } else {
-            workspace.serve()
+            workspace.serve_with_args(&["--toolset", "plugins"])
         };
         let called = client.call_tool_ok("agentfixture_echo", json!({}));
         assert_eq!(called["echo"]["tool"], "agentfixture.echo");
@@ -113,7 +113,7 @@ fn consented_mutations_reach_agent_cli_and_mcp_without_operator_authority() {
                 ("ORBIT_TASK_ACTOR_KIND", "agent"),
             ];
             env.extend(policy);
-            let mut managed = workspace.serve_with_args_and_env(&[], &env);
+            let mut managed = workspace.serve_with_args_and_env(&["--toolset", "plugins"], &env);
             managed.assert_tool_error("agentfixture_echo", json!({}), "policy_denied");
         }
 

@@ -1,6 +1,6 @@
 Initialize MCP client integration for the current workspace
 
-New entries register agent-only authority, as bare `orbit mcp serve` does. Existing operator entries retain their launch and workspace binding; remove the entry first to replace it with agent authority. `--federated` instead adds a separate client entry for the session-unbound mux and preserves the default v1 entry. For the operator-authorized bootstrap integration (workflow dispatch, `orbit.command.exec`), use `orbit workspace init --mcp` instead.
+New entries register agent-only authority, as bare `orbit mcp serve` does. Existing operator entries retain their launch and workspace binding; remove the entry first to replace it with agent authority. `--federated` instead adds a separate client entry for the session-unbound mux and preserves the default v1 entry. For the operator-authorized integration (workflow dispatch and `orbit.command.exec`), pass `--operator` or use `orbit workspace init --mcp`.
 
 Usage: orbit mcp init [OPTIONS]
 
@@ -51,6 +51,9 @@ Options:
 
       --federated
           Register the federated mux as a separate `orbit-federated` MCP server, launched by `orbit mcp serve --mode federated`
+
+      --operator
+          Register a server with the operator profile and authority
 
   -h, --help
           Print help (see a summary with '-h')

@@ -13,7 +13,7 @@ use super::providers::*;
 
 fn server_id_for_action(action: McpAction<'_>) -> &'static str {
     match action {
-        McpAction::Init(ServerLaunch::Federated) | McpAction::RemoveFederated => {
+        McpAction::Init(ServerLaunch::Federated { .. }) | McpAction::RemoveFederated => {
             ORBIT_FEDERATED_MCP_SERVER_ID
         }
         McpAction::Init(ServerLaunch::Local { .. }) | McpAction::Remove => ORBIT_MCP_SERVER_ID,
@@ -108,7 +108,10 @@ fn is_legacy_orbit_grok_entry(entry: &toml::Value, server_id: &str) -> bool {
     match (server_id, args.as_slice()) {
         (ORBIT_MCP_SERVER_ID, ["mcp", "serve"])
         | (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--operator"])
-        | (ORBIT_FEDERATED_MCP_SERVER_ID, ["mcp", "serve", "--mode", "federated"]) => true,
+        | (ORBIT_FEDERATED_MCP_SERVER_ID, ["mcp", "serve", "--mode", "federated"])
+        | (ORBIT_FEDERATED_MCP_SERVER_ID, ["mcp", "serve", "--mode", "federated", "--operator"]) => {
+            true
+        }
         (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--workspace", workspace])
         | (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--operator", "--workspace", workspace]) => {
             !workspace.is_empty()

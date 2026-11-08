@@ -416,3 +416,142 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
         "must deny as binding mismatch: {denied}"
     );
 }
+
+#[test]
+fn orbit_launched_worker_exposes_and_resolves_its_non_core_activity_grant() {
+    if crate::isolated_test::run_in_child_with_env(
+        "mcp_roundtrip::worker_routing::orbit_launched_worker_exposes_and_resolves_its_non_core_activity_grant",
+        &[("ORBIT_AGENT_MODEL", "codex")],
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let config_path = workspace.home.join(".orbit/config.toml");
+    let mut config: toml_edit::DocumentMut = std::fs::read_to_string(&config_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    config["crews"]["sol"]["enabled"] = toml_edit::value(true);
+    config["crews"]["sol"]["provider"] = toml_edit::value("codex");
+    config["crews"]["sol"]["model"] = toml_edit::value("gpt-6-sol");
+    config["crews"]["sol"]["backend"] = toml_edit::value("cli");
+    std::fs::write(config_path, config.to_string()).unwrap();
+    let evidence = workspace.home.join("worker-mcp.jsonl");
+    let script = format!(
+        r##"#!/usr/bin/env python3
+import json, subprocess, sys
+sys.stdin.read()
+requests = [
+ {{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-03-26","capabilities":{{}},"clientInfo":{{"name":"worker-probe","version":"1"}}}}}},
+ {{"jsonrpc":"2.0","method":"notifications/initialized"}},
+ {{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}},
+ {{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"orbit_decision_list","arguments":{{}}}}}},
+]
+result = subprocess.run([{binary}, "mcp", "serve"], input="".join(json.dumps(r)+"\n" for r in requests), text=True, capture_output=True, timeout=20)
+open({evidence}, "w").write(result.stdout)
+if result.returncode: sys.exit(result.returncode)
+print(json.dumps({{"schemaVersion":1,"status":"success","result":{{}},"error":None}}))
+"##,
+        binary = json!(env!("CARGO_BIN_EXE_orbit")),
+        evidence = json!(evidence),
+    );
+    let mut operator = workspace.serve_agent(&script, &["--operator"], &[]);
+    let activity = workspace
+        .home
+        .join(".orbit/resources/activities/historical_invocation.yaml");
+    let mut yaml = std::fs::read_to_string(&activity).unwrap();
+    yaml.push_str("  tools:\n    - orbit.task.show\n    - orbit.decision.list\n");
+    std::fs::write(activity, yaml).unwrap();
+    let submitted = operator.call_tool_ok(
+        "orbit_pipeline_invoke",
+        json!({"job_name":"agent_invoke_pipeline","input":{},"model":"codex"}),
+    );
+    let terminal = wait_for_run(&mut operator, submitted["run_id"].as_str().unwrap());
+    assert_eq!(terminal["state"], "success", "{terminal}");
+    let messages: Vec<Value> = std::fs::read_to_string(evidence)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let listed = messages.iter().find(|v| v["id"] == 2).unwrap();
+    let names = tool_names(listed);
+    assert!(names.contains(&"orbit_task_show"), "{listed}");
+    assert!(names.contains(&"orbit_decision_list"), "{listed}");
+    assert!(!names.contains(&"orbit_decision_show"), "{listed}");
+    let called = messages.iter().find(|v| v["id"] == 3).unwrap();
+    assert_ne!(called["result"]["isError"], true, "{called}");
+
+    // A task's exact operator grant already allowed by its implementing
+    // activity must also reach that worker's MCP server.
+    let resources = workspace.home.join(".orbit/resources");
+    std::fs::write(
+        resources.join("activities/agent_implement.yaml"),
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_implement
+spec:
+  type: agent_loop
+  description: Probe an admitted task grant.
+  input_schema_json:
+    type: object
+    properties:
+      task_id: {type: string}
+  instruction: Return the fixture response envelope.
+  require_completion_envelope: true
+  require_response_envelope: true
+  wall_clock_timeout_seconds: 30
+  tool_disallow_list:
+    - proc.spawn
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        resources.join("jobs/historical_invocation.yaml"),
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: agent_invoke_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: invoke
+      target: activity:agent_implement
+      default_input:
+        task_id: "{{ input.task_id }}"
+"#,
+    )
+    .unwrap();
+    let task = operator.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title":"Grant probe", "description":"Probe an admitted grant", "complexity":"low", "crew":"sol", "model":"codex",
+            "granted_tools":["orbit.decision.list"]
+        }),
+    );
+    assert_eq!(
+        task["granted_tools"],
+        json!(["orbit.decision.list"]),
+        "{task}"
+    );
+    let submitted = operator.call_tool_ok(
+        "orbit_pipeline_invoke",
+        json!({
+            "job_name":"agent_invoke_pipeline", "input":{"task_id":task["id"]}, "model":"codex"
+        }),
+    );
+    let terminal = wait_for_run(&mut operator, submitted["run_id"].as_str().unwrap());
+    assert_eq!(terminal["state"], "success", "{terminal}");
+    let messages: Vec<Value> = std::fs::read_to_string(workspace.home.join("worker-mcp.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let listed = messages.iter().find(|v| v["id"] == 2).unwrap();
+    let names = tool_names(listed);
+    assert!(names.contains(&"orbit_decision_list"), "{names:?}");
+    assert!(!names.contains(&"orbit_decision_show"), "{names:?}");
+    let called = messages.iter().find(|v| v["id"] == 3).unwrap();
+    assert_ne!(called["result"]["isError"], true, "{called}");
+}

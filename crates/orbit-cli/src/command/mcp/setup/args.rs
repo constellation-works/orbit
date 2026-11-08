@@ -205,6 +205,9 @@ pub struct InitArgs {
     /// Register the federated mux as a separate `orbit-federated` MCP server, launched by `orbit mcp serve --mode federated`.
     #[arg(long)]
     pub federated: bool,
+    /// Register a server with the operator profile and authority.
+    #[arg(long)]
+    pub operator: bool,
 }
 
 impl InitArgs {
@@ -212,11 +215,13 @@ impl InitArgs {
         let layout = federated_layout(self.federated, self.scope, root_override)?;
         // New entries use agent authority. Provider reconciliation retains an
         // existing operator launch; removing it first explicitly resets it.
-        // Only `workspace init --mcp` selects operator authority for new entries.
+        // The operator flag explicitly selects operator authority.
         let launch = if self.federated {
-            ServerLaunch::Federated
+            ServerLaunch::Federated {
+                operator: self.operator,
+            }
         } else {
-            ServerLaunch::local(false, layout_workspace_id(layout.as_ref()))
+            ServerLaunch::local(self.operator, layout_workspace_id(layout.as_ref()))
         };
         let home_dir = env_home_dir();
         let providers = run_action(

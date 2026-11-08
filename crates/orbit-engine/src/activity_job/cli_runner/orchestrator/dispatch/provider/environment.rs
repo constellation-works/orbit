@@ -13,7 +13,6 @@ use orbit_common::security::child_env::{
     ACTIVITY_MCP_TOOLSETS_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
 use orbit_tools::ToolContext;
-use orbit_types::tool::McpToolset;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -190,33 +189,34 @@ pub(super) fn prepare_provider_environment(
         &activity_tools.effective_tools,
         fs_profile,
     ));
-    // A run whose resolved tools include a fleet-notice tool gets the
-    // `notice` toolset stamped, independent of `machine.mcp.toolsets`, so
-    // the agent sees the tool its baseline grants.
-    let mut stamped_toolsets: Vec<&str> = Vec::new();
-    if activity_tools
-        .effective_tools
-        .iter()
-        .any(|tool| tool.starts_with("orbit.notice."))
-    {
-        stamped_toolsets.push(McpToolset::Notice.as_str());
-    }
-    // Core lists a crew memory tool only for a dreaming task's run or a run
-    // in a memory arm; stamp the toolset that carries it so the agent sees
-    // it over MCP.
-    if activity_tools
-        .effective_tools
-        .iter()
-        .any(|tool| tool.starts_with("orbit.memory."))
-    {
-        stamped_toolsets.push(McpToolset::Experiments.as_str());
-    }
-    if !stamped_toolsets.is_empty() {
-        dispatch_env.push((
-            ACTIVITY_MCP_TOOLSETS_ENV.to_string(),
-            stamped_toolsets.join(","),
-        ));
-    }
+    // Start managed servers with the core surface and add only explicitly
+    // granted tools. The activity policy still enforces the callable set.
+    let mut stamped_tools = vec!["core".to_string()];
+    stamped_tools.extend(
+        activity_tools
+            .granted_tools
+            .iter()
+            .chain(activity_tools.requested_tools.iter())
+            .map(|tool| format!("tool:{tool}")),
+    );
+    // An allowlist activity explicitly grants its baseline tools. Deny-mode
+    // activities instead have a broad effective set, so retain only their
+    // explicit lifts and the notice/memory tools admitted by the host.
+    stamped_tools.extend(
+        activity_tools
+            .effective_tools
+            .iter()
+            .filter(|tool| {
+                tool_disallow_list.is_none()
+                    || tool.starts_with("orbit.notice.")
+                    || tool.starts_with("orbit.memory.")
+            })
+            .map(|tool| format!("tool:{tool}")),
+    );
+    dispatch_env.push((
+        ACTIVITY_MCP_TOOLSETS_ENV.to_string(),
+        stamped_tools.join(","),
+    ));
     dispatch_env.extend(orbit_env);
     // Spawned CLI agents resolve the Orbit registry from $HOME unless a
     // managed registry locator is set. A dispatching run already knows its

@@ -235,7 +235,7 @@ caller capability, placement, or authorization.
 Role and toolset selection filters the surface before listing and dispatch.
 `--role` or `machine.mcp.role` selects the base toolsets; `--toolset` or
 `machine.mcp.toolsets` adds to that selection. A local server with neither a
-role nor extra toolsets keeps the pre-role default surface; a direct SSH route
+role nor extra toolsets serves the core profile; a direct SSH route
 with no selection still serves every toolset for caller-side filtering
 [ORB-20234] [ORB-21263]. Direct `tools/list` also hides governed tools
 the session's caller authority cannot use, while Core continues to authorize

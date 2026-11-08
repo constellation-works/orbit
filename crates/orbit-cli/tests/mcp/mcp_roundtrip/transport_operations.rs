@@ -291,7 +291,7 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
     assert_eq!(current.state, original.state);
     assert_eq!(current.input, original.input);
     drop(client);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
     assert_eq!(
         client.call_tool_err(
             "orbit_workflow_auto",
@@ -485,7 +485,7 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), config);
     let before = runtime.list_job_runs(Default::default()).unwrap();
     drop(client);
-    let mut unprivileged = workspace.serve();
+    let mut unprivileged = workspace.serve_with_args(&["--toolset", "dispatch"]);
     assert_eq!(unprivileged.call_tool_err("orbit_workflow_auto",
         json!({"workspace":selector,"action":"start","for_seconds":60,"auto_concurrency":"enforce"}))["code"], "capability_denied");
     assert_eq!(runtime.list_job_runs(Default::default()).unwrap(), before);
@@ -577,7 +577,7 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
         json!({"workspace":selector,"id":resumed,"model":"codex"}),
     );
     drop(client);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
     assert_eq!(
         client.call_tool_err(
             "orbit_workflow_run_resume",

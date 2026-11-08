@@ -17,14 +17,14 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         | "orbit.task.show"
         | "orbit.task.list"
         | "orbit.task.eligible"
-        | "orbit.task.artifact.get"
-        | "orbit.task.block_triage" => T::TasksRead,
+        | "orbit.task.artifact.get" => T::TasksRead,
         "orbit.task.add"
         | "orbit.task.update"
         | "orbit.task.artifact.put"
         | "orbit.friction.add"
         | "orbit.friction.update" => T::TasksWrite,
-        "orbit.task.reconcile_review"
+        "orbit.task.block_triage"
+        | "orbit.task.reconcile_review"
         | "orbit.task.recover_claim"
         | "orbit.task.repilot"
         | "orbit.task.requeue"

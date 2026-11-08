@@ -40,13 +40,9 @@ toolset surface introduced by [ORB-20234].
 - `core` is always on and holds only workspace discovery
   (`orbit.workspace.list` and the federated list). No registry tool is in
   it.
-- The toolsets the single `default` toolset used to hold are now the
-  **default tier**: `tasks-read`, `tasks-write`, `task-repair`, `decisions`,
-  `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec` and
-  `plugins`. The selection name `default` stands for them, so an existing
-  `--toolset default` or `machine.mcp.toolsets = ["default"]` keeps its
-  meaning. `leases`, `experiments`, `analytics`, `decision-channel`,
-  `notice` [ORB-21211] and `resident` [ORB-21242] stay opt-in.
+- The default profile combines `core` with `tasks-read`, `tasks-write` and
+  `search`. The name `default` selects those toolsets. Other toolsets are
+  opt-in, or included in a named role.
 
 ## Roles
 
@@ -54,7 +50,7 @@ Roles are defined in one place, `McpRole::toolsets`:
 
 | Role | Toolsets beside `core` |
 |---|---|
-| `operator` | every toolset |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
 | `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
 | `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
@@ -68,15 +64,14 @@ The roles, not another add-on toolset, are how those surfaces are served.
 
 ## Selection
 
-1. The role is `--role`, else the global `machine.mcp.role`, else none.
+1. The role is `--role`, else `operator` when `--operator` is set, else the global `machine.mcp.role`, else none.
 2. The base is the role's toolsets plus `core`, or with no role `core` plus
    the default tier.
 3. `--toolset`, else `machine.mcp.toolsets`, adds to the base (union).
-4. A managed run's `ORBIT_ACTIVITY_MCP_TOOLSETS` stamp adds to that.
+4. A managed run uses the default profile plus explicitly allowed activity tools and its admitted required and granted tools, ignoring the host selection.
 
-With no `--role` and no `machine.mcp.role` the advertised list is exactly
-the pre-role default surface; `crates/orbit-cli/tests/snapshots/mcp_tools_list.json`
-is unchanged. An Orbit SSH route (`--remote-caller-machine-id`) that names
+With no role the server advertises the core profile, recorded in
+`crates/orbit-cli/tests/snapshots/mcp_tools_list.json`. An Orbit SSH route (`--remote-caller-machine-id`) that names
 neither `--role` nor `--toolset` serves every toolset, because its caller
 filters. `orbit mcp listen` takes the same `--role` and `--toolset`.
 

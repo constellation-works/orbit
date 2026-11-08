@@ -3111,7 +3111,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "tasks-read"
+    "mcp_toolset": "task-repair"
   },
   {
     "name": "orbit.task.eligible",

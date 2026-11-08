@@ -59,9 +59,9 @@ pub struct ResolvedActivityTools {
     /// disallow list covers them. Empty when nothing was dropped.
     /// [ORB-15162]
     pub omitted_requirement_notes: Vec<String>,
-    /// Operator-granted names whose exact disallow entries the implementing
-    /// activity lifted for this run. Only `agent_implement` lifts any; the
-    /// dispatcher removes them from the deny list the child enforces.
+    /// Operator-granted names admitted to the implementing activity, including
+    /// exact disallow entries it lifted and grants already allowed by policy.
+    /// The dispatcher removes lifted entries from the child deny list.
     pub granted_tools: Vec<String>,
     /// Tools a host switch removed from `effective_tools` that a deny-mode
     /// child must also deny. A deny-mode child ignores the legacy allowlist,
