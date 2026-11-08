@@ -600,8 +600,16 @@ release_port
 # race the rlib restore (participant C exit 101 with missing tgt-c rlib in CI).
 # A cold cache keeps the shared-TCP concurrency hazard while staying
 # deterministic; warmth is already covered by warm-identical-source above.
+# Pin daemon ownership on the host before the concurrent run: without this the
+# two supervisors race daemon startup/teardown on the shared port, and the
+# loser observes a missing rlib when its daemon disappears mid-compile. Both
+# participants still compile concurrently through the shared host daemon and
+# cache; the host daemon simply outlives both trees.
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
+SCCACHE_DIR="$WORKDIR/cache" SCCACHE_SERVER_PORT="$cs_port" \
+  SCCACHE_ERROR_LOG="$SERVER_LOG" SCCACHE_LOG=debug \
+  "$sccache_bin" --start-server || fail "could not start shared sccache daemon on port $cs_port"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" \
@@ -614,7 +622,13 @@ run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" \
   --setenv SCCACHE_LOG debug &
 PIDS+=($!)
-wait_participants || fail "client-side shared TCP daemon concurrent namespaces failed"
+set +e
+wait_participants
+cs_status=$?
+set -e
+SCCACHE_DIR="$WORKDIR/cache" SCCACHE_SERVER_PORT="$cs_port" \
+  "$sccache_bin" --stop-server >/dev/null 2>&1 || true
+[[ "$cs_status" -eq 0 ]] || fail "client-side shared TCP daemon concurrent namespaces failed"
 [[ "$(probe_out "$WORKDIR/logs/cs-c")" == "3" ]] || fail "client-side namespace C expected 3"
 [[ "$(probe_out "$WORKDIR/logs/cs-d")" == "6" ]] || fail "client-side namespace D expected 6"
 
