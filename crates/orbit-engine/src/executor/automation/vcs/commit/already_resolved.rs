@@ -1,8 +1,8 @@
-//! A claimed implementer that found its pinned base already resolves the
-//! task, without attaching a clean-tree report [ORB-22407].
+//! An implementer that found its pinned base already resolves the task,
+//! without attaching a clean-tree report [ORB-22407, ORB-23169].
 //!
 //! The artifact-backed routes (`no-diff.json`, `already-landed.json`) stay
-//! the authority when an implementer attaches one. A claimed leaf whose
+//! the authority when an implementer attaches one. An owner or claimed task whose
 //! implementer instead carried its evidence in its output — admitted
 //! `already_resolved` test selectors, with its summary beside them —
 //! settles through this checkpoint instead of failing the commit step with
@@ -24,7 +24,7 @@ use super::super::git::git_output;
 use super::super::handoff::reports_failure;
 use super::super::pr::meaningful_execution_summary;
 
-/// Checkpoint decision for a claimed already-resolved clean base.
+/// Checkpoint decision for an already-resolved clean base.
 pub(super) const DECISION: &str = "verified_already_resolved";
 
 const EVIDENCE_KEY: &str = "already_resolved_evidence";
@@ -62,9 +62,9 @@ pub(super) fn evidence_from_implementation(input: &Value) -> Result<Option<Value
     })))
 }
 
-/// The settled commit outcome for a claimed already-resolved leaf. It
-/// reuses the NoDiff route (`skipped_no_diff_expected`), so both claimed
-/// pipelines hand off without publishing a branch or pull request.
+/// The settled commit outcome for an already-resolved task. It reuses the
+/// NoDiff route (`skipped_no_diff_expected`), so owner and claimed pipelines
+/// hand off without publishing a branch or pull request.
 pub(super) fn checkpoint(task_id: &str, run_id: &str, base_sha: &str, evidence: Value) -> Value {
     json!({
         "phase": "commit",
@@ -78,7 +78,7 @@ pub(super) fn checkpoint(task_id: &str, run_id: &str, base_sha: &str, evidence: 
     })
 }
 
-/// Recheck the checkpoint on the leaf's live worktree: HEAD is the pinned
+/// Recheck the checkpoint on the live worktree: HEAD is the pinned
 /// base and nothing is pending.
 pub(super) fn verify_handoff(
     task: &Task,
