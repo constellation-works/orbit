@@ -168,6 +168,8 @@ The first experiment covers implementers only.
 
 **Memory changes during the experiment by design.** Every weekly revision changes the arm's digest. The experiments framework marks an arm **drifted** when an instruction digest changes. For the memory surface, a change of revision is expected, not drift. The readout stratifies memory-arm tasks by revision week instead, and still flags drift when the rendering code changes (a separate renderer version is part of the digest). This is a small change to the experiment readout and part of slice M2 (§10).
 
+**What shadow mode reports.** In `shadow`, no overlay is applied and no memory is delivered, so there are no `experiment_overlay_applied` rows to stratify. The readout instead reports what the owner captured for each admitted memory-arm task — from the run's `experiment_capture` or the admission receipt — as captures, not deliveries: per task (`memory_captures`) the captured digest, the model and global revisions (`null` when that space had no revision yet) and the renderer version, and per arm (`memory_capture_strata`) the distinct captured digests grouped by revision week. The human readout labels this summary "captured, not delivered". Each arm also lists its enrolled analysed task ids (`task_ids`), so the memory-arm tasks can be found without a per-task scan. Live mode is unchanged: it reports delivered memory from the overlay-applied audit rows (`memory_strata`) and adds no capture section.
+
 **Evidence from both arms feeds memory.** Dreaming reads each model's work from both arms. That doesn't contaminate the comparison, because the treatment is *receiving* memory, and control tasks never receive it.
 
 ## 8. The Global Memory and Its Review
@@ -185,7 +187,7 @@ Open proposals older than 4 weeks become `withdrawn`, with `decided_by = system`
 |---|---|---|
 | CLI | `orbit memory show [<key>\|global] [--revision N]`, `orbit memory history <key>`, `orbit memory export [--dir]`, `orbit memory write <key> --file PATH… [--evidence ID…]` (operator seed), `orbit memory proposals`, `orbit memory proposal accept\|reject <id>`, `orbit memory reset <key>`, `orbit memory copy <from> <to>` (model upgrade) | Operator |
 | MCP / `orbit tool run` | `orbit.memory.show` (read, any agent run in a memory arm), `orbit.memory.write`, `orbit.memory.propose` (dreaming tasks only, key-scoped) | Agents |
-| Experiment readout | memory-arm digest/revision per task, revision-week strata, dreaming overhead in cost | Operator |
+| Experiment readout | memory-arm digest/revision per task, revision-week strata, dreaming overhead in cost; in `shadow`, captured (not delivered) digest/revision per task and per-arm captured strata, plus enrolled task ids per arm (§7) | Operator |
 | Dashboard | none in this design; the experiments page shows the arm like any other | — |
 
 ## 10. Phasing

@@ -1668,3 +1668,4 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
 
 mod delivery;
 mod per_line;
+mod shadow_memory;

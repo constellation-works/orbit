@@ -331,6 +331,67 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     blocks.push(Block::text("\nArms:"));
     blocks.push(Block::table(arms));
 
+    // Shadow memory arms: what was captured, never delivered.
+    let has_captures = value["arms"].as_array().into_iter().flatten().any(|arm| {
+        arm["memory_captures"]
+            .as_array()
+            .is_some_and(|captures| !captures.is_empty())
+    });
+    if has_captures {
+        blocks.push(Block::text("\nMemory captures (captured, not delivered):"));
+        let mut captures = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("TASK"),
+            Column::new("DIGEST"),
+            Column::new("MODEL REV"),
+            Column::new("GLOBAL REV"),
+            Column::new("RENDERER").number(),
+            Column::new("WEEK"),
+        ]);
+        for arm in value["arms"].as_array().into_iter().flatten() {
+            for capture in arm["memory_captures"].as_array().into_iter().flatten() {
+                captures.add_row(vec![
+                    text(&arm["name"]),
+                    text(&capture["task_id"]),
+                    text(&capture["digest"]),
+                    text(&capture["model_revision"]),
+                    text(&capture["global_revision"]),
+                    text(&capture["renderer_version"]),
+                    text(&capture["week"]),
+                ]);
+            }
+        }
+        blocks.push(Block::table(captures));
+        for arm in value["arms"].as_array().into_iter().flatten() {
+            let strata = arm["memory_capture_strata"].as_array();
+            if let Some(strata) = strata.filter(|strata| !strata.is_empty()) {
+                let summary = strata
+                    .iter()
+                    .map(|stratum| {
+                        format!(
+                            "{}: {} task(s), digests {}",
+                            text(&stratum["week"]),
+                            text(&stratum["tasks"]),
+                            stratum["digests"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .map(text)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                blocks.push(Block::text(format!(
+                    "Arm {} captured (not delivered): {}",
+                    text(&arm["name"]),
+                    summary
+                )));
+            }
+        }
+    }
+
     let per_protocol = &value["per_protocol"];
     if per_protocol.is_object() {
         let metric = &per_protocol["metric"];

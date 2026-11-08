@@ -208,6 +208,141 @@ impl Fixture {
     }
 }
 
+#[test]
+fn shadow_memory_readout_labels_captures_not_delivered() {
+    if crate::isolated_test::run_in_child(
+        "experiment_readout::shadow_memory_readout_labels_captures_not_delivered",
+    ) {
+        return;
+    }
+    let fixture = Fixture::workspace();
+    let config = fixture.work.join(".orbit/config.toml");
+    let mut existing = std::fs::read_to_string(&config).unwrap_or_default();
+    existing.push_str("[crew_memory]\nenabled = true\n");
+    std::fs::write(&config, existing).expect("enable crew memory");
+
+    let (task_id, digest) = {
+        let runtime =
+            OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+                .expect("fixture runtime");
+        let actor = ExperimentActor {
+            actor: "readout-caption".into(),
+            reason: None,
+        };
+        let created = runtime
+            .create_experiment(
+                "shadow-capture",
+                ExperimentDefinitionInput {
+                    mode: Some("shadow".into()),
+                    arms: Some(json!([
+                        {"name": "control", "control": true, "weight": 1},
+                        {"name": "memory", "weight": 1, "overlay": {"memory": {"roles": ["implement"], "global": true}}}
+                    ])),
+                    primary_metric: Some("delivery_done_rate".into()),
+                    ..ExperimentDefinitionInput::default()
+                },
+                actor.clone(),
+            )
+            .expect("create shadow experiment");
+        let started = runtime
+            .change_experiment("shadow-capture", ExperimentChange::Start, actor)
+            .expect("start shadow experiment");
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Shadow memory sample".into(),
+                complexity: TaskComplexity::Low,
+                status: Some(TaskStatus::Backlog),
+                ..TaskAddParams::default()
+            })
+            .expect("add task");
+        let arm = started
+            .arms
+            .iter()
+            .find(|arm| arm.name == "memory")
+            .expect("memory arm");
+        let workspace_id = runtime.workspace_id().expect("workspace id");
+        let db = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db"))
+            .expect("open fixture store");
+        db.execute(
+            "INSERT INTO experiment_assignments (
+                workspace_id, experiment_id, task_id, arm, segment, overlay_digest,
+                assigned_at, forced, exclusion_reason
+             ) VALUES (?1, ?2, ?3, 'memory', ?4, ?5, ?6, 0, NULL)",
+            rusqlite::params![
+                workspace_id,
+                created.id,
+                task.id,
+                started.segment,
+                arm.overlay_digest,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .expect("record memory assignment");
+        drop(db);
+        let delivery = orbit_types::workflow::CrewMemoryDelivery::render(
+            orbit_types::workflow::TagInstructionRole::Implement,
+            "model-null-rev",
+            true,
+            Some("2026-11-02T02:00:00Z".into()),
+            orbit_types::workflow::CrewMemoryBlock {
+                revision: orbit_types::workflow::CrewMemoryRevisions {
+                    model: None,
+                    global: None,
+                },
+                ..Default::default()
+            },
+        );
+        let digest = delivery.digest.clone();
+        let capture = json!({
+            "task_id": task.id,
+            "assignments": [{
+                "experiment": created.id,
+                "arm": "memory",
+                "segment": started.segment,
+                "forced": false,
+                "digest": arm.overlay_digest,
+                "overlay_json": "{\"memory\":{\"global\":true,\"roles\":[\"implement\"]}}",
+                "live": false,
+                "memory": { "enabled": true, "deliveries": [delivery] }
+            }]
+        });
+        orbit_engine::RuntimeHost::insert_job_run(
+            &runtime,
+            "task_local_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(
+                json!({ "task_id": task.id, "task_ids": [task.id], "experiment_capture": capture }),
+            ),
+            None,
+        )
+        .expect("record capture run");
+        (task.id.to_string(), digest)
+    };
+
+    let output = fixture.run(&[
+        "experiment",
+        "readout",
+        "shadow-capture",
+        "--format",
+        "plain",
+        "--header",
+    ]);
+    assert!(
+        output.status.success(),
+        "shadow readout failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).expect("readout is utf-8");
+    assert!(
+        text.contains("captured, not delivered"),
+        "human readout must label shadow captures as captured, not delivered:\n{text}"
+    );
+    assert!(text.contains(&digest), "captured digest missing:\n{text}");
+    assert!(text.contains(&task_id), "captured task missing:\n{text}");
+}
+
 fn line_containing(text: &str, needle: &str) -> String {
     text.lines()
         .find(|line| line.contains(needle))

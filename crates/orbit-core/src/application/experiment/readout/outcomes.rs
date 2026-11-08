@@ -11,7 +11,9 @@ use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
 use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus, complexity_bucket};
-use orbit_types::workflow::{ReviewVerdict, TagInstructionRole, V2AuditEvent, V2AuditEventKind};
+use orbit_types::workflow::{
+    CapturedExperiments, ReviewVerdict, TagInstructionRole, V2AuditEvent, V2AuditEventKind,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -277,6 +279,14 @@ impl OrbitRuntime {
         let mut interactive_excluded = 0;
 
         let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id, &ids)?;
+        let mut captured_memory = self.captured_memory_from_runs(experiment_id, &ids)?;
+        for (id, claim) in &claimed_treatments {
+            if let Some(memory) = &claim.captured_memory {
+                captured_memory
+                    .entry(id.clone())
+                    .or_insert_with(|| memory.clone());
+            }
+        }
         let mut outcomes = Vec::with_capacity(enrolled.len());
         for row in enrolled {
             let (Some(arm), Some(task)) = (row.arm.as_ref(), tasks.get(row.task_id.as_str()))
@@ -442,6 +452,7 @@ impl OrbitRuntime {
                 assignment_digest: row.digest.clone(),
                 delivered_roles: delivered_roles.get(id).cloned().unwrap_or_default(),
                 memory: task_memory.get(id).cloned(),
+                captured_memory: captured_memory.get(id).cloned(),
                 cost_source,
                 reviewable,
                 values,
@@ -454,6 +465,81 @@ impl OrbitRuntime {
             open_regression_windows,
             interactive_excluded,
         })
+    }
+
+    /// Captured crew memory per task from its runs' `experiment_capture`
+    /// (or pipeline `initial_input`), earliest run first. Shadow arms are
+    /// captured but never delivered, so this is their only memory evidence;
+    /// live arms keep using the overlay-applied audit rows for delivery.
+    fn captured_memory_from_runs(
+        &self,
+        experiment_id: &str,
+        ids: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskMemoryDelivery>, OrbitError> {
+        let mut captured: BTreeMap<String, TaskMemoryDelivery> = BTreeMap::new();
+        for id in ids {
+            let mut runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(id.clone()),
+                include_steps: false,
+                ..Default::default()
+            })?;
+            runs.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.run_id.cmp(&right.run_id))
+            });
+            for run in runs {
+                let state = self.read_run_state(&run.run_id.to_string())?;
+                let raw = run
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("experiment_capture"))
+                    .cloned()
+                    .or_else(|| {
+                        state
+                            .as_ref()
+                            .and_then(|state| state.initial_input.get("experiment_capture"))
+                            .cloned()
+                    });
+                let Some(raw) = raw else { continue };
+                let Ok(capture) = serde_json::from_value::<CapturedExperiments>(raw) else {
+                    continue;
+                };
+                let Some(entry) = capture
+                    .assignments
+                    .iter()
+                    .find(|entry| entry.experiment == experiment_id)
+                else {
+                    continue;
+                };
+                let Some(memory) = &entry.memory else {
+                    continue;
+                };
+                if !memory.enabled {
+                    continue;
+                }
+                let Some(delivery) = memory.deliveries.first() else {
+                    continue;
+                };
+                captured.insert(
+                    id.clone(),
+                    TaskMemoryDelivery {
+                        week: delivery
+                            .revised_at
+                            .as_deref()
+                            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                            .map(|at| at.format("%G-W%V").to_string()),
+                        digest: delivery.digest.clone(),
+                        model: delivery.model.clone(),
+                        model_revision: delivery.block.revision.model,
+                        global_revision: delivery.block.revision.global,
+                        renderer_version: delivery.renderer_version,
+                    },
+                );
+                break;
+            }
+        }
+        Ok(captured)
     }
 
     /// The summed complete cost of `ids` (crew memory dreaming tasks) and
@@ -734,6 +820,10 @@ impl OrbitRuntime {
                                                 })
                                                 .map(|at| at.format("%G-W%V").to_string()),
                                             digest: received.digest.clone(),
+                                            model: received.model.clone(),
+                                            model_revision: received.model_revision,
+                                            global_revision: received.global_revision,
+                                            renderer_version: received.renderer_version,
                                         }
                                     });
                                 }
