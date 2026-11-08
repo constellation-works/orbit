@@ -175,7 +175,7 @@ or by setting `enabled` in its YAML. Git ignores `.orbit/`, so the change applie
 to this checkout on this machine. Start with worktree GC. No routine ships work;
 to ship unattended, see [Ship unattended](#ship-unattended).
 
-![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group paged at three routines per page, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group listing every matching routine, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 
 ```bash
 orbit routine list            # enabled, paused, next due, last fire

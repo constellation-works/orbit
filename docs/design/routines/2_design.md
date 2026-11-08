@@ -58,20 +58,20 @@ The dashboard Operations view projects the same typed status and control functio
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
 Automation > Routines filters names, job targets and descriptions locally and
-shows at most three cards per page in each Active or Paused group. Paused
+shows every matching routine in each Active or Paused group. Paused
 routines start collapsed behind a keyboard- and touch-operable disclosure;
 filtering opens it to show matching paused entries. Group counts include the
 total catalogue and summarize blocked, stalled and repeatedly failing routines
-even when their cards are on another page or collapsed. The failure warning
-and next-hour timeline always cover the full catalogue. Filter, page and
+even when their cards are collapsed or filtered out. The failure warning
+and next-hour timeline always cover the full catalogue. Filter and
 disclosure choices survive status refreshes and reset on workspace or host
-changes. Filtering and paging are refused only while a trigger editor is on
-screen: close it first. An open editor whose routine moved to another page or
-group keeps the controls usable, so the operator can page back to it; paging
-or filtering back onto the editor disables them again. If a filter keystroke
+changes. Filtering is refused only while a trigger editor is on
+screen: close it first. An open editor whose routine is filtered out
+keeps the controls usable, so the operator can filter back to it;
+filtering back onto the editor disables them again. If a filter keystroke
 reveals the editor, the query stops there and focus moves to the editor panel;
 remaining query characters do not change the draft. Tab or click into a form
-control to resume editing. Paging and Clear focus an enabled editor control
+control to resume editing. Clear focuses an enabled editor control
 when available, or the panel while a save is pending. A save still in flight
 reports its refusal in the editor now on screen, with the draft kept.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
