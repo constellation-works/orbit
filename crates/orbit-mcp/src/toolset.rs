@@ -80,7 +80,10 @@ impl ToolsetFilteredHost {
         let mut withheld = HashMap::new();
         for definition in source.iter() {
             let toolset = definition.rules.toolset;
-            if self.selection.enables(toolset) {
+            if self
+                .selection
+                .enables_tool(toolset, &definition.schema.name)
+            {
                 advertised.push(definition.clone());
             } else {
                 let canonical = definition.schema.name.clone();
@@ -139,6 +142,10 @@ fn toolset_not_enabled(tool: &str, toolset: McpToolset, role: Option<McpRole>) -
 }
 
 impl McpHost for ToolsetFilteredHost {
+    fn presentation_enabled(&self) -> bool {
+        self.selection.enables(McpToolset::Ui) && self.inner.presentation_enabled()
+    }
+
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         self.surface()
             .map(|surface| surface.advertised.as_ref().clone())
@@ -228,10 +235,9 @@ pub fn mcp_surface_report(selection: &McpToolsetSelection) -> Result<McpSurfaceR
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     let mut tool_names = Vec::new();
     let mut bytes = 0usize;
-    for definition in definitions
-        .iter()
-        .filter(|definition| selection.enables(definition.rules.toolset))
-    {
+    for definition in definitions.iter().filter(|definition| {
+        selection.enables_tool(definition.rules.toolset, &definition.schema.name)
+    }) {
         let input_schema = definition.input_schema.clone().unwrap_or_else(|| {
             Value::Object(orbit_common::protocol::tool_schema::tool_input_schema_for(
                 &definition.schema.name,

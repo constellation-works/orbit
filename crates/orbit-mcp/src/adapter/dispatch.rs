@@ -249,6 +249,11 @@ impl OrbitToolServer {
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         if let Some(definition) = presentation_definition(request.name.as_ref()) {
+            if !self.host.presentation_enabled() {
+                return Ok(tool_error_result(&OrbitError::InvalidInput(
+                    "UI tools are not enabled for this server".into(),
+                )));
+            }
             let result = self.dispatch_presentation(request, definition.kind).await;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
@@ -617,7 +622,8 @@ impl ServerHandler for OrbitToolServer {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let presentation_available = presentation::available(&definitions);
+        let presentation_available =
+            self.host.presentation_enabled() && presentation::available(&definitions);
         let mut tools = definitions
             .into_iter()
             .map(|mut definition| {

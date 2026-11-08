@@ -1109,8 +1109,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
         );
     }
 
-    // A managed run's dispatch stamps the toolsets it offers its agent; they
-    // add to the host config rather than replace it.
+    // A managed run uses its dispatch stamp instead of the host config.
     let mut stamped = workspace.serve_with_args_and_env(
         &["--operator"],
         &[("ORBIT_ACTIVITY_MCP_TOOLSETS", "notice")],
@@ -1120,8 +1119,8 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     for (tool, toolset) in OPT_IN {
         assert_eq!(
             names.contains(&tool),
-            matches!(toolset, "experiments" | "notice"),
-            "a stamped notice toolset must add to the configured experiments: {tool}"
+            toolset == "notice",
+            "a stamped notice toolset must override the configured experiments: {tool}"
         );
     }
 }
@@ -1551,7 +1550,8 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
     const LANDED: &str = "3333333333333333333333333333333333333333";
     const RUN_ID: &str = "jrun-20261003-0000-dl";
 
-    let (workspace, mut client) = McpWorkspace::served();
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
     let task_id = client.add_task(
         "Deliver over MCP",
         "Observed through the public delivery read.",
@@ -1851,7 +1851,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
 
 fn a_replica_mcp_session_enforces_checkout_capability_classes() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "automation,runs,exec"]);
 
     for (name, arguments) in [
         (
@@ -1920,7 +1920,8 @@ fn an_operator_served_mcp_session_reaches_a_governed_tool() {
 
     // Same governed tool, same process environment that authorizes it on the
     // CLI, but an ordinary session: still refused, and told the truth about it.
-    let mut agent = workspace.serve_with_args_and_env(&[], &[("ORBIT_OPERATOR", "1")]);
+    let mut agent =
+        workspace.serve_with_args_and_env(&["--toolset", "runs"], &[("ORBIT_OPERATOR", "1")]);
     let denied = agent.assert_tool_error("orbit_workflow_run_list", json!({}), "capability_denied");
     let message = denied["message"]
         .as_str()
@@ -3012,7 +3013,7 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
     let mut config = std::fs::read_to_string(&config_path).unwrap_or_default();
     config.push_str("\n[decision_channel]\nenabled = true\n");
     std::fs::write(config_path, config).unwrap();
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "decisions"]);
 
     // Bad params: missing required field is a structured `invalid_input`
     // tool error, not a JSON-RPC failure or a crash.
@@ -3299,7 +3300,8 @@ fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
 }
 
 fn mcp_calls_are_audited_once_including_unknown_raw_names() {
-    let (workspace, mut client) = McpWorkspace::served();
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
 
     client.call_tool_ok(
         "orbit_search",
@@ -5344,7 +5346,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
     let workspace = McpWorkspace::init();
     let task_id = author_task(&workspace, "<script>unsafe task title</script>");
     let selector = workspace.work.to_str().expect("workspace path");
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "ui,dispatch"]);
     let listed = client.tools_list();
     let tools = tools_array(&listed);
     for (name, entrypoint) in [("orbit_ui_open", "global"), ("orbit_ui_inspect", "thread")] {
@@ -5413,7 +5415,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
     assert_eq!(unchanged["updated_at"], ordinary["updated_at"]);
     assert_eq!(unchanged["status"], ordinary["status"]);
 
-    let mut federated = federated_client(&workspace);
+    let mut federated = workspace.serve_with_args(&["--mode", "federated", "--toolset", "ui"]);
     let discovered = federated.call_tool_ok("orbit_workspace_list", json!({}));
     let descriptors = array_of(&discovered, "workspaces");
     let qualified = descriptors

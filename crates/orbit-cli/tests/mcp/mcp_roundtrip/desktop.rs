@@ -3,7 +3,7 @@ use super::*;
 fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
     let create = json!({"workspace":selector,"model":"codex","request_id":"desktop-create-proof","title":"Desktop capture","description":"Durable evidence","acceptance_criteria":["One effect across restart"]});
     let created = client.call_tool_ok("orbit_task_add", create.clone());
     let id = created["snapshot"]["task"]["id"]
@@ -14,7 +14,7 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     assert_eq!(created["workspace"], selector);
     assert_eq!(created["snapshot"]["task"]["status"], "proposed");
     drop(client);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
     let replay = client.call_tool_ok("orbit_task_add", create.clone());
     assert_eq!(replay["replayed"], true);
     assert_eq!(replay["snapshot"]["task"]["id"], id);
@@ -27,7 +27,7 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     let comment = json!({"workspace":selector,"model":"codex","request_id":"desktop-comment-proof","id":id,"expected_revision":replay["snapshot"]["revision"],"comment":"Recorded once"});
     let first = client.call_tool_ok("orbit_task_update", comment.clone());
     drop(client);
-    let mut client = workspace.serve();
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
     let again = client.call_tool_ok("orbit_task_update", comment);
     assert_eq!(again["replayed"], true);
     assert_eq!(
@@ -242,7 +242,7 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "disabled and mixed-input refusals do not submit runs"
     );
     drop(client);
-    let mut unprivileged = workspace.serve();
+    let mut unprivileged = workspace.serve_with_args(&["--toolset", "automation,dispatch,runs"]);
     for (tool, input) in [
         (
             "orbit_routine_control",

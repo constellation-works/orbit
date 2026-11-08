@@ -9,14 +9,13 @@ use super::{McpWorkspace, SpawnPiped, tool_names};
 
 /// The reader role's advertised surface: core discovery plus attention,
 /// task, run, codebase and search reads.
-const READER_TOOLS: [&str; 14] = [
+const READER_TOOLS: [&str; 13] = [
     "orbit_attention",
     "orbit_codebase_analytics",
     "orbit_codebase_related",
     "orbit_codebase_show",
     "orbit_search",
     "orbit_task_artifact_get",
-    "orbit_task_block_triage",
     "orbit_task_eligible",
     "orbit_task_list",
     "orbit_task_show",
@@ -116,7 +115,7 @@ fn a_role_serves_only_its_toolsets_in_every_mode() {
 
     // `machine.mcp.role` is the host default; `--role` replaces it.
     set_host_role(&workspace, "manager");
-    let mut configured = workspace.serve_with_args(&["--operator"]);
+    let mut configured = workspace.serve_with_args(&["--operator", "--role", "manager"]);
     let listed = configured.tools_list();
     let names = tool_names(&listed);
     assert!(names.contains(&"orbit_notice_list"), "{names:?}");
@@ -274,4 +273,43 @@ fn unbound_attention_notice_actions_target_each_home_workspace() {
         assert_eq!(closed["notice"]["workspace"]["id"], home);
         assert_eq!(closed["notice"]["status"], "closed");
     }
+}
+
+#[test]
+fn default_and_operator_profiles_advertise_their_expected_surfaces() {
+    let workspace = McpWorkspace::init();
+    let mut core = workspace.serve();
+    let listed = core.tools_list();
+    assert_eq!(
+        tool_names(&listed),
+        vec![
+            "orbit_attention",
+            "orbit_friction_add",
+            "orbit_friction_update",
+            "orbit_search",
+            "orbit_task_add",
+            "orbit_task_artifact_get",
+            "orbit_task_artifact_put",
+            "orbit_task_eligible",
+            "orbit_task_list",
+            "orbit_task_show",
+            "orbit_task_update",
+            "orbit_workspace_list",
+        ]
+    );
+    let mut operator = workspace.serve_with_args(&["--operator"]);
+    let listed = operator.tools_list();
+    let names = tool_names(&listed);
+    for expected in [
+        "orbit_task_recover_claim",
+        "orbit_workflow_ship",
+        "orbit_routine_control",
+        "orbit_pipeline_invoke",
+        "orbit_decision_list",
+        "orbit_codebase_show",
+        "orbit_ui_open",
+    ] {
+        assert!(names.contains(&expected), "missing {expected}: {names:?}");
+    }
+    assert!(!names.contains(&"orbit_experiment_list"), "{names:?}");
 }

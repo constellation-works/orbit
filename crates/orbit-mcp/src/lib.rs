@@ -83,6 +83,11 @@ pub trait McpHost: Send + Sync + 'static {
         BTreeSet::new()
     }
 
+    /// Whether the adapter may expose its UI entrypoints.
+    fn presentation_enabled(&self) -> bool {
+        true
+    }
+
     /// Execute one canonicalized call and return its finished result. The
     /// host applies the operation's result policy (such as `orbit.task.list`'s
     /// default compact rows); the adapter renders the value without per-tool

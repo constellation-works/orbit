@@ -225,6 +225,10 @@ fn resolve_granted_deny_lifts(
                 return Err(refuse(reason));
             }
             if !tool_allowed(tool_name, disallow_list) {
+                // The activity already allows this exact task grant. Preserve
+                // it for MCP surface selection even though no denial needs
+                // lifting; the existing activity policy still applies.
+                grants.lifted.insert(tool_name.clone());
                 continue;
             }
             let classification = authorization::classify_agent_tool_grant(tool_name);
