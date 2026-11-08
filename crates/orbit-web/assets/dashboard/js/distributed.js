@@ -1110,24 +1110,38 @@ export function retryHandoff(claim, reason, requestId) {
     expectedCandidate(claim), claim.handoff.landing.attempt, claim.handoff.landing.state, reason]);
   const storageKey = `orbit-handoff-retry:${identity}`;
   let durableKey;
+  let retainedKey = false;
   try {
-    durableKey = localStorage.getItem(storageKey) || requestId || newRequestId();
-    try {
-      localStorage.setItem(storageKey, durableKey);
-    } catch (_) {
-      // A store full of this feature's stale keys frees itself: settled
-      // retries delete their key, so any other retry key is abandoned.
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith("orbit-handoff-retry:") && key !== storageKey) localStorage.removeItem(key);
-      }
-      localStorage.setItem(storageKey, durableKey);
-    }
+    const storedKey = localStorage.getItem(storageKey);
+    retainedKey = !!storedKey;
+    durableKey = storedKey || requestId || newRequestId();
+    // Never evict another retry key to make room: settled retries remove
+    // their own key below, so any other key still present is unresolved
+    // (lost reply or in flight) and its identity must survive. If the
+    // store cannot hold this key, no request is sent yet.
+    localStorage.setItem(storageKey, durableKey);
   } catch (_) {
     return Promise.reject(new Error("Landing retry needs browser storage to retain its request key; use the owner CLI with a saved request key."));
   }
   const removeKey = () => {
     try { localStorage.removeItem(storageKey); } catch (_) { /* already gone */ }
+  };
+  // Only an authoritative outcome settles this identity. A successful reply
+  // resolves the receipt, and a definitive HTTP refusal (400/409 and other
+  // 4xx below) proves this key recorded no dispatch to replay: the owner
+  // checks such refusals before or instead of reserving a receipt, so its
+  // key can go. Everything else is uncertain and keeps the key for an
+  // identical replay: a transport failure (fetch or response body, no
+  // HTTP status) may follow a received request, a 408/429/5xx reply does
+  // not prove no reservation happened, and an authorization refusal
+  // (401/403/404) on a retained key is checked before the receipt lookup,
+  // so it says nothing about an earlier uncertain attempt.
+  const settled = (error) => {
+    const status = error && typeof error.status === "number" ? error.status : null;
+    if (status === null) return false;
+    if (status === 408 || status === 429 || status >= 500) return false;
+    if (retainedKey && (status === 401 || status === 403 || status === 404)) return false;
+    return status >= 400 && status < 500;
   };
   return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/retry`, {
     ...expectedCandidate(claim),
@@ -1137,7 +1151,7 @@ export function retryHandoff(claim, reason, requestId) {
     request_key: durableKey,
   }).then(
     (result) => { removeKey(); return result; },
-    (error) => { removeKey(); throw error; },
+    (error) => { if (settled(error)) removeKey(); throw error; },
   );
 }
 
