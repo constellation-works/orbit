@@ -36,8 +36,10 @@ spec:
 
 A `deterministic` activity names a registered `action` and passes it optional
 `config`. `example_action` above is a placeholder: replace it with a registered
-action before running the job. An `agent_loop` activity gives the agent an instruction, its tools,
-and a provider instead:
+action before running the job. An `agent_loop` activity gives the agent an instruction and its tools
+instead. It names no provider: the crew the run draws picks the provider,
+model and effort (an optional inline `provider` or `model` is only a baseline
+that the crew overrides):
 
 ```yaml
 spec:
@@ -47,7 +49,6 @@ spec:
   tools:
     - orbit.task.show
     - orbit.search
-  provider: claude
 ```
 
 Orbit runs every agent loop through the provider's CLI agent. The retired

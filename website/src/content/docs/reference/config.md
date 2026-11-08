@@ -424,12 +424,22 @@ enable a crew.
 
 `orbit init` also seeds the four `workflow.*_complexity_crews` pools from the
 detected providers. Claude only: `haiku` / `sonnet` / `opus` / `opus`. Codex
-only: `luna` / `sol` / `sol` / `astra`. Both: `haiku, luna` / `sol, sonnet` /
-`opus` / `opus, astra`. Grok adds `grok` to `medium`; a detected `agy` appends
+only: `luna` / `terra` / `sol` / `astra`. Both: `haiku, luna` / `terra, sonnet` /
+`sol, opus` / `opus, astra`. Grok adds `grok` to `medium`; a detected `agy` appends
 `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder`,
 and `muse-wonder-full` to `low`, `medium`, and `hard`. Other
-providers leave the pools empty, which routes to `default_crew`. Init only
-seeds a new file; an existing config is not rewritten.
+providers leave the pools empty, which routes to `default_crew`.
+
+Init also seeds the `review`, `task_pilot`, `failure_recovery`, `auto_fix`,
+`final_recovery`, `baseline_red_repair` and `pre_landing_review`
+[purpose pools](#purpose-pools), keeping only crews it seeds enabled (an empty
+`final_recovery` is written as `[]`, which turns it off). It also writes
+`experiments.enabled = true`, `workflow.crew_selection = "static"`,
+`workflow.unlocked_context_paths`, `workflow.mid_run_steering.enabled = true`
+and `workflow.task_pilot_freshness.material_fields`, and, when it creates the
+machine identity, `machine.auto_concurrency.mode = "enforce"`. These override
+the built-in defaults in [Settable keys](#settable-keys). Init only seeds a new
+file; an existing config is not rewritten.
 
 ### Human crews
 
@@ -682,8 +692,8 @@ complexity instead of `workflow.<tier>_complexity_crews`, and records the
 source `type:<type>/<tier>`. A task whose type has no pool for its tier draws
 from the complexity pool as before. The order is an explicit crew, then a
 purpose pool, then the type pool, then the complexity pool, then
-`default_crew`. Executor OS filtering, usage pressure and the performance
-multiplier apply as they do to complexity pools.
+`default_crew`. Executor OS filtering and usage pressure apply as they do to
+complexity pools.
 
 Orbit draws at creation, when the crew is cleared, when the complexity changes
 and when a tag or context-file edit moves the task to another type pool, or
@@ -729,6 +739,17 @@ and have no effect; remove them with `orbit doctor --fix-retired-config-keys`,
 which backs up each affected file first, or delete the lines by hand from the
 `config.toml` that sets them. Historical run answers and concluded experiment
 readouts remain readable.
+
+The crew ladder (with `orbit agents ladder`), crew-performance weighting,
+regression-risk prompt marks and the task pilot's explore brief have been
+removed. Every `[workflow.crew_ladder]`, `[workflow.regression_risk]` and
+`[workflow.explore_brief]` key, and `workflow.crew_performance`,
+`crew_performance_strength`, `crew_performance_cap` and
+`crew_performance_window_days`, load with a deprecation warning and have no
+effect. They are recognised until 2026-12-07, after which they are reported as
+unknown settings; delete them from the `config.toml` that sets them. Route each
+tier with `workflow.<tier>_complexity_crews` and compare crews with
+experiments.
 
 ## Settable keys
 

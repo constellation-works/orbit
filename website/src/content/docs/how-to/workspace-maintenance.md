@@ -202,6 +202,10 @@ Orbit identifies the source repository using a portable Git URL and refuses cred
 
 ### Rebinding workflow
 
+:::caution[Remove publication bindings first]
+If this workspace uses task publication, `source-remote rebind` refuses a changed source identity, even with `--dry-run`, while a publication binding exists. Before step 2, record `orbit workspace publication show --json` and remove the binding with `orbit workspace publication remove --confirm`. After the source rebind, run `orbit workspace publication rebind` with a new publication ID and an empty publication branch. Orbit never rewrites publication lineages or remote snapshot histories automatically. See [Publish and restore tasks](../task-publication/).
+:::
+
 Follow these steps to rebind the remote:
 
 1. **Inspect and record the current remote:**
@@ -233,10 +237,6 @@ Follow these steps to rebind the remote:
 
 5. **Rollback if needed:**
    To undo the transition, rebind back to the saved original URL using `orbit workspace source-remote rebind --remote <OLD_URL>`.
-
-:::caution[Recreate publication bindings]
-If this workspace uses task publication, existing publication bindings must be removed and recreated explicitly with `orbit workspace publication remove` and `orbit workspace publication bind`. Orbit never rewrites publication lineages or remote snapshot histories automatically. See [Publish and restore tasks](../task-publication/).
-:::
 
 ## Remove or tear down a workspace
 
