@@ -425,11 +425,16 @@ only complexity, type and tag rules apply to them. Local delivery and an
 owner's landing of a claimed leaf under `workflow.distributed_completion` are
 not held.
 
-Loading fails, naming the rule's position, on an unknown key, an empty rule,
-a blank name, glob or tag, a glob that is not a confined relative path, an
-exclude-only `paths`, an unknown type, or a complexity outside the four
-levels. Verify with `orbit config show completion.hold` and
-`orbit config keys`.
+Loading fails on an unknown key, an empty rule, a blank name, glob or tag,
+a glob that is not a confined relative path, an exclude-only `paths`, an
+unknown type, or a complexity outside the four levels (`unassessed` is also
+refused). Only errors found after a rule decodes name the rule by its
+1-based position (`completion.hold[2]`): an empty rule, a blank name, glob
+or tag, a bad glob, an exclude-only `paths` list, or
+`complexity_at_least = "unassessed"`. Schema errors name only
+`completion.hold` and the bad field or value, without a rule position: an
+unknown key, or an unknown complexity or type value. Verify with
+`orbit config show completion.hold` and `orbit config keys`.
 
 ## Distributed-drain completion policy
 
