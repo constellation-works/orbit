@@ -17,14 +17,16 @@ use crate::context::RuntimeHost;
 use super::head::classify_logged_job;
 use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
 use super::log::job_log;
-use super::recovery::{CheckFailureClass, FailedJob};
+use super::recovery::{CheckFailureClass, FailedJob, unreadable_job_text};
 
 /// The class deciding a watched pull request's failed checks, with the
 /// landing's wording of every failed job.
 pub(in crate::executor::automation::vcs) struct WatchedFailure {
     /// `transient`, `inherited`, `flaky`, `candidate`, `base-suspect` or
-    /// `inconclusive`: the greatest class of any failed job, as the landing
-    /// orders them, so one unreadable job leaves the set inconclusive.
+    /// `inconclusive`: the greatest class of the readable failed jobs, as the
+    /// landing orders them. A log that could not be read is unknown and does
+    /// not outrank those jobs; the detail names it. The set is inconclusive
+    /// only when no readable job decides.
     pub(in crate::executor::automation::vcs) class: &'static str,
     pub(in crate::executor::automation::vcs) detail: String,
 }
@@ -100,9 +102,17 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
         let log = match job_log(host, workspace, run_id, job_id, job, deadline_ms) {
             Ok(log) => log,
             Err(error) => {
-                return WatchedFailure::inconclusive(format!(
-                    "the log of '{label}' could not be read: {error}"
-                ));
+                jobs.push(FailedJob {
+                    run_id: Some(run_id),
+                    job_id,
+                    label,
+                    class: CheckFailureClass::Unknown,
+                    signature: "unreadable".to_string(),
+                    why: error.to_string(),
+                    excerpt: String::new(),
+                    tip_passes: false,
+                });
+                continue;
             }
         };
         let (class, why, tip_passes, signature) = match classify_logged_job(
@@ -132,11 +142,17 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
             tip_passes,
         });
     }
-    let Some(class) = jobs.iter().map(|job| job.class).max() else {
-        return WatchedFailure::inconclusive(
-            "no failed workflow job on the pull request's head answers the failed check"
-                .to_string(),
-        );
+    let Some(class) = jobs
+        .iter()
+        .map(|job| job.class)
+        .filter(|class| *class != CheckFailureClass::Unknown)
+        .max()
+    else {
+        return WatchedFailure::inconclusive(if jobs.is_empty() {
+            "no failed workflow job on the pull request's head answers the failed check".to_string()
+        } else {
+            unreadable_job_text(&jobs)
+        });
     };
     WatchedFailure {
         class: class.as_str(),

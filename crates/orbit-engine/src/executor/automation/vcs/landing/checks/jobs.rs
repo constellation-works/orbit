@@ -213,5 +213,18 @@ pub(super) fn describe(class: CheckFailureClass, jobs: &[FailedJob]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("classified `{}`: {details}", class.as_str())
+    let unreadable = jobs
+        .iter()
+        .filter(|job| job.class == CheckFailureClass::Unknown)
+        .map(|job| format!("'{}'", job.label))
+        .collect::<Vec<_>>();
+    let unknown = if unreadable.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; unreadable job logs left unknown: {}",
+            unreadable.join(", ")
+        )
+    };
+    format!("classified `{}`: {details}{unknown}", class.as_str())
 }

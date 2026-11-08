@@ -56,13 +56,20 @@
 //!   instead: the owner ends the claim and returns the task to the backlog,
 //!   keeping the candidate and this evidence for the task's next run, within
 //!   the task's landing repair budget.
-//! - **inconclusive**: the evidence for any of the above could not be read:
-//!   a job query or log read failed, a log read recovered no text, or a log
-//!   names no diagnostic, so its signature is only the failed step's name.
-//!   A failed read is not a successful empty answer, and neither proves the
+//! - **unknown**: one failed job's log could not be read (including a
+//!   truncated log with no selected diagnostic). That job is recorded and
+//!   named, and it does not void a decision the readable jobs already make,
+//!   such as every readable job carrying the same inherited or candidate
+//!   signature. The landing stays unclassified, and spends nothing, only
+//!   when no readable job decides. A missing log of a `cancelled` or
+//!   `timed_out` job is not this case: that conclusion is transient without
+//!   the log.
+//! - **inconclusive**: a log was read and still does not decide: it names no
+//!   diagnostic, so its signature is only the failed step's name, or a read
+//!   the classification rests on (the base's jobs, a base log) failed. A
+//!   failed read is not a successful empty answer, and neither proves the
 //!   base or the candidate at fault, so the landing stops in review and
-//!   spends nothing. A missing log of a `cancelled` or `timed_out` job is
-//!   not this case: that conclusion is transient without the log.
+//!   spends nothing.
 //!
 //! [ORB-16185] A required check that no failed job answers, such as a
 //! provider app's aggregate result beside passing analysis jobs, is not

@@ -182,6 +182,7 @@ mod cancelled;
 mod diagnostic;
 mod hold;
 mod infrastructure;
+mod unreadable_log;
 
 #[test]
 fn dependency_adapter_refuses_incomplete_or_forged_evidence() {
