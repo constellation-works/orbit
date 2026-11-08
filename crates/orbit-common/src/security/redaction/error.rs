@@ -452,11 +452,90 @@ pub(super) fn redact_json_with(value: Value, redact: fn(&str) -> String) -> Valu
         ),
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(key, value)| (key, redact_json_with(value, redact)))
+                .map(|(key, value)| {
+                    let redacted = if is_credential_json_key(&key) {
+                        redact_credential_json_value(value, redact)
+                    } else {
+                        redact_json_with(value, redact)
+                    };
+                    (key, redacted)
+                })
                 .collect(),
         ),
         other => other,
     }
+}
+
+/// Mask the string value of a credential-labelled key.
+///
+/// The key-context patterns in `redact_all` need the key and value in one
+/// string, so a bare leaf value (a `Basic …` token, a 20-char key) matches
+/// nothing on its own. Masking by key keeps the placeholder the
+/// whole-document pass would have produced. Those patterns match only a
+/// string value, so an object under the key (a plugin secret record of
+/// `value` and `version`) is redacted field by field as usual rather than
+/// masked whole. Empty strings carry no secret and stay empty; non-string
+/// scalars keep their type.
+fn redact_credential_json_value(value: Value, redact: fn(&str) -> String) -> Value {
+    match value {
+        Value::String(raw) => {
+            if raw.is_empty() {
+                Value::String(raw)
+            } else {
+                Value::String("[REDACTED_AUTH]".to_string())
+            }
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| redact_credential_json_value(item, redact))
+                .collect(),
+        ),
+        object @ Value::Object(_) => redact_json_with(object, redact),
+        other => other,
+    }
+}
+
+/// Whether a JSON object key labels its value as a credential, mirroring
+/// the quoted key-context patterns in `compile_http_default`:
+/// `authorization`, `x-api-key`, the `api[_-]?key` family (bare,
+/// `*_api_key` / `*-api-key` prefixed and `*ApiKey` camel-case) and
+/// `aws_secret_access_key`. Lookalikes the patterns deliberately spare
+/// (`api_keyboard`, `serviceApiKeyboard`, `capiKey`) return false.
+fn is_credential_json_key(key: &str) -> bool {
+    if key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("x-api-key") {
+        return true;
+    }
+    let lower = key.to_ascii_lowercase();
+    if lower
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect::<String>()
+        == "awssecretaccesskey"
+    {
+        return true;
+    }
+    // Snake/kebab `api[_-]?key`, bare or behind a `_`/`-` separated prefix.
+    if lower == "apikey" || lower == "api_key" || lower == "api-key" {
+        return true;
+    }
+    for suffix in ["api_key", "api-key", "apikey"] {
+        if let Some(prefix) = lower.strip_suffix(suffix)
+            && (prefix.ends_with('_') || prefix.ends_with('-'))
+        {
+            return true;
+        }
+    }
+    // Camel-case `*ApiKey` / `*APIKey`: the six-char suffix must start with
+    // a capital `A`, so `capiKey` (lowercase `a`) stays readable.
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() > 6 {
+        let suffix: String = chars[chars.len() - 6..].iter().collect();
+        if suffix.eq_ignore_ascii_case("apikey") && suffix.starts_with('A') {
+            return true;
+        }
+    }
+    false
 }
 
 fn redact_artifact_origin(
