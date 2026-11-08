@@ -155,6 +155,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             code,
             message: redact(&message),
         },
+        OrbitError::TaskPilotRefused { code, message } => OrbitError::TaskPilotRefused {
+            code,
+            message: redact(&message),
+        },
         OrbitError::ClaimRefused { kind, message } => OrbitError::ClaimRefused {
             kind,
             message: redact(&message),

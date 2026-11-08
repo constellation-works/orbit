@@ -46,11 +46,22 @@ fn repilot_and_update_flag_submit_once_and_refuse_pending_duplicates() {
         } else {
             vec!["task", "repilot", id, "--json"]
         };
-        fixture
+        let submitted = fixture
             .command(&args)
             .env("ORBIT_OPERATOR", "1")
             .assert()
-            .success();
+            .success()
+            .get_output()
+            .clone();
+        if !update {
+            // The shared submission result names the task and keeps the
+            // published `job_name` and `queue_position` [ORB-22908].
+            let submitted: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
+            assert_eq!(submitted["task_id"], id, "{submitted}");
+            assert_eq!(submitted["job_name"], "task_pilot_pipeline", "{submitted}");
+            assert_eq!(submitted["queued"], false, "{submitted}");
+            assert!(submitted.get("queue_position").is_some(), "{submitted}");
+        }
         gate.wait_ready();
         let duplicate = fixture
             .command(&args)
@@ -63,6 +74,11 @@ fn repilot_and_update_flag_submit_once_and_refuse_pending_duplicates() {
             String::from_utf8_lossy(&duplicate.stderr).contains("already held by pilot run"),
             "{duplicate:?}"
         );
+        if !update {
+            // The refusal keeps its stable code instead of `invalid_input`.
+            let refused: serde_json::Value = serde_json::from_slice(&duplicate.stderr).unwrap();
+            assert_eq!(refused["code"], "task_pilot_already_running", "{refused}");
+        }
         let shown = fixture.json(&["task", "show", id, "--json"]);
         assert_eq!(shown["status"], "proposed");
         if update {
@@ -70,6 +86,16 @@ fn repilot_and_update_flag_submit_once_and_refuse_pending_duplicates() {
         }
         gate.release();
     }
+    // A missing task keeps its not-found kind instead of `invalid_input`.
+    let missing = fixture
+        .command(&["task", "repilot", "ORB-99999", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let missing: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(missing["code"], "task_not_found", "{missing}");
     let runs = fixture.json(&[
         "run",
         "history",

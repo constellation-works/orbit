@@ -4,7 +4,7 @@ use super::{
     ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
     RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -19,6 +19,14 @@ impl OrbitError {
     /// Construct a fleet-notice refusal with its stable code.
     pub fn notice_refused(code: NoticeRefusalCode, message: impl Into<String>) -> Self {
         Self::NoticeRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Construct an explicit task-pilot submission refusal with its stable code.
+    pub fn task_pilot_refused(code: TaskPilotRefusalCode, message: impl Into<String>) -> Self {
+        Self::TaskPilotRefused {
             code,
             message: message.into(),
         }
