@@ -545,8 +545,14 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
         match charge.owner {
             Owner::Role(role) => {
                 *owners.entry(role).or_default() += 1;
+                // A rejected finding charges the review job that filed it,
+                // whose executor invocation performed the filing; other
+                // reviewer charges are gate reviewers' own invocations.
                 let activity = match role {
                     AgentRole::Implementers => Some(super::effort::MainActivity::Implement),
+                    AgentRole::Reviewers if charge.problem == Problem::RejectedFinding => {
+                        Some(super::effort::MainActivity::ReviewJob)
+                    }
                     AgentRole::Reviewers => Some(super::effort::MainActivity::Review),
                     AgentRole::Pilots => Some(super::effort::MainActivity::Pilot),
                     AgentRole::Orchestrators => None,
