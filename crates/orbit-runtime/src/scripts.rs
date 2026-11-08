@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_engine::activity_job::{ScriptAsset, V2ScriptCatalog};
+use orbit_engine::activity_job::{ScriptAsset, ScriptLoadError, V2ScriptCatalog};
 use orbit_types::identity::lower_hex;
 use orbit_types::workflow::activity_job::{
     SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES, SCRIPT_OUTPUT_HARD_MAX_FILES, ScriptGrant,
@@ -341,6 +341,30 @@ fn grant_output_limits(
     Ok(limits)
 }
 
+/// A script catalog load refusal plus how to recover. Every job dispatch
+/// loads the whole catalog, so one bad manifest refuses every job in the
+/// workspace until it is repaired or removed.
+fn script_catalog_refusal(error: &ScriptLoadError) -> String {
+    let remedy = match error.manifest_path() {
+        Some(path) => {
+            let name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!(
+                "repair that manifest (for example its `entry`), or, if the script is retired, \
+                 delete {} and run `orbit script revoke {name}`",
+                path.display()
+            )
+        }
+        None => "repair or remove the manifests it names".to_string(),
+    };
+    format!(
+        "{error}. Every job in this workspace refuses until the script catalog loads: {remedy}, \
+         then rerun `orbit doctor`"
+    )
+}
+
 impl RuntimeKernel {
     /// Load this workspace's script catalog. Scripts are workspace-only:
     /// the global root's `resources/` holds none.
@@ -349,7 +373,7 @@ impl RuntimeKernel {
         let mut catalog = V2ScriptCatalog::new(paths.scripts_dir.clone(), paths.repo_root.clone());
         catalog
             .load_dir()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            .map_err(|error| OrbitError::InvalidInput(script_catalog_refusal(&error)))?;
         Ok(catalog)
     }
 
