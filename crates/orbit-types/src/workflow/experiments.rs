@@ -177,7 +177,10 @@ impl CrewMemoryDelivery {
 
 /// A memory arm's owner capture: what it resolved for each role in the arm's
 /// `roles`, for the crew the owner drew. `enabled` is false when
-/// `crew_memory.enabled` was off at capture, so nothing is delivered.
+/// `crew_memory.enabled` was off at capture, so nothing was captured to
+/// deliver. A later disable does not rewrite this capture; dispatch reads
+/// the owner's current key and delivers nothing while that key is off or
+/// cannot be observed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapturedExperimentMemory {
