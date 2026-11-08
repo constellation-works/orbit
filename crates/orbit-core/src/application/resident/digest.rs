@@ -28,6 +28,7 @@ impl OrbitRuntime {
         let mut escalations = Vec::new();
         let mut escalation_ids = BTreeSet::new();
         let mut decisions = Vec::new();
+        let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mandates = self.list_resident_mandates(false)?;
         for row in mandates["mandates"].as_array().into_iter().flatten() {
             let Some(id) = row["task_id"].as_str() else {
@@ -105,7 +106,9 @@ impl OrbitRuntime {
             );
             resident["open_request_count"] = json!(open.len());
             resident["open_requests"] = json!(open);
-            let stalled = self.resident_stall_of(&view, now, None)?.is_some();
+            let stalled = self
+                .resident_stall_of(&view, now, cycle_routine_disabled.as_deref())?
+                .is_some();
             resident["stalled"] = json!(stalled);
             // An ended mandate is no longer a resident and cannot take a veto.
             // Its open escalations above stay: a person may still answer them.

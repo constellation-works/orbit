@@ -124,6 +124,104 @@ fn stalled_for(rows: &Value, id: &str) -> bool {
         .unwrap()
 }
 
+fn stalled_reason_for(rows: &Value, id: &str) -> Value {
+    rows.get("mandates")
+        .or_else(|| rows.get("residents"))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["task_id"] == id)
+        .unwrap()["stalled_reason"]
+        .clone()
+}
+
+/// The workspace's resident cycle routine, present but disabled: no cycle
+/// will ever fire until it is enabled. Mirrors the disabled-routine
+/// fixture in resident_cycle::deadline_expiry for this test's roots
+/// (`home/.orbit` global, `repo/.orbit` checkout).
+fn install_disabled_cycle_routine(root: &Path, enabled: bool) {
+    // The routine's target job must be a known job, or the loader retires
+    // the routine instead of reporting it disabled.
+    let jobs = root.join("home/.orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::write(
+        jobs.join("resident_cycle_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: resident_cycle_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .unwrap();
+    let routines = root.join("repo/.orbit/routines");
+    std::fs::create_dir_all(&routines).unwrap();
+    std::fs::write(
+        routines.join("resident_cycle.yaml"),
+        format!(
+            "schemaVersion: 1\nname: resident-cycle-fixture\nenabled: {}\ntrigger:\n  state:\n    kind: resident_due\n    owner_machine: fixture-machine\n    branch: main\n    debounce_minutes: 1\n    max_wait_minutes: 5\n    max_items: 50\n    batch_size: 1\n    retries: 2\n    deadline_minutes: 60\ntarget: job:resident_cycle_pipeline\n",
+            if enabled { "true" } else { "false" }
+        ),
+    )
+    .unwrap();
+}
+
+fn digest_reports_the_disabled_routine_stall_like_show_list_and_attention() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    install_disabled_cycle_routine(root.path(), false);
+    drop(runtime);
+    let runtime = runtime_at(root.path());
+    // Fresh mandate, two-hour heartbeat, no checkpoints: not
+    // heartbeat-stalled, but no cycle can ever fire while the routine is
+    // disabled.
+    let id = mandate(&runtime, 120);
+
+    let shown = call(&runtime, "orbit.resident.show", json!({"task_id": id}));
+    assert_eq!(shown["cycle_routine_disabled"], true, "{shown}");
+    assert_eq!(shown["stalled"], true, "{shown}");
+
+    let listed = call(&runtime, "orbit.resident.list", json!({}));
+    let digested = call(&runtime, "orbit.resident.digest", json!({"since": "1d"}));
+    assert!(stalled_for(&listed, &id), "{listed}");
+    assert!(
+        stalled_for(&digested, &id),
+        "digest must agree with show/list: {digested}"
+    );
+    assert_eq!(
+        stalled_reason_for(&digested, &id),
+        shown["stalled_reason"].clone(),
+        "digest reason must agree with show: {digested} vs {shown}"
+    );
+    assert!(
+        stalled_reason_for(&digested, &id)
+            .as_str()
+            .is_some_and(|reason| reason.contains("disabled")),
+        "the stall reason names the disabled routine: {digested}"
+    );
+
+    let attention = call(
+        &runtime,
+        "orbit.attention",
+        json!({"kind": "resident_stalled"}),
+    );
+    assert!(
+        attention["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| { item["refs"]["task_id"] == id || item["task_id"] == id }),
+        "the mandate surfaces in attention: {attention}"
+    );
+
+    // Enabling the routine removes this cause: a fresh mandate with a
+    // healthy heartbeat is stalled nowhere.
+    install_disabled_cycle_routine(root.path(), true);
+    drop(runtime);
+    let runtime = runtime_at(root.path());
+    let shown = call(&runtime, "orbit.resident.show", json!({"task_id": id}));
+    assert_eq!(shown["cycle_routine_disabled"], false, "{shown}");
+    assert_eq!(shown["stalled"], false, "{shown}");
+    let digested = call(&runtime, "orbit.resident.digest", json!({"since": "1d"}));
+    assert!(!stalled_for(&digested, &id), "{digested}");
+}
+
 fn digest_and_list_agree_for_a_single_incomplete_checkpoint_and_long_silence() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -305,4 +403,5 @@ crate::scenario_table!(
     resident_digest,
     digest_and_list_agree_for_a_single_incomplete_checkpoint_and_long_silence,
     digest_omits_an_ended_mandate_and_its_vetoes_but_keeps_handed_off_and_active_ones,
+    digest_reports_the_disabled_routine_stall_like_show_list_and_attention,
 );
