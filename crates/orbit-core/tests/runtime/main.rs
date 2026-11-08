@@ -85,6 +85,7 @@ mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
+mod friction_stats_observation;
 mod git_protection;
 mod granted_mutation_proposals;
 mod granted_tools;
