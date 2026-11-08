@@ -2541,7 +2541,7 @@ What a hold does:
 
 Approve a held task as any task in review: merge the pull request if it is still open, then `orbit task update <id> --approve` (`review -> done`), or approve it in the dashboard.
 
-Load fails, naming the rule by position, on an unknown key in a rule, a rule that sets nothing, a blank `name`, tag or glob, a glob that is not a confined relative path or a `paths` list that only excludes, an unknown type, and a complexity outside `low`, `medium`, `hard`, `xhard`. A typo never silently lets a risky change land.
+Load fails on an unknown key in a rule, a rule that sets nothing, a blank `name`, tag or glob, a glob that is not a confined relative path or a `paths` list that only excludes, an unknown type, and a complexity outside `low`, `medium`, `hard`, `xhard` (`unassessed` is also refused). Only errors found after a rule decodes name the rule by its 1-based position (`completion.hold[2]`): a rule that sets nothing, a blank `name`, tag or glob, a bad glob, a `paths` list that only excludes, or `complexity_at_least = "unassessed"`. Schema errors name only `completion.hold` and the bad field or value, without a rule position: an unknown key, or an unknown complexity or type value. A typo never silently lets a risky change land.
 
 Worked example — the rules Orbit's own workspace uses:
 
