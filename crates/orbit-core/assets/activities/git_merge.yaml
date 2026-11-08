@@ -6,7 +6,10 @@ spec:
   type: deterministic
   description: >
     Merge a worktree branch either by fast-forwarding into the base branch or by
-    merging the associated GitHub pull request.
+    merging the associated GitHub pull request. A fast-forward whose input
+    carries `completion: done` first decides the `completion.hold` rules
+    against the candidate's diff; a held candidate is not merged and the
+    output reports `merged: false` with the held tasks and the hold.
   input_schema_json:
     type: object
     properties:
@@ -27,6 +30,14 @@ spec:
         enum: [fast_forward, pr_merge]
       base:
         type: string
+      base_sync:
+        type: string
+      completion:
+        type: string
+        description: >
+          `done` when this run is authorized to complete its tasks: the
+          fast-forward then honors the `completion.hold` rules before the
+          candidate lands on the base. Any other value merges as today.
       workspace_path:
         type: string
   output_schema_json:
@@ -34,5 +45,13 @@ spec:
     properties:
       merged:
         type: boolean
+      reason:
+        type: string
+      held_task_ids:
+        type: array
+        items:
+          type: string
+      completion_hold:
+        type: object
   action: git_merge
   config: {}

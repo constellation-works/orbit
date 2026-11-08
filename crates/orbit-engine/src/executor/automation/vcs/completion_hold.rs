@@ -5,7 +5,11 @@
 //! ([`orbit_types::workflow::CompletionPolicy`]); these rules can only hold it
 //! back. `pr_complete` evaluates them against the files the pull request
 //! changes before it merges anything, and final recovery against the task
-//! alone before it settles a `complete_no_diff` as `done`.
+//! alone before it settles a `complete_no_diff` as `done`. Local delivery
+//! evaluates them in `git_merge` before the candidate lands on the base, and
+//! an owner's landing of a claimed leaf under
+//! `workflow.distributed_completion = "done"` evaluates them before it
+//! merges or fast-forwards anything [ORB-23365].
 
 use std::path::Path;
 
@@ -210,6 +214,39 @@ pub(crate) fn pull_request_changed_paths(
             "-z",
             "--no-renames",
             &format!("{base_ref}...{candidate}"),
+            "--",
+        ],
+    ) {
+        Ok(paths) => ChangedPaths::Read(paths),
+        Err(error) => ChangedPaths::Unreadable(error.to_string()),
+    }
+}
+
+/// The files a candidate commit changes against the base commit it was
+/// built on: the merge-base diff between the two pinned revisions. This is
+/// the local-delivery analogue of [`pull_request_changed_paths`], for a
+/// candidate a handoff pins by commit rather than by branch.
+pub(crate) fn candidate_commit_changed_paths(
+    workspace: &Path,
+    base_commit: &str,
+    candidate_commit: &str,
+) -> ChangedPaths {
+    let base_commit = base_commit.trim();
+    let candidate_commit = candidate_commit.trim();
+    if candidate_commit.is_empty() {
+        return ChangedPaths::Unreadable("no candidate commit is pinned".to_string());
+    }
+    if base_commit.is_empty() {
+        return ChangedPaths::Unreadable("no base commit is pinned".to_string());
+    }
+    match git_output_paths(
+        workspace,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            &format!("{base_commit}...{candidate_commit}"),
             "--",
         ],
     ) {

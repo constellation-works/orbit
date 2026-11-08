@@ -258,6 +258,7 @@ pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLand
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["Protected (rust)".into()],
             automatic_repair_spent: false,
+            owner_distributed_completion_done: false,
             candidate: orbit_types::workflow::handoff::HandoffCandidate {
                 repository: "orbit/test".into(),
                 source_branch: BRANCH.into(),

@@ -75,6 +75,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     }
 
     Ok(json!({
+        "merged": true,
         "base": base,
         "workspace_path": workspace_path.to_string_lossy().to_string(),
         "workspace_branch": workspace_branch,

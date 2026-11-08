@@ -504,6 +504,7 @@ fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
             workspace_path: fx.repo.clone(),
             owed_hosted_checks: vec![],
             automatic_repair_spent: false,
+            owner_distributed_completion_done: false,
         },
         steps: Mutex::default(),
         data_root: PathBuf::new(),

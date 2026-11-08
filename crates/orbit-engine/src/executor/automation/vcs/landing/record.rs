@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, HandoffLandingUpdate, RuntimeHost};
 
+use super::super::completion_hold::{
+    ChangedPaths, evaluate_completion_hold, record_completion_hold,
+};
 use super::super::pr::diagnostics;
 use super::super::pr::{PrMergeState, PullRequestStatus};
 use super::run::LandingPass;
@@ -214,6 +217,43 @@ pub(super) fn record_stop<H: RuntimeHost + ?Sized>(
         &Value::String(reason.to_string()),
     )?;
     Ok(OrbitError::Execution(format!("handoff_land: {reason}")))
+}
+
+/// [ORB-23365] The `completion.hold` gate of an owner landing under
+/// `workflow.distributed_completion = "done"`: when a rule matches the
+/// accepted candidate's diff or its task, record the same
+/// `completion_held` hold `pr_complete` records and stop the attempt
+/// before anything merges or lands, leaving the task in review for a
+/// person to approve. Returns the error the run fails with when held,
+/// `None` when the landing may proceed. Callers that first observe the
+/// candidate already merged or contained settle that fact instead and
+/// never reach this gate: a merge that already happened cannot be held.
+pub(super) fn completion_hold_stop<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    changed: &ChangedPaths,
+    run_id: &str,
+) -> Result<Option<OrbitError>, OrbitError> {
+    if !context.owner_distributed_completion_done {
+        return Ok(None);
+    }
+    let rules = host.completion_hold_rules();
+    if rules.is_empty() {
+        return Ok(None);
+    }
+    let task = host.get_task(&context.task_id)?;
+    let Some(hold) =
+        evaluate_completion_hold(&rules, std::slice::from_ref(&task), changed, run_id)?
+    else {
+        return Ok(None);
+    };
+    record_completion_hold(host, std::slice::from_ref(&context.task_id), &hold)?;
+    let reason = format!(
+        "{}; the owner's landing stopped before merging anything, so the candidate \
+         stays in review for a person to approve",
+        hold.summary()
+    );
+    Ok(Some(stop(host, context, &reason)?))
 }
 
 /// Whether the provider reports the pull request's branch as behind its base,

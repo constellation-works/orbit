@@ -7,11 +7,12 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
 use super::super::super::input::input_string_field;
+use super::super::completion_hold::{ChangedPaths, candidate_commit_changed_paths};
 use super::super::git::{git_command_success, git_output};
 use super::super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 use super::intent::LandingView;
 use super::observe::{contains_commit, observe_or_stop, resolve_landing_ref};
-use super::record::{complete, record, stop, stop_for_repair};
+use super::record::{complete, completion_hold_stop, record, stop, stop_for_repair};
 use super::run::LandingPass;
 
 /// Owner-local delivery: no origin, no pull request, and a fast-forward of the
@@ -21,6 +22,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     context: &LandingPass,
     input: &Value,
     view: &LandingView,
+    run_id: &str,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
     let workspace = context.workspace_path.clone();
@@ -35,6 +37,18 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
             "verified": "landing_ref_contains_candidate",
         });
         return complete(host, context, observed, &evidence);
+    }
+
+    // [ORB-23365] A candidate the landing ref does not already contain is
+    // still unlanded, so a completion hold stops it here, before the
+    // fast-forward below moves the branch.
+    let changed = candidate_commit_changed_paths(
+        &workspace,
+        &candidate.base.commit,
+        &candidate.candidate.commit,
+    );
+    if let Some(held) = completion_hold_stop(host, context, &changed, run_id)? {
+        return Err(held);
     }
 
     let checkout = checkout_holding_branch(&workspace, &candidate.landing_branch)?
@@ -155,6 +169,7 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
     context: &LandingPass,
     covering_commit: &str,
     view: &LandingView,
+    run_id: &str,
 ) -> Result<Value, OrbitError> {
     let workspace = context.workspace_path.clone();
     let observed = observe_or_stop(host, context, None, view)?;
@@ -173,6 +188,11 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
                 view.clause()
             ),
         )?);
+    }
+    // [ORB-23365] No diff of its own reaches the base here, so only the
+    // task's complexity, type and tags can hold this completion.
+    if let Some(held) = completion_hold_stop(host, context, &ChangedPaths::NoDiff, run_id)? {
+        return Err(held);
     }
     let evidence = json!({
         "delivery": "already_landed",
@@ -194,6 +214,7 @@ pub(super) fn land_no_diff<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &LandingPass,
     view: &LandingView,
+    run_id: &str,
 ) -> Result<Value, OrbitError> {
     let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(
@@ -207,6 +228,11 @@ pub(super) fn land_no_diff<H: RuntimeHost + ?Sized>(
             context,
             "NoDiff candidate is not its synchronized base; revalidate the current base",
         )?);
+    }
+    // [ORB-23365] As in `pr_complete`, a no-diff completion is held by the
+    // task's complexity, type and tags alone.
+    if let Some(held) = completion_hold_stop(host, context, &ChangedPaths::NoDiff, run_id)? {
+        return Err(held);
     }
     complete(
         host,

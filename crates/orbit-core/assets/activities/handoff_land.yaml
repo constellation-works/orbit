@@ -14,7 +14,11 @@ spec:
     repairing the candidate. A provider transport failure before any external
     write is retried against the same handoff a bounded number of times; a
     run that still fails records a stop with its error, unless a merge intent
-    it sent stays unresolved for the next attempt to reconcile.
+    it sent stays unresolved for the next attempt to reconcile. Under
+    `workflow.distributed_completion = "done"` the `completion.hold` rules
+    are decided against the accepted candidate's diff and task before
+    anything merges or lands; a held candidate records the hold and stops
+    unmerged with its task in review.
   input_schema_json:
     type: object
     required: [handoff_id]
