@@ -99,11 +99,13 @@ pub(super) async fn list_failure_incidents(
         role: role.clone(),
         ..Default::default()
     };
-    // Both the grouping scan and the total-event count are synchronous SQLite
-    // reads; keep them off the async executor.
+    // The grouping scan and the window's event count are synchronous SQLite
+    // reads; keep them off the async executor. The count is only the
+    // denominator: `audit_event_stats` would also sort every duration in the
+    // window to compute a percentile this payload does not return.
     let bundle = match tokio::task::spawn_blocking(move || {
         let report = runtime_clone.audit_failure_incidents(&incident_query)?;
-        let total_events = runtime_clone.audit_event_stats(since, None)?.total;
+        let total_events = runtime_clone.audit_event_count(since)?;
         Ok::<_, OrbitError>((report, total_events))
     })
     .await
