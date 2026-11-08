@@ -4,12 +4,13 @@ mod federated;
 mod filters;
 mod friction;
 mod merge;
-mod path_match;
 mod request;
 mod runtime;
 mod types;
 
-pub use path_match::task_selectors_contain_path;
+// Compatibility shim: selector matching belongs to task. Retiring this
+// search path after its consumers migrate is a follow-up.
+pub use crate::application::task::task_selectors_contain_path;
 pub use request::{SearchRequest, SearchRequestProfile};
 pub(crate) use types::whitespace_query_note;
 pub use types::{

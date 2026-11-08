@@ -184,7 +184,7 @@ fn query_task_store(
                     reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
                 ))
             && query.path.as_deref().is_none_or(|path| {
-                crate::application::search::task_selectors_contain_path(&task.context_files, path)
+                crate::application::task::task_selectors_contain_path(&task.context_files, path)
             })
     };
     store.query_task_rows(
@@ -375,10 +375,7 @@ impl OrbitRuntime {
             .filter(|task| statuses.contains(&task.status))
             .filter(|task| {
                 query.path.as_deref().is_none_or(|path| {
-                    crate::application::search::task_selectors_contain_path(
-                        &task.context_files,
-                        path,
-                    )
+                    crate::application::task::task_selectors_contain_path(&task.context_files, path)
                 })
             })
             .collect();

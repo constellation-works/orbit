@@ -136,7 +136,7 @@ class RelativeImportTests(unittest.TestCase):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
         owners = ("automation", "job", "review", "distributed", "pull_drain",
-                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto")
+                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto", "search")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"

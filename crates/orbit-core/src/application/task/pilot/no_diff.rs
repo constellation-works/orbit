@@ -40,9 +40,8 @@ use serde_json::{Value, json};
 
 use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::search::task_selectors_contain_path;
 use crate::application::task::{
-    PILOT_WARNING_TRIAGED_EVENT, SourceGit, TaskAutomationPort, TaskJobPort,
+    self, PILOT_WARNING_TRIAGED_EVENT, SourceGit, TaskAutomationPort, TaskJobPort,
 };
 
 /// The hold reason, and the admission classification, for a proposed task
@@ -491,7 +490,7 @@ fn touches_paths(source: &dyn SourceGit, commit: &str, selectors: &[String]) -> 
         changed
             .split('\0')
             .filter(|path| !path.is_empty())
-            .any(|path| task_selectors_contain_path(selectors, path))
+            .any(|path| task::task_selectors_contain_path(selectors, path))
     })
 }
 

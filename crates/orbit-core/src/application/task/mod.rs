@@ -75,6 +75,7 @@ mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod ci_sweep_filing;
 mod screened;
+mod selector_match;
 mod steering;
 mod sweep_filing_port;
 mod transient_infra;
@@ -185,6 +186,7 @@ pub(crate) use records::TaskRecords;
 pub(in crate::application) use resident_port::TaskResidentPort;
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
+pub use selector_match::task_selectors_contain_path;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
     AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence,
