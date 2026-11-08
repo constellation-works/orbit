@@ -1764,7 +1764,7 @@ fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
     expect_status(&fix_rows, "fix-retired-config-keys", "ok");
 }
 /// ORB-22883: a `ux_rules_runner` manifest left from the retired ux-rules
-/// routine names a deleted entry and refuses every job dispatch; doctor
+/// routine names a deleted entry and refuses jobs that reference it; doctor
 /// names the manifest and how to remove it before dispatch fails.
 #[test]
 fn doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal() {
@@ -1790,10 +1790,51 @@ fn doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal() {
     let reported = check(&f);
     assert_eq!(reported["status"], "warning", "{reported}");
     msg_has(&reported, &manifest.display().to_string());
-    msg_has(&reported, "every job dispatch");
+    msg_has(&reported, "jobs that reference it refuse");
     fix_has(&reported, &format!("Delete {}", manifest.display()));
     fix_has(&reported, "orbit script revoke ux_rules_runner");
     assert!(manifest.is_file(), "diagnosis leaves the manifest in place");
     fs::remove_file(&manifest).expect("remove manifest");
     assert_eq!(check(&f)["status"], "ok");
+}
+
+#[test]
+fn broken_script_only_refuses_jobs_that_reference_it() {
+    if in_child("doctor::broken_script_only_refuses_jobs_that_reference_it") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "script-isolation"]);
+    let scripts = f.work.join(".orbit/resources/scripts");
+    mkdir(&scripts);
+    let manifest = scripts.join("broken.yaml");
+    put(
+        &manifest,
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: broken\nspec:\n  description: Broken fixture\n  entry: missing.sh\n",
+    );
+    let jobs = f.work.join(".orbit/resources/jobs");
+    mkdir(&jobs);
+    put(
+        &jobs.join("independent.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: independent\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    );
+    put(
+        &jobs.join("dependent.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: dependent\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run\n      target: script:broken\n",
+    );
+    let report = rows(&doctor(&f, &[]));
+    let script_row = row(&report, "script-grants");
+    assert_eq!(script_row["status"], "warning", "{script_row}");
+    msg_has(script_row, &manifest.display().to_string());
+    let independent = run(&f, &["job", "run", "independent", "--wait", "--json"]);
+    assert!(
+        independent.status.success(),
+        "independent job: {independent:?}"
+    );
+    let dependent = run(&f, &["job", "run", "dependent", "--wait", "--json"]);
+    assert!(!dependent.status.success(), "dependent job must refuse");
+    let error = format!("{}{}", utf8(dependent.stdout), utf8(dependent.stderr));
+    has(&error, &manifest.display().to_string());
+    has(&error, "repair that manifest");
+    has(&error, "orbit script revoke broken");
 }

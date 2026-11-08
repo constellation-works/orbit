@@ -378,6 +378,24 @@ fn resolve_script_entry(
     Ok(resolved)
 }
 
+/// Describe a load error and the operator's remedy.
+pub fn script_load_refusal(error: &ScriptLoadError) -> String {
+    let remedy = match error.manifest_path() {
+        Some(path) => {
+            let name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!(
+                "repair that manifest (for example its `entry`), or, if the script is retired, delete {} and run `orbit script revoke {name}`",
+                path.display()
+            )
+        }
+        None => "repair or remove the manifests it names".to_string(),
+    };
+    format!("{error}. {remedy}, then rerun `orbit doctor`")
+}
+
 /// The workspace's script catalog: every manifest in one scripts
 /// directory, keyed by name. Scripts are workspace-only, so there is one
 /// directory and no layering.
@@ -386,6 +404,7 @@ pub struct V2ScriptCatalog {
     scripts_dir: PathBuf,
     workspace_root: PathBuf,
     entries: BTreeMap<String, ScriptAsset>,
+    unavailable: BTreeMap<String, String>,
 }
 
 impl V2ScriptCatalog {
@@ -398,14 +417,17 @@ impl V2ScriptCatalog {
             scripts_dir,
             workspace_root,
             entries: BTreeMap::new(),
+            unavailable: BTreeMap::new(),
         }
     }
 
     /// Load every `*.yaml` / `*.yml` manifest directly in the scripts
     /// directory. A missing directory is an empty catalog, not an error:
-    /// most workspaces have no scripts. One invalid manifest refuses the
-    /// whole load, naming that file.
+    /// most workspaces have no scripts. Invalid manifests are retained as
+    /// unavailable under their file stem; directory errors still fail the load.
     pub fn load_dir(&mut self) -> Result<(), ScriptLoadError> {
+        self.entries.clear();
+        self.unavailable.clear();
         let read_dir = match std::fs::read_dir(&self.scripts_dir) {
             Ok(read_dir) => read_dir,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -432,27 +454,55 @@ impl V2ScriptCatalog {
             }
         }
         paths.sort();
+        let mut seen = BTreeMap::<String, PathBuf>::new();
         for path in paths {
-            let asset = load_script_asset(&path, &self.workspace_root)?;
-            if let Some(existing) = self.entries.get(&asset.name) {
-                return Err(ScriptLoadError::DuplicateName {
-                    name: asset.name,
-                    first: existing.manifest_path.clone(),
+            let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let name = name.to_string();
+            if let Some(first) = seen.get(&name) {
+                let error = ScriptLoadError::DuplicateName {
+                    name: name.clone(),
+                    first: first.clone(),
                     second: path,
-                });
+                };
+                self.entries.remove(&name);
+                self.unavailable.insert(name, script_load_refusal(&error));
+                continue;
             }
-            self.entries.insert(asset.name.clone(), asset);
+            seen.insert(name.clone(), path.clone());
+            match load_script_asset(&path, &self.workspace_root) {
+                Ok(asset) => {
+                    self.entries.insert(name, asset);
+                }
+                Err(error) => {
+                    self.unavailable.insert(name, script_load_refusal(&error));
+                }
+            }
         }
         Ok(())
     }
 
     /// Insert one already-loaded asset — used by smokes and tests.
     pub fn insert(&mut self, asset: ScriptAsset) -> Option<ScriptAsset> {
+        self.unavailable.remove(&asset.name);
         self.entries.insert(asset.name.clone(), asset)
     }
 
     pub fn get(&self, name: &str) -> Option<&ScriptAsset> {
         self.entries.get(name)
+    }
+
+    /// The reason a manifest cannot be used, including its remedy.
+    pub fn unavailable_script(&self, name: &str) -> Option<&str> {
+        self.unavailable.get(name).map(String::as_str)
+    }
+
+    /// Manifests that could not be loaded, keyed by their file stem.
+    pub fn unavailable_scripts(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.unavailable
+            .iter()
+            .map(|(name, reason)| (name.as_str(), reason.as_str()))
     }
 
     pub fn is_empty(&self) -> bool {
