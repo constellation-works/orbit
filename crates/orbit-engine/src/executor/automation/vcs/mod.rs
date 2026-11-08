@@ -14,6 +14,7 @@ mod deferred_sandbox;
 mod delivery_marker;
 mod failure;
 mod flaky;
+mod forge_text;
 mod freshness;
 pub(crate) mod git;
 mod handoff;

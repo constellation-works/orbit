@@ -9,6 +9,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::input::{input_string_field, required_input_string};
 use super::super::super::base::obsolescence::ensure_base_can_still_land;
+use super::super::super::forge_text;
 use super::super::super::freshness::branch_freshness_against_ref;
 use super::super::super::git::git_output;
 use super::super::super::handoff::{
@@ -131,6 +132,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     let title = input_string_field(input, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| pr_title(&context.tasks, &pr_config));
+    let title = forge_text::neutralize_mentions(&title);
     let pr_opener_model = host.actor_model_identity();
     let (body, missing_required) =
         match input_string_field(input, "body").filter(|value| !value.trim().is_empty()) {
@@ -395,6 +397,7 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     title: &str,
     body: &str,
 ) -> Result<(String, Option<String>, bool), OrbitError> {
+    let title = forge_text::neutralize_mentions(title);
     let body = bound_pr_body(body.to_string(), &[]);
     if let Some((number, url, _)) = lookup::find_pr_by_head(host, workspace_path, head, base)? {
         return Ok((number, url, false));

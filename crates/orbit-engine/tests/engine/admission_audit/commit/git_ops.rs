@@ -331,3 +331,58 @@ fn regression_fallback_ignores_quoted_fix_subjects() {
     );
     assert!(message.contains("Regression-From: T-MISSING"));
 }
+
+#[test]
+fn git_commit_neutralizes_forge_mentions_in_subjects_and_bodies() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::git_commit_neutralizes_forge_mentions_in_subjects_and_bodies"
+    )) {
+        return;
+    }
+    for scope in ["all", "per_task", "per_task_finalize"] {
+        let temp = initialized_git_repo();
+        let repo = temp.path();
+        fs::write(repo.join("README.md"), "candidate\n").unwrap();
+        let mut task = task_with_file(
+            "T1",
+            "opus@auto @orbit-tools/cli dev@example.com",
+            "README.md",
+            "codex",
+        );
+        task.description = "@auto @astrojs/core dev@example.com\n\n`@kept`\n\n~~~text\n@fenced\n~~~\n\nCo-authored-by: @author <author@example.com>".into();
+        let mut config = orbit_engine::PrConfig::default();
+        config.conventions.commit_body = Some(
+            orbit_types::workflow::ConventionTemplate::parse(
+                "commit.body_template",
+                "{{description}}",
+                orbit_types::workflow::TemplateSurface::Text,
+            )
+            .unwrap(),
+        );
+        let host = CommitTestHost::new(vec![task], repo.to_path_buf()).with_pr_config(config);
+        git_commit(
+            &host,
+            &json!({"workspace_path": repo, "job_run_id": "batch-1", "scope": scope}),
+        )
+        .unwrap();
+        let message = git_output(repo, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            message.contains("@\u{200d}auto @\u{200d}astrojs/core dev@example.com"),
+            "{scope}: {message}"
+        );
+        assert!(
+            message.contains("`@kept`\n\n~~~text\n@fenced\n~~~"),
+            "{scope}: {message}"
+        );
+        assert!(
+            message.contains("Co-authored-by: @author <author@example.com>"),
+            "{scope}: {message}"
+        );
+        let subject = message.lines().next().unwrap();
+        assert!(
+            subject.contains("opus@\u{200d}auto @\u{200d}orbit-tools/cli dev@example.com"),
+            "{scope}: {subject}"
+        );
+    }
+}
