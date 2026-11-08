@@ -33,42 +33,6 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
-## 2026-10-24: Compiler-cache namespace guard fails a hosted check, and the green candidate has no recovery route
-
-- **Where:** dk-server-2 (owner), `complete_pr` / `pr_complete` of
-  `task_pr_pipeline`, the hosted `Check / Clippy / Test` job's
-  `Run CI guardrails` step.
-- **Symptom:** PR [#5855](https://github.com/constellation-works/orbit/pull/5855)
-  at `0ad21022f16a71da569cac60fb5097d25eb6d662` failed
-  `scripts/test-compiler-cache-namespaces.sh`, stage `client-side-shared-tcp`:
-  participants C and D exited 2 with empty stdout and stderr (run 40079428623,
-  job 120829734093). The candidate touched only
-  `crates/orbit-web/src/tests/host_tunnels.rs`. All test shards passed. ORB-17882,
-  the CI remediation task for the same failure, blocked on it as well.
-- **Cause:** unconfirmed. The guard passed at `3ee5d569` and `35c5bfe88`, and a
-  same-SHA rerun (attempt 2) passed on 2026-10-24, so the failure is
-  intermittent. The owner host cannot create user namespaces, so it cannot
-  reproduce the failure locally.
-- **Rescue route:** none supported. `orbit task requeue` refused because the
-  stopped run has no failure-handoff receipt. Source repair through
-  `orbit.workflow.run.resume` refused because "failure-handoff ownership, failed
-  step or task specification disagrees". A plain resume
-  (`jrun-20261024-1814-t1`) moved the task to `review`, then failed at
-  `complete_pr` because the run's kept worktree had been deleted while the task
-  was blocked. `reconcile-review` applies only to follower deliveries. The PR
-  was merged by hand after the green rerun (`gh pr merge 5855 --squash
-  --match-head-commit 0ad21022…`, as `c8f8ed69`), and
-  `orbit task settle-merged ORB-17852` closed the task.
-- **Fix:** ORB-23034 adds sccache server diagnostics to the shared-TCP stages,
-  so the next recurrence names its cause. The missing recovery route
-  (F2026-10-561) is fixed by ORB-17998, in v0.46.0 on every host: an escalated
-  publication whose PR goes green at the recorded head now has a landing route.
-  Until ORB-23034 lands, rerun the failed job at the same SHA.
-- **Tasks:** ORB-17852 (`jrun-20261024-0837-c6`, PR #5855), ORB-17882
-  (`jrun-20261024-1221-c3`).
-- **Final recovery:** `escalate` on both runs. Blocked-task triage
-  (`jrun-20261024-1806-t1`) reported both as needing a human.
-
 ## Operational causes (no code defect)
 
 - **Editing the primary checkout while a drain runs.** A leaf compares the

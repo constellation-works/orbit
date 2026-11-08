@@ -163,6 +163,7 @@ STAGE="fixture-setup"
 PARTICIPANTS=()
 LOGFILES=()
 STATUSES=()
+SERVER_LOG=""
 
 # Failure-only I/O: at most 4096 payload bytes per stream (head and tail so
 # compiler startup and final statistics survive), plus labels/byte counts.
@@ -186,6 +187,13 @@ report_stream() {
   printf '\n' >&2
 }
 
+report_server_log() {
+  [[ -n "$SERVER_LOG" ]] || return 0
+  printf 'test-compiler-cache-namespaces: stage=%s sccache_server_log=%s\n' \
+    "$STAGE" "$SERVER_LOG" >&2
+  report_stream sccache-server-log "$SERVER_LOG"
+}
+
 report_participants() {
   local i
   for ((i=0; i<${#PARTICIPANTS[@]}; i++)); do
@@ -194,6 +202,7 @@ report_participants() {
     report_stream stdout "${LOGFILES[$i]}"
     report_stream stderr "${LOGFILES[$i]}.err"
   done
+  report_server_log
 }
 
 pid_running() {
@@ -414,6 +423,7 @@ run_ns() {
   extra_binds+=(--bind "$target" "$target")
   extra_binds+=(--bind "$WORKDIR/cache" "$WORKDIR/cache")
   extra_binds+=(--bind "$WORKDIR/sync" "$WORKDIR/sync")
+  extra_binds+=(--bind "$WORKDIR/logs" "$WORKDIR/logs")
   extra_binds+=(--dir /tmp/orbit-workspace --bind "$tree" /tmp/orbit-workspace)
   extra_binds+=(--dir /tmp/orbit-build --bind "$target" /tmp/orbit-build)
   extra_binds+=(--ro-bind "$tree/bin/sccache" "$tree/bin/sccache")
@@ -465,6 +475,7 @@ run_ns_hold() {
   extra_binds+=(--bind "$target" "$target")
   extra_binds+=(--bind "$WORKDIR/cache" "$WORKDIR/cache")
   extra_binds+=(--bind "$WORKDIR/sync" "$WORKDIR/sync")
+  extra_binds+=(--bind "$WORKDIR/logs" "$WORKDIR/logs")
   extra_binds+=(--dir /tmp/orbit-workspace --bind "$tree" /tmp/orbit-workspace)
   extra_binds+=(--dir /tmp/orbit-build --bind "$target" /tmp/orbit-build)
   extra_binds+=(--ro-bind "$tree/bin/sccache" "$tree/bin/sccache")
@@ -580,17 +591,21 @@ STAGE=client-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
 STATUSES=(pending pending)
+SERVER_LOG="$WORKDIR/logs/sccache-server-client-side-shared-tcp.log"
+rm -f "$SERVER_LOG"
 alloc_port; cs_port="$ALLOC_PORT"
 release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
-  --setenv SCCACHE_SERVER_PORT "$cs_port" &
+  --setenv SCCACHE_SERVER_PORT "$cs_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
-  --setenv SCCACHE_SERVER_PORT "$cs_port" &
+  --setenv SCCACHE_SERVER_PORT "$cs_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 wait_participants || fail "client-side shared TCP daemon concurrent namespaces failed"
 [[ "$(probe_out "$WORKDIR/logs/cs-c")" == "3" ]] || fail "client-side namespace C expected 3"
@@ -602,6 +617,8 @@ STAGE=server-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
 STATUSES=(pending pending)
+SERVER_LOG="$WORKDIR/logs/sccache-server-server-side-shared-tcp.log"
+rm -f "$SERVER_LOG"
 alloc_port; bad_port="$ALLOC_PORT"
 release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
@@ -610,7 +627,8 @@ ready="$WORKDIR/sync/c-ready"
 donef="$WORKDIR/sync/c-done"
 run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$donef" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
-  --setenv SCCACHE_SERVER_PORT "$bad_port" &
+  --setenv SCCACHE_SERVER_PORT "$bad_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_c=$!
 wait_for_file "$ready"
@@ -621,7 +639,8 @@ if ! grep -Eq 'Compile requests[[:space:]]+[1-9]' "$WORKDIR/logs/bad-c"; then
 fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
-  --setenv SCCACHE_SERVER_PORT "$bad_port" &
+  --setenv SCCACHE_SERVER_PORT "$bad_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_d=$!
 bounded_wait "$pid_d"; STATUSES[1]="$BOUNDED_STATUS"
