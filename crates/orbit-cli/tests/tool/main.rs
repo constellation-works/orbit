@@ -21,6 +21,8 @@ mod fixture_crew;
 mod git_repo;
 #[path = "../support/isolated_cli_fixture.rs"]
 mod isolated_cli_fixture;
+#[path = "../support/isolated_test.rs"]
+mod isolated_test;
 #[path = "../support/tool_input_hints.rs"]
 mod tool_input_hint_cases;
 

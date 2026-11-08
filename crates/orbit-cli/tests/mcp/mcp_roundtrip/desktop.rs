@@ -127,20 +127,31 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "{listed}"
     );
     let toggle = json!({"workspace":selector,"action":"toggle","name":"stdio-routine","target":"job:stdio-maintenance","expected_enabled":true,"enabled":false});
-    client.call_tool_ok("orbit_routine_control", toggle.clone());
+    let toggled = client.call_tool_ok("orbit_routine_control", toggle.clone());
+    assert_eq!(toggled["changed"], true, "{toggled}");
     let after_toggle = std::fs::read(&routine_path).unwrap();
     let conflict = client.call_tool_err("orbit_routine_control", toggle);
     assert_eq!(conflict["code"], "invalid_input", "{conflict}");
+    assert_eq!(
+        conflict["message"],
+        "invalid input: stale_routine_state: routine state changed while this action was pending; refresh before retrying",
+        "{conflict}"
+    );
+    let unchanged = client.call_tool_ok(
+        "orbit_routine_control",
+        json!({"workspace":selector,"action":"toggle","name":"stdio-routine","target":"job:stdio-maintenance","expected_enabled":false,"enabled":false}),
+    );
+    assert_eq!(unchanged["changed"], false, "{unchanged}");
     for (name, target, message) in [
         (
             "missing-routine",
             "job:stdio-maintenance",
-            "invalid input: routine unavailable in this workspace",
+            "invalid input: routine_not_found: routine 'missing-routine' was not found",
         ),
         (
             "stdio-routine",
             "job:elsewhere",
-            "invalid input: routine target changed; refresh before retrying",
+            "invalid input: target_mismatch: routine target changed; refresh and confirm 'job:stdio-maintenance'",
         ),
     ] {
         let refused = client.call_tool_err(
@@ -151,9 +162,23 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         assert_eq!(refused["code"], "invalid_input", "{refused}");
         assert_eq!(
             refused["message"], message,
-            "the shared toggle selection keeps each MCP refusal: {refused}"
+            "the shared routine-edit refusal carries its code: {refused}"
         );
     }
+    assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
+    let set_trigger = |expected: &str| {
+        json!({"workspace":selector,"action":"set_trigger","name":"stdio-routine",
+            "target":"job:stdio-maintenance","expected_trigger":{"cron":expected},
+            "trigger":{"cron":"0 9 * * *"}})
+    };
+    let stale = client.call_tool_err("orbit_routine_control", set_trigger("0 8 * * *"));
+    assert_eq!(
+        stale["message"],
+        "invalid input: stale_routine_trigger: routine trigger changed while this edit was open; refresh before retrying",
+        "{stale}"
+    );
+    let unchanged = client.call_tool_ok("orbit_routine_control", set_trigger("0 9 * * *"));
+    assert_eq!(unchanged["changed"], false, "{unchanged}");
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);

@@ -1,33 +1,26 @@
 //! The Automation › Residents view: set up and manage resident mandates.
 //!
 //! Reads and writes go through the `orbit.resident.*` tools, so the view
-//! reports and changes exactly what `orbit resident list|show|grant|relay|
-//! control` do. The one exception is creation, which needs a file for
-//! `orbit.task.artifact.put`; it goes to the core use case that judges the
-//! draft with the same rule every mandate read applies before it writes the
-//! tagged assignment and its `resident/mandate.json`.
+//! reports and changes exactly what `orbit resident list|show|relay|control`
+//! do. Two writes go to core use cases instead. Creation needs a file for
+//! `orbit.task.artifact.put`; its use case judges the draft with the same
+//! rule every mandate read applies before it writes the tagged assignment
+//! and its `resident/mandate.json`. The grant form goes to the dashboard
+//! grant operation beside `orbit.resident.grant`'s, which applies the same
+//! grant rules.
 //!
 //! * `GET /api/residents` — every mandate as `orbit.resident.show` reports
 //!   it, the configured crews for the form, the workspace's resident cycle
 //!   routine and what this session may do.
 //! * `GET /api/residents/<id>` — one mandate.
 //! * `POST /api/residents` — create a mandate.
-//! * `POST /api/residents/<id>/grant` — narrow, or widen. A dashboard
-//!   session is never the native-terminal operator: a widening raises the
-//!   `resident_authority` request with the operator's words and the operator
-//!   answers it `grant` in the same action, so the change is recorded as
-//!   `via: decision:<id>` like any human answer. The dashboard form sends
-//!   one mixed widen+narrow POST; the server runs it as two core grant
-//!   operations, widening first and then narrowing. When the widening
-//!   applied and the narrowing is then refused, the response is
-//!   `granted_narrowing_refused` with `narrowing_error` and the widened
-//!   authority, and the audit row records that partial outcome as a
-//!   failure, so neither claims the widening was refused. When every
-//!   requested right/workspace was already held, the widening is
-//!   `unchanged` with no request; a refused narrowing then returns
-//!   `unchanged_narrowing_refused` and audits that no widening applied.
-//!   If narrowing changes nothing, the outcome is `granted` or `unchanged`
-//!   according to whether widening applied.
+//! * `POST /api/residents/<id>/grant` — narrow, or widen, through the core
+//!   dashboard grant operation, which owns the widen-then-narrow split of a
+//!   mixed form, the answered `resident_authority` request (`via:
+//!   decision:<id>`), the `quote` requirement and the outcome vocabulary.
+//!   A partial outcome (`granted_narrowing_refused`,
+//!   `unchanged_narrowing_refused`) audits as a failure naming which step
+//!   applied.
 //! * `POST /api/residents/<id>/control` and `/relay` — the manager channel.
 //!
 //! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
@@ -43,12 +36,14 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_ROUTINE_TOGGLE};
-use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_core::application::resident::ResidentMandateCreateParams;
+use orbit_core::application::resident::{
+    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+    ResidentMandateCreateParams,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskComplexity;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::routines::{
@@ -254,13 +249,16 @@ pub(super) async fn show_resident(
 }
 
 /// Authorize one resident write, audit it, run it and audit the outcome.
-async fn resident_write(
+/// `partial_failure` names a successful write's outcome the audit row
+/// records as a failure.
+async fn resident_write<T: Serialize + Send + 'static>(
     state: &DashboardState,
     runtime: Arc<OrbitRuntime>,
     operation: &'static str,
     target: &str,
     arguments: Value,
-    write: impl FnOnce(Arc<OrbitRuntime>) -> Result<Value, OrbitError> + Send + 'static,
+    write: impl FnOnce(Arc<OrbitRuntime>) -> Result<T, OrbitError> + Send + 'static,
+    partial_failure: fn(&T) -> Option<String>,
 ) -> Response {
     let started = Instant::now();
     let workspace = workspace_label(&runtime).await;
@@ -287,15 +285,7 @@ async fn resident_write(
     let result = blocking(operation, move || write(writer)).await;
     let failure: Option<String> = match &result {
         Err(_) => Some("refused".to_string()),
-        Ok(value) if value["outcome"] == "granted_narrowing_refused" => Some(format!(
-            "Widening applied; narrowing refused: {}",
-            value["narrowing_error"].as_str().unwrap_or_default()
-        )),
-        Ok(value) if value["outcome"] == "unchanged_narrowing_refused" => Some(format!(
-            "No widening applied; narrowing refused: {}",
-            value["narrowing_error"].as_str().unwrap_or_default()
-        )),
-        Ok(_) => None,
+        Ok(value) => partial_failure(value),
     };
     record_operation_audit(
         &runtime,
@@ -314,6 +304,11 @@ async fn resident_write(
         Ok(value) => Json(value).into_response(),
         Err(response) => *response,
     }
+}
+
+/// A write whose every success audits as a success.
+fn no_partial_failure(_: &Value) -> Option<String> {
+    None
 }
 
 /// `POST /api/residents` — create a mandate's assignment and artifact.
@@ -364,195 +359,83 @@ pub(super) async fn create_resident(
                 mandate,
             })
         },
+        no_partial_failure,
     )
     .await
 }
 
 /// `POST /api/residents/<id>/grant` — narrow, widen as an answered
-/// request, or both. The dashboard form sends a widening with a deadline
-/// as one mixed POST to this handler. Core refuses one call that both
-/// widens and narrows, so the server runs a mixed call as two core grant
-/// operations: it widens first (raising and answering the grant request
-/// when the widening changes authority) and then narrows. The outcome
-/// names both steps truthfully: `granted_and_narrowed`, `granted`, or
-/// `granted_narrowing_refused` when the widening applied, and
-/// `unchanged_and_narrowed`, `unchanged`, or `unchanged_narrowing_refused` when every
-/// requested right/workspace was already held, so no widening was applied
-/// and no grant request was raised or answered. The plain `granted` and
-/// `unchanged` outcomes mean the narrowing step made no change.
+/// request, or both, through
+/// [`OrbitRuntime::grant_resident_authority_as_dashboard_operator`]. The
+/// handler parses the form, authorizes and audits it and renders the core
+/// result; a partial outcome audits as a failure naming which step applied.
 pub(super) async fn grant_resident(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<ResidentGrantBody>,
 ) -> Response {
-    let widening = !body.add.is_empty() || !body.workspaces.is_empty();
-    let narrowing = !body.remove.is_empty()
-        || !body.drop_workspaces.is_empty()
-        || non_blank(body.deadline.as_deref()).is_some();
-    let quote = non_blank(body.quote.as_deref());
-    let mut input = Map::new();
-    input.insert("task_id".into(), json!(id));
+    let params = ResidentDashboardGrantParams {
+        task_id: id.clone(),
+        add: body.add,
+        workspaces: body.workspaces,
+        remove: body.remove,
+        drop_workspaces: body.drop_workspaces,
+        deadline: body.deadline,
+        quote: body.quote,
+        answered_by: human_comment_author(None),
+    };
+    let mut arguments = Map::new();
+    arguments.insert("task_id".into(), json!(id));
     for (key, list) in [
-        ("add", &body.add),
-        ("workspaces", &body.workspaces),
-        ("remove", &body.remove),
-        ("drop_workspaces", &body.drop_workspaces),
+        ("add", &params.add),
+        ("workspaces", &params.workspaces),
+        ("remove", &params.remove),
+        ("drop_workspaces", &params.drop_workspaces),
     ] {
         if !list.is_empty() {
-            input.insert(key.into(), json!(list));
+            arguments.insert(key.into(), json!(list));
         }
     }
-    if let Some(deadline) = non_blank(body.deadline.as_deref()) {
-        input.insert("deadline".into(), json!(deadline));
+    for (key, value) in [("deadline", &params.deadline), ("quote", &params.quote)] {
+        if let Some(value) = non_blank(value.as_deref()) {
+            arguments.insert(key.into(), json!(value));
+        }
     }
-    if let Some(quote) = &quote {
-        input.insert("quote".into(), json!(quote));
-    }
-    let input = Value::Object(input);
-    let operation = if widening {
+    let operation = if params.widens() {
         "resident.grant"
     } else {
         "resident.narrow"
     };
-    let target = id.clone();
     resident_write(
         &state,
         runtime,
         operation,
-        &target,
-        input.clone(),
-        move |runtime| {
-            let mut session = dashboard_session(true);
-            if widening && quote.is_none() {
-                return Err(OrbitError::InvalidInput(
-                    "a widening needs your words authorizing it; they are recorded verbatim on the grant request"
-                        .to_string(),
-                ));
-            }
-            if !widening {
-                return runtime.run_tool_with_session("orbit.resident.grant", input, session);
-            }
-            // The relaying session marks this caller as other than the
-            // native-terminal operator, so core raises the request; the
-            // operator then answers it as the human, as the decision view
-            // would.
-            session.origin_session_id = Some(format!("dashboard:{}", audit_execution_id("resident")));
-            if !narrowing {
-                let raised = runtime.run_tool_with_session("orbit.resident.grant", input, session)?;
-                if raised["outcome"] != "requested" {
-                    return Ok(raised);
-                }
-                let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
-                    OrbitError::Execution("the grant request carries no id".to_string())
-                })?;
-                let answered = runtime.answer_decision_request_as_human(
-                    request_id,
-                    "grant",
-                    Some("Granted from the dashboard Residents view".to_string()),
-                    human_comment_author(None),
-                    Some("dashboard".to_string()),
-                )?;
-                let shown = runtime.run_tool_with_session(
-                    "orbit.resident.show",
-                    json!({"task_id": id}),
-                    dashboard_session(true),
-                )?;
-                return Ok(json!({
-                    "outcome": "granted",
-                    "request": serde_json::to_value(&answered).unwrap_or(Value::Null),
-                    "authority": shown["authority"],
-                    "effective_authority": shown["effective_authority"],
-                }));
-            }
-            // Core refuses one call that both widens and narrows, so split
-            // a mixed dashboard call into two recorded changes: widen
-            // first as an answered request, then narrow.
-            let mut widen_input = Map::new();
-            widen_input.insert("task_id".into(), json!(id));
-            for (key, list) in [("add", &body.add), ("workspaces", &body.workspaces)] {
-                if !list.is_empty() {
-                    widen_input.insert(key.into(), json!(list));
-                }
-            }
-            if let Some(quote) = &quote {
-                widen_input.insert("quote".into(), json!(quote));
-            }
-            let raised = runtime.run_tool_with_session(
-                "orbit.resident.grant",
-                Value::Object(widen_input),
-                session,
-            )?;
-            // `unchanged` means every requested right/workspace was
-            // already held: nothing widened and no request exists.
-            let widening_applied = raised["outcome"] != "unchanged";
-            let request = if raised["outcome"] == "requested" {
-                let request_id = raised["request"]["id"].as_str().ok_or_else(|| {
-                    OrbitError::Execution("the grant request carries no id".to_string())
-                })?;
-                let answered = runtime.answer_decision_request_as_human(
-                    request_id,
-                    "grant",
-                    Some("Granted from the dashboard Residents view".to_string()),
-                    human_comment_author(None),
-                    Some("dashboard".to_string()),
-                )?;
-                serde_json::to_value(&answered).unwrap_or(Value::Null)
-            } else {
-                raised["request"].clone()
-            };
-            let mut narrow_input = Map::new();
-            narrow_input.insert("task_id".into(), json!(id));
-            for (key, list) in [
-                ("remove", &body.remove),
-                ("drop_workspaces", &body.drop_workspaces),
-            ] {
-                if !list.is_empty() {
-                    narrow_input.insert(key.into(), json!(list));
-                }
-            }
-            if let Some(deadline) = non_blank(body.deadline.as_deref()) {
-                narrow_input.insert("deadline".into(), json!(deadline));
-            }
-            // The widening above is already recorded; a refused narrowing
-            // must not report the whole call as refused.
-            let narrowed = runtime.run_tool_with_session(
-                "orbit.resident.grant",
-                Value::Object(narrow_input),
-                dashboard_session(true),
-            );
-            let shown = runtime.run_tool_with_session(
-                "orbit.resident.show",
-                json!({"task_id": id}),
-                dashboard_session(true),
-            )?;
-            match narrowed {
-                Ok(narrowed) => Ok(json!({
-                    "outcome": match (widening_applied, narrowed["outcome"] == "unchanged") {
-                        (true, true) => "granted",
-                        (false, true) => "unchanged",
-                        (true, false) => "granted_and_narrowed",
-                        (false, false) => "unchanged_and_narrowed",
-                    },
-                    "request": request,
-                    "authority": shown["authority"],
-                    "effective_authority": shown["effective_authority"],
-                })),
-                Err(error) => Ok(json!({
-                    "outcome": if widening_applied {
-                        "granted_narrowing_refused"
-                    } else {
-                        "unchanged_narrowing_refused"
-                    },
-                    "narrowing_error": error.to_string(),
-                    "request": request,
-                    "authority": shown["authority"],
-                    "effective_authority": shown["effective_authority"],
-                })),
-            }
-        },
+        &id,
+        Value::Object(arguments),
+        move |runtime| runtime.grant_resident_authority_as_dashboard_operator(params),
+        grant_partial_failure,
     )
     .await
+}
+
+/// The audit failure of a grant whose widening outcome stands while its
+/// narrowing was refused.
+fn grant_partial_failure(grant: &ResidentDashboardGrant) -> Option<String> {
+    let error = grant.narrowing_error.as_deref().unwrap_or_default();
+    match grant.outcome {
+        ResidentDashboardGrantOutcome::GrantedNarrowingRefused => {
+            Some(format!("Widening applied; narrowing refused: {error}"))
+        }
+        ResidentDashboardGrantOutcome::UnchangedNarrowingRefused => {
+            Some(format!("No widening applied; narrowing refused: {error}"))
+        }
+        ResidentDashboardGrantOutcome::Granted
+        | ResidentDashboardGrantOutcome::Unchanged
+        | ResidentDashboardGrantOutcome::Narrowed
+        | ResidentDashboardGrantOutcome::GrantedAndNarrowed
+        | ResidentDashboardGrantOutcome::UnchangedAndNarrowed => None,
+    }
 }
 
 /// `POST /api/residents/<id>/control`.
@@ -583,6 +466,7 @@ pub(super) async fn control_resident(
         move |runtime| {
             runtime.run_tool_with_session("orbit.resident.control", input, dashboard_session(true))
         },
+        no_partial_failure,
     )
     .await
 }
@@ -616,6 +500,7 @@ pub(super) async fn relay_resident(
         move |runtime| {
             runtime.run_tool_with_session("orbit.resident.relay", input, dashboard_session(true))
         },
+        no_partial_failure,
     )
     .await
 }

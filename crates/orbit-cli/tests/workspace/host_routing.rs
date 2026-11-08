@@ -1479,3 +1479,126 @@ fn host_routing_contracts_2() {
         check();
     }
 }
+
+#[test]
+fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
+    if crate::isolated_test::run_in_child(
+        "host_routing::routed_artifact_put_preserves_disabled_cycle_write_sidecars",
+    ) {
+        return;
+    }
+    let routed = Routed::new();
+    let routine_path = routed
+        .bravo
+        .repo()
+        .join(".orbit/routines/resident_cycle.yaml");
+    fs::create_dir_all(routine_path.parent().unwrap()).unwrap();
+    fs::write(routine_path,
+        "schemaVersion: 1\nname: artifact-cycle\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:resident_cycle_pipeline\n",
+    ).unwrap();
+    routed
+        .remote_runtime
+        .update_task_as_human(
+            &routed.remote_task,
+            TaskUpdateParams {
+                tags: Some(vec!["resident".into()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let source = routed.bravo.repo().join(".orbit/tmp/mandate.json");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(
+        &source,
+        json!({
+            "schema": "resident.mandate/v1",
+            "goal": "Keep remote attachment warnings visible",
+            "exit_criteria": ["The warning reaches the caller"],
+            "workspaces": ["bravo-ws"],
+            "crew": "sol",
+            "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
+        routed.bravo.home.join(".orbit"),
+        routed.bravo.repo().join(".orbit"),
+    ))
+    .unwrap();
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER injected_tool_audit_failure BEFORE INSERT ON audit_events
+         WHEN NEW.command = 'tool' AND NEW.tool_name = 'orbit.task.artifact.put'
+         BEGIN SELECT RAISE(ABORT, 'injected audit write failure'); END;",
+        )
+        .unwrap();
+    let input = json!({
+        "id": routed.remote_task,
+        "workspace": "bravo-ws",
+        "path": "resident/mandate.json",
+        "source_path": source,
+        "model": "codex",
+    })
+    .to_string();
+    for flags in [vec!["--full"], vec![], vec!["--fields", "id"]] {
+        let mut args = vec![
+            "tool",
+            "run",
+            "orbit.task.artifact.put",
+            "--host",
+            "bravo",
+            "--input",
+            &input,
+        ];
+        args.extend(&flags);
+        let result = routed.json(&args);
+        assert_eq!(result["id"], routed.remote_task, "{result}");
+        assert_eq!(
+            result["audit_warning"]["code"], "audit_row_unpersisted",
+            "{result}"
+        );
+        if flags.first() == Some(&"--fields") {
+            assert_eq!(
+                result.as_object().unwrap().len(),
+                2,
+                "explicit fields stay filtered: {result}"
+            );
+        } else {
+            assert_eq!(result["cycle_routine_disabled"], true, "{result}");
+            assert!(result["cycle_routine_name"].as_str().is_some(), "{result}");
+            assert!(result["warning"].as_str().is_some(), "{result}");
+            assert!(
+                !result["warnings"].as_array().unwrap().is_empty(),
+                "{result}"
+            );
+            assert_eq!(result["redactions_applied"], false, "{result}");
+            assert_eq!(result["redactions"], json!([]), "{result}");
+            assert_eq!(
+                result.get("description").is_some(),
+                flags.first() == Some(&"--full"),
+                "{result}"
+            );
+        }
+    }
+
+    let mut client = StdioClient::spawn(&routed.fleet, &["mcp", "serve", "--mode", "federated"]);
+    let mut mcp_input: Value = serde_json::from_str(&input).unwrap();
+    mcp_input["workspace"] = json!(routed.bravo_selector());
+    let mcp = client.call_ok("orbit_task_artifact_put", mcp_input);
+    assert_eq!(mcp["cycle_routine_disabled"], true, "{mcp}");
+    assert!(
+        mcp.get("description").is_some(),
+        "MCP keeps the complete response: {mcp}"
+    );
+    assert!(mcp["warning"].as_str().is_some(), "{mcp}");
+    assert!(!mcp["warnings"].as_array().unwrap().is_empty(), "{mcp}");
+    assert_eq!(
+        mcp["audit_warning"]["code"], "audit_row_unpersisted",
+        "{mcp}"
+    );
+    assert_eq!(mcp["redactions_applied"], false, "{mcp}");
+    assert_eq!(mcp["redactions"], json!([]), "{mcp}");
+}

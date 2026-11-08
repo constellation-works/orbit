@@ -185,6 +185,18 @@ Two related but distinct policies live together in `orbit_types::task`:
 
 `MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact.put` refuses to read a larger source, and `orbit.task.artifact.get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
 
+### Attachment result profiles
+
+Core owns the default `orbit.task.artifact.put` result projection used by
+`orbit tool run`, including `--host` and federated routing. It keeps the
+compact task fields plus the write sidecars: `warnings`, `warning`,
+`cycle_routine_disabled`, `cycle_routine_name`, `audit_warning`,
+`context_files_unverified`, `redactions_applied` and `redactions`. In
+particular, attaching a resident mandate while its cycle routine is disabled
+returns both the warning and the routine signals. MCP keeps its existing
+complete tool response. CLI `--full` keeps that complete response, while
+`--fields` remains an explicit field filter that also retains `audit_warning`.
+
 ### Transport: what a multimodal client actually receives
 
 `orbit.task.artifact.get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.

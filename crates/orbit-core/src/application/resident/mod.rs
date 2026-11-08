@@ -43,7 +43,11 @@ pub use control::{
 };
 pub use create::ResidentMandateCreateParams;
 pub(crate) use due::ResidentDue;
-pub use grant::{ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams};
+pub(crate) use grant::resident_grant_params_from_input;
+pub use grant::{
+    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+    ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams,
+};
 pub(crate) use guard::{ResidentCallAdmission, ResidentCallClass};
 pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 

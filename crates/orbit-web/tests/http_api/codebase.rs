@@ -2030,7 +2030,7 @@ analytics_test!(
         assert!(filtered["rows"].as_array().unwrap().is_empty());
         let unknown = related(&server, "path=unknown&min_support=1");
         assert!(unknown["rows"].as_array().unwrap().is_empty());
-        for query in ["top=0", "min_support=0", "window=1y", "path=../outside"] {
+        for query in ["top=0", "min_support=0", "window=1y"] {
             assert_eq!(
                 server
                     .get(&format!("/api/codebase/related?{WS}&path=src/a.rs&{query}"))
@@ -2039,6 +2039,12 @@ analytics_test!(
                 400
             );
         }
+        let traversal = server.get(&format!("/api/codebase/related?{WS}&path=../outside"));
+        assert_eq!(traversal.status().as_u16(), 400);
+        assert_eq!(
+            traversal.json::<Value>().unwrap()["error"],
+            "path must be a repository-relative file path"
+        );
         let analytics = analytics(&server, "");
         assert!(
             analytics["known_paths"]

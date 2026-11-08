@@ -62,7 +62,7 @@ pub(crate) fn pilot_blocker_task_ids(assessment: &Value) -> BTreeSet<String> {
         .flatten()
         .filter_map(Value::as_str)
         .flat_map(|text| text.split(|character| !task_id_character(character)))
-        .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
+        .filter(|id| is_valid_orb_task_id(id))
         .map(str::to_string)
         .collect()
 }

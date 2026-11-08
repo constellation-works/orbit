@@ -64,7 +64,7 @@ mode, the run ends by opening a pull request.
 
 A successful run stops with the task in `review` and the pull request open.
 The task's detail shows the plan and the execution summary, plus the
-reviewer's verdict when second-agent review is on. **Runs** holds every step
+reviewer's verdict when second-agent review is on. **Jobs** holds every step
 and event behind them.
 
 Review the pull request and merge it on GitHub. Then the task moves to `done`

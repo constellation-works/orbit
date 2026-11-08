@@ -48,6 +48,14 @@ session cannot write, or hand the filing to a session with that surface.
    activation prerequisite. Without granted rights it still runs observe-only
    cycles; granted rights authorize action, not activation.
 
+After attaching a mandate, inspect `cycle_routine_disabled`,
+`cycle_routine_name` and the returned warnings. A disabled cycle routine leaves
+the mandate stored but unable to act until the routine is enabled. These
+signals are present in MCP and in the compact default `orbit tool run` output,
+including calls routed with `--host`. `--full` returns the complete tool
+response; an explicit `--fields` filter keeps only the requested fields and
+any `audit_warning`.
+
 Editing the mandate is an ordinary task write (`orbit.task.update`) and needs
 the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
 widen authority — the effective scope is the workspaces both the

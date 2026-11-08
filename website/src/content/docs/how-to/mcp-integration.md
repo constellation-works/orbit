@@ -108,13 +108,14 @@ works with `--mode remote <ssh-host>` and `--mode federated`.
 
 Every tool schema a server lists costs context in each agent session, so
 every tool belongs to exactly one toolset, and a server lists only the
-toolsets it enables. `orbit tool list` shows each tool's toolset.
+toolsets it enables. `orbit tool show <tool>` names a tool's toolset, and
+`orbit tool list --json` reports it as `mcp_toolset`.
 
 | Toolset | Tools |
 |---|---|
 | `core` (always on) | Workspace discovery: `orbit.workspace.list` |
 | `tasks-read` | `orbit.task.show`, `list`, `eligible`, `block_triage`, `orbit.task.artifact.get` and `orbit.attention` |
-| `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put` and `orbit.friction.*` |
+| `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put`, `orbit.friction.add` and `orbit.friction.update` |
 | `task-repair` | The delivery repair verbs: `orbit.task.requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
 | `decisions` | `orbit.decision.list`, `show` and `raise` |
 | `runs` | `orbit.workflow.run.list`, `show` and `observe` |

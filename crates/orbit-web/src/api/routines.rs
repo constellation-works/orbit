@@ -19,9 +19,9 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
-    ClockHealth, ClockStatus, FireField, RoutineField, RoutineStatus, RoutineStatusReport,
-    RoutineToggleOutcome, RoutineToggleRefusal, set_clock_cadence, set_clock_enabled,
-    toggle_listed_routine, trigger_options,
+    ClockHealth, ClockStatus, FireField, RoutineEditRefusal, RoutineField, RoutineStatus,
+    RoutineStatusReport, set_clock_cadence, set_clock_enabled, toggle_listed_routine,
+    trigger_options,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime};
 use orbit_types::telemetry::AuditEventStatus;
@@ -258,35 +258,14 @@ pub(super) async fn toggle_routine(
     };
     let outcome = match selected {
         Ok(Ok(outcome)) => outcome,
-        // A replica's owner-only routine is listed with the owner named; a
-        // toggle is refused with the same reason and writes nothing.
-        Ok(Err(RoutineToggleRefusal::OwnerAuthority {
-            reason,
-            owner_machine,
-        })) => {
-            let refusal = json!({
-                "error": reason,
-                "code": "owner_authority",
-                "owner_machine": owner_machine,
-            });
-            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
-                .await;
+        // An unlisted routine is a 404 with nothing to audit.
+        Ok(Err(refusal @ RoutineEditRefusal::NotFound { .. })) => {
+            return routine_edit_refused(&refusal);
         }
-        Ok(Err(RoutineToggleRefusal::NotFound)) => {
-            return named_entity_not_found(
-                "routine_not_found",
-                format!("routine '{}' was not found", body.name),
-            );
-        }
-        Ok(Err(RoutineToggleRefusal::WorkspaceMismatch { source_workspace })) => {
-            let refusal = json!({
-                "error": format!(
-                    "select routine source workspace '{source_workspace}' before changing '{}'",
-                    body.name
-                ),
-                "code": "workspace_mismatch",
-            });
-            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
+        // Every other refusal (owner authority, workspace, stale state,
+        // retargeted definition) wrote nothing; audit it and answer 409.
+        Ok(Err(refusal)) => {
+            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, &refusal)
                 .await;
         }
         Err(error) => {
@@ -307,21 +286,6 @@ pub(super) async fn toggle_routine(
             return map_runtime_error(error);
         }
     };
-    let refusal = match &outcome {
-        RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => None,
-        RoutineToggleOutcome::Conflict { actual_enabled } => Some(json!({
-            "error": "routine state changed while this action was pending; refresh before retrying",
-            "code": "stale_routine_state",
-            "actual_enabled": actual_enabled,
-        })),
-        // The definition was retargeted since the caller selected it.
-        RoutineToggleOutcome::TargetConflict { actual_target } => {
-            Some(target_mismatch(&actual_target.as_ref_string()))
-        }
-    };
-    if let Some(refusal) = refusal {
-        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
-    }
     record_operation_audit(
         &runtime,
         workspace,
@@ -341,36 +305,39 @@ pub(super) async fn toggle_routine(
         "target": body.target,
         "machine_name": body.machine_name,
         "enabled": body.enabled,
-        "changed": outcome == RoutineToggleOutcome::Changed,
+        "changed": outcome.changed,
         "message": if body.enabled { "Routine enabled" } else { "Routine disabled" },
     }))
     .into_response()
 }
 
-/// The request's selected target is no longer the definition's target.
-fn target_mismatch(actual_target: &str) -> Value {
-    json!({
-        "error": format!("routine target changed; refresh and confirm '{actual_target}'"),
-        "code": "target_mismatch",
-        "actual_target": actual_target,
-    })
+/// A refused routine definition edit as the dashboard answers it: the core
+/// refusal body, 404 for an unlisted routine and 409 (resolved by refreshing)
+/// for every other refusal.
+pub(super) fn routine_edit_refused(refusal: &RoutineEditRefusal) -> Response {
+    let status = match refusal {
+        RoutineEditRefusal::NotFound { .. } => StatusCode::NOT_FOUND,
+        _ => StatusCode::CONFLICT,
+    };
+    (status, Json(refusal.to_json())).into_response()
+}
+
+/// The audit failure reason of a refused routine definition edit.
+pub(super) fn routine_edit_refusal_reason(refusal: &RoutineEditRefusal) -> String {
+    format!("{}: {}", refusal.code(), refusal.message())
 }
 
 /// Audit an authorized toggle that was refused without writing, then answer
-/// with the refusal as a 409 the client resolves by refreshing.
+/// with the refusal.
 async fn refuse_routine_toggle(
     runtime: &Arc<OrbitRuntime>,
     workspace: &str,
     body: &RoutineToggleRequest,
     caller: &CallerCapabilities,
     started: Instant,
-    refusal: Value,
+    refusal: &RoutineEditRefusal,
 ) -> Response {
-    let reason = format!(
-        "{}: {}",
-        refusal["code"].as_str().unwrap_or("conflict"),
-        refusal["error"].as_str().unwrap_or_default()
-    );
+    let reason = routine_edit_refusal_reason(refusal);
     record_operation_audit(
         runtime,
         workspace,
@@ -384,7 +351,7 @@ async fn refuse_routine_toggle(
         started,
     )
     .await;
-    (StatusCode::CONFLICT, Json(refusal)).into_response()
+    routine_edit_refused(refusal)
 }
 
 /// `POST /api/routines/clock` — typed native-service or cadence control.

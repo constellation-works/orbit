@@ -7,6 +7,9 @@ use std::path::Path;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::application::resident::{
+    ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskArtifact;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -184,6 +187,135 @@ fn agent_widening_is_a_request_the_human_answers() {
     assert_eq!(granted["quote"], QUOTE);
     // The grant changed the authority, so the other request lapsed.
     assert_eq!(shown["open_requests"], json!([]));
+}
+
+fn dashboard_grant_splits_a_mixed_form_and_answers_its_request() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (id, workspace) = mandate(&runtime, "2030-01-01T00:00:00Z");
+    let form =
+        |add: &[&str], deadline: Option<&str>, quote: Option<&str>| ResidentDashboardGrantParams {
+            task_id: id.clone(),
+            add: add.iter().map(ToString::to_string).collect(),
+            workspaces: if add.is_empty() {
+                Vec::new()
+            } else {
+                vec![workspace.clone()]
+            },
+            deadline: deadline.map(ToOwned::to_owned),
+            quote: quote.map(ToOwned::to_owned),
+            answered_by: "human:daniel".into(),
+            ..Default::default()
+        };
+    let keys = |value: &Value| {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // The tool contract stays one change per call.
+    let error = call(
+        &runtime,
+        "orbit.resident.grant",
+        json!({"task_id": id, "add": ["dispatch"], "deadline": "2029-06-01T00:00:00Z"}),
+        &operator(),
+    )
+    .expect_err("a tool call that widens and narrows is refused");
+    assert!(error.contains("make two calls"), "{error}");
+
+    let error = runtime
+        .grant_resident_authority_as_dashboard_operator(form(&["dispatch"], None, Some(" ")))
+        .expect_err("a dashboard widening needs the operator's words");
+    assert!(
+        error.to_string().contains("a widening needs your words"),
+        "{error}"
+    );
+    assert_eq!(show(&runtime, &id)["authority"]["revision"], 0);
+    assert_eq!(show(&runtime, &id)["open_requests"], json!([]));
+
+    let mixed = runtime
+        .grant_resident_authority_as_dashboard_operator(form(
+            &["dispatch"],
+            Some("2029-06-01T00:00:00Z"),
+            Some(QUOTE),
+        ))
+        .unwrap();
+    assert_eq!(
+        mixed.outcome,
+        ResidentDashboardGrantOutcome::GrantedAndNarrowed
+    );
+    let rendered = serde_json::to_value(&mixed).unwrap();
+    assert_eq!(
+        keys(&rendered),
+        ["outcome", "request", "authority", "effective_authority"]
+    );
+    assert_eq!(rendered["outcome"], "granted_and_narrowed");
+    assert_eq!(rendered["request"]["state"], "answered", "{rendered}");
+    let shown = show(&runtime, &id);
+    assert_eq!(rendered["authority"], shown["authority"]);
+    assert_eq!(
+        rendered["effective_authority"],
+        shown["effective_authority"]
+    );
+    assert_eq!(shown["effective_authority"]["rights"], json!(["dispatch"]));
+    let granted = &shown["authority"]["granted"][0];
+    assert_eq!(
+        granted["via"],
+        format!("decision:{}", rendered["request"]["id"].as_str().unwrap())
+    );
+    assert_eq!(granted["by"], "human:daniel");
+    assert_eq!(granted["quote"], QUOTE);
+    assert_eq!(
+        shown["authority"]["narrowed"][0]["deadline"],
+        "2029-06-01T00:00:00Z"
+    );
+
+    // An already-held widening raises nothing; its refused narrowing is
+    // reported, not raised.
+    let refused = runtime
+        .grant_resident_authority_as_dashboard_operator(form(
+            &["dispatch"],
+            Some("2031-01-01T00:00:00Z"),
+            Some(QUOTE),
+        ))
+        .unwrap();
+    assert_eq!(
+        refused.outcome,
+        ResidentDashboardGrantOutcome::UnchangedNarrowingRefused
+    );
+    let rendered = serde_json::to_value(&refused).unwrap();
+    assert_eq!(
+        keys(&rendered),
+        [
+            "outcome",
+            "narrowing_error",
+            "request",
+            "authority",
+            "effective_authority"
+        ]
+    );
+    assert!(rendered["request"].is_null(), "{rendered}");
+    assert!(
+        rendered["narrowing_error"]
+            .as_str()
+            .unwrap()
+            .contains("only shortens"),
+        "{rendered}"
+    );
+    assert_eq!(show(&runtime, &id)["authority"]["revision"], 2);
+
+    let mut narrowing = form(&[], None, None);
+    narrowing.remove = vec!["dispatch".into()];
+    let narrowed = runtime
+        .grant_resident_authority_as_dashboard_operator(narrowing)
+        .unwrap();
+    assert_eq!(narrowed.outcome, ResidentDashboardGrantOutcome::Narrowed);
+    let rendered = serde_json::to_value(&narrowed).unwrap();
+    assert_eq!(keys(&rendered), ["outcome", "authority"]);
+    assert_eq!(rendered["authority"]["rights"], json!([]));
 }
 
 fn rejected_or_superseded_requests_change_nothing() {
@@ -791,6 +923,7 @@ crate::scenario_table!(
     resident_sensitive_checkpoint_is_refused_without_writes,
     resident_stale_comment_is_refused_without_writes,
     agent_widening_is_a_request_the_human_answers,
+    dashboard_grant_splits_a_mixed_form_and_answers_its_request,
     rejected_or_superseded_requests_change_nothing,
     any_task_writer_narrows_and_is_recorded,
     losing_the_resident_tag_clears_effective_authority_but_keeps_history,

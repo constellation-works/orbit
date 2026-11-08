@@ -107,7 +107,9 @@ fn unusable_tls_material_and_permissive_keys_refuse_startup() {
 }
 
 fn assert_tls_refused(home: &Path, tls: LeaseListenerTlsSettings) {
-    let error = LeaseListenerConfig::from_settings(&settings(home, "0.0.0.0:0", Some(tls)))
+    // A silent fallback to plaintext must succeed here, so it cannot be
+    // mistaken for TLS validation rejecting the configuration.
+    let error = LeaseListenerConfig::from_settings(&settings(home, "127.0.0.1:0", Some(tls)))
         .expect_err("unusable TLS must refuse startup")
         .to_string();
     assert!(

@@ -592,10 +592,12 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
             std::fs::write(&f.answer, answer.to_string()).unwrap();
         }
 
-        let answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
-        assert_eq!(
-            answer["isDraft"], true,
-            "source recovery preserves the explicit draft hold"
+        let gh_calls = std::fs::read_to_string(f._root.path().join("gh-calls")).unwrap();
+        assert!(
+            !gh_calls
+                .lines()
+                .any(|call| call.split_whitespace().take(2).eq(["pr", "ready"])),
+            "source recovery must not request removal of the explicit draft hold: {gh_calls}"
         );
 
         let mut gate = json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"base":"main","base_sha":setup["base_sha"],"base_sync":"remote","mode":"pr"});

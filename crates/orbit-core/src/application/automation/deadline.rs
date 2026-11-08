@@ -6,13 +6,13 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::BatchState;
 
+use super::consumer_states;
 use crate::OrbitRuntime;
+use std::ops::ControlFlow;
 
 /// How close to its deadline a frozen batch must be for its task to sort
 /// ahead of same-priority backlog at admission.
 pub(crate) const FROZEN_BATCH_EXPIRY_WINDOW_HOURS: i64 = 2;
-
-const CONSUMER_PAGE_LIMIT: usize = 100;
 
 /// Task ID → admission deadline for every task this workspace's delivery
 /// automation minted over a frozen batch that reaches its deadline within
@@ -33,34 +33,25 @@ pub(crate) fn expiring_frozen_batch_tasks(
     let horizon = now + Duration::hours(FROZEN_BATCH_EXPIRY_WINDOW_HOURS);
 
     let store = runtime.automation_store()?;
-    let mut after: Option<String> = None;
     let mut expiring = BTreeMap::new();
-    loop {
-        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
-        if page.is_empty() {
-            return Ok(expiring);
-        }
-        for state in page {
-            if !state.consumer.starts_with(&prefix)
-                || after.as_ref().is_some_and(|key| state.consumer <= *key)
-            {
-                return Err(OrbitError::Store(
-                    "automation state page is outside its prefix or not strictly ordered".into(),
-                ));
-            }
-            after = Some(state.consumer.clone());
-            let Some(attempt) = state.active else {
-                continue;
-            };
-            if attempt.state != BatchState::Admitted {
-                continue;
-            }
-            let deadline = attempt.deadline();
-            if let Some(task_id) = attempt.action_id
-                && deadline <= horizon
-            {
-                expiring.insert(task_id, deadline);
-            }
-        }
-    }
+    let _: ControlFlow<std::convert::Infallible> =
+        consumer_states::for_each_workspace_consumer_state(
+            &prefix,
+            |after, limit| store.automation_states_page(&prefix, after, limit),
+            |state| &state.consumer,
+            |state| {
+                if let Some(attempt) = state.active
+                    && attempt.state == BatchState::Admitted
+                {
+                    let deadline = attempt.deadline();
+                    if let Some(task_id) = attempt.action_id
+                        && deadline <= horizon
+                    {
+                        expiring.insert(task_id, deadline);
+                    }
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
+    Ok(expiring)
 }

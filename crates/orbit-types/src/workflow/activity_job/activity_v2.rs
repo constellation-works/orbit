@@ -171,7 +171,8 @@ pub struct AgentLoopSpec {
     /// profile and denies the built-in Orbit mutation tools, including writes
     /// to coordination state outside the worktree
     /// ([`validate_response_correction_activity`]), so those mutations cannot
-    /// be repeated by a correction.
+    /// be repeated by a correction. A task's `required_tools` cannot add one
+    /// either: the runtime grant drops such a requirement with a note.
     ///
     /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity
     #[serde(default, skip_serializing_if = "Option::is_none")]
