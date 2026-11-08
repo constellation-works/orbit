@@ -17,6 +17,7 @@
 //! or the legacy `refs/orbit/automation/<attempt id>` pins earlier releases
 //! wrote into one shared namespace, which no owner can prove are its own.
 
+use super::consumer_states;
 use super::source::Source;
 use crate::OrbitRuntime;
 use orbit_automation::{
@@ -27,6 +28,7 @@ use orbit_types::workflow::automation::{AutomationState, members::MemberAttempt}
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::ops::ControlFlow;
 use std::path::Path;
 
 /// The shared namespace releases before owner scoping pinned attempts in.
@@ -34,9 +36,6 @@ use std::path::Path;
 const LEGACY_NAMESPACE: &str = "refs/orbit/automation/";
 const OWNED_NAMESPACE: &str = "refs/orbit/pins/v1/";
 const OWNER_RECORDS: &str = "refs/orbit/pin-owners/v1/";
-
-/// Store pages read while inventorying consumers.
-const CONSUMER_PAGE_LIMIT: usize = 100;
 
 /// Unreferenced pins deleted per `update-ref --stdin` transaction: about
 /// 90 KiB of instructions, well inside one command's budget.
@@ -496,23 +495,16 @@ impl Inventory {
         let mut inventory = Self::default();
         let store = runtime.automation_store()?;
         let prefix = owner.consumers();
-        let mut after: Option<String> = None;
-        loop {
-            let page =
-                store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
-            if page.is_empty() {
-                break;
-            }
-            for state in page {
-                if after.as_ref().is_some_and(|key| state.consumer <= *key) {
-                    return Err(OrbitError::Store(
-                        "automation state page is not strictly ordered".into(),
-                    ));
-                }
-                after = Some(state.consumer.clone());
-                inventory.add(&state);
-            }
-        }
+        let _: ControlFlow<std::convert::Infallible> =
+            consumer_states::for_each_workspace_consumer_state(
+                &prefix,
+                |after, limit| store.automation_states_page(&prefix, after, limit),
+                |state| &state.consumer,
+                |state| {
+                    inventory.add(&state);
+                    Ok(ControlFlow::Continue(()))
+                },
+            )?;
 
         for job in [
             "task_pilot_pipeline",
