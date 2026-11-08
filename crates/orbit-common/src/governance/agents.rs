@@ -251,7 +251,7 @@ const CI_FAILURES: OperationSpec<AgentsVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[CI_FAILURE_SELECTION, MODEL],
+    params: &[CI_FAILURE_SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
