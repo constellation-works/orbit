@@ -49,8 +49,7 @@ normal discovery and errors.
 ## 4. Other transports
 
 SSH is appropriate while every supported remote has a shell and the same operator
-controls both ends. The TCP listener exists for socket deployments and remains
-unauthenticated, with loopback as its default; a network MCP service with remote
+controls both ends. The TCP listener exists for socket deployments and admits only a peer whose uid matches the server uid (differing, missing, ambiguous, or unreadable peer uids are refused before any read [ORB-23052]), with loopback as its default and agent authority unchanged; a network MCP service with remote
 authentication would require Orbit-owned authentication, session lifecycle,
 exposure hardening, and operational support. Do not add one merely to avoid
 launching SSH.

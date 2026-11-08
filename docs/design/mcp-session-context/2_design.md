@@ -52,7 +52,7 @@ Remote mode starts one child:
 
 SSH inherits stdin, stdout, and stderr. Orbit does not parse or rewrite MCP in the proxy. The hidden caller argument marks the accepting session as ssh-mcp; its value remains audit metadata. The remote server derives its own process identity and may record the source address exposed by SSH_CONNECTION.
 
-The stdio modes do not use a TCP listener or a reusable network session. The separate `orbit mcp listen` command accepts TCP connections, creates an independent `OrbitToolServer` session for each peer, and records the peer address as `caller_ip`; it binds loopback by default and supplies no authentication policy [ORB-10690] [ORB-10806]. The federated stdio mux is another distinct mode: it routes workspace calls to configured local or SSH destinations and routes task IDs through the configured task-prefix table [ORB-11009].
+The stdio modes do not use a TCP listener or a reusable network session. The separate `orbit mcp listen` command accepts TCP connections, creates an independent `OrbitToolServer` session for each peer, and records the peer address as `caller_ip`; it binds loopback by default and admits only a peer whose uid matches the server uid, refusing differing, missing, ambiguous, or unreadable peer uids before any read [ORB-23052]; it serves agent authority unchanged [ORB-10690] [ORB-10806]. The federated stdio mux is another distinct mode: it routes workspace calls to configured local or SSH destinations and routes task IDs through the configured task-prefix table [ORB-11009].
 
 ## 3. Workspace resolution
 
