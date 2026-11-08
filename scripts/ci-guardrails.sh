@@ -670,6 +670,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-ci-p90.py"
   run_guard "$repo_root/scripts/test-audit-panics.py"
   run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"
+  run_guard "$repo_root/scripts/test-wsl2-smoke.py"
   run_guard "$repo_root/scripts/test-ci-repack-nextest.py"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   run_guard "$repo_root/scripts/test-path-leases-listener-sudo.py"
