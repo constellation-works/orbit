@@ -451,9 +451,13 @@ protected result uses that reference's narrowly proved HTTP-prerequisite
 infrastructure rerun, not this failed-job classification. Local required
 validation failures use [red-base validation holds](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base),
 not hosted landing waits. None of these diagnoses authorizes manual requeue,
-a second drain, weaker checks or a merge. A stopped healthy handoff follows
-the existing operator-only [retry landing](orchestration.md#retry-a-stopped-owner-landing)
-procedure only when its authority and evidence qualify.
+a second drain, weaker checks or a merge. A stopped authorized owner landing
+with typed `waiting_gate` evidence resumes automatically after a fresh
+observation confirms the gate has cleared, subject to fresh candidate and
+authority checks. The owner clock sweep allows at most three retries (landing
+attempts 2–4), with minimum backoffs of 60, 120 and 240 seconds; explicit
+retries count toward that ceiling. Use the operator [retry landing](orchestration.md#retry-a-stopped-owner-landing)
+procedure for other stops and after the automatic retry budget is exhausted.
 
 ## Historical agent invocations
 
@@ -652,7 +656,7 @@ Resolve the named refusal before starting a new delivery attempt. Apart from
 | `delivery_pr_closed` | The pull request closed without merging. | Reopen the pull request or open a new one, then start a new delivery attempt. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. | Move the task to a promotable status, then start a new delivery attempt. |
 | `delivery_landing_conflict` | Landing requires a conflict repair with fresh validation and a new handoff. | Repair the conflict, revalidate, and hand off again. |
-| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. Pending-only owner landings keep waiting within their check-wait budget instead of stopping on this hold; non-auto-fix completion with readable policy stops on this hold even when only a non-required check is still running, and never arms auto-merge on that head. When current policy is unreadable, completion without auto-fix instead re-polls up to four polls, and an unpinned, ungated run may arm auto-merge while that grace reports pending. | Satisfy the named gate; for a stopped authorized owner landing, use **Retry landing** or `orbit task retry-handoff`. Other deliveries need a new attempt. |
+| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. Pending-only owner landings keep waiting within their check-wait budget instead of stopping on this hold; non-auto-fix completion with readable policy stops on this hold even when only a non-required check is still running, and never arms auto-merge on that head. When current policy is unreadable, completion without auto-fix instead re-polls up to four polls, and an unpinned, ungated run may arm auto-merge while that grace reports pending. | Satisfy the named gate. A stopped authorized owner landing with typed `waiting_gate` evidence resumes automatically after a fresh observation confirms the gate cleared, for at most three retries with 60/120/240-second minimum backoffs; explicit retries count toward that ceiling. Use **Retry landing** or `orbit task retry-handoff` for other stops and after the automatic retry budget is exhausted. Other deliveries need a new attempt. |
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; the base's own result comes before candidate recovery. | Wait for the base's own check result; do not run candidate recovery first. |
 | `delivery_completion_budget_expired` | The completion budget expired before completion could be confirmed; the last observed pull-request state was unmerged and the task stays in review. A hold does not cancel auto-merge, and another actor may have merged since, so the forge is authoritative. | Check the forge for the current pull-request state, then start a new delivery attempt. |
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. | Let the next auto-fix pass reread the pull-request status; do not dispatch a repair on that evidence. |

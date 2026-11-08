@@ -1168,9 +1168,13 @@ A `BLOCKED` head with readable running checks, no failed check and no review ref
 keeps the owner polling within that same budget when the required-check views have not identified
 those checks as required. This grants another observation, never a merge: the provider must still
 report a mergeable state and all required and owner-owed checks must pass. Persistent pending checks
-stop at the original deadline. A stopped authorized handoff retains its completion authority;
-`orbit.workflow.land` reports its durable stop reason and directs the operator to **Retry landing**
-or `orbit task retry-handoff`. An operator-revoked refusal requires a recorded revoked authority.
+stop at the original deadline. A stopped authorized handoff with typed `waiting_gate` evidence
+resumes through the owner clock sweep after a fresh observation confirms the gate has cleared,
+subject to fresh candidate and authority checks. The sweep allows at most three automatic retries
+(landing attempts 2–4) with minimum 60/120/240-second backoffs; explicit retries count toward that
+ceiling. Other stops and stops after the automatic retry budget is exhausted use the operator's
+**Retry landing** or `orbit task retry-handoff` procedure. An operator-revoked refusal requires a
+recorded revoked authority.
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
