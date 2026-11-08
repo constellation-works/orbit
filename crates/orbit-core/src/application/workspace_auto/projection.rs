@@ -17,7 +17,7 @@ use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
-use super::readiness_hosts::{self, FollowerEvidence};
+use super::readiness_hosts::{self, FollowerEvidence, FollowerEvidenceStatus};
 
 use super::drains::LiveLeafRun;
 use crate::application::admission::auto_admission::AdmissionSelection;
@@ -138,7 +138,7 @@ pub(super) fn project_readiness_tasks(
                     object.insert("host_os_wait".to_string(), json!(format!(
                         "On this {} host: {wait}", runtime.host_os().map_or("unknown", |os| os.as_str())
                     )));
-                    object.insert("executor_evidence".to_string(), follower_evidence.task_follower_evidence(task));
+                    object.insert("executor_evidence".to_string(), json!(follower_evidence.task_follower_evidence(task)));
                     if let Some(fleet) = runtime.task_host_fleet_note(task) {
                         object.insert("host_fleet".to_string(), json!(fleet));
                     }
@@ -226,8 +226,8 @@ pub(super) fn project_readiness_tasks(
                             excluded.detail.as_deref().unwrap_or("OS requirement is not satisfied")
                         )));
                         let evidence = follower_evidence.task_follower_evidence(task);
-                        let compatible = evidence["status"] == "compatible_recent";
-                        object.insert("executor_evidence".to_string(), evidence);
+                        let compatible = matches!(evidence.status, FollowerEvidenceStatus::CompatibleRecent);
+                        object.insert("executor_evidence".to_string(), json!(evidence));
                         if compatible {
                             // Diagnostic only: the local exclusion remains in
                             // the snapshot and no follower is declared ready.
