@@ -10,7 +10,7 @@ impl Store {
         &self,
         params: &V2AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
-        let payload_json = orbit_common::security::redaction::redact_all(&params.payload_json);
+        let payload_json = redact_payload_json(&params.payload_json);
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
@@ -34,5 +34,23 @@ impl Store {
         )
         .map_err(sqlite_store_error)?;
         Ok(())
+    }
+}
+
+/// Redact a payload without destroying its JSON syntax.
+///
+/// A parseable payload is redacted per string leaf and re-serialized, so
+/// patterns that match across a value (for example a URL `?key=` at the end
+/// of a message) cannot consume the closing quote or braces of the
+/// serialized document. A payload that is not a JSON document keeps the
+/// previous whole-text redaction.
+fn redact_payload_json(payload_json: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(payload_json) {
+        Ok(value) => {
+            let redacted = orbit_common::security::redaction::redact_all_json(value);
+            serde_json::to_string(&redacted)
+                .unwrap_or_else(|_| orbit_common::security::redaction::redact_all(payload_json))
+        }
+        Err(_) => orbit_common::security::redaction::redact_all(payload_json),
     }
 }

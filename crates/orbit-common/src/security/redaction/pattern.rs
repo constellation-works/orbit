@@ -159,8 +159,15 @@ impl PatternRedactor {
                 Regex::new(r"(?im)^(\s*api[_-]?key\s*:\s*).+$").expect("valid regex"),
                 "${1}[REDACTED_AUTH]",
             ),
+            // The value stops at JSON / quoting delimiters (`"`, `}`, `]`,
+            // `)`, …) as well as `&` and whitespace, so redacting a
+            // serialized JSON document cannot consume its terminators and
+            // leave an unterminated string. An already-redacted placeholder
+            // is matched whole so it is replaced by itself, not truncated
+            // at its closing bracket.
             (
-                Regex::new(r"(?i)([?&]key=)[^&\s]+").expect("valid regex"),
+                Regex::new(r#"(?i)([?&]key=)(?:\[REDACTED[A-Z_]*\]|[^&\s"',;\]\)}]+)"#)
+                    .expect("valid regex"),
                 "${1}[REDACTED_AUTH]",
             ),
             // `ssh-keygen -l` output: redact the fingerprint and the key comment,

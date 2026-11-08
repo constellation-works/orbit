@@ -335,6 +335,27 @@ fn redact_all_scrubs_key_query_params_case_insensitively() {
 }
 
 #[test]
+fn redact_all_on_serialized_json_keeps_it_parseable() {
+    for raw in [
+        r#"{"message":"request failed https://example.test/?key=json-secret-123"}"#,
+        r#"{"message":"request failed https://example.test/?key=[REDACTED_AUTH]"}"#,
+    ] {
+        let redacted = redact_all(raw);
+        assert!(
+            !redacted.contains("json-secret-123"),
+            "secret leaked: {redacted}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&redacted)
+            .unwrap_or_else(|err| panic!("redacted JSON no longer parses: {err}: {redacted}"));
+        assert_eq!(
+            parsed["message"], "request failed https://example.test/?key=[REDACTED_AUTH]",
+            "redacted message: {redacted}"
+        );
+        assert_eq!(redact_all(&redacted), redacted, "idempotent: {redacted}");
+    }
+}
+
+#[test]
 fn redact_all_masks_same_line_api_key_assignments_and_keeps_key_names() {
     const VALUE: &str = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
     for (key, separator) in [
