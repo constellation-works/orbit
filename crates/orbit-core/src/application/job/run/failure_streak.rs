@@ -4,7 +4,7 @@
 //! `interrupted`, read newest first until the first `success`. Operator cancels,
 //! designed holds, timeouts and skips are neither failures nor successes: they
 //! are not in the query, so they neither extend nor break a streak. This is not
-//! the failure set the daily run-failure-patterns pass counts: that pass also
+//! the failure set the run-failure-patterns pass counts: that pass also
 //! counts a `cancelled` run with a non-null `error_code`, which this streak
 //! never reads. A streak only describes; nothing here pauses or changes a job.
 
