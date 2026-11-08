@@ -164,10 +164,20 @@ for every pair of models.
 **Bands** are formed top-down:
 
 1. Sort by `score`.
-2. A model joins the band of the model directly above it when `P(above > it) < 0.8`.
+2. A model joins the band of the model directly above it when `P(above > it) < 0.95`.
 3. Otherwise it starts a new band.
 
 Bands are displayed as shared ranks: `1=`, `1=`, `3`.
+
+The 95% threshold is the **R3 recommendation for the R4 shadow**, not an adopted
+publication rule. R2 still implements 80%. The [ORB-23304] readout found band-membership
+changes in 14 of 96 one-at-a-time ±50% weight perturbations at 80%, versus 6 of 96 at
+95%, over eight retained-history rolling cutoffs. Wider bands reduce sensitivity but do
+not establish robustness; the earliest rolling cutoff is retention-limited. Eight
+additional complete, non-overlapping weekly windows are included in the task artifact.
+Keep the proposed weights and evaluate K = 30 in shadow; CI and recovery remain
+unmeasured, and the sparsely attributed tool measure is exploratory. This recommendation
+does not waive R1's coverage exit or Daniel's adoption decision.
 
 ### 4.5 Order within a band
 
@@ -313,6 +323,7 @@ change starts a new season (§4.2).
   eligibility, `crews` and `effort_split`. Per board: `measures` with their scales,
   `season`, `scales_source`, `rules`, `qualified`, `unattributed` and
   `paired_probabilities`. The dashboard Rank tab and the weekly snapshot are later work.
+- **Band threshold.** R2 uses 80%; the R3 shadow recommendation in §4.4 is 95%.
 
 ## 7. Validation and rollout
 
@@ -343,5 +354,6 @@ change starts a new season (§4.2).
 - [ORB-21789] — size-adjusted escaped regressions for implementers
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
 - [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`
+- [ORB-23304] — R3: season-0 candidate scales, component replay, coverage and weight sensitivity
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
