@@ -589,7 +589,7 @@ unblocks into the doc, config or code that owns it, in that task's PR.
 
 ### Agent scorecards
 
-`orbit_agents_scorecard` ranks one agent role's crews and models over the window. Over
+`orbit_agents_scorecard` ranks one agent role's models by recorded reasoning effort over the window: one row per model and recorded effort, labelled `model @ effort` (orchestrators excepted below). Over
 MCP it is in the `analytics` toolset.
 
 - **Score.** Each term's count per 100 units of work is weighted and summed.
@@ -598,14 +598,14 @@ MCP it is in the `analytics` toolset.
   fleet average is pulled down toward it. Tasks tagged `no-diff-expected`, when
   an attempt was admitted, are not implementer work and count nowhere on the
   implementers scorecard.
-- **Ranking.** Rows below the minimum support are listed last without a rank. A
+- **Ranking.** Each row lists the crews that contributed its units (`crews`, with `crew` kept as the first of them). Two efforts of one model are two rows, however many crews ran them; one crew that ran a model at two recorded efforts contributes units to both rows and is listed under each. Rows below the minimum support are listed last without a rank. A
   reviewer row none of whose work is judged yet is `unjudged`: no rank, null
   `raw` and `score`, listed after every other row and left out of the fleet
   average. A role whose terms are not computed yet answers
   `status: not_computed`, with its terms and no rows.
-- **Switches.** `by_type` returns one cell per (crew, model, tier, type) with
-  `n`, `raw`, `crew_mean` and `score`, plus the type list used. `per_task` returns one row per implemented task
-  with its crew, model, tier, configured type, tags, context-file selectors, path
+- **Switches.** `by_type` returns one cell per (model, recorded effort, tier, type) with
+  `n`, `raw`, `crew_mean` and `score`, plus the type list used; each cell carries the row's `crews`, `model`, `reasoning_effort`, `effort_label` and `label`. `per_task` returns one row per implemented task
+  and the model-and-effort row that worked it, with its crews, model, `reasoning_effort`, tier, configured type, tags, context-file selectors, path
   prefixes and per-term counts, plus the type list used. Without these switches,
   the ranking is returned.
 - **Execution.** Each task's execution is derived from its runs, never set by
@@ -615,18 +615,26 @@ MCP it is in the `analytics` toolset.
   tasks by default; `execution: all` adds interactive tasks and
   `execution: interactive` shows them alone. Unclassified tasks count in
   neither. Cost and run time count managed tasks whatever the scope, and the
-  implementers header's `execution_split` lists each crew and model's managed,
-  interactive and unclassified tasks with the interactive ones' landed and
-  regressed counts. Other roles ignore the scope.
+  implementers header's `execution_split` lists each model-and-effort row's managed,
+  interactive and unclassified tasks (with the row's contributing crews and the interactive ones' landed and
+  regressed counts). Other roles ignore the scope.
 - **Recorded effort.** Each ranking/detail row includes `effort_breakdown` of
   completed invocations by immutable dispatch crew, model and reasoning effort,
   with counts, linked tasks, duration, tokens and provider-reported cost.
-  `null` means provider default; `"unknown"` means no dispatch record exists.
-  Scores retain their crew/model population. The top-level breakdown covers
+  A rendered effort is its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
+  a present dispatch identity with no rendered effort is `null` and is labelled **provider default**;
+  a historical invocation with no dispatch identity is `"unknown"` and is labelled **effort unknown**.
+  Units with unknown effort form a separate effort-unknown row per model and are never folded into a known effort.
+  Scores retain their model-and-recorded-effort population. The top-level breakdown covers
   completed workspace invocations in the selected window; `effort_population`
   identifies that separate descriptive population. Orchestrator authorship stays
   unknown because authorship does not record an execution effort. Never infer
   historical effort from the crew's current configuration or an audit event.
+  To follow a row to its tasks, pass its crew with `crew` and narrow an ambiguous
+  crew-and-model selection with `row_effort` (`--effort` on the CLI, the `effort`
+  query parameter on the dashboard API: a wire name, `provider_default` for a null
+  effort, or `unknown` for unrecorded work); `row_model` (`--model` on the CLI)
+  narrows by model.
   Experiment arms break down invocations linked to their enrolled tasks.
   Run show exposes `agent_executions` on the run and displayed steps, captured
   before launch so interrupted runs remain inspectable.
