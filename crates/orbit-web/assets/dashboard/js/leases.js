@@ -157,6 +157,7 @@ function leasesByPath(leases) {
   }
   for (const row of paths.values()) {
     for (const lease of granted) {
+      if (row.held.some((held) => held.lease === lease)) continue;
       const via = list(lease.selectors).find((selector) => encloses(selector, row.path));
       if (via) row.held.push({ lease, via });
     }

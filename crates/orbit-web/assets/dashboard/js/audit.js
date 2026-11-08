@@ -1012,7 +1012,9 @@ function renderAudit(events, ctx) {
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
-    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
+    // Include the displayed relative age so syncNodes rebuilds the row when
+    // the age advances instead of reusing the first-render age forever.
+    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${fmtTimestampValue(ctx, ev.timestamp)}`;
     tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp), title: fmtAbsTimeValue(ctx, ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));

@@ -53,7 +53,8 @@ function syncViewTabs(view) {
 // The last locks read, repainted when the view or filter changes.
 let lastPayload = null;
 // The task the filter names: `{ id, state, anchors }`, `state` one of
-// `loading`, `ready` or `missing`. `null` shows every locked path.
+// `loading`, `ready`, `missing` (404 only) or `error` (any other failure).
+// `null` shows every locked path.
 let filter = null;
 let filterTimer = null;
 let filterRequest = 0;
@@ -250,6 +251,7 @@ function filterNote(rows, total) {
   if (!filter) return null;
   if (filter.state === "loading") return `Reading ${filter.id}…`;
   if (filter.state === "missing") return `No task ${filter.id} in this workspace.`;
+  if (filter.state === "error") return `Could not read ${filter.id}${filter.error ? ` (${filter.error})` : ""}; showing every locked path. Try again or clear the filter.`;
   if (!filter.anchors.length) return `${filter.id} declares no context files.`;
   if (!rows.length) return `None of the ${total} locked ${total === 1 ? "path overlaps" : "paths overlap"} ${filter.id}'s context files.`;
   const others = rows.filter(row => [...row.owners.values()].some(owner => owner.taskId !== filter.id)).length;
@@ -273,7 +275,7 @@ function paintByFile(payload) {
 
   const rows = filter?.state === "ready"
     ? allRows.filter(row => filter.anchors.some(anchor => anchorsOverlap(anchor, row.anchor)))
-    : filter ? [] : allRows;
+    : filter?.state === "error" ? allRows : filter ? [] : allRows;
   const note = document.getElementById("locks-filter-note");
   if (note) {
     const text = filterNote(rows, allRows.length);
@@ -443,9 +445,11 @@ async function applyFilter(raw) {
       if (request !== filterRequest) return;
       const selectors = Array.isArray(task?.context_files) ? task.context_files : [];
       filter = { id: String(task?.id || id), state: "ready", anchors: selectors.map(lockAnchor) };
-    } catch {
+    } catch (error) {
       if (request !== filterRequest) return;
-      filter = { id, state: "missing", anchors: [] };
+      filter = error?.status === 404
+        ? { id, state: "missing", anchors: [] }
+        : { id, state: "error", anchors: [], error: error?.message || String(error) };
     }
   }
   if (lastPayload) paintLocks(lastPayload);

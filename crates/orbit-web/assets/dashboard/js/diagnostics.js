@@ -249,7 +249,9 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
       tr.appendChild(td);
     }
     tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
-    tr.dataset.hash = JSON.stringify(row);
+    // Include the displayed relative age so syncNodes rebuilds the row when
+    // the age advances instead of reusing the first-render age forever.
+    tr.dataset.hash = `${JSON.stringify(row)}|${row.ts ? fmtRelativeValue(ctx, row.ts) : ''}`;
     if (row.affiliation === "unaffiliated") {
       tr.classList.add("unaffiliated");
     }

@@ -468,6 +468,7 @@ const PUSHED_SAMPLE_TTL_MS = 12_000;
 
 function showHostResources(payload) {
   lastPayload = payload;
+  expiredAgeRendered = false;
   receivedAt = Date.now();
   renderHostResources(payload);
   renderProviderUsage(payload);
@@ -526,6 +527,7 @@ export function fetchAndRenderHostResources({ shareRecent = false } = {}) {
 /// the previous host is dropped with it.
 export function resetHostResources() {
   sequence += 1;
+  expiredAgeRendered = false;
   pushedAt = 0;
   renderRead = null;
   selectedRead = null;
@@ -534,6 +536,20 @@ export function resetHostResources() {
   renderHostResources(null);
   renderProviderUsage(null);
   for (const listener of listeners) listener(null);
+}
+
+// Update only the age readings in place, so a focused node inside the host
+// detail dialog survives the 1s ticker.
+let expiredAgeRendered = false;
+function updateHostAgeInPlace(payload) {
+  const verdict = hostVerdict(payload);
+  const detailAge = document.querySelector?.('#host-detail .host-detail-age');
+  if (detailAge) detailAge.textContent = verdict.age === 'age unknown' ? 'age unknown' : `sampled ${verdict.age}`;
+  if (verdict.verdictUnknown) {
+    const compact = ageCompact(payload);
+    const blockText = document.querySelector?.('#host-block .host-block-verdict-text');
+    if (blockText) blockText.textContent = compact ? `stale · ${compact}` : 'unknown';
+  }
 }
 
 export function initHostResources() {
@@ -550,8 +566,16 @@ export function initHostResources() {
     if (!lastPayload || document.hidden) return;
     const age = lastPayload.sample_age_seconds + (Date.now() - receivedAt) / 1000;
     const expired = age > lastPayload.max_age_seconds;
-    renderHostResources({ ...lastPayload, sample_age_seconds: age, stale: lastPayload.stale || expired,
+    const aged = { ...lastPayload, sample_age_seconds: age, stale: lastPayload.stale || expired,
       verdict_unknown: expired, throttle: expired ? false : lastPayload.throttle,
-      reason: expired ? 'Resource sample expired; awaiting a fresh verdict' : lastPayload.reason });
+      reason: expired ? 'Resource sample expired; awaiting a fresh verdict' : lastPayload.reason };
+    if (expired && !expiredAgeRendered) {
+      // One full render marks the sample stale; later ticks age it in place.
+      expiredAgeRendered = true;
+      renderHostResources(aged);
+    } else {
+      if (!expired) expiredAgeRendered = false;
+      updateHostAgeInPlace(aged);
+    }
   }, 1000);
 }

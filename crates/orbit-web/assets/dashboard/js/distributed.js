@@ -42,6 +42,7 @@ const inflightConsoles = new Map();
 // instead of flashing empty until the re-read lands; the re-read then replaces
 // it. Nothing decides from it: actions always carry a fresh read's identity.
 const knownConsoles = new Map();
+const KNOWN_CONSOLES_LIMIT = 50;
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -52,6 +53,7 @@ let lastFeedback = null;
 export function invalidateDistributedConsole() {
   cachedConsoles.clear();
   inflightConsoles.clear();
+  knownConsoles.clear();
   lastFeedback = null;
 }
 
@@ -87,7 +89,11 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
           return body;
         }
         cachedConsoles.set(key, { payload: body, at: Date.now() });
+        knownConsoles.delete(key);
         knownConsoles.set(key, { payload: body, revision });
+        while (knownConsoles.size > KNOWN_CONSOLES_LIMIT) {
+          knownConsoles.delete(knownConsoles.keys().next().value);
+        }
         inflightConsoles.delete(key);
         return body;
       })
@@ -1106,17 +1112,33 @@ export function retryHandoff(claim, reason, requestId) {
   let durableKey;
   try {
     durableKey = localStorage.getItem(storageKey) || requestId || newRequestId();
-    localStorage.setItem(storageKey, durableKey);
+    try {
+      localStorage.setItem(storageKey, durableKey);
+    } catch (_) {
+      // A store full of this feature's stale keys frees itself: settled
+      // retries delete their key, so any other retry key is abandoned.
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("orbit-handoff-retry:") && key !== storageKey) localStorage.removeItem(key);
+      }
+      localStorage.setItem(storageKey, durableKey);
+    }
   } catch (_) {
     return Promise.reject(new Error("Landing retry needs browser storage to retain its request key; use the owner CLI with a saved request key."));
   }
+  const removeKey = () => {
+    try { localStorage.removeItem(storageKey); } catch (_) { /* already gone */ }
+  };
   return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/retry`, {
     ...expectedCandidate(claim),
     expected_latest_attempt: claim.handoff.landing.attempt,
     expected_latest_state: claim.handoff.landing.state,
     reason: reason || "",
     request_key: durableKey,
-  });
+  }).then(
+    (result) => { removeKey(); return result; },
+    (error) => { removeKey(); throw error; },
+  );
 }
 
 export function revokeHandoff(claim, reason, requestId) {

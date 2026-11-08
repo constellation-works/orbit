@@ -365,7 +365,7 @@ function detailView(experiment, view) {
       healthCard(readout),
       el("div", { class: "mx-row" }, [
         armEvidenceCard(readout),
-        crewCard(readout, color),
+        crewCard(readout, color, experiment.id),
       ]),
       el("div", { class: "mx-row" }, [
         complexityCard(primary, color),

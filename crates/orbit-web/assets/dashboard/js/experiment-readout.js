@@ -548,10 +548,10 @@ export function complexityCard(primary, color) {
 
 // The invocations behind an arm's crew mix, which can run to dozens of rows:
 // a collapsed list whose open state survives a poll.
-function recordedEffort(arm) {
+function recordedEffort(arm, experimentId) {
   const rows = arm.effort_breakdown || [];
   if (!rows.length) return el("span", { class: "mx-muted ex-effort", text: "Recorded effort: unknown" });
-  const panel = detailsPanel(`experiment-effort:${arm.name}`, { class: "ex-effort" });
+  const panel = detailsPanel(`experiment-effort:${experimentId || "unknown"}:${arm.name}`, { class: "ex-effort" });
   panel.append(
     el("summary", { class: "mx-muted", text: "Recorded effort" }),
     el("ul", { class: "ex-effort-rows" }, rows.map((item) => el("li", {
@@ -561,7 +561,7 @@ function recordedEffort(arm) {
   return panel;
 }
 
-export function crewCard(readout, color) {
+export function crewCard(readout, color, experimentId = readout?.experiment?.id) {
   const arms = readout.arms || [];
   const rows = arms.map((arm) => {
     const total = (arm.crew_mix || []).reduce((sum, row) => sum + (row.tasks || 0), 0);
@@ -573,7 +573,7 @@ export function crewCard(readout, color) {
     return el("div", { class: "ex-crew-row" }, [
       el("span", { class: "ex-arm-name" }, [armSwatch(armColor(color(arm.name))), arm.name]),
       el("span", { class: "ex-crews" }, crews.length ? crews : [el("span", { class: "mx-muted", text: "no tasks" })]),
-      recordedEffort(arm),
+      recordedEffort(arm, experimentId),
     ]);
   });
   return experimentCard("Crew mix", [el("div", { class: "ex-crew-rows" }, rows)], {
