@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{SecondsFormat, Utc};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::AuditEventStatus;
 use orbit_core::JobRunState;
@@ -1167,8 +1168,12 @@ fn local_forward_preserves_inner_path_params() {
             let task = seed_task(&fixture);
             let server = fixture.server(false);
 
+            // Pin the window end so the direct and forwarded scorecards
+            // report the same `since`/`until` even when the two requests
+            // straddle a second boundary (ORB-23462).
+            let until = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             let direct_score = server.get(
-                "/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+                &format!("/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1&until={until}"),
             );
             let direct_status = direct_score.status();
             let direct_body = direct_score.text().unwrap();
@@ -1179,7 +1184,7 @@ fn local_forward_preserves_inner_path_params() {
             );
             let direct_score_json: Value = serde_json::from_str(&direct_body).unwrap();
             let forwarded_score = server.get(
-                "/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+                &format!("/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1&until={until}"),
             );
             let status = forwarded_score.status();
             let body = forwarded_score.text().unwrap();
