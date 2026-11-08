@@ -109,6 +109,9 @@ alloc_port() {
   # Hold the socket until release_port so no other process takes the port while
   # the caller reads it. Callers release it before starting any sccache daemon:
   # the daemon binds this same address, which the held socket blocks.
+  # The child closes the socket when the release marker appears. Nothing in
+  # this script signals HOLD_PID: bash can reap the job while a later command
+  # runs, and a numeric kill after that can reach a reused PID.
   HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
   # One output file per allocation: a reused file still holds the previous
   # port until this python child truncates it, so polling it would return a
@@ -116,8 +119,28 @@ alloc_port() {
   local out="$HOLD_RELEASE.port"
   rm -f "$out"
   python3 - "$HOLD_RELEASE" >"$out" <<'PY' &
-import os, socket, sys, time
+import os
+import socket
+import sys
+import threading
+import time
+
 release = sys.argv[1]
+parent = os.getppid()
+
+
+def exit_when_released():
+    # One-second cap after the marker, or immediately if the shell is gone.
+    # Process exit closes the socket. No external signal is required.
+    while not os.path.exists(release):
+        if os.getppid() != parent:
+            os._exit(0)
+        time.sleep(0.02)
+    time.sleep(1.0)
+    os._exit(0)
+
+
+threading.Thread(target=exit_when_released, daemon=True).start()
 sock = socket.socket()
 sock.bind(("127.0.0.1", 0))
 print(sock.getsockname()[1], flush=True)
@@ -138,19 +161,21 @@ PY
   [[ "$ALLOC_PORT" =~ ^[0-9]+$ ]] || fail "allocated an invalid port: '$ALLOC_PORT'"
 }
 
-release_port() {
-  [[ -n "$HOLD_RELEASE" ]] || return 0
-  : >"$HOLD_RELEASE"
-  if [[ -n "$HOLD_PID" ]]; then
-    local attempts=0
-    while kill -0 "$HOLD_PID" 2>/dev/null && [[ "$attempts" -lt 200 ]]; do
-      attempts=$((attempts + 1))
-      sleep 0.05
-    done
-    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
+# Reap the allocator this shell started. wait collects only a child of this
+# shell and does not signal, so a reused PID is not a kill target. The marker
+# is what makes the child exit; without it, waiting would block teardown.
+reap_port_allocator() {
+  [[ -n "${HOLD_PID:-}" ]] || return 0
+  if [[ -n "${HOLD_RELEASE:-}" && -e "$HOLD_RELEASE" ]]; then
     wait "$HOLD_PID" 2>/dev/null || true
   fi
   HOLD_PID=""
+}
+
+release_port() {
+  [[ -n "${HOLD_RELEASE:-}" ]] || return 0
+  : >"$HOLD_RELEASE"
+  reap_port_allocator
   HOLD_RELEASE=""
 }
 
@@ -234,10 +259,11 @@ wait_participants() {
 
 cleanup() {
   local exit_status=$? pid i
-  if [[ -n "${HOLD_PID:-}" ]]; then
-    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
-    wait "$HOLD_PID" 2>/dev/null || true
+  if [[ -n "${HOLD_RELEASE:-}" ]]; then
+    : >"$HOLD_RELEASE" 2>/dev/null || true
   fi
+  reap_port_allocator
+  HOLD_RELEASE=""
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done

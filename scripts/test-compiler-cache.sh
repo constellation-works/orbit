@@ -892,13 +892,20 @@ assert_ns_skip "namespaces refused with Python 3.10"
 # Model immediate PID/PGID reuse after reaping, without creating/signaling any
 # process. Execute both embedded owners, including the independent watchdog.
 # Failed anchor forks and preexec startup also exercise cleanup while the
-# transport leader alone reserves its process group.
+# transport leader alone reserves its process group. The same entrypoint
+# runs the port allocator's release and EXIT cleanup against an exited PID
+# that has been reused: the model intercepts every signal.
 python3 - "$ROOT" <<'PYIDENTITY'
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
-from compiler_cache_process_regression import group_lifetime_regression
-group_lifetime_regression(Path(sys.argv[1]))
+from compiler_cache_process_regression import (
+    allocator_identity_regression,
+    group_lifetime_regression,
+)
+root = Path(sys.argv[1])
+group_lifetime_regression(root)
+allocator_identity_regression(root)
 PYIDENTITY
 
 # Exercise the benchmark's actual namespace caller with checkout-local WORKDIR.
