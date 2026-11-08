@@ -289,9 +289,11 @@ change starts a new season (§4.2).
   expectation on a shared term is therefore the sum of its crews' scorecard rows. A task
   two crews of one model both worked counts once per crew, as on the scorecard.
 - **Measures recorded today.** Escaped regressions, review outcome and crew-caused rework
-  are measured. CI failures, final recoveries and tool-call errors report `unmeasured`
-  with the reason, and their weight leaves every denominator until R1 records them. A
-  measure whose calibrated scale is zero reports `no_scale` and leaves the denominator too.
+  are measured. CI failures and tool-call errors report `unmeasured` while model attribution
+  is unavailable. Final recoveries also report `unmeasured`: R1 records their fault, but the
+  ranking does not yet compute that measure. Each unmeasured measure's weight leaves every
+  denominator. A measure whose calibrated scale is zero reports `no_scale` and leaves the
+  denominator too.
 - **Seasons.** `orbit agents rank calibrate [--window] [--until] [--settle-lag]
   [--execution]` calibrates the settled window and appends a season to
   `.orbit/state/agents/rank-seasons.json`: its number, the definition version, the
