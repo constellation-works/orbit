@@ -7,13 +7,35 @@
 //! already merged settles without another request, so a retry after a lost reply
 //! never merges twice.
 
+use std::time::{Duration, Instant};
+
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskWorkspaceAutoPort;
-use crate::runtime::task_pr_forge::PullRequestMergeOutcome;
+use crate::runtime::task_pr_forge::{PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge};
+
+/// How long a landing waits while GitHub reports mergeability `UNKNOWN`.
+///
+/// A push to the base branch makes every open pull request `UNKNOWN` until
+/// GitHub recomputes, often for 30–60 seconds on a busy integration branch.
+/// Landing reads again after 5, 10, 20 and 40 seconds, then once more with
+/// whatever of this budget remains, and then refuses with the same
+/// `pull request #N mergeability is unknown` error. A reported conflict is
+/// refused on the first read. The bound is fixed: the delay is GitHub's
+/// recomputation, not an operator policy, so it is not a workspace setting.
+const MERGEABILITY_UNKNOWN_BUDGET: Duration = Duration::from_secs(90);
+
+/// Backoff before each further read, in seconds. The last read uses whatever
+/// of [`MERGEABILITY_UNKNOWN_BUDGET`] remains after these steps.
+const MERGEABILITY_UNKNOWN_BACKOFF_SECS: [u64; 4] = [5, 10, 20, 40];
+
+/// Debug-build tests set this to `virtual` so the budget advances without
+/// sleeping. Release builds ignore it, so a production binary cannot skip
+/// the wait.
+const MERGEABILITY_WAIT_TEST_ENV: &str = "ORBIT_TEST_MERGEABILITY_WAIT";
 
 use super::candidate::Candidate;
 
@@ -184,19 +206,7 @@ impl OrbitRuntime {
     fn merge_delivery_pull_request(&self, id: &str, number: u64) -> Result<String, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
-        let blockers = match forge.pull_request_blockers(&repo_root, number) {
-            Ok(Some(blockers)) => blockers,
-            Ok(None) => {
-                return Err(landing_refused(
-                    id,
-                    format_args!("the forge cannot say what holds pull request #{number} back"),
-                ));
-            }
-            Err(error @ OrbitError::PullRequestMergeabilityUnknown { .. }) => {
-                return Err(landing_refused(id, error));
-            }
-            Err(error) => return Err(error),
-        };
+        let blockers = await_known_merge_blockers(id, number, forge, &repo_root)?;
         if blockers.conflicting {
             return Err(landing_refused(
                 id,
@@ -222,4 +232,73 @@ impl OrbitRuntime {
             )),
         }
     }
+}
+
+/// Read what holds `number` back, waiting out GitHub's `UNKNOWN` mergeability
+/// window. A conflict, a closed pull request and any other forge error return
+/// on the first read.
+fn await_known_merge_blockers(
+    id: &str,
+    number: u64,
+    forge: &dyn TaskPrForge,
+    repo_root: &std::path::Path,
+) -> Result<PullRequestBlockers, OrbitError> {
+    let started = Instant::now();
+    let mut virtual_elapsed = mergeability_wait_is_virtual().then_some(Duration::ZERO);
+    let mut attempt = 0_u32;
+    loop {
+        match forge.pull_request_blockers(repo_root, number) {
+            Ok(Some(blockers)) => return Ok(blockers),
+            Ok(None) => {
+                return Err(landing_refused(
+                    id,
+                    format_args!("the forge cannot say what holds pull request #{number} back"),
+                ));
+            }
+            Err(OrbitError::PullRequestMergeabilityUnknown { .. }) => {
+                let elapsed = virtual_elapsed.unwrap_or_else(|| started.elapsed());
+                let remaining = MERGEABILITY_UNKNOWN_BUDGET.saturating_sub(elapsed);
+                // One more step than the documented backoff, so a clock that
+                // does not advance cannot spin.
+                if remaining.is_zero() || attempt > MERGEABILITY_UNKNOWN_BACKOFF_SECS.len() as u32 {
+                    return Err(landing_refused(
+                        id,
+                        OrbitError::PullRequestMergeabilityUnknown { number },
+                    ));
+                }
+                let delay = mergeability_backoff(attempt, remaining);
+                attempt = attempt.saturating_add(1);
+                if delay.is_zero() {
+                    return Err(landing_refused(
+                        id,
+                        OrbitError::PullRequestMergeabilityUnknown { number },
+                    ));
+                }
+                tracing::debug!(
+                    target: "orbit.core.external_merge",
+                    pull_request = number,
+                    wait_secs = delay.as_secs(),
+                    "landing waits while GitHub computes mergeability"
+                );
+                if let Some(elapsed) = virtual_elapsed.as_mut() {
+                    *elapsed = elapsed.saturating_add(delay);
+                } else {
+                    std::thread::sleep(delay);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn mergeability_backoff(attempt: u32, remaining: Duration) -> Duration {
+    let step = MERGEABILITY_UNKNOWN_BACKOFF_SECS
+        .get(usize::try_from(attempt).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or(40);
+    Duration::from_secs(step).min(remaining)
+}
+
+fn mergeability_wait_is_virtual() -> bool {
+    cfg!(debug_assertions) && std::env::var(MERGEABILITY_WAIT_TEST_ENV).as_deref() == Ok("virtual")
 }

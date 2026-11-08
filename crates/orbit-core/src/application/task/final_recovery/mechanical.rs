@@ -172,7 +172,8 @@ impl OrbitRuntime {
     }
 
     /// `rerun_ci`: re-request the failed required checks at `head_sha`, once
-    /// per head, and requeue the task.
+    /// per head, and requeue the task. The check read does not wait on
+    /// GitHub mergeability: `UNKNOWN` still carries the failed checks.
     pub(super) fn plan_rerun_ci(
         &self,
         task: &Task,
@@ -208,7 +209,7 @@ impl OrbitRuntime {
             let repo_root = &self.paths().repo_root;
             let forge = self.task_pr_forge();
             let blockers = forge
-                .pull_request_blockers(repo_root, number)
+                .pull_request_required_checks(repo_root, number)
                 .map_err(|error| {
                     format!(
                         "{STEP} refused: the checks of pull request #{number} cannot be read \

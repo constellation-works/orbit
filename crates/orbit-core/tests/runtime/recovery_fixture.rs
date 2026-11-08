@@ -182,6 +182,11 @@ impl Fixture {
 pub(super) struct RerunForge {
     blockers: Arc<Mutex<PullRequestBlockers>>,
     reruns: Arc<Mutex<Vec<(u64, String)>>>,
+    /// `pull_request_blockers` reports mergeability still calculating.
+    /// Required checks stay readable through `pull_request_required_checks`.
+    mergeability_unknown: bool,
+    blocker_reads: Arc<Mutex<u32>>,
+    check_reads: Arc<Mutex<u32>>,
 }
 
 impl RerunForge {
@@ -201,11 +206,29 @@ impl RerunForge {
                 passed_required_checks: Vec::new(),
             })),
             reruns: Arc::default(),
+            mergeability_unknown: false,
+            blocker_reads: Arc::default(),
+            check_reads: Arc::default(),
         }
+    }
+
+    /// Report mergeability `UNKNOWN` from the merge read, while the check
+    /// read still returns the failed checks.
+    pub(super) fn unknown_mergeability(mut self) -> Self {
+        self.mergeability_unknown = true;
+        self
     }
 
     pub(super) fn reruns(&self) -> Vec<(u64, String)> {
         self.reruns.lock().unwrap().clone()
+    }
+
+    pub(super) fn blocker_reads(&self) -> u32 {
+        *self.blocker_reads.lock().unwrap()
+    }
+
+    pub(super) fn check_reads(&self) -> u32 {
+        *self.check_reads.lock().unwrap()
     }
 }
 
@@ -218,6 +241,20 @@ impl TaskPrForge for RerunForge {
         _: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        *self.blocker_reads.lock().unwrap() += 1;
+        if self.mergeability_unknown {
+            return Err(OrbitError::PullRequestMergeabilityUnknown { number });
+        }
+        let blockers = self.blockers.lock().unwrap().clone();
+        Ok((blockers.pull.number == number).then_some(blockers))
+    }
+
+    fn pull_request_required_checks(
+        &self,
+        _: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        *self.check_reads.lock().unwrap() += 1;
         let blockers = self.blockers.lock().unwrap().clone();
         Ok((blockers.pull.number == number).then_some(blockers))
     }

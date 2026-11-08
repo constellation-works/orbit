@@ -87,6 +87,37 @@ fn rerun_ci_is_refused_when_the_head_moved() {
     assert_eq!(fx.status(&task), "blocked");
 }
 
+fn rerun_ci_reruns_failed_checks_while_mergeability_is_unknown() {
+    let forge = RerunForge::new(HEAD, &["Test (shard 1)"]).unknown_mergeability();
+    let fx = fixture_with_forge(&forge);
+    let task = fx.task(&[]);
+    fx.record_pull_request(&task, 17);
+    fx.update(json!({"id": task, "status": "in_progress"}));
+
+    fx.final_recovery(&task, rerun_ci_decision(HEAD));
+
+    assert_eq!(forge.reruns(), vec![(17, HEAD.to_string())]);
+    assert_eq!(
+        forge.check_reads(),
+        1,
+        "the check read is the one that decides"
+    );
+    assert_eq!(
+        forge.blocker_reads(),
+        0,
+        "unknown mergeability is not a reason to skip the checks"
+    );
+    assert_eq!(fx.status(&task), "backlog");
+    assert!(
+        fx.runtime
+            .get_task_comments(&task)
+            .unwrap()
+            .iter()
+            .any(|comment| comment.message.contains("Test (shard 1)")),
+        "the requeue names the failed check"
+    );
+}
+
 fn rerun_ci_is_refused_when_no_required_check_failed() {
     let forge = RerunForge::new(HEAD, &[]);
     let fx = fixture_with_forge(&forge);
@@ -229,6 +260,7 @@ fn resume_run_resumes_the_failed_run_once_within_the_shared_bound() {
 crate::scenario_table!(
     final_recovery_mechanical,
     rerun_ci_reruns_the_failed_checks_once_per_head_and_requeues,
+    rerun_ci_reruns_failed_checks_while_mergeability_is_unknown,
     rerun_ci_is_refused_when_the_head_moved,
     rerun_ci_is_refused_when_no_required_check_failed,
 );

@@ -158,13 +158,28 @@ pub trait TaskPrForge: Send + Sync {
     /// is not open or this forge cannot tell. GitHub's still-calculating
     /// `UNKNOWN` mergeability answer is reported as
     /// [`OrbitError::PullRequestMergeabilityUnknown`]. The default cannot tell,
-    /// so a forge without it repairs nothing out of run.
+    /// so a forge without it repairs nothing out of run. A caller that needs
+    /// the required checks while mergeability is still calculating uses
+    /// [`Self::pull_request_required_checks`].
     fn pull_request_blockers(
         &self,
         _repo_root: &Path,
         _number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
         Ok(None)
+    }
+
+    /// Required checks on open pull request `number`, without treating unknown
+    /// mergeability as unread. `None` when the pull request is not open.
+    /// `conflicting` is true only when the forge reports a conflict. The
+    /// default asks [`Self::pull_request_blockers`], so a forge that has not
+    /// separated the two still refuses while mergeability is unknown.
+    fn pull_request_required_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        self.pull_request_blockers(repo_root, number)
     }
 
     /// Re-request the checks that failed on exactly commit `head_sha` of pull
@@ -384,30 +399,40 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let stdout = task_forge_gh_request(
-            orbit_tools::github_cli::pull_request_blockers_request(number),
-            repo_root,
-            "gh api graphql",
-        )?;
-        let answer = orbit_tools::github_cli::parse_gh_json(&stdout, "gh api graphql")?;
-        let pull = answer
-            .pointer("/data/repository/pullRequest")
-            .filter(|pull| !pull.is_null())
-            .ok_or_else(|| {
-                OrbitError::Execution(format!("gh api graphql found no pull request #{number}"))
-            })?;
-        if !has_state(pull, "open") {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
             return Ok(None);
-        }
+        };
+        // Unknown mergeability is its own answer: callers that merge or defer
+        // must not treat it as a conflict, a clean merge, or an unreadable
+        // rollup. Check reads use `pull_request_required_checks` instead.
         if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
             return Err(OrbitError::PullRequestMergeabilityUnknown { number });
         }
-        pull_request_blockers_from_json(number, pull)
+        if !matches!(
+            pull.get("mergeable").and_then(Value::as_str),
+            Some("MERGEABLE" | "CONFLICTING")
+        ) {
+            return Err(unreadable_pull_request_blockers(number));
+        }
+        pull_request_blockers_from_json(number, &pull)
+            .map(Some)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))
+    }
+
+    fn pull_request_required_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+            return Ok(None);
+        };
+        pull_request_blockers_from_json(number, &pull)
             .map(Some)
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
-                    "gh api graphql did not report the author, head, mergeability and complete \
-                 required checks of pull request #{number}"
+                    "gh api graphql did not report the author, head and complete required \
+                     checks of pull request #{number}"
                 ))
             })
     }
@@ -588,18 +613,45 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
     })
 }
 
-/// Read a GraphQL pull request answer whose mergeability can be judged. The
-/// caller classifies `UNKNOWN` separately; a head the rollup does not describe
-/// or a truncated rollup cannot be judged, so neither is reported as no blocker.
-/// Every context must say whether it is required: an unreadable flag cannot
-/// prove a failed or unfinished check optional.
+fn open_pull_request_document(repo_root: &Path, number: u64) -> Result<Option<Value>, OrbitError> {
+    let stdout = task_forge_gh_request(
+        orbit_tools::github_cli::pull_request_blockers_request(number),
+        repo_root,
+        "gh api graphql",
+    )?;
+    let answer = orbit_tools::github_cli::parse_gh_json(&stdout, "gh api graphql")?;
+    let Some(pull) = answer
+        .pointer("/data/repository/pullRequest")
+        .filter(|pull| !pull.is_null())
+        .cloned()
+    else {
+        return Err(OrbitError::Execution(format!(
+            "gh api graphql found no pull request #{number}"
+        )));
+    };
+    if !has_state(&pull, "open") {
+        return Ok(None);
+    }
+    Ok(Some(pull))
+}
+
+fn unreadable_pull_request_blockers(number: u64) -> OrbitError {
+    OrbitError::Execution(format!(
+        "gh api graphql did not report the author, head, mergeability and complete \
+         required checks of pull request #{number}"
+    ))
+}
+
+/// Read a GraphQL pull request answer's required checks. `conflicting` is
+/// true only for `CONFLICTING`; `UNKNOWN` and any other spelling are not a
+/// conflict, and a missing mergeability field does not hide the checks. A
+/// head the rollup does not describe, or a truncated rollup, cannot be
+/// judged, so neither is reported as no blocker. Every context must say
+/// whether it is required: an unreadable flag cannot prove a failed or
+/// unfinished check optional.
 fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequestBlockers> {
     let head_sha = pull.get("headRefOid")?.as_str()?.to_string();
-    let conflicting = match pull.get("mergeable")?.as_str()? {
-        "CONFLICTING" => true,
-        "MERGEABLE" => false,
-        _ => return None,
-    };
+    let conflicting = pull.get("mergeable").and_then(Value::as_str) == Some("CONFLICTING");
     let commit = pull.pointer("/commits/nodes/0/commit")?;
     if commit.get("oid")?.as_str()? != head_sha {
         return None;
