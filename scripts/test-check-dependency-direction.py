@@ -62,6 +62,9 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-store/src/driver/sqlite", "crates/orbit-store/src/fs",
         ):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
+        # The guard scans this single-file module and fails closed when it is
+        # absent [ORB-23019].
+        (self.app / "tag_instructions.rs").write_text("")
         self.prepare_config_paths()
 
     def prepare_config_paths(self):
@@ -89,6 +92,16 @@ class RelativeImportTests(unittest.TestCase):
                     self.assertNotIn("dependency direction guard passed", result.stdout)
                 finally:
                     parked.rename(path)
+
+    def test_missing_tag_instructions_scan_path_fails_closed(self):
+        path = self.app / "tag_instructions.rs"
+        path.unlink()
+        result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("dependency scan path missing", result.stderr)
+        self.assertIn("tag_instructions.rs", result.stderr)
+        self.assertNotIn("dependency direction guard passed", result.stdout)
 
     def test_missing_scan_paths_fail_closed(self):
         for relative in ("task", "contracts", "automation"):
@@ -432,6 +445,56 @@ class RelativeImportTests(unittest.TestCase):
                 "        self.capture_pull_experiments();\n    }\n}\n",
             "experiment/readout/admission.rs":
                 "use crate::application::distributed::claim_receipt;\n",
+        }, rejected=False)
+
+    def test_tag_instructions_reaches_experiment_only_through_its_port(self):
+        # [ORB-23019] tag_instructions.rs called experiment's overlay query,
+        # and experiment reads tag-instruction helpers back. The module is one
+        # file, so the caller scan names tag_instructions.rs. The port method
+        # stays distinct from the inherent method the guard indexes.
+        method = {
+            "experiment/overlay.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_overlay_method(&self) {}\n}\n",
+        }
+        for call in (
+            "self.fresh_overlay_method()",
+            "OrbitRuntime::fresh_overlay_method(self)",
+            "Self::fresh_overlay_method(self)",
+            "<crate::OrbitRuntime>::fresh_overlay_method(self)",
+        ):
+            with self.subTest(call=call):
+                self.check_files({
+                    **method,
+                    "tag_instructions.rs":
+                        "impl OrbitRuntime {\n    fn resolve(&self) {\n"
+                        f"        {call};\n    }}\n}}\n",
+                }, rejected=True)
+        for source in (
+            "use crate::application::experiment::Probe;\n",
+            "use crate::application::{experiment::Probe};\n",
+            "use crate::application::{\n    experiment::Probe,\n};\n",
+            "use super::experiment::Probe;\n",
+            "use super::{experiment::Probe};\n",
+            "use super::super::application::experiment::Probe;\n",
+        ):
+            with self.subTest(source=source):
+                self.check_files({"tag_instructions.rs": source}, rejected=True)
+        self.check_files({
+            "experiment/overlay.rs":
+                "use crate::application::tag_instructions::LazyRevision;\n"
+                "impl OrbitRuntime {\n"
+                "    pub(crate) fn experiment_overlays_for_activity(&self) {}\n}\n",
+            "tag_instructions.rs":
+                "pub(in crate::application) trait TagInstructionExperimentPort {\n"
+                "    fn tag_instruction_experiment_overlays(&self);\n}\n"
+                "impl OrbitRuntime {\n    fn resolve(&self) {\n"
+                "        self.tag_instruction_experiment_overlays();\n    }\n}\n",
+            "experiment/tag_instruction_port.rs":
+                "impl TagInstructionExperimentPort for OrbitRuntime {\n"
+                "    fn tag_instruction_experiment_overlays(&self) {\n"
+                "        self.experiment_overlays_for_activity();\n    }\n}\n",
+            "experiment/skills.rs":
+                "use crate::application::tag_instructions::LazyRevision;\n",
         }, rejected=False)
 
     def test_task_and_job_reach_experiment_only_through_their_ports(self):
