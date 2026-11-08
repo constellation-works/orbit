@@ -87,7 +87,7 @@ becomes true for a subject (`condition`); see
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
 - **Seeded routines.** With the default seeding policy, `orbit workspace init`
-  seeds `worktree-gc` and `task-pilot` enabled; it also seeds the `host-health` auto-task enabled. A custom
+  seeds `worktree-gc`, `task-pilot` and `crew-memory-dream` enabled; it also seeds the `host-health` auto-task enabled. `crew-memory-dream` mints nothing while `crew_memory.enabled` is false or no running memory-arm experiment applies. A custom
   seeding policy can omit any of these defaults. A workspace seeded while
   `worktree-gc` or `task-pilot` shipped disabled keeps its existing `enabled`
   value. Other routine defaults, including task publication, store GC, CI and

@@ -19,10 +19,14 @@ use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_store::contracts::{JobRunStoreBackend, KeyedJobRunAdmission};
-use orbit_types::task::{TaskArtifact, TaskStatus};
+use orbit_types::task::{TaskArtifact, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use orbit_types::workflow::{JobRunState, ResidentComment, RoutineDefinition};
+use orbit_types::workflow::{
+    JobRunState, RESIDENT_ACTION_EVENT, ResidentActionPhase, ResidentActionRow, ResidentComment,
+    RoutineDefinition,
+};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n\
@@ -265,6 +269,43 @@ impl Fixture {
 
     fn agent_call(&self, tool: &str, input: Value) -> Result<Value, String> {
         call(&self.runtime, tool, input, McpCapability::Agent)
+    }
+
+    fn seed_action_row(&self, mandate: &str, row: ResidentActionRow) {
+        self.runtime
+            .stores()
+            .task_history()
+            .update_task_history(
+                mandate,
+                orbit_store::contracts::TaskHistoryUpdateParams {
+                    actor: "system".into(),
+                    append_history: vec![TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: RESIDENT_ACTION_EVENT.into(),
+                        note: Some(serde_json::to_string(&row).unwrap()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    fn latest_action_row(&self, mandate: &str, cycle: &str) -> ResidentActionRow {
+        self.runtime
+            .get_task_history(mandate)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == RESIDENT_ACTION_EVENT)
+            .filter_map(|entry| {
+                serde_json::from_str::<ResidentActionRow>(entry.note.as_deref()?).ok()
+            })
+            .rfind(|row| row.cycle == cycle)
+            .unwrap()
     }
 
     fn operator_call(&self, tool: &str, input: Value) -> Value {
@@ -1121,6 +1162,168 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     fx.checkpoint(&brief, &run);
     let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
+}
+
+#[test]
+fn reordered_completed_actions_are_already_done_without_repeating() {
+    let fx = isolated_fixture!(reordered_completed_actions_are_already_done_without_repeating);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let dead_run = fx.cycle_run(&mandate, "resident-cycle-1");
+    let dead = fx.begin_cycle(&dead_run, Utc::now());
+    let dead_cycle = dead["cycle"].as_str().unwrap().to_string();
+    let first = json!({"id": watched, "comment": "Checked CI.", "model": "codex", "relations": [{"type": "related_to", "target": mandate}]});
+    let key = fx.as_cycle_agent(&dead_run, || {
+        fx.agent_call("orbit.task.update", first).unwrap()["resident_action_key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    });
+    fx.stop_run(&dead_run, JobRunState::Failed);
+    let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
+    let run = fx.cycle_run(&mandate, "resident-cycle-2");
+    let brief = fx.begin_cycle(&run, Utc::now() + Duration::minutes(11));
+    assert_eq!(brief["recovery_of"], dead_cycle, "{brief}");
+    let reordered = json!({"relations": [{"target": mandate, "type": "related_to"}], "model": "codex", "comment": "Checked CI.", "id": watched});
+    let retried = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", reordered).unwrap()
+    });
+    assert_eq!(retried["resident_action"], "already_done", "{retried}");
+    assert_eq!(retried["key"], key);
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments,
+        "reordered completed action did not run again"
+    );
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
+}
+
+#[test]
+fn reordered_started_actions_remain_in_doubt() {
+    let fx = isolated_fixture!(reordered_started_actions_remain_in_doubt);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let dead_run = fx.cycle_run(&mandate, "resident-cycle-1");
+    let dead = fx.begin_cycle(&dead_run, Utc::now());
+    let dead_cycle = dead["cycle"].as_str().unwrap().to_string();
+    let first = json!({"id": watched, "comment": "Checked CI.", "model": "codex"});
+    fx.as_cycle_agent(&dead_run, || {
+        fx.agent_call("orbit.task.update", first).unwrap();
+    });
+    // Leave the action in doubt, as a cycle killed mid-call would.
+    let mut row = fx.latest_action_row(&mandate, &dead_cycle);
+    row.phase = ResidentActionPhase::Started;
+    fx.seed_action_row(&mandate, row);
+    fx.stop_run(&dead_run, JobRunState::Failed);
+    let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
+    let run = fx.cycle_run(&mandate, "resident-cycle-2");
+    let brief = fx.begin_cycle(&run, Utc::now() + Duration::minutes(11));
+    let reordered = json!({"model": "codex", "comment": "Checked CI.", "id": watched});
+    let error = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", reordered)
+            .expect_err("started action stays in doubt")
+    });
+    assert!(error.contains("resident_action_in_doubt"), "{error}");
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments
+    );
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
+}
+
+#[test]
+fn array_reordering_and_value_changes_are_distinct_actions() {
+    let fx = isolated_fixture!(array_reordering_and_value_changes_are_distinct_actions);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let dead_run = fx.cycle_run(&mandate, "resident-cycle-1");
+    let _dead = fx.begin_cycle(&dead_run, Utc::now());
+    let first = json!({"id": watched, "comment": "Checked CI.", "model": "codex", "tags": ["alpha", "beta"]});
+    fx.as_cycle_agent(&dead_run, || {
+        fx.agent_call("orbit.task.update", first).unwrap();
+    });
+    fx.stop_run(&dead_run, JobRunState::Failed);
+    let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
+    let run = fx.cycle_run(&mandate, "resident-cycle-2");
+    let brief = fx.begin_cycle(&run, Utc::now() + Duration::minutes(11));
+    let array_reordered = json!({"id": watched, "comment": "Checked CI.", "model": "codex", "tags": ["beta", "alpha"]});
+    let first_retry = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", array_reordered).unwrap()
+    });
+    assert_ne!(
+        first_retry["resident_action"], "already_done",
+        "{first_retry}"
+    );
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments + 1
+    );
+    let changed = json!({"id": watched, "comment": "Checked CI again.", "model": "codex", "tags": ["alpha", "beta"]});
+    let second_retry = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", changed).unwrap()
+    });
+    assert_ne!(
+        second_retry["resident_action"], "already_done",
+        "{second_retry}"
+    );
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments + 2
+    );
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
+}
+
+#[test]
+fn legacy_rows_never_replay_uncertain_writes() {
+    let fx = isolated_fixture!(legacy_rows_never_replay_uncertain_writes);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let dead_run = fx.cycle_run(&mandate, "resident-cycle-1");
+    let dead = fx.begin_cycle(&dead_run, Utc::now());
+    let dead_cycle = dead["cycle"].as_str().unwrap().to_string();
+    let original = json!({"id": watched, "comment": "Checked CI.", "model": "codex"});
+    let legacy_bytes = serde_json::to_vec(&json!(["orbit.task.update", original])).unwrap();
+    let legacy_digest = format!(
+        "sha256:{}",
+        orbit_types::identity::lower_hex(Sha256::digest(legacy_bytes))
+    );
+    fx.seed_action_row(
+        &mandate,
+        ResidentActionRow {
+            key: format!("resident:{mandate}:{dead_cycle}:1"),
+            cycle: dead_cycle.clone(),
+            tool: "orbit.task.update".into(),
+            input_digest: legacy_digest,
+            subject: Some(watched.clone()),
+            phase: ResidentActionPhase::Ok,
+            reference: None,
+        },
+    );
+    fx.stop_run(&dead_run, JobRunState::Failed);
+    let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
+    let run = fx.cycle_run(&mandate, "resident-cycle-2");
+    let brief = fx.begin_cycle(&run, Utc::now() + Duration::minutes(11));
+    // Reordered against a legacy digest cannot be established: refuse.
+    let reordered = json!({"model": "codex", "comment": "Checked CI.", "id": watched});
+    let error = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", reordered)
+            .expect_err("legacy reordered action is refused")
+    });
+    assert!(error.contains("resident_action_in_doubt"), "{error}");
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments
+    );
+    // Byte-identical legacy input is recognised without running again.
+    let retried = fx.as_cycle_agent(&run, || {
+        fx.agent_call("orbit.task.update", original).unwrap()
+    });
+    assert_eq!(retried["resident_action"], "already_done", "{retried}");
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments
+    );
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
 }
 
 #[test]

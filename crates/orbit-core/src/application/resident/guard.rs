@@ -86,13 +86,43 @@ pub(crate) fn action_rows(history: &[TaskHistoryEntry], cycle: &str) -> Vec<Resi
     rows
 }
 
-/// `sha256:` over the call's canonical input (keys sorted).
+/// Recursively sort object keys; array order stays significant.
+fn canonical_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), canonical_value(&map[key]));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
+        other => other.clone(),
+    }
+}
+
+fn digest_of(bytes: &[u8]) -> String {
+    orbit_types::identity::lower_hex(Sha256::digest(bytes))
+}
+
+/// `sha256:v2:` over the call's canonical input (object keys sorted
+/// recursively, array order preserved).
 fn input_digest(tool: &str, input: &Value) -> String {
-    let canonical = serde_json::to_vec(&json!([tool, input])).unwrap_or_default();
-    format!(
-        "sha256:{}",
-        orbit_types::identity::lower_hex(Sha256::digest(canonical))
-    )
+    let canonical = serde_json::to_vec(&json!([tool, canonical_value(input)])).unwrap_or_default();
+    format!("sha256:v2:{}", digest_of(&canonical))
+}
+
+/// Pre-canonicalisation digest (`sha256:<hex>` over the input as
+/// serialised). Only used to recognise byte-identical legacy rows.
+fn legacy_input_digest(tool: &str, input: &Value) -> String {
+    let bytes = serde_json::to_vec(&json!([tool, input])).unwrap_or_default();
+    format!("sha256:{}", digest_of(&bytes))
+}
+
+fn is_legacy_digest(digest: &str) -> bool {
+    digest.starts_with("sha256:") && !digest.starts_with("sha256:v2:")
 }
 
 fn subject_of(input: &Value) -> Option<String> {
@@ -344,9 +374,13 @@ impl OrbitRuntime {
     ) -> Result<ResidentCallAdmission, OrbitError> {
         let digest = input_digest(tool, input);
         if let Some(dead) = grant.recovery_of.as_deref() {
+            let legacy_digest = legacy_input_digest(tool, input);
+            let matches_row = |row: &ResidentActionRow| {
+                row.input_digest == digest || row.input_digest == legacy_digest
+            };
             let prior = action_rows(history, dead);
             if let Some(done) = prior.iter().find(|row| {
-                row.input_digest == digest
+                matches_row(row)
                     && matches!(
                         row.phase,
                         ResidentActionPhase::Ok | ResidentActionPhase::AlreadyDone
@@ -361,13 +395,35 @@ impl OrbitRuntime {
             }
             if let Some(doubt) = prior
                 .iter()
-                .find(|row| row.input_digest == digest && row.phase == ResidentActionPhase::Started)
+                .find(|row| matches_row(row) && row.phase == ResidentActionPhase::Started)
             {
                 return Err(refused(
                     "resident_action_in_doubt",
                     format!(
                         "the dead cycle started this call as `{}` and never reported it; check its effect instead of repeating it",
                         doubt.key
+                    ),
+                ));
+            }
+            // A legacy row stores only the old order-sensitive digest, so a
+            // non-matching call to the same tool cannot be told apart from a
+            // reordered repeat of that row. Refuse rather than replay a
+            // completed or in-doubt legacy mutation.
+            if let Some(legacy) = prior.iter().find(|row| {
+                is_legacy_digest(&row.input_digest)
+                    && row.tool == tool
+                    && matches!(
+                        row.phase,
+                        ResidentActionPhase::Ok
+                            | ResidentActionPhase::AlreadyDone
+                            | ResidentActionPhase::Started
+                    )
+            }) {
+                return Err(refused(
+                    "resident_action_in_doubt",
+                    format!(
+                        "the dead cycle recorded this tool as `{}` under a legacy input digest; its effect cannot be matched to this call, so check its effect instead of repeating it",
+                        legacy.key
                     ),
                 ));
             }

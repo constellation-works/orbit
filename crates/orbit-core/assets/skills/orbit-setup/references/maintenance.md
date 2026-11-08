@@ -423,8 +423,13 @@ local build — use `--local-candidate` (below). `orbit update --check` checks r
 compatibility.
 
 Participating CLI/MCP processes hold a generation lock for their entire
-lifetime. The updater still requires exclusive admission and refuses while a
-participant is live. Ordinary v2 runtime admission instead compares store,
+lifetime. Admission depends on the update: for a staged local candidate, a
+live long-lived participant that reports a handover capability the candidate
+resumes is admitted beside the updater and pinning waits for it to hand
+over, and short-lived participants are waited for; a participant that cannot
+hand over (unsupported, v1-owned, or the `mcp listen` listener) still blocks
+the update. Without a candidate, a live long-lived participant still blocks.
+Do not kill an idle handover-capable client to make room. Ordinary v2 runtime admission instead compares store,
 layout and feature compatibility: compatible builds may run and apply additive
 migrations side by side despite different executable digests. A breaking newer
 writer records a pending switch and waits up to 120 seconds by default for
@@ -473,7 +478,7 @@ cargo build --release --locked -p orbit-cli
 C="$(pwd -P)/target/release/orbit"
 "$C" update --local-candidate "$C" --source-commit "$SHA" \
   --write-candidate-manifest ~/orbit-candidate-"$SHA".json
-# Quiesce clients, then run from the intended workspace for discovery/convergence.
+# Handover-capable clients need no quiescing; run from the intended workspace for discovery/convergence.
 cd "$WORKSPACE"
 "$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
   --source-commit "$SHA" \
@@ -495,8 +500,12 @@ workspace, and use an isolated checkout as well as isolated `HOME` and install
 target for smoke checks. The JSON report's `workspace_root` and
 `admission_roots` show what was selected and held. The staged copy is what
 installs even if the candidate path changes, an equal version with a different
-digest replaces, and live MCP/dashboard/clock/drain clients make it refuse
-before anything changes — quiesce them, retry, then reconnect. Rerunning the
+digest replaces, and live MCP/dashboard/clock/drain clients that report a
+handover capability the candidate resumes are admitted beside it and hand
+over after the swap, while short-lived clients are waited for — do not
+quiesce idle handover-capable clients. Only a client that cannot hand over
+(unsupported, v1-owned, or the `mcp listen` listener) makes it refuse before
+anything changes; quiesce that client, retry, then reconnect. Rerunning the
 same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
 See the upgrades runbook for the full procedure.
@@ -713,18 +722,12 @@ The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates from
 long-lived processes (`orbit mcp serve`, `orbit sweep`, `orbit web serve`)
 and when the active file exceeds its budget (one `metadata()` check on first
 write). Short-lived commands, including `orbit --help`, do not open the file
-or walk the log directory. Defaults: seven days of archives, a 500 MiB
-total budget, a 100 MiB active-file threshold. Tune in `config.toml`:
-
-```toml
-[runtime]
-log_retention_days = 7
-log_max_total_mb   = 500
-log_max_file_mb    = 100
-```
-
-Values are validated at load — zero is rejected, and `log_max_file_mb` may not
-exceed `log_max_total_mb`.
+or walk the log directory. These budgets are fixed in code: seven days of
+archives, a 500 MiB total budget, a 100 MiB active-file threshold. They are
+not tunable. The former `runtime.log_retention_days`,
+`runtime.log_max_total_mb` and `runtime.log_max_file_mb` keys are ignored
+when present (recognised only until 2026-12-08); delete them from
+`config.toml`.
 
 ```bash
 orbit log tail -n 120

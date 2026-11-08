@@ -177,8 +177,11 @@ orbit doctor
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
   from enabling it: shipped auto-tasks start disabled, except `host-health`,
-  which ships enabled. The shipped `worktree-gc` and `task-pilot` routines
-  seed enabled; other shipped routines seed disabled. Preserve existing
+  which ships enabled. The shipped `worktree-gc`, `task-pilot` and
+  `crew-memory-dream` routines seed enabled; other shipped routines seed
+  disabled. `crew-memory-dream` mints nothing while `crew_memory.enabled`
+  is false or no running memory-arm experiment applies, so its seeded
+  enablement does not turn the experimental feature on. Preserve existing
   enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves
@@ -975,7 +978,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 (`opus-credits:200usd/30d`).
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
-Codex: `astra`, `sol`, `luna`; Antigravity: `gemini-flash`, `argon`;
+Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`;
 Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
 no built-in Gemini CLI crew; the `cursor`, `pi`, and `opencode` lanes were [retired](providers.md#provider-identity-and-resolution)), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
@@ -984,8 +987,8 @@ host, `gemini-flash` on an Antigravity host). Interactive init offers the enable
 writes the recommendation. Init does not write a `custom` or `system` crew
 table, nor a system-crew key. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
-(Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
-`sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
+(Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `terra` /
+`sol` / `astra`; both: `haiku, luna` / `terra, sonnet` / `sol, opus` / `opus, astra`;
 grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored

@@ -82,7 +82,9 @@ pub struct ResidentActionRow {
     pub cycle: String,
     /// The tool's canonical name.
     pub tool: String,
-    /// `sha256:` digest of the call's canonical input.
+    /// Digest of the call's canonical input: `sha256:v2:` over the input
+    /// with object keys sorted recursively (array order preserved). Rows
+    /// written before canonicalisation carry a bare `sha256:` legacy digest.
     pub input_digest: String,
     /// The task the call names, when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
