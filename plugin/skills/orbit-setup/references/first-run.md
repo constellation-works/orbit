@@ -139,7 +139,7 @@ Three things to know about what it seeded and how to finalize:
   nothing while `crew_memory.enabled` is false or no running memory-arm
   experiment applies. A host clock is still needed
   for unattended runs.
-  The `host-health` auto-task files a daily host-health review on the workspace
+  The `host-health` auto-task files a weekly host-health review on the workspace
   owner once the host clock is installed; `orbit auto-task toggle host-health
   off` turns it off, and `orbit routine disable <routine-name>` turns a routine
   off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
