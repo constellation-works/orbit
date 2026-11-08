@@ -128,6 +128,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
@@ -142,6 +143,7 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
 
 /// Open a calm runtime with fixture configuration and workspace files in place.
 fn configured_runtime(config: &str, files: &[&str]) -> (TempDir, OrbitRuntime, Arc<PressureProbe>) {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::configured_runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");

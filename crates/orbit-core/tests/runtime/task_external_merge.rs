@@ -186,6 +186,7 @@ impl Fixture {
     }
 
     fn with_config(config: &str) -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("task_external_merge::Fixture::new");
         let root =
             TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let global_root = root.path().join("global");

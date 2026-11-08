@@ -32,6 +32,7 @@ struct Fixture {
 impl Fixture {
     /// A Git repository with `.orbit/config.toml` holding `config`.
     fn new(config: &str) -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("tag_instructions::Fixture::new");
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");

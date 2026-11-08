@@ -25,6 +25,7 @@ struct Fixture {
 /// A workspace with a granted `check` script whose entry probes its inputs,
 /// and a granted read root `library/` outside the workspace.
 fn fixture(inputs_yaml: &str) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("script_file_inputs::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");

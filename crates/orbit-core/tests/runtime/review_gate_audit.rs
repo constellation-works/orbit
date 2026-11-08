@@ -136,6 +136,7 @@ impl Fixture {
         granted: &[&str],
         settings: FixtureSettings<'_>,
     ) -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("review_gate_audit::Fixture::build");
         let FixtureSettings {
             workflow,
             review_setting,

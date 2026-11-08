@@ -20,6 +20,9 @@ const UNSET_PASS: &str = "FIXTURE_NOTICE_TOKEN";
 /// A Linux host under sustained memory pressure, whose operator passes a
 /// variable this environment does not hold, configured by `extra`.
 fn throttled_runtime(root: &Path, extra: &str) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture(
+        "dispatch_admission::submission_notices::throttled_runtime",
+    );
     let global = root.join("home/.orbit");
     let workspace = root.join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();

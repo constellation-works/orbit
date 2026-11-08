@@ -23,6 +23,7 @@ struct Fixture {
 /// A workspace with an ungranted `export` script that writes into its
 /// granted `outbox` write root, with `global_config` as the host config.
 fn fixture(global_config: &str) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("script_roots::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
