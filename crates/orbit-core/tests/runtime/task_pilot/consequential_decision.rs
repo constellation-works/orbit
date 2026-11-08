@@ -4,8 +4,10 @@
 //! that leaves an ownership or policy choice, or an unenumerated surface a
 //! stop rule reaches, and a description whose only open choices are ordinary
 //! implementation choices. The incidents are an open ownership policy
-//! [ORB-21111], a later resolution of that same choice [ORB-23274], and a
-//! surface the stop rule reaches that the spec did not enumerate [ORB-21174].
+//! [ORB-21111], a later resolution of that same choice [ORB-23274], an
+//! affirmative "not only ... but also ..." that must still resolve [ORB-23299],
+//! and a surface the stop rule reaches that the spec did not enumerate
+//! [ORB-21174].
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
@@ -197,6 +199,17 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
         "an affirmative adverbial preserve must still clear the hold",
     );
     assert_public_clear(&workspace, &affirmative_adverb_resolution);
+
+    let not_only_but_also = filed(
+        &workspace,
+        "The ownership policy was undecided. \
+         Not only preserve the current ownership policy but also document it.",
+    );
+    assert_no_consequential_hold(
+        &assess(&workspace, &not_only_but_also, json!([])),
+        "ORB-23299: not only preserve ... but also ... affirms the ownership policy",
+    );
+    assert_public_clear(&workspace, &not_only_but_also);
 
     let different_choice = filed(
         &workspace,

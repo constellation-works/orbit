@@ -41,7 +41,8 @@ const OWNERSHIP_NEGATIONS: [&str; 6] = [
 
 /// Later-sentence verbs that state which ownership or policy to keep.
 /// A same-sentence open marker still wins. A negated verb ("do not
-/// preserve", "doesn't keep") is not a resolution [ORB-23274].
+/// preserve", "doesn't keep") is not a resolution [ORB-23274]. "not only ...
+/// but also ..." affirms the verb.
 const OWNERSHIP_RESOLUTION_VERBS: [&str; 9] = [
     "preserve",
     "preserves",
@@ -203,7 +204,8 @@ fn utility_warnings_mut(assessment: &mut Value) -> Option<&mut Vec<Value>> {
 /// attach the choice named in a different sentence. A later keep, preserve
 /// or retain of the same choice, with no open marker of its own, clears that
 /// choice [ORB-23274]. A resolution that precedes the open marker does not,
-/// and a negated verb ("do not preserve") is not a resolution.
+/// and a negated verb ("do not preserve") is not a resolution. "not only ...
+/// but also ..." affirms the verb and does resolve the choice.
 fn ownership_name(description: &str) -> Option<&'static str> {
     let mut open = Vec::new();
     for sentence in sentences(description) {
@@ -286,7 +288,8 @@ fn ownership_choice_name(lower: &str) -> Option<&'static str> {
 }
 
 /// A keep, preserve or retain that is not itself negated. "do not preserve"
-/// and "doesn't keep" leave the choice open.
+/// and "doesn't keep" leave the choice open. "not only preserve ... but also ..."
+/// affirms the verb and resolves the choice.
 fn ownership_resolution(lower: &str) -> bool {
     OWNERSHIP_RESOLUTION_VERBS
         .iter()
@@ -316,8 +319,11 @@ fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
     // preserve", "never automatically keep"); a negation within that
     // short window negates the verb, an unrelated word ends the scan so
     // an affirmative verb preceded by an adverb still resolves.
+    // "only" ends in "ly", so the walk reaches "not" in "not only
+    // preserve ... but also ...". That correlative affirms the verb.
     let prefix = lower[..verb_at].trim_end();
     let mut scanned = 0;
+    let mut only_in_window = false;
     for token in prefix.rsplit(|c: char| c.is_whitespace()) {
         let token = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
         if token.is_empty() {
@@ -328,7 +334,14 @@ fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
             break;
         }
         if token == "not" || token == "never" || token == "cannot" || token.ends_with("n't") {
+            if token == "not" && only_in_window && not_only_but_also_in_sentence(lower, verb_at) {
+                only_in_window = false;
+                continue;
+            }
             return true;
+        }
+        if token == "only" {
+            only_in_window = true;
         }
         if token.ends_with("ly")
             || matches!(
@@ -352,6 +365,18 @@ fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
         break;
     }
     false
+}
+
+/// "not only <verb> ... but also ..." affirms the verb. The correlative has to
+/// sit in the same sentence; a later sentence's "but also" does not.
+fn not_only_but_also_in_sentence(lower: &str, verb_at: usize) -> bool {
+    let start = lower[..verb_at]
+        .rfind(['.', '!', '?', '\n'])
+        .map_or(0, |index| index + 1);
+    let end = lower[verb_at..]
+        .find(['.', '!', '?', '\n'])
+        .map_or(lower.len(), |index| verb_at + index);
+    contains_term(&lower[start..end], "but also")
 }
 
 fn rank(name: &str) -> u8 {
