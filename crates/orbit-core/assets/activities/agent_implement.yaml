@@ -397,6 +397,13 @@ spec:
       only for a complete deliverable whose check the workspace policy lets
       you defer (see Sanctioned sandbox deferral); otherwise report a
       validation blocker.
+    - A provider CLI permission denial (distinct from the sandbox or runner
+      denial above) covers only the one command it refused: rerun the needed
+      work with commands that avoid the denied path, and keep using the shell.
+      Report a tool unavailable only after a trivial call to it (for the
+      shell, `true`) is also denied, quoting that denial. A denial never
+      excuses skipping required validation or acceptance criteria; only a
+      sanctioned deferral (below) defers a check.
     - Run only gates the workspace policy names. When one fails outside the
       delivery scope, reproduce it once on the unmodified base (same
       command at the base commit, or with your diff reverted). If it fails
