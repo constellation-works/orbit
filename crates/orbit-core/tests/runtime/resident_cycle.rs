@@ -8,6 +8,7 @@
 
 mod assignment_lifecycle;
 mod control_admission;
+mod deadline_expiry;
 mod landing;
 
 use std::path::PathBuf;

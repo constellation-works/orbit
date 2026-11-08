@@ -58,7 +58,7 @@ Orbit validates the artifact against these rules:
 | `crew` | Yes | A non-blank name of a configured crew. Orbit checks it when it reads the mandate. |
 | `cadence.floor_minutes` | Yes | An integer of at least 5: the fewest minutes between two cycles. |
 | `cadence.heartbeat_minutes` | Yes | An integer at least equal to `floor_minutes`: the most minutes without a cycle. |
-| `deadline` | No | An RFC 3339 instant. After it the resident only hands off. |
+| `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and its assignment moves to review — enforced by the sweep clock on the owning host, whether or not the cycle routine runs. A cycle that starts first is observe-only and only hands off. |
 | `watch` | No | `tasks` (task IDs) and `tags` lists whose changes feed the resident's wake digest. Both default to empty. |
 | `continuity` | No | `prefer` (the default) resumes a provider conversation when the adapter can. `off` starts every cycle fresh. |
 | `probe` | No | A boolean, default `false`. Whether the mandate runs interactively as a probe. |
@@ -253,9 +253,9 @@ Any caller that can write the assignment may call `control`, because every actio
 
 ## Stalled residents
 
-An `active` mandate is stalled when it has not written a checkpoint for twice its heartbeat (or, never having checkpointed, for twice its heartbeat since the task was created), or when its last three checkpoints are all `incomplete`. A paused, taken-over, handed-off or ended mandate is not stalled.
+An `active` mandate is stalled when it has not written a checkpoint for twice its heartbeat (or, never having checkpointed, for twice its heartbeat since the task was created), when its last three checkpoints are all `incomplete`, or when its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed. A paused, taken-over, handed-off or ended mandate is not stalled.
 
-`orbit attention` lists each stalled mandate as a `resident_stalled` item. When the workspace's `resident-cycle-<workspace>` routine is enabled, the suggested next step is `orbit resident control <task id> wake --status-request`. When that routine is disabled, `wake` cannot start a cycle, so the suggested next step is instead enabling the routine (`orbit routine enable resident-cycle-<workspace>`); the stall reason names the disabled routine as the cause. The suggestion enables nothing by itself: running it is still the operator's action. `orbit resident show`, `list` and `digest` report the same flag; the digest marks the resident's line with `(stalled)`.
+`orbit attention` lists each stalled mandate as a `resident_stalled` item. When the workspace's `resident-cycle-<workspace>` routine is enabled, the suggested next step is `orbit resident control <task id> wake --status-request`. When that routine is disabled, `wake` cannot start a cycle, so the suggested next step is instead enabling the routine (`orbit routine enable resident-cycle-<workspace>`) or stopping the mandate (`orbit resident control <task id> stop`); the stall reason names the disabled routine as the cause. The suggestion enables nothing by itself: running it is still the operator's action. `orbit resident show`, `list` and `digest` report the same flag; the digest marks the resident's line with `(stalled)`.
 
 ## Evolution ledger
 

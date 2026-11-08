@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::cycle::live_cycle_from_history;
-use super::{resident_mandate_ended, resident_mandate_from_artifact};
+use super::{ResidentMandateState, resident_mandate_ended, resident_mandate_from_artifact};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskUpdateParams};
 
@@ -344,6 +344,136 @@ impl OrbitRuntime {
             value["handoff"] = json!(self.hand_off_stopped_resident(&task_id)?);
         }
         Ok(value)
+    }
+
+    /// End every mandate in this workspace whose deadline has passed, with
+    /// reason `deadline` recorded as a `resident_control` stop in its
+    /// history, and hand its assignment off to review. This is the
+    /// owner-side enforcement the sweep clock runs every tick, so a
+    /// deadline ends a mandate even when its cycle routine is disabled and
+    /// no cycle ever evaluates it. Idempotent: an ended, handed-off or
+    /// invalid mandate, and one whose deadline is still ahead, is left
+    /// alone. Returns the task ids this call expired. A mandate with a
+    /// live cycle is still ended here; its assignment reaches review when
+    /// that cycle finalizes (or is found dead), through the same handoff a
+    /// manager's stop uses.
+    pub fn expire_resident_mandates_past_deadline(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<String>, OrbitError> {
+        if self.coordination_write_owner().is_some() {
+            return Ok(Vec::new());
+        }
+        self.ensure_coordination_task_write_permitted()?;
+        let mut expired = Vec::new();
+        for task in self.list_task_metadata()? {
+            if !task.tags.iter().any(|tag| tag == RESIDENT_TAG)
+                || resident_mandate_ended(task.status)
+                || task.status == TaskStatus::Review
+            {
+                continue;
+            }
+            let task_id = task.id.to_string();
+            let history = self.get_task_history(&task_id)?;
+            let view = self.resident_view(task, &history)?;
+            if view.state().0 == ResidentMandateState::Ended {
+                // Already ended (by an earlier deadline tick, or a stop)
+                // but not yet in review: its cycle was live, or the move
+                // was refused. Retrying the handoff here settles it
+                // without needing a cycle to run again.
+                self.hand_off_stopped_resident_at(&task_id, now)?;
+                continue;
+            }
+            if matches!(
+                view.state().0,
+                ResidentMandateState::HandedOff | ResidentMandateState::Invalid
+            ) {
+                continue;
+            }
+            let Ok(mandate) = &view.mandate else {
+                continue;
+            };
+            if mandate.deadline.is_none_or(|deadline| deadline > now) {
+                continue;
+            }
+            if self.expire_resident_mandate_at_deadline(&task_id, now)? {
+                expired.push(task_id);
+            }
+        }
+        Ok(expired)
+    }
+
+    /// Write the deadline stop for one mandate under its write lock,
+    /// re-checking inside the lock that it is still live and past its
+    /// deadline, then hand the assignment off. Returns whether this call
+    /// wrote the stop.
+    fn expire_resident_mandate_at_deadline(
+        &self,
+        task_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, OrbitError> {
+        let mut wrote = false;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                let task = self.get_task(task_id)?;
+                if resident_mandate_ended(task.status) || task.status == TaskStatus::Review {
+                    return Ok(());
+                }
+                let history = self.get_task_history(task_id)?;
+                let view = self.resident_view(task, &history)?;
+                if matches!(
+                    view.state().0,
+                    ResidentMandateState::Ended
+                        | ResidentMandateState::HandedOff
+                        | ResidentMandateState::Invalid
+                ) {
+                    return Ok(());
+                }
+                let Ok(mandate) = &view.mandate else {
+                    return Ok(());
+                };
+                let Some(deadline) = mandate.deadline.filter(|current| *current <= now) else {
+                    return Ok(());
+                };
+                let entry = ResidentControlEntry {
+                    action: ResidentControlAction::Stop,
+                    state: ResidentControlState::Ended,
+                    reason: format!(
+                        "deadline: the mandate deadline {} has passed",
+                        deadline.to_rfc3339()
+                    ),
+                    by: "system".into(),
+                    status_request: false,
+                    by_session: None,
+                };
+                let note = serde_json::to_string(&entry).map_err(|error| {
+                    OrbitError::Execution(format!("serialize control: {error}"))
+                })?;
+                self.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: "system".into(),
+                        append_history: vec![TaskHistoryEntry {
+                            at: now,
+                            by: "system".into(),
+                            event: RESIDENT_CONTROL_EVENT.into(),
+                            note: Some(note),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        ..Default::default()
+                    },
+                )?;
+                wrote = true;
+                Ok(())
+            })?;
+        if wrote {
+            self.hand_off_stopped_resident_at(task_id, now)?;
+        }
+        Ok(wrote)
     }
 
     /// Move a stopped mandate's assignment to review with a synthesized
