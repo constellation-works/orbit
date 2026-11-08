@@ -1133,6 +1133,55 @@ class RelativeImportTests(unittest.TestCase):
         self.assertEqual(result.stderr, "", result.stderr)
         self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
 
+    def check_surface_dependency(self, crate, dependency, kind, target, rejected):
+        """Run the guard over a synthetic Cargo metadata edge for a surface crate.
+
+        Builds `cargo metadata --no-deps`-shaped packages for `crate`, the
+        `dependency` crate and the `orbit-core` fixture the guard also scans,
+        then runs the real public script against them.
+        """
+        names = {crate, dependency, "orbit-core"}
+        packages = []
+        for name in sorted(names):
+            manifest = self.root / f"crates/{name}/Cargo.toml"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            if not manifest.exists():
+                manifest.write_text(f'[package]\nname = "{name}"\n')
+            dependencies = (
+                [{"name": dependency, "kind": kind, "target": target}]
+                if name == crate else []
+            )
+            packages.append({"id": name, "name": name,
+                             "manifest_path": str(manifest),
+                             "dependencies": dependencies})
+        metadata = self.root / "metadata.json"
+        metadata.write_text(json.dumps({
+            "workspace_members": sorted(names), "packages": packages}))
+        result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.stderr, "", result.stderr)
+        self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
+        if rejected:
+            self.assertIn(
+                f"forbidden dependency '{dependency}'", result.stdout)
+        else:
+            self.assertIn("dependency direction guard passed", result.stdout)
+
+    def test_cli_auth_edge_is_refused(self):
+        # Cargo and ARCHITECTURE.md give orbit-cli no orbit-auth edge, in
+        # normal or dev form; credential code reaches the assembled binary
+        # only through orbit-web, so the guard refuses a direct edge.
+        for kind, target in ((None, None), ("dev", None), (None, "cfg(unix)")):
+            with self.subTest(kind=kind, target=target):
+                self.check_surface_dependency(
+                    "orbit-cli", "orbit-auth", kind, target, rejected=True)
+
+    def test_web_auth_edge_remains_legal(self):
+        # orbit-web's lease listener wraps orbit-auth's token verification,
+        # client-address rule and limiter, so its normal edge stays allowed.
+        self.check_surface_dependency(
+            "orbit-web", "orbit-auth", None, None, rejected=False)
+
     def test_core_policy_edge_is_dev_only(self):
         # [ORB-22418] ARCHITECTURE.md records orbit-core -> orbit-policy as
         # dev-only and crates/orbit-core/Cargo.toml declares it under

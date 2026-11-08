@@ -53,6 +53,17 @@ policy through `orbit-runtime` (which keeps its own production
 `scripts/check-dependency-direction.sh` enforces the dev-only edge and rejects
 a normal, build, or target-normal `orbit-core` → `orbit-policy` edge.
 
+At the surface, the same guard keeps the CLI/auth boundary explicit:
+`orbit-cli` holds no direct `orbit-auth` edge, in normal or dev form.
+`orbit-auth` stays a kernel crate (common, types) whose only surface consumer
+is `orbit-web`: its lease listener wraps credential verification, the
+client-address rule and the failed-authentication limiter, and its lease
+intake socket carries the token scope types. The CLI assembles `orbit-web`,
+`orbit-mcp`, `orbit-registry` and `orbit-core` and dispatches through Core, so
+credential code reaches the assembled binary only through that web surface.
+A synthetic `orbit-cli` → `orbit-auth` Cargo edge fails the guard, while the
+existing `orbit-web` → `orbit-auth` edge stays legal.
+
 ## 1. Motivation
 
 After [ORB-10016] extracted CLI-facing commands, Core still had a two-way
