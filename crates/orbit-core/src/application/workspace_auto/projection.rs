@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
+use orbit_types::task::{ExecutorOsLimit, TaskStatus, unmet_task_dependencies_with_index};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -43,6 +43,10 @@ pub(super) struct ReadinessProjection<'a> {
     pub(super) light_budget: &'a LightBudget,
     pub(super) examined: &'a [String],
     pub(super) live_leaves: &'a [LiveLeafRun],
+    /// Executor OS limits and follower census, read once for the response.
+    /// An `also_task` projection reuses them instead of reading the census again.
+    pub(super) host_os_limits: &'a BTreeMap<String, ExecutorOsLimit>,
+    pub(super) follower_evidence: &'a FollowerEvidence,
 }
 
 pub(super) fn project_readiness_tasks(
@@ -66,16 +70,14 @@ pub(super) fn project_readiness_tasks(
         light_budget,
         examined,
         live_leaves,
+        host_os_limits,
+        follower_evidence,
     } = inputs;
     let excluded_by_id = snapshot
         .excluded
         .iter()
         .map(|excluded| (excluded.id.as_str(), excluded))
         .collect::<BTreeMap<_, _>>();
-    // Advisory: unreadable executor definitions only drop the OS wait that a
-    // dependency wait would otherwise hide.
-    let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
-    let follower_evidence = FollowerEvidence::read(runtime);
     selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -133,7 +135,7 @@ pub(super) fn project_readiness_tasks(
                 );
                 // Admission checks dependencies first, so a task that also
                 // waits for another host's OS would show only its dependency.
-                if let Some(wait) = runtime.task_host_os_wait(task, pools, &host_os_limits) {
+                if let Some(wait) = runtime.task_host_os_wait(task, pools, host_os_limits) {
                     object.insert("host_scope".to_string(), json!("local"));
                     object.insert("host_os_wait".to_string(), json!(format!(
                         "On this {} host: {wait}", runtime.host_os().map_or("unknown", |os| os.as_str())
@@ -412,6 +414,23 @@ pub(super) fn project_readiness_tasks(
         .collect::<Vec<_>>()
 }
 
+/// Annotate each task from the recorded admission pass without copying the
+/// forecast views. The `also_task` projection uses this so it does not rebuild
+/// those views a second time.
+pub(super) fn annotate_readiness_task_forecasts(
+    status_state: &Option<PipelineState>,
+    drain_phase: &str,
+    tasks: &mut [Value],
+) {
+    // Observations come from the drain's recorded pass, not a new forecast:
+    // readiness never takes the admission lock or writes reservations.
+    let admission_forecast = status_state
+        .as_ref()
+        .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
+        .and_then(|pass| pass.admission_forecast.as_ref());
+    annotate_readiness_forecasts(admission_forecast, drain_phase, tasks);
+}
+
 pub(super) fn project_readiness_forecasts(
     runtime: &OrbitRuntime,
     snapshot: &BacklogSnapshot,
@@ -429,6 +448,7 @@ pub(super) fn project_readiness_forecasts(
         .as_ref()
         .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
         .and_then(|pass| pass.admission_forecast.as_ref());
+    annotate_readiness_forecasts(admission_forecast, drain_phase, tasks);
     let project_forecast = |forecast: &orbit_types::workflow::DrainAdmissionForecast| {
         let settings = runtime.auto_concurrency_settings();
         let mut view = json!(forecast);
@@ -473,45 +493,54 @@ pub(super) fn project_readiness_forecasts(
         .as_ref()
         .and_then(|state| state.pull_drain.drain_last_forecast.as_ref())
         .map(project_forecast);
-    if let Some(forecast) = admission_forecast {
-        for task in tasks {
-            let Some(id) = task["task_id"].as_str() else {
-                continue;
-            };
-            let skipped = forecast
-                .skipped
-                .iter()
-                .find(|candidate| candidate.task_id == id);
-            let source = skipped
-                .map(|candidate| &candidate.profile_source)
-                .or_else(|| {
-                    forecast
-                        .admitted
-                        .iter()
-                        .find(|candidate| candidate.task_id == id)
-                        .map(|candidate| &candidate.profile_source)
-                });
-            let Some(source) = source else { continue };
-            let mut observation = skipped.map_or_else(|| json!({}), |skip| json!(skip));
-            observation["mode"] = json!(forecast.mode);
-            observation["forecast_at"] = json!(forecast.forecast_at);
-            observation["profile_source"] = json!(source);
-            observation["decision"] = json!(if skipped.is_some() {
-                "skipped"
-            } else {
-                "admitted"
+    (forecast_view, last_forecast_view)
+}
+
+/// Per-task forecast annotation. Shared by the bounded listing and `also_task`,
+/// which must not each rebuild the forecast views.
+fn annotate_readiness_forecasts(
+    admission_forecast: Option<&orbit_types::workflow::DrainAdmissionForecast>,
+    drain_phase: &str,
+    tasks: &mut [Value],
+) {
+    let Some(forecast) = admission_forecast else {
+        return;
+    };
+    for task in tasks {
+        let Some(id) = task["task_id"].as_str() else {
+            continue;
+        };
+        let skipped = forecast
+            .skipped
+            .iter()
+            .find(|candidate| candidate.task_id == id);
+        let source = skipped
+            .map(|candidate| &candidate.profile_source)
+            .or_else(|| {
+                forecast
+                    .admitted
+                    .iter()
+                    .find(|candidate| candidate.task_id == id)
+                    .map(|candidate| &candidate.profile_source)
             });
-            task["admission_forecast"] = observation;
-            if forecast.mode == "enforce"
-                && drain_phase == "draining"
-                && skipped.is_some()
-                && task["reason"] == "ready"
-            {
-                task["eligible"] = json!(false);
-                task["reason"] = json!("gap_fit");
-            }
+        let Some(source) = source else { continue };
+        let mut observation = skipped.map_or_else(|| json!({}), |skip| json!(skip));
+        observation["mode"] = json!(forecast.mode);
+        observation["forecast_at"] = json!(forecast.forecast_at);
+        observation["profile_source"] = json!(source);
+        observation["decision"] = json!(if skipped.is_some() {
+            "skipped"
+        } else {
+            "admitted"
+        });
+        task["admission_forecast"] = observation;
+        if forecast.mode == "enforce"
+            && drain_phase == "draining"
+            && skipped.is_some()
+            && task["reason"] == "ready"
+        {
+            task["eligible"] = json!(false);
+            task["reason"] = json!("gap_fit");
         }
     }
-
-    (forecast_view, last_forecast_view)
 }
