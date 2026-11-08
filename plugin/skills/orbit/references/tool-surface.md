@@ -5,6 +5,23 @@ version's `tools/list`, `orbit tool list`, and command `--help`; a similar name
 is not evidence that an operation exists. This skill explains the contracts
 without requiring an Orbit source checkout.
 
+## MCP schema shape
+
+Property descriptions on `orbit_task_add`, `orbit_task_update` and
+`orbit_task_list` are one sentence. Relation types, `regression_from`
+attribution, status transitions, context-file creation intent, granted and
+required tools, capability labels, OS tags, field projection and the review
+verdict are in [task-fields.md](task-fields.md). Those three tools link that
+reference from their tool description.
+
+MCP fields that take several strings advertise an array of strings. The CLI
+still accepts a repeated flag or a comma-separated string for the same
+fields; that string form is not the published MCP schema.
+
+Every workspace-scoped tool uses one `workspace` description: `Workspace
+selector from orbit_workspace_list.` Whether the selector is required is the
+schema's `required` array, not the description.
+
 ## Select the store before reading or writing
 
 For a single task addressed by ID, use the prefix-routing rules below. For

@@ -65,13 +65,13 @@ impl GuardedModes for AttentionVerb {
 fn attention_input_schema(schema: &mut Value) {
     let kinds = serde_json::json!(orbit_types::tool::AttentionKind::NAMES);
     for field in ["kind", "exclude_kind"] {
-        schema["properties"][field]["anyOf"] = serde_json::json!([
-            {"type": "string", "enum": kinds},
-            {"type": "array", "items": {"type": "string", "enum": kinds}}
-        ]);
         if let Some(property) = schema["properties"][field].as_object_mut() {
-            property.remove("type");
-            property.remove("items");
+            property.remove("anyOf");
+            property.insert("type".to_string(), serde_json::json!("array"));
+            property.insert(
+                "items".to_string(),
+                serde_json::json!({ "type": "string", "enum": kinds }),
+            );
         }
     }
     schema["properties"]["severity"]["enum"] =

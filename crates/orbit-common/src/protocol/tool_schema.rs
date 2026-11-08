@@ -106,13 +106,10 @@ pub fn tool_parameter_schema(param_type: &str) -> Map<String, Value> {
             schema.insert("type".to_string(), Value::String("boolean".to_string()));
         }
         "string_list" | "string[]" | "strings" => {
-            schema.insert(
-                "anyOf".to_string(),
-                json!([
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "string" },
-                ]),
-            );
+            // MCP advertises arrays only. Runtime still accepts one string or a
+            // comma-separated string so the CLI and existing callers keep working.
+            schema.insert("type".to_string(), Value::String("array".to_string()));
+            schema.insert("items".to_string(), json!({ "type": "string" }));
         }
         "array" | "list" => {
             schema.insert("type".to_string(), Value::String("array".to_string()));

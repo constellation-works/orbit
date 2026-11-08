@@ -558,13 +558,23 @@ fn plant_both_providers(workspace: &McpWorkspace, script: &str) {
     }
 }
 
+/// The one `workspace` description every advertised selector uses.
+const SHARED_WORKSPACE_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
+
 /// Assert a bound session advertises `tool`'s workspace selector as optional.
 fn assert_selector_optional<C>(client: &mut McpClient<C>, tool: &str) {
     let listed = client.tools_list();
     let description = tool_workspace_description(&listed, tool);
+    assert_eq!(
+        description, SHARED_WORKSPACE_DESCRIPTION,
+        "workspace selectors share one description"
+    );
+    let schema = find_tool(tools_array(&listed), tool);
     assert!(
-        description.contains("Optional in this session"),
-        "a bound session must advertise {tool}'s selector as optional: {description}"
+        schema["inputSchema"]["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "workspace")),
+        "a bound session must advertise {tool}'s selector as optional: {schema}"
     );
 }
 
@@ -1349,6 +1359,126 @@ fn mcp_repeated_field_metadata_stays_within_context_budget() {
         model_bytes, 0,
         "no MCP tool schema advertises a model property, got {model_bytes} description/pattern bytes"
     );
+}
+
+/// Operator `tools/list` measured as Python `json.dumps` of each tool object.
+///
+/// The length is `len(json.dumps(tool))` with default separators, matching the
+/// federated `--operator` pipe. A regression that puts rule prose back on the
+/// wire fails here.
+#[test]
+fn operator_tools_list_stays_within_byte_budget() {
+    const TASK_UPDATE_BUDGET: usize = 4_500;
+    const TASK_ADD_BUDGET: usize = 3_500;
+    const TASK_LIST_BUDGET: usize = 2_500;
+    const OPERATOR_LIST_BUDGET: usize = 50_000;
+
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--operator", "--mode", "federated"]);
+    let tools = client.listed_tools();
+    let mut sizes = Vec::new();
+    for tool in &tools {
+        let name = tool["name"].as_str().unwrap_or("").to_string();
+        let size = python_json_dumps(tool).len();
+        sizes.push((name, size));
+    }
+    sizes.sort_by_key(|left| std::cmp::Reverse(left.1));
+    let total: usize = sizes.iter().map(|(_, size)| size).sum();
+    let size_of = |name: &str| {
+        sizes
+            .iter()
+            .find(|(tool, _)| tool == name)
+            .map(|(_, size)| *size)
+    };
+    let update = size_of("orbit_task_update").expect("orbit_task_update is advertised");
+    let add = size_of("orbit_task_add").expect("orbit_task_add is advertised");
+    let list = size_of("orbit_task_list").expect("orbit_task_list is advertised");
+    assert!(
+        update <= TASK_UPDATE_BUDGET,
+        "orbit_task_update is {update} chars; budget is {TASK_UPDATE_BUDGET}"
+    );
+    assert!(
+        add <= TASK_ADD_BUDGET,
+        "orbit_task_add is {add} chars; budget is {TASK_ADD_BUDGET}"
+    );
+    assert!(
+        list <= TASK_LIST_BUDGET,
+        "orbit_task_list is {list} chars; budget is {TASK_LIST_BUDGET}"
+    );
+    assert!(
+        total <= OPERATOR_LIST_BUDGET,
+        "operator tools/list is {total} chars across {} tools; budget is {OPERATOR_LIST_BUDGET}; largest: {sizes:?}",
+        tools.len()
+    );
+}
+
+/// Python `json.dumps` default encoding: spaces after separators, ASCII escapes.
+fn python_json_dumps(value: &Value) -> String {
+    let mut out = String::new();
+    write_python_json(value, &mut out);
+    out
+}
+
+fn write_python_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(&number.to_string()),
+        Value::String(text) => write_python_json_string(text, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_python_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_python_json_string(key, out);
+                out.push_str(": ");
+                write_python_json(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn write_python_json_string(text: &str, out: &mut String) {
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                let code = control as u32;
+                out.push_str(&format!("\\u{code:04x}"));
+            }
+            non_bmp if (non_bmp as u32) > 0xFFFF => {
+                let shifted = (non_bmp as u32) - 0x10000;
+                let high = 0xD800 + (shifted >> 10);
+                let low = 0xDC00 + (shifted & 0x3FF);
+                out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+            }
+            non_ascii if !non_ascii.is_ascii() => {
+                out.push_str(&format!("\\u{code:04x}", code = non_ascii as u32));
+            }
+            ascii => out.push(ascii),
+        }
+    }
+    out.push('"');
 }
 
 /// Whether a JSON schema advertises `model` as an input property or names it
@@ -2471,9 +2601,16 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
         ],
     );
     let description = tool_workspace_description(&listed, "orbit_task_list");
+    assert_eq!(
+        description, SHARED_WORKSPACE_DESCRIPTION,
+        "workspace selectors share one description"
+    );
+    let list_schema = find_tool(tools_array(&listed), "orbit_task_list");
     assert!(
-        description.contains("Required in this session"),
-        "an unbound session must advertise the selector as required: {description}"
+        list_schema["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "workspace")),
+        "an unbound session must advertise the selector as required: {list_schema}"
     );
 
     // An explicit valid selector is the one way out, and it works.
@@ -4186,8 +4323,9 @@ fn managed_source_inspection_mcp_search_uses_the_dispatching_workspace() {
     );
 
     let listed = client.tools_list();
-    assert!(
-        tool_workspace_description(&listed, "orbit_search").contains("Optional in this session")
+    assert_eq!(
+        tool_workspace_description(&listed, "orbit_search"),
+        SHARED_WORKSPACE_DESCRIPTION
     );
     let search_schema = find_tool(tools_array(&listed), "orbit_search");
     assert!(
@@ -4470,9 +4608,9 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     let workspace_help = task_show["inputSchema"]["properties"]["workspace"]["description"]
         .as_str()
         .expect("optional workspace filter advertised");
-    assert!(
-        workspace_help.contains("resolved globally by default"),
-        "generic workspace-selection copy must not replace task.show help: {workspace_help}"
+    assert_eq!(
+        workspace_help, SHARED_WORKSPACE_DESCRIPTION,
+        "task.show uses the shared workspace description: {workspace_help}"
     );
     assert!(
         !workspace_help.contains("_meta.orbit.workspace"),
@@ -5744,22 +5882,8 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
         "a re-sent link keeps its recorded severity"
     );
 
-    // Every recorded source can appear on a read-back link, so both public
-    // schemas must allow it when that link is sent back.
-    let listed = client.listed_tools();
-    for tool_name in ["orbit_task_add", "orbit_task_update"] {
-        let schema = &find_tool(&listed, tool_name)["inputSchema"]["properties"]["relations"]["items"]
-            ["properties"]["regression"]["properties"]["severity_source"]["enum"];
-        for source in ["filer", "operator", "backfill", "verified", "default"] {
-            assert!(
-                schema
-                    .as_array()
-                    .expect("source enum")
-                    .contains(&json!(source)),
-                "{tool_name} must accept recorded source {source}: {schema}"
-            );
-        }
-    }
+    // Relation item fields are not repeated on the MCP schema. A stored link,
+    // including its recorded severity source, still round-trips on update.
     let read_back = relations(&classified, &mut client);
     client.call_tool_ok(
         "orbit_task_update",

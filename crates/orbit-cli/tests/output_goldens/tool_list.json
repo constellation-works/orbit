@@ -2542,7 +2542,7 @@
   },
   {
     "name": "orbit.task.add",
-    "description": "Create an Orbit task and return the created task JSON",
+    "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2550,133 +2550,133 @@
     "parameters": [
       {
         "name": "title",
-        "description": "Task title",
+        "description": "Task title.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "description",
-        "description": "Task description markdown",
+        "description": "Task description markdown.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Registered workspace name, ID or path, defaulting to a bound session's workspace.",
+        "description": "Workspace selector from orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "acceptance_criteria",
-        "description": "Optional acceptance criteria as a string or array of strings",
+        "description": "Acceptance criteria.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "tags",
-        "description": "Optional tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task (several: any one of them); any other `os:` value is rejected",
+        "description": "Task tags.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "required_tools",
-        "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
+        "description": "Canonical tool names added to the activity baseline.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "granted_tools",
-        "description": "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
+        "description": "Operator-granted tool names.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "requires_labels",
-        "description": "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags",
+        "description": "Host capability labels the task requires.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "not_before",
-        "description": "Optional scheduled start: an RFC 3339 instant with an offset, such as `<TIMESTAMP>`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused",
+        "description": "Earliest dispatch time as an RFC 3339 instant.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "context_files",
-        "description": "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
+        "description": "Context selectors this task will change.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "allow_missing_context",
-        "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default.",
+        "description": "Accept selectors for created files.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "priority",
-        "description": "Optional priority level",
+        "description": "Priority level.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "complexity",
-        "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+        "description": "Task complexity.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "type",
-        "description": "Optional task type (defaults to chore)",
+        "description": "Task type.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "relations",
-        "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link.",
+        "description": "Typed task relations.",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "crew",
-        "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
+        "description": "Crew that runs this task.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
+        "description": "Crew credited for orchestration.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator_model",
-        "description": "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer",
+        "description": "Orchestrator model when it differs from the crew.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`.",
+        "description": "Why the task was filed.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`.",
+        "description": "Response field names.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
+        "description": "One response field.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "request_id",
-        "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
+        "description": "Retry-safe creation identity.",
         "param_type": "string",
         "required": false
       }
@@ -2855,7 +2855,7 @@
   },
   {
     "name": "orbit.task.list",
-    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2863,43 +2863,43 @@
     "parameters": [
       {
         "name": "status",
-        "description": "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday.",
+        "description": "Filter by status name.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "parent_id",
-        "description": "Optional parent task ID to list subtasks for",
+        "description": "Parent task ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "type",
-        "description": "Optional task type filter",
+        "description": "Filter by task type.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "scheduled",
-        "description": "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply.",
+        "description": "Keep only future schedules, soonest first.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "not_before_from",
-        "description": "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+        "description": "Inclusive lower schedule bound as RFC 3339.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "not_before_until",
-        "description": "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+        "description": "Inclusive upper schedule bound as RFC 3339.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match.",
+        "description": "Filter by task origin.",
         "param_type": "string",
         "required": false
       },
@@ -2911,79 +2911,79 @@
       },
       {
         "name": "tag",
-        "description": "Filter by tag. Repeat or pass an array for AND semantics.",
+        "description": "Filter by tag; an array is AND.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "runs_on",
-        "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
+        "description": "Filter by effective host OS.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "pilot_warnings",
-        "description": "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings.",
+        "description": "Keep proposed tasks held by pilot warnings.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "ready",
-        "description": "When true, keep only tasks whose dependencies are satisfied",
+        "description": "Keep tasks whose dependencies are satisfied.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "path",
-        "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
+        "description": "Filter by context selector path.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
+        "description": "Maximum number of tasks to return.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
+        "description": "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "view",
-        "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
+        "description": "Bounded metadata view.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "offset",
-        "description": "Bounded view list offset",
+        "description": "Bounded view list offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "search",
-        "description": "Bounded view key/title substring",
+        "description": "Bounded view key or title substring.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "priority",
-        "description": "Optional task priority filter",
+        "description": "Filter by priority.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "external_ref",
-        "description": "Optional exact external reference filter in `system:id` form",
+        "description": "Exact external reference in system:id form.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "has_ref",
-        "description": "Optional external reference system filter: keep tasks with any reference in this system",
+        "description": "Keep tasks with a reference in this system.",
         "param_type": "string",
         "required": false
       }
@@ -3418,7 +3418,7 @@
       },
       {
         "name": "fields",
-        "description": "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
+        "description": "Field names to return; `delivery` is selected alone.",
         "param_type": "string_list",
         "required": false
       },
@@ -3442,7 +3442,7 @@
       },
       {
         "name": "view",
-        "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
+        "description": "Bounded metadata view.",
         "param_type": "string",
         "required": false
       },
@@ -3475,7 +3475,7 @@
   },
   {
     "name": "orbit.task.update",
-    "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
+    "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3483,217 +3483,217 @@
     "parameters": [
       {
         "name": "repilot",
-        "description": "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot.",
+        "description": "Request one new pilot.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "id",
-        "description": "task ID",
+        "description": "Task ID.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "title",
-        "description": "New task title",
+        "description": "New task title.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "description",
-        "description": "New task description (empty string clears)",
+        "description": "New description; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "acceptance_criteria",
-        "description": "New acceptance criteria as an array of strings or a single string",
+        "description": "Replacement criteria.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "dependencies",
-        "description": "Replacement dependency task IDs as a string or array of strings",
+        "description": "Replacement dependency IDs.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "relations",
-        "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source.",
+        "description": "Replacement task relations.",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "tags",
-        "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
+        "description": "Replacement task tags.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "granted_tools",
-        "description": "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
+        "description": "Replacement granted tool names.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "requires_labels",
-        "description": "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags",
+        "description": "Replacement capability labels.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "not_before",
-        "description": "Replacement scheduled start: an RFC 3339 instant with an offset, such as `<TIMESTAMP>`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused",
+        "description": "Earliest start, or empty to clear.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "allow_drop_system_tags",
-        "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop.",
+        "description": "Allow dropping a system tag.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "plan",
-        "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
+        "description": "Replacement plan text.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "status",
-        "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
+        "description": "New task status.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "note",
-        "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
+        "description": "Note on this status transition.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "priority",
-        "description": "New dispatch priority (low, medium, high, or critical)",
+        "description": "New dispatch priority.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "complexity",
-        "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+        "description": "New task complexity.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "type",
-        "description": "New task type",
+        "description": "New task type.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "source_task_id",
-        "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)",
+        "description": "Source bug ID; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "planned_by",
-        "description": "Explicit planning attribution label (empty string clears)",
+        "description": "Planner; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "implemented_by",
-        "description": "Explicit implementation attribution label (empty string clears)",
+        "description": "Implementer; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "execution_summary",
-        "description": "Replacement execution summary text",
+        "description": "New execution summary.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "comment",
-        "description": "Task comment to append",
+        "description": "Comment to append.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "pr_status",
-        "description": "PR review status (e.g. approve, request-changes; empty string clears)",
+        "description": "PR status; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "job_run_id",
-        "description": "Job run ID to associate with the task (empty string clears)",
+        "description": "Job run ID; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "crew",
-        "description": "Named crew to use when running this task (empty string draws a fresh one)",
+        "description": "Named crew; empty redraws.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)",
+        "description": "Orchestrator crew; empty clears it.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared.",
+        "description": "Why the task was filed.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "context_files",
-        "description": "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
+        "description": "New context selectors.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "allow_missing_context",
-        "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
+        "description": "Accept selectors for created files.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`.",
+        "description": "Response field names.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
+        "description": "One response field.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "request_id",
-        "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
+        "description": "Retry-safe write identity.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_revision",
-        "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
+        "description": "Revision from task show.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "verdict",
-        "description": "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision.",
+        "description": "Review verdict object.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "complete",
-        "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
+        "description": "Complete an accepted review.",
         "param_type": "boolean",
         "required": false
       }

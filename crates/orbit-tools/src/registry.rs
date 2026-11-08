@@ -500,6 +500,12 @@ fn validate_task_arguments(
                         normalized = Value::from(number);
                     }
                 }
+                // MCP advertises string lists as arrays. A single string is
+                // still a list for the handler; check it as one element and
+                // leave the value the handler sees unchanged.
+                "string_list" | "string[]" | "strings" => {
+                    normalized = Value::Array(vec![Value::String(raw.to_string())]);
+                }
                 _ => {}
             }
         }
