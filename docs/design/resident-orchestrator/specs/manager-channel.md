@@ -143,7 +143,7 @@ because a leaf agent has no use for them. A resident cycle's own grant includes
 | Progress, decisions, costs | `resident.checkpoint` on the assignment | — |
 | An escalation | decision request on a human-crew task, plus a `resident.request` index comment | `decision_open` |
 | Handoff | assignment in `review` with execution summary | `review_waiting` |
-| Stalled | an `active` mandate with no checkpoint for 2 × heartbeat (since creation when it never checkpointed), or three `incomplete` outcomes in a row | `resident_stalled` |
+| Stalled | an `active` mandate with no checkpoint for 2 × heartbeat (since creation when it never checkpointed), or three `incomplete` outcomes in a row, or its workspace's cycle routine disabled — no cycle can fire at all then, however recently it checkpointed | `resident_stalled` |
 | Something broken | friction, or an `incident` notice (agent class) | `friction_untriaged` |
 
 ## Agent Signature
