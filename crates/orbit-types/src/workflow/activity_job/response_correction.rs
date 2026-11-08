@@ -41,6 +41,8 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.experiment.update",
     "orbit.friction.add",
     "orbit.friction.update",
+    "orbit.memory.propose",
+    "orbit.memory.write",
     "orbit.notice.close",
     "orbit.notice.post",
     "orbit.pipeline.invoke",

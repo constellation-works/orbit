@@ -287,6 +287,17 @@ Surface removal (2026-11-07): `orbit.visual.accept_dispute`, its `orbit visual
 accept-dispute` CLI and the `orbit.visual.capture` tool were removed with visual review
 [ORB-22807]; their governed rows and placement entries went with them.
 
+Current surface addition (2026-11-08): `orbit.memory.write` (governed `agent`
+and `operator`) and `orbit.memory.propose` (governed `agent`, tool-only) are
+advertised in the `experiments` toolset, which a crew memory dreaming run's
+dispatch stamps, and `orbit.memory.show` (ungoverned) joins them. Their rows
+are an identity floor, like the notice and resident rows: an unidentified
+caller is refused, and core admits an agent's call only from a dreaming
+task's run, for that task's key, while the run's activity lists the tools
+only then ([crew memory](../crew-memory/2_design.md) §6). Copy, export and
+reset stay unadvertised operator verbs. `GOVERNED_TOOL_PLACEMENT` records
+write and propose advertised.
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.

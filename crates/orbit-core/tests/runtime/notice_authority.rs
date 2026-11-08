@@ -992,10 +992,16 @@ fn agent_posting_baseline_governs_managed_runs() {
     // their baselines; no other notice tool is granted by this slice.
     for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
         let resolved = activity_resolved_tools(&runtime, activity);
-        assert!(
-            resolved.suppressed_tools.is_empty(),
-            "{activity} must suppress nothing when agent posting is on: {:?}",
-            resolved.suppressed_tools
+        // The only host suppression left is crew memory's agent tools, which
+        // a run outside a dreaming task and a memory arm never lists.
+        assert_eq!(
+            resolved.suppressed_tools,
+            [
+                "orbit.memory.show",
+                "orbit.memory.write",
+                "orbit.memory.propose"
+            ],
+            "{activity} must suppress no notice tool when agent posting is on"
         );
         for tool in [
             "orbit.notice.post",

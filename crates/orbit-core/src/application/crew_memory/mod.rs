@@ -7,16 +7,26 @@
 //! place the five write rules live. Nothing here delivers memory to a
 //! prompt on its own: slice M2's `memory` experiment overlay renders a space
 //! with [`OrbitRuntime::render_crew_memory_delivery`](crate::OrbitRuntime)
-//! for a memory arm's dispatches.
+//! for a memory arm's dispatches. Slice M3 adds dreaming: the weekly
+//! `crew_memory_dream` routine (`dream`) and the agent tools' admission
+//! (`agent`), which binds a dreaming run's write and proposals to its own
+//! key and evidence pack.
 //! Design: `docs/design/crew-memory/2_design.md`.
 
+mod agent;
 mod delivery;
+mod dream;
 mod key;
 mod operations;
 mod validate;
 
 use serde::{Deserialize, Serialize};
 
+pub use agent::{CREW_MEMORY_MAX_PROPOSALS_PER_RUN, MemoryToolCaller};
+pub use dream::{
+    CREW_MEMORY_DREAM_MIN_SUPPORT, CREW_MEMORY_DREAM_TAG, CREW_MEMORY_EVIDENCE_ARTIFACT,
+    CREW_MEMORY_EVIDENCE_MAX_BYTES, CREW_MEMORY_KEY_REF_SYSTEM,
+};
 pub use key::{GLOBAL_MEMORY_KEY, MemoryKey, memory_key, parse_memory_key};
 pub use validate::{
     GLOBAL_MAX_BYTES, GLOBAL_MAX_FILES, MODEL_SPACE_MAX_BYTES, MODEL_SPACE_MAX_FILES,
@@ -47,8 +57,8 @@ pub struct MemoryWrite {
 pub enum MemoryWriter {
     /// An operator through the CLI. May cite no evidence.
     Operator { actor: String },
-    /// A managed run (a dreaming run, from slice M3): it must cite evidence,
-    /// and it writes only the space of its own recorded `crew_model`.
+    /// A dreaming task's run (slice M3): it must cite evidence from its
+    /// evidence pack, and it writes only its task's `crew_memory_key`.
     Run {
         run_id: String,
         crew: String,

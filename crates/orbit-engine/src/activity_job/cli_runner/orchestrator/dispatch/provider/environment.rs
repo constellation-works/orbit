@@ -201,6 +201,16 @@ pub(super) fn prepare_provider_environment(
     {
         stamped_toolsets.push(McpToolset::Notice.as_str());
     }
+    // Core lists a crew memory tool only for a dreaming task's run or a run
+    // in a memory arm; stamp the toolset that carries it so the agent sees
+    // it over MCP.
+    if activity_tools
+        .effective_tools
+        .iter()
+        .any(|tool| tool.starts_with("orbit.memory."))
+    {
+        stamped_toolsets.push(McpToolset::Experiments.as_str());
+    }
     if !stamped_toolsets.is_empty() {
         dispatch_env.push((
             ACTIVITY_MCP_TOOLSETS_ENV.to_string(),

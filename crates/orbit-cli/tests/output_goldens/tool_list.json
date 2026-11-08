@@ -1837,6 +1837,87 @@
     "mcp_toolset": "tasks-write"
   },
   {
+    "name": "orbit.memory.propose",
+    "description": "Propose a note for the global memory every model receives, for an operator to accept or reject. Only a crew memory dreaming task's run may propose, at most 2 proposals per run. The note is refused, naming the rule, when it breaks the global memory's caps (3 KiB), provenance (at least one evidence task id, each from the run's evidence pack), the score-blind lint or the not-instructions lint. Refused while crew_memory.enabled is false.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "text",
+        "description": "The proposed global-memory note, at most 3 KiB of Markdown. It passes the same rules as a global-memory write.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence task ids the note rests on, at least one, each from this run's evidence pack.",
+        "param_type": "string_list",
+        "required": true
+      }
+    ],
+    "mcp_toolset": "experiments"
+  },
+  {
+    "name": "orbit.memory.show",
+    "description": "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a crew memory dreaming task's run or a run in a memory experiment arm, and reads only its own model's space (the default key) or `global`.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "key",
+        "description": "Memory key: a model id or `global`. Omit to summarise every space.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "revision",
+        "description": "Show this revision instead of the newest. Requires key.",
+        "param_type": "integer",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "experiments"
+  },
+  {
+    "name": "orbit.memory.write",
+    "description": "Replace a crew memory space's files with a new revision. Refused while crew_memory.enabled is false. A write is refused whole, naming the rule, when it breaks caps (a model space at most 8 files and 6 KiB, global 1 file and 3 KiB, names [a-z0-9-]{1,40}.md), provenance (a dreaming run cites at least one evidence task id, each from its evidence pack), the score-blind lint (scorecard vocabulary or another crew's or model's name), the not-instructions lint (a URL, an Orbit tool name, a shell command block or an injection phrase) or rewrite-whole (each file once); a refusal is recorded in the space's history. An agent may write only from a crew memory dreaming task's run, and only that task's own key: another model's key and `global` are refused (propose a global note instead).",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "key",
+        "description": "Memory key: the model id a space belongs to, as runs record it, or `global`. A dreaming run may name only its own task's key.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "files",
+        "description": "The space's complete new content as {path, text} objects. It replaces every file; there is no append.",
+        "param_type": "object_array",
+        "required": false
+      },
+      {
+        "name": "evidence",
+        "description": "Evidence task ids the notes rest on. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "Why the space changes; stored on the revision.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "experiments"
+  },
+  {
     "name": "orbit.notice.close",
     "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
     "enabled": true,

@@ -1,14 +1,19 @@
 //! Crew memory revisions in `crew_memory_revisions` and their audit in
 //! `crew_memory_events`. Both tables are append-only (triggers refuse
 //! updates and deletes); a write assigns the key's next revision number and
-//! appends its event in one immediate transaction.
+//! appends its event in one immediate transaction. Global-memory proposals
+//! in `crew_memory_proposals` open with their event in one transaction that
+//! also enforces the per-run cap.
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 
 use crate::Store;
-use crate::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow, CrewMemoryStoreBackend};
+use crate::contracts::{
+    CrewMemoryEventRow, CrewMemoryProposalOutcome, CrewMemoryProposalRow, CrewMemoryRevisionRow,
+    CrewMemoryStoreBackend,
+};
 
 use super::codec::stamp;
 
@@ -66,6 +71,48 @@ impl CrewMemoryStoreBackend for Store {
     fn append_crew_memory_event(&self, event: &CrewMemoryEventRow) -> Result<(), OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             insert_event(tx.connection(), event)
+        })
+    }
+
+    fn open_crew_memory_proposal(
+        &self,
+        proposal: &CrewMemoryProposalRow,
+        event: &CrewMemoryEventRow,
+        max_per_run: u32,
+    ) -> Result<CrewMemoryProposalOutcome, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            if let Some(run_id) = &proposal.proposing_run_id {
+                let existing: u32 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM crew_memory_proposals \
+                         WHERE workspace_id = ?1 AND proposing_run_id = ?2",
+                        params![proposal.workspace_id, run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(sqlite_store_error)?;
+                if existing >= max_per_run {
+                    return Ok(CrewMemoryProposalOutcome::CapReached { existing });
+                }
+            }
+            conn.execute(
+                "INSERT INTO crew_memory_proposals (workspace_id, id, proposing_key, \
+                 proposing_run_id, text, evidence_json, status, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    proposal.workspace_id,
+                    proposal.id,
+                    proposal.proposing_key,
+                    proposal.proposing_run_id,
+                    proposal.text,
+                    proposal.evidence_json,
+                    proposal.status,
+                    stamp(proposal.created_at),
+                ],
+            )
+            .map_err(sqlite_store_error)?;
+            insert_event(conn, event)?;
+            Ok(CrewMemoryProposalOutcome::Opened)
         })
     }
 
