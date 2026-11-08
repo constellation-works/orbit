@@ -12,7 +12,7 @@ paths:
   - "crates/orbit-exec/src/**"
 related_features: [policy-sandbox, executors, routines]
 related_artifacts: []
-last_validated: 2026-10-19
+last_validated: 2026-11-08
 ---
 
 # Run Orbit on Windows through WSL2
@@ -339,24 +339,81 @@ you configured, and, only when agent execution is wanted and authorized, one
 disposable task through the normal pipeline. Record any WSL-specific failure
 with its exact command and output.
 
+## How to verify
+
+On a Windows 11 host with a fresh WSL2 Ubuntu distribution, run from a Linux
+checkout of this repository. Install `git`, `curl`, `xz-utils`, and `python3`
+first. The script uses a disposable home, npm prefix and Git repository; if
+Node 18 or newer is unavailable on the Linux PATH, it downloads Node into that
+disposable temporary directory (under the original Linux home, or `TMPDIR`
+when it is outside `/tmp`). Bubblewrap hides host `/tmp`, so the installed
+fixture tools must live elsewhere. In a restricted agent lane, set `TMPDIR`
+to a writable directory such as `$PWD/.orbit/tmp`. It installs the published
+npm package, so the run needs network access. It does not change the host's
+Bubblewrap configuration; prepare it using section 5 if the readiness check
+fails. A provider-free stub makes a
+single local delivery, and PowerShell fetches the dashboard via Windows
+`localhost`. The script creates and removes a temporary Git repository under
+`/mnt/c` for the filesystem check. The result includes the DrvFs limitations.
+It never initializes Orbit state on that Windows drive. The script leaves the host's packages, npm prefix, provider
+credentials and existing Orbit state untouched; its temporary contents are
+removed after all children stop.
+
+```bash
+bash scripts/wsl2-smoke.sh > wsl2-smoke-result.json
+```
+
+Attach `wsl2-smoke-result.json` to the follow-up task that records the Windows
+run, with the Windows, WSL and Ubuntu versions. A nonzero exit and a `fail`
+result require investigation; a `skipped` step is not Windows evidence. A
+Linux-only run skips WSL detection, Windows forwarding and the `/mnt/c` check.
+When the existing readiness probe specifically reports denied namespace creation
+(as in a nested or unprivileged agent sandbox), `sandbox` and `ship` report
+`status: "skipped"`, `reason: "nested_sandbox"` and a
+`skipped:nested_sandbox` detail. This permits a Linux harness run to pass with
+explicit skips; it does not verify sandboxing or shipment. Run again outside
+the enclosing sandbox to obtain that evidence. Missing or incompatible
+Bubblewrap, AppArmor uid-map failures and other misconfiguration still fail;
+no sandbox fallback is enabled. A Windows verification needs all automated
+steps to pass without skips.
+
+Run the regression checks for this classification with
+`python3 scripts/test-wsl2-smoke.py`. They use disposable command fixtures and
+do not install packages or contact a provider.
+
+The smoke test does not install WSL, test Windows MCP clients or run the clock;
+follow the manual checks in sections 2, 3, 8 and 9 for those matrix rows.
+Do not remove the not-verified wording until a passing Windows run is recorded.
+
 ## Verification matrix
 
 Recorded 2026-10-05 against Orbit 0.27.0 at source commit `fa0b727d9`
 (`agent-main`). "Help/source" means checked against the CLI help or source of
 that commit on Linux; it does not mean the command ran under WSL.
 
-| Step | Help/source checked | Executed on Linux | Executed on Windows/WSL |
-|---|---|---|---|
-| `wsl --install`, `--list`, `--set-version`, `--version`, `--update`, `--shutdown`, `--terminate` | Microsoft docs, 2026-10-05 | n/a | **Not verified** |
-| `wsl.exe --distribution/--user/--exec` argument handling | `wsl.exe` usage text (Microsoft WSL repository), 2026-10-05 | n/a | **Not verified** |
-| `/etc/wsl.conf` `[boot] systemd=true`, `[interop] appendWindowsPath` | Microsoft docs, 2026-10-05 | n/a | **Not verified** |
-| `orbit init` flags, `--format json` `linux_sandbox` | CLI help and init source | Not run for this guide; see the Linux sandbox runbook | **Not verified** |
-| Bubblewrap probe, bundled `bwrap`, AppArmor rule | `crates/orbit-exec`, init source, [Linux sandbox runbook](linux-sandbox.md) | No native onboarding run is recorded for any distribution | **Not verified** |
-| `orbit doctor providers --json` readiness fields | CLI help and doctor source | Ran read-only on a Linux host: a JSON array with the fields above; inside an agent sandbox the probe reported the nested-namespace denial, as expected | **Not verified** |
-| `orbit workspace init --mcp`, `orbit mcp init` write Linux-side files only | `orbit-cli` MCP setup source | Not run for this runbook | n/a (does not touch Windows) |
-| `orbit mcp serve --workspace/--operator` | CLI help and source | Not run for this runbook | **Not verified** through `wsl.exe` |
-| `orbit routine init --install-clock`, `orbit clock status/pause/enable/repair/set` | CLI help and clock source | Not run for this runbook | **Not verified** |
-| `orbit workspace show --format json`, `orbit doctor` | CLI help | `workspace show --format json` ran read-only; `workspace.id` carries the selector. `orbit doctor` not run | **Not verified** |
+| Step | Help/source checked | Executed on Linux | Executed on Windows/WSL | Smoke coverage |
+|---|---|---|---|---|
+| `wsl --install`, `--list`, `--set-version`, `--version`, `--update`, `--shutdown`, `--terminate` | Microsoft docs, 2026-10-05 | n/a | **Not verified** | `wsl` detects the running kernel; installation and version management remain manual (section 2) |
+| `wsl.exe --distribution/--user/--exec` argument handling | `wsl.exe` usage text (Microsoft WSL repository), 2026-10-05 | n/a | **Not verified** | Manual: section 8; dashboard uses Windows PowerShell interop but does not test `wsl.exe` arguments |
+| `/etc/wsl.conf` `[boot] systemd=true`, `[interop] appendWindowsPath` | Microsoft docs, 2026-10-05 | n/a | **Not verified** | Manual: sections 3 and 4; `wsl` and `distro` check the running environment only |
+| `orbit init` flags, `--format json` `linux_sandbox` | CLI help and init source | Not run for this guide; see the Linux sandbox runbook | **Not verified** | `init` runs non-interactively; `--format json` remains manual (section 5) |
+| Bubblewrap probe, bundled `bwrap`, AppArmor rule | `crates/orbit-exec`, init source, [Linux sandbox runbook](linux-sandbox.md) | No native onboarding run is recorded for any distribution | **Not verified** | `sandbox` checks readiness; package installation, bundled wrapper and AppArmor repair remain manual (section 5) |
+| `orbit doctor providers --json` readiness fields | CLI help and doctor source | Ran read-only on a Linux host: a JSON array with the fields above; inside an agent sandbox the probe reported the nested-namespace denial, as expected | **Not verified** | `sandbox` |
+| `orbit workspace init --mcp`, `orbit mcp init` write Linux-side files only | `orbit-cli` MCP setup source | Not run for this runbook | n/a (does not touch Windows) | `workspace` initializes without `--mcp`; MCP registration remains manual |
+| `orbit mcp serve --workspace/--operator` | CLI help and source | Not run for this runbook | **Not verified** through `wsl.exe` | Manual: section 8 |
+| `orbit routine init --install-clock`, `orbit clock status/pause/enable/repair/set` | CLI help and clock source | Not run for this runbook | **Not verified** | Manual: section 9 |
+| `orbit workspace show --format json`, `orbit doctor` | CLI help | `workspace show --format json` ran read-only; `workspace.id` carries the selector. `orbit doctor` not run | **Not verified** | `workspace` and `doctor`; workspace show remains manual |
+
+A Linux smoke run on 2026-11-08 with the published Orbit 0.47.0 passed
+`node`, `install`, `version`, `init`, `workspace`, `doctor` and `dashboard`.
+The namespace-denial classification skipped `sandbox` and `ship`; WSL-only
+checks were also skipped. This is harness evidence, not Windows verification
+or an unsandboxed local shipment result.
+
+The `node`, `install`, `version`, `ship`, `dashboard` and `windows_fs`
+steps additionally check the published npm install, a provider-free local
+delivery, Windows localhost forwarding and the documented filesystem limits.
+They do not establish the unexercised manual checks above.
 
 ## Related references
 
