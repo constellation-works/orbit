@@ -123,15 +123,11 @@ so transcript volume cannot evict operational events. The same age limit applies
 to both feeds; either feed can be pruned sooner when its own size budget fills.
 Writers recheck size and reopen after each MiB written, so long-lived producers
 also enforce the cap. Relay archives use `orbit-agent.jsonl.<UTC-timestamp>`.
-Override the operational size limits and shared age limit in
-`~/.orbit/config.toml`:
-
-```toml
-[runtime]
-log_retention_days = 7
-log_max_total_mb = 500
-log_max_file_mb = 100
-```
+These operational size limits and the shared age limit are fixed in code and
+are not tunable. The former `runtime.log_retention_days`,
+`runtime.log_max_total_mb` and `runtime.log_max_file_mb` keys are ignored
+when present (recognised only until 2026-12-08); delete them from
+`~/.orbit/config.toml`.
 
 Log snapshots return an opaque `cursor` that binds each feed's complete-record
 byte offset to the identity of the open file scanned by that snapshot. Pass it

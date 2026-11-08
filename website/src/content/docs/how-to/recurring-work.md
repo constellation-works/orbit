@@ -7,8 +7,10 @@ sidebar:
 
 A per-machine **host scheduler clock** drives all scheduled work. On each tick, due
 **routines** start job runs and due **auto-tasks** file tasks. Most routines
-and auto-tasks ship disabled; the `worktree-gc` and `task-pilot` routines and
-the `host-health` auto-task ship enabled in new workspaces. [Routines and
+and auto-tasks ship disabled; the `worktree-gc`, `task-pilot` and
+`crew-memory-dream` routines and the `host-health` auto-task ship enabled
+in new workspaces. `crew-memory-dream` mints nothing while
+`crew_memory.enabled` is false or no running memory-arm experiment applies. [Routines and
 Auto-Tasks](../../concepts/scheduling/) explains the model; this page is the
 procedure.
 
@@ -161,8 +163,10 @@ CI-failure and dependency-alert sweeps, and
 [task publication](../task-publication/#scheduled-publication) (weekly Sunday
 at 04:47 host-local time, disabled until you opt into publishing task prose;
 attachments default to `omit`).
-The shipped `worktree-gc` and `task-pilot` routines start enabled; the other
-shipped routines start disabled. `orbit workspace sync`
+The shipped `worktree-gc`, `task-pilot` and `crew-memory-dream` routines
+start enabled; the other shipped routines start disabled.
+`crew-memory-dream` mints nothing while `crew_memory.enabled` is false or
+no running memory-arm experiment applies. `orbit workspace sync`
 refreshes the routines after an upgrade and keeps your edits.
 
 Change a routine's enablement with its switch in **Automation → Routines**, with

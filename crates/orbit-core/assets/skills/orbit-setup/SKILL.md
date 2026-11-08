@@ -96,7 +96,10 @@ Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
 Seeded schedules are disabled until an operator deliberately enables them, except
-the `worktree-gc` and `task-pilot` routines and the `host-health` auto-task, which
-seed enabled when the seeding policy selects them. Preserve
+the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-health` auto-task, which
+seed enabled when the seeding policy selects them. Seeded enabled does not
+turn the experimental crew-memory feature on: `crew-memory-dream` mints
+nothing while `crew_memory.enabled` is false or no running memory-arm
+experiment applies. Preserve
 existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.
