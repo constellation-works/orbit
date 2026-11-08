@@ -68,7 +68,9 @@ impl Tool for OrbitCommandExecTool {
             description:
                 "Execute a command as an explicit argv array in an explicit working directory \
                  and return its stdout, stderr, and exit status, within a deadline. Requires operator capability \
-                 and the workspace claim; withheld from managed runs."
+                 and the workspace claim; withheld from managed runs. The child receives an \
+                 allowlisted environment: baseline process context, git author and committer \
+                 identity, and Orbit's execution envelope."
                     .to_string(),
             parameters,
             builtin: true,

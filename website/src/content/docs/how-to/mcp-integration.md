@@ -260,6 +260,13 @@ The directory must exist and be absolute, inside the selected workspace's
 checkout or a linked worktree under `.orbit/state/worktrees/`. Orbit never
 infers it from the caller's current directory.
 
+The command's environment is an allowlist, not the Orbit server's environment.
+It receives baseline process context such as `HOME`, `PATH` and `USER`, git
+author and committer name and email when the server has them, and Orbit's
+execution-envelope variables. Other names are absent, including
+`SSH_AUTH_SOCK`, names starting with `MCP_MANAGED_`, and privilege-bearing
+names such as `ORBIT_OPERATOR`.
+
 The workspace claim is an optional exclusive coordination hold, separate
 from operator authority. An unclaimed workspace admits the command. If a
 claim is held, supply its matching `claim_token` argument or set

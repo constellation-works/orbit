@@ -14,6 +14,13 @@
 //! command is reported as `timed_out: true` with no exit code; the output it
 //! had produced is discarded.
 //!
+//! The child environment is the shared agent-subprocess allowlist
+//! (`orbit_common::security::child_env::allowlisted_child_env`): baseline
+//! process context, the git-identity pass list `COMMAND_EXEC_PASS`, and the
+//! named Orbit execution envelope. A name outside that set, including
+//! `DATABASE_URL`, `SSH_AUTH_SOCK`, `MCP_MANAGED_*` and `ORBIT_OPERATOR`, does
+//! not reach the command.
+//!
 //! Operator capability is enforced uniformly across every entry point by the
 //! ORB-10453 governed-operation chokepoint before this method is ever reached;
 //! this method owns the rest of the gate the capability check cannot see —
@@ -26,7 +33,8 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::process::{BoundedRunError, run_bounded_capped_typed};
-use orbit_common::security::redaction::{argv_redactor, is_sensitive_env_name};
+use orbit_common::security::child_env::allowlisted_child_env;
+use orbit_common::security::redaction::argv_redactor;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ExecutionResult;
 use serde_json::json;
@@ -36,6 +44,21 @@ use crate::RuntimeKernel;
 
 const COMMAND_TOOL_NAME: &str = "orbit.command.exec";
 const COMMAND_TARGET_TYPE: &str = "command_exec";
+
+/// Git identity forwarded to an `orbit.command.exec` child, beyond the
+/// agent-subprocess baseline and the named Orbit execution envelope.
+///
+/// These four names are identity, not credentials: a commit the operator runs
+/// through this tool keeps the author and committer the parent process already
+/// set. Every other ambient name stays in the parent. Privilege-bearing
+/// `ORBIT_*` names are refused by `allowlisted_child_env` even if one is added
+/// here.
+const COMMAND_EXEC_PASS: &[&str] = &[
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+];
 
 /// Deadline when the caller passes no `timeout_ms`.
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -82,7 +105,7 @@ impl RuntimeKernel {
             .chain(args.clone())
             .collect();
 
-        let env_pairs = std::env::vars().filter(|(key, _)| !is_sensitive_env_name(key));
+        let env_pairs = command_exec_child_env();
 
         let timeout_ms = params
             .timeout_ms
@@ -175,6 +198,15 @@ impl RuntimeKernel {
 
         result
     }
+}
+
+/// The environment an `orbit.command.exec` child is launched with.
+fn command_exec_child_env() -> Vec<(String, String)> {
+    let pass = COMMAND_EXEC_PASS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    allowlisted_child_env(&pass, &[])
 }
 
 /// True when `error` is the OS argument/environment size refusal (E2BIG).
