@@ -188,7 +188,9 @@ Claimed workers reach the owner's `orbit.task.show`, `orbit.search`,
 Notices are stored only on the owner, and the claim binding supplies the
 posting task and run. Search and task listing read only the claimed workspace's owner
 records; federated search scope (`workspaces`, `all_workspaces` and aliases)
-is refused. Task show and artifacts retain their claimed-task scope, and
+is refused. Task show and artifact get may read any task in the claimed
+workspace; artifact put stays on the claimed task, another task's `review-*`
+artifacts and another run's delivery of the claimed task are refused, and
 finding creation retains its `spawned_from` requirement. Use search/list for
 owner-side deduplication and return dedupe evidence in the output or the new
 finding. `orbit.task.update` stays denied: a task requiring it remains an
