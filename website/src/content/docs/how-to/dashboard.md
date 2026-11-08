@@ -26,7 +26,7 @@ This serves every workspace in the current Orbit registry at
 | `--no-open` | Do not open a browser. |
 | `--port <N>` | Serve on another port. |
 | `--workspace <SELECTOR>` | Open on this workspace: a registered name, `ws_*` ID, or checkout path. If nothing matches, the dashboard opens on **All workspaces**. |
-| `--operator` | Enable operator controls without an interactive terminal. See [Authorization](#authorization). |
+| `--operator` | Grant the dashboard's operator capability for Operations controls. This is its only operator grant; the server's terminal and `ORBIT_OPERATOR` do not grant it. See [Authorization](#authorization). |
 | `orbit --root <DIR> web serve` | Serve only the workspaces in `<DIR>/workspaces.json`, not `~/.orbit/workspaces.json`. |
 
 `--global` is still accepted but does nothing. The server refuses
@@ -2057,14 +2057,11 @@ Two gates apply:
    **Send pending results**, settings writes, plugin enable and disable, and the
    owner's handoff approve, revoke, and claim-recovery actions.
 
-The dashboard server has operator capability when:
-
-- it was started from a local interactive terminal;
-- it was started with `orbit web serve --operator`;
-- it was started by `orbit web connect`, which passes `--operator` by default
-  because the SSH login is the operator act (pass `--no-operator` for a
-  read-only remote); or
-- its process has `ORBIT_OPERATOR=1`, which the audit trail records.
+The dashboard server has operator capability only when it is started with
+`orbit web serve --operator`. `orbit web connect` passes `--operator` by
+default when it starts a remote server; pass `--no-operator` for read-only
+remote access. A local interactive terminal and `ORBIT_OPERATOR=1` do not
+grant operator capability.
 
 When you [switch to another host](#switch-hosts), a write is forwarded only
 if the dashboard you are using, the serving one, has operator capability.
