@@ -1,6 +1,6 @@
 //! Task/job adapters retain existing creation and evidence provenance boundaries.
 
-use super::{COVERAGE_ARTIFACT, source::Source};
+use super::{COVERAGE_ARTIFACT, consumer_states, source::Source};
 use crate::OrbitRuntime;
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
@@ -16,6 +16,7 @@ use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskHistoryEntry
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 
 pub(super) fn mint(
     runtime: &OrbitRuntime,
@@ -219,7 +220,6 @@ pub(super) fn blocked_by_failed_run(history: &[TaskHistoryEntry], run_id: &str) 
         })
 }
 
-const CONSUMER_PAGE_LIMIT: usize = 100;
 const RECEIPT_LIMIT: usize = 100;
 
 /// [ORB-14837] The coverage evidence task `task_id` submitted as a delivery
@@ -240,21 +240,11 @@ pub(crate) fn accepted_action_coverage(
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
     let store = runtime.automation_store()?;
-    let mut after: Option<String> = None;
-    loop {
-        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
-        for state in &page {
-            if after.as_ref().is_some_and(|key| state.consumer <= *key) {
-                return Err(OrbitError::Store(
-                    "automation state page is not strictly ordered".into(),
-                ));
-            }
-            after = Some(state.consumer.clone());
-        }
-        if page.is_empty() {
-            return Ok(None);
-        }
-        for state in page {
+    let result = consumer_states::for_each_workspace_consumer_state(
+        &prefix,
+        |after, limit| store.automation_states_page(&prefix, after, limit),
+        |state| &state.consumer,
+        |state| {
             let accepted = match state
                 .active
                 .as_ref()
@@ -267,13 +257,15 @@ pub(crate) fn accepted_action_coverage(
                     .find(|receipt| receipt.action_id == task_id)
                     .map(|receipt| receipt.evidence),
             };
-            if let Some(bytes) = accepted {
-                return serde_json::from_slice(&bytes)
-                    .map(Some)
-                    .map_err(|error| OrbitError::Store(format!("accepted coverage: {error}")));
+            match accepted {
+                Some(bytes) => serde_json::from_slice(&bytes)
+                    .map(ControlFlow::Break)
+                    .map_err(|error| OrbitError::Store(format!("accepted coverage: {error}"))),
+                None => Ok(ControlFlow::Continue(())),
             }
-        }
-    }
+        },
+    )?;
+    Ok(result.break_value())
 }
 
 /// Bytes settlement would accept for `attempt` now. Unverifiable evidence is

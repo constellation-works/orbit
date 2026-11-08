@@ -13,7 +13,9 @@ use super::super::freshness::{commit_sha, original_base_sha};
 use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
-use super::super::handoff::rebase_in_progress;
+use super::super::handoff::{
+    comment_already_recorded, rebase_in_progress, review_repair_comment_key,
+};
 use super::super::interrupted_review::review_in_flight;
 use super::super::pr::{close_earlier_task_pull_requests, open_or_reuse_unchecked};
 use super::super::push::push_batch_changes_inner;
@@ -47,10 +49,19 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
         return Ok(None);
     };
     let recipe = &error_message[start..];
-    let already = host
-        .get_task_comments(&task.id)?
-        .iter()
-        .any(|comment| comment.message.contains("review_repair_after_merge:"));
+    // Keyed by the merged pull request, falling back to the marker prefix
+    // when the recipe carries no number.
+    let (operation_id, legacy_prefix) = review_repair_comment_key(recipe).unwrap_or_else(|| {
+        (
+            "review-repair-after-merge:".to_string(),
+            "review_repair_after_merge:".to_string(),
+        )
+    });
+    let already = comment_already_recorded(
+        &host.get_task_comments(&task.id)?,
+        &operation_id,
+        &legacy_prefix,
+    );
     let blocked = task.status == TaskStatus::Blocked;
     if !already || !blocked {
         let mut append_comments = Vec::new();
@@ -59,7 +70,7 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: recipe.to_string(),
-                operation_id: None,
+                operation_id: Some(operation_id),
             });
         }
         host.apply_task_automation_update(

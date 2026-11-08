@@ -59,8 +59,8 @@ pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
     ),
     (
         "ux_rules_pipeline",
-        "the scheduled ux-rules filer was removed; run `scripts/ux-rules/run.mjs` by hand to \
-         measure UI rules",
+        "the scheduled ux-rules filer was removed, so nothing runs UI rule checks on a schedule or \
+         files tasks from them",
     ),
     (
         "finding_verification_pipeline",

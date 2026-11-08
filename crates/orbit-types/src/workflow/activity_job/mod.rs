@@ -196,7 +196,8 @@ pub use job_v2::{
     TargetRef, TargetStep,
 };
 pub use response_correction::{
-    ResponseCorrectionActivityError, validate_response_correction_activity,
+    MUTATING_TOOLS, ResponseCorrectionActivityError, is_response_correction_mutating_tool,
+    validate_response_correction_activity,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;

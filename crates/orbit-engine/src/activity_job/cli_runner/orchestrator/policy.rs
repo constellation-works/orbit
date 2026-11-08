@@ -8,7 +8,9 @@ use orbit_common::security::child_env::{
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::tool::{AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS};
-use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
+use orbit_types::workflow::activity_job::{
+    ActivityToolPolicyMode, AgentLoopSpec, MUTATING_TOOLS, is_response_correction_mutating_tool,
+};
 use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed};
 use serde_json::Value;
 
@@ -185,6 +187,14 @@ pub(super) fn resolve_activity_tool_grant(
             }
         }
     }
+    drop_mutating_tools_for_response_correction(
+        host,
+        spec,
+        activity_name,
+        task_ids,
+        &mut activity_tools,
+        tool_disallow_list.as_mut(),
+    )?;
     if claimed && tool_disallow_list.is_none() {
         restrict_allowlist(
             host,
@@ -199,6 +209,69 @@ pub(super) fn resolve_activity_tool_grant(
         tool_disallow_list,
         activity_tools,
     })
+}
+
+/// A `response_correction` activity must never receive a built-in mutating
+/// tool, however its grant was composed. Asset load already refuses such a
+/// tool in the activity's own list, but a task's `required_tools` are only
+/// admitted at run time and, in allowlist mode, are added to the baseline
+/// without that check. Drop a mutating requirement here, with an
+/// omitted-requirement note like the one a deny-mode non-implementer records,
+/// and strip any mutating name (including one a wildcard baseline covers)
+/// from the effective grant. Deny mode keeps its existing behaviour: the host
+/// already refused or dropped a covered requirement, and this only re-denies
+/// the mutating names to the child. Activities without `response_correction`
+/// are untouched.
+fn drop_mutating_tools_for_response_correction(
+    host: &dyn RuntimeHost,
+    spec: &AgentLoopSpec,
+    activity_name: &str,
+    task_ids: &[String],
+    activity_tools: &mut ResolvedActivityTools,
+    tool_disallow_list: Option<&mut Vec<String>>,
+) -> Result<(), DispatchError> {
+    if spec.response_correction.is_none() {
+        return Ok(());
+    }
+    for tool in &activity_tools.requested_tools {
+        if is_response_correction_mutating_tool(tool) {
+            let note = format!(
+                "required tool `{tool}` dropped from requested_tools: the activity declares response_correction, so a task's required_tools cannot grant a mutating tool to it"
+            );
+            tracing::warn!("{note}");
+            if !activity_tools.omitted_requirement_notes.contains(&note) {
+                activity_tools.omitted_requirement_notes.push(note);
+            }
+        }
+    }
+    activity_tools
+        .granted_tools
+        .retain(|tool| !is_response_correction_mutating_tool(tool));
+    match tool_disallow_list {
+        Some(disallow_list) => {
+            for tool in MUTATING_TOOLS {
+                if !tool_allowed(tool, disallow_list) {
+                    disallow_list.push((*tool).to_string());
+                }
+            }
+            activity_tools
+                .requested_tools
+                .retain(|tool| !is_response_correction_mutating_tool(tool));
+            activity_tools
+                .effective_tools
+                .retain(|tool| !is_response_correction_mutating_tool(tool));
+        }
+        None => {
+            restrict_allowlist(
+                host,
+                activity_tools,
+                activity_name,
+                task_ids,
+                MUTATING_TOOLS,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Removes the granted names the host lifted from the disallow list the child

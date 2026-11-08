@@ -1,6 +1,7 @@
 mod admission;
 mod forecast;
 mod gap_fit;
+mod load_failure;
 mod lock_busy;
 mod pool;
 mod waiting;

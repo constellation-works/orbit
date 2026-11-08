@@ -298,13 +298,15 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
             let definition = routines.join("pilot.yaml");
             let raw = fs::read_to_string(&definition).unwrap();
             fs::write(&definition, raw.replace("enabled: false", "enabled: true")).unwrap();
-            let requests = (0..4)
-                .map(|_| server.get("/api/routines?workspace=ws_http_fixture"))
-                .collect::<Vec<_>>();
+            let barrier = std::sync::Barrier::new(4);
             let responses = std::thread::scope(|scope| {
-                requests
-                    .into_iter()
-                    .map(|request| scope.spawn(move || json_ok(request)))
+                (0..4)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            json_ok(server.get("/api/routines?workspace=ws_http_fixture"))
+                        })
+                    })
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|thread| thread.join().unwrap())

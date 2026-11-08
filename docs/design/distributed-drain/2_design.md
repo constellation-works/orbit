@@ -505,6 +505,19 @@ its transaction:
 `classify_workspace_auto_tasks` and the readiness diagnostic report `wrapper_leaf_runs` and
 `leaf_occupancy_by_pipeline`.
 
+**Leaf load-failure hold** ([ORB-22892]). A local drain also excludes, for the rest of its own
+window, a task whose leaf of that drain ended `failed` before any real step started — its only
+recorded step is the job-load diagnostic (target: the job itself), or it has none. That is the
+shape of a deterministic load failure: a bad job or activity definition, an invalid catalog
+entry, a retired declaration, or a script manifest whose entry does not resolve. The failure
+changes nothing on the task, so the live-leaf exclusion alone would re-admit it on the next
+iteration indefinitely (one bad manifest produced 88 failed leaves in 21 s). The pass records
+each held task in its deferred list with reason `leaf_load_failed` and returns it in
+`leaf_load_failed_holds`, naming the leaf run and the load error. The hold lifts when the task
+is updated after the failure; a leaf that started any step (a transient or post-step failure)
+is not held and keeps ordinary re-admission, and a new drain carries no hold from an earlier
+one. The rule is generic over load failures, never keyed to one error text.
+
 **Pull review replacement credit.** Owner/local drains continue to count every occupied child
 against their worker ceiling. A pull drain uses the same ceiling N but computes its admission
 load as `occupied - min(reviewing, N)` and admits only while that load is below N. A leaf enters

@@ -3,6 +3,7 @@
 //! stall, recent fires with their upstream chain, and `self` (§9, §11).
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::ControlFlow;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{ConditionCarrier, self_facts};
@@ -16,6 +17,7 @@ use serde::Serialize;
 
 use super::{ConditionDefinition, condition_consumer, condition_refusal, facts};
 use crate::OrbitRuntime;
+use crate::application::automation::consumer_states;
 
 /// Most fires and subjects one status lists.
 const LISTED: usize = 20;
@@ -434,20 +436,19 @@ fn fire_index(runtime: &OrbitRuntime) -> Result<FireIndex, OrbitError> {
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
     let store = runtime.automation_store()?;
     let mut index = HashMap::new();
-    let mut after: Option<String> = None;
-    loop {
-        let page = store.condition_states_page(&prefix, after.as_deref(), 100)?;
-        let Some(last) = page.last() else {
-            break;
-        };
-        after = Some(last.consumer.clone());
-        for state in page {
-            let trigger = trigger_of(&state.consumer);
-            for fire in state.fires {
-                index.insert(fire.fire_id.clone(), (trigger.clone(), fire));
-            }
-        }
-    }
+    let _: ControlFlow<std::convert::Infallible> =
+        consumer_states::for_each_workspace_consumer_state(
+            &prefix,
+            |after, limit| store.condition_states_page(&prefix, after, limit),
+            |state| &state.consumer,
+            |state| {
+                let trigger = trigger_of(&state.consumer);
+                for fire in state.fires {
+                    index.insert(fire.fire_id.clone(), (trigger.clone(), fire));
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
     Ok(index)
 }
 

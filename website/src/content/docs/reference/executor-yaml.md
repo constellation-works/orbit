@@ -266,7 +266,7 @@ spec:
     success:
       kind: stdout_contains
       text: ORBIT_AUTH_OK
-    relogin_hint: "Run `claude auth login`, or renew `claude setup-token`."
+    relogin_hint: "Run `claude auth login`, or renew `claude setup-token` and pass CLAUDE_CODE_OAUTH_TOKEN in [execution.env].pass."
 ```
 
 - `args` replaces the activity arguments for the probe call, using the same

@@ -182,7 +182,7 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     }
 }
 struct Fixture {
-    _temp: tempfile::TempDir,
+    _temp: Option<tempfile::TempDir>,
     home: PathBuf,
     work: PathBuf,
 }
@@ -201,7 +201,7 @@ impl Fixture {
         fs::create_dir_all(home.join("empty-bin")).expect("empty child PATH");
         git_repo::init(&work);
         let fixture = Self {
-            _temp: temp,
+            _temp: Some(temp),
             home,
             work,
         };

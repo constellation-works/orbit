@@ -1,6 +1,6 @@
 //! Hold assessments whose source evidence leaves their lock footprint unresolved.
 use super::super::promotion::FOOTPRINT_UNRESOLVED;
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{TaskComplexity, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
 /// Hold a task whose pilot could not establish its lock footprint, so the hold
@@ -66,10 +66,10 @@ pub(super) fn hold_unresolved_footprint(
     }
 }
 
-/// Whole `ORB-` task ids named in `text`.
+/// Whole task ids named in `text`, under any valid task-id prefix.
 fn named_task_ids(text: &str) -> Vec<String> {
     text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_')))
-        .filter(|token| token.starts_with("ORB-") && token.len() > 4)
+        .filter(|token| is_valid_orb_task_id(token))
         .map(str::to_string)
         .collect()
 }

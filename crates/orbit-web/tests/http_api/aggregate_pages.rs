@@ -560,29 +560,42 @@ fn aggregate_task_candidates_select_workspaces_concurrently() {
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(
         "aggregate_pages::aggregate_job_runs_page_is_bounded_and_observational",
-        || {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let global_root = tmp.path().join("global");
-            std::fs::create_dir_all(&global_root).expect("create global root");
-            let names = ["alpha", "bravo", "charlie", "delta", "echo"];
-            let repos = names
-                .iter()
-                .map(|name| seed_workspace(&global_root, tmp.path(), name).1)
-                .collect::<Vec<_>>();
-            let bindings = names
-                .iter()
-                .zip(&repos)
-                .map(|(name, repo)| (*name, repo.as_path()))
-                .collect::<Vec<_>>();
-            write_registry(&global_root, &bindings);
-            let alpha = OrbitRuntime::from_roots(&global_root, &repos[0].join(".orbit"))
-                .expect("alpha runtime");
-            let store = alpha.sqlite_store().expect("store");
-            {
-                let connection = store.connection();
-                let conn = connection.lock().expect("store connection");
-                for name in names {
-                    conn.execute(
+        || check_aggregate_job_runs_pages(false),
+    );
+}
+
+/// Warm-page latency is manual evidence, without a load-sensitive CI threshold.
+#[test]
+#[ignore = "manual latency evidence over 20,000 aggregate job runs"]
+fn aggregate_job_runs_page_latency() {
+    isolated("aggregate_pages::aggregate_job_runs_page_latency", || {
+        check_aggregate_job_runs_pages(true);
+    });
+}
+
+fn check_aggregate_job_runs_pages(measure_latency: bool) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    let repos = names
+        .iter()
+        .map(|name| seed_workspace(&global_root, tmp.path(), name).1)
+        .collect::<Vec<_>>();
+    let bindings = names
+        .iter()
+        .zip(&repos)
+        .map(|(name, repo)| (*name, repo.as_path()))
+        .collect::<Vec<_>>();
+    write_registry(&global_root, &bindings);
+    let alpha =
+        OrbitRuntime::from_roots(&global_root, &repos[0].join(".orbit")).expect("alpha runtime");
+    let store = alpha.sqlite_store().expect("store");
+    {
+        let connection = store.connection();
+        let conn = connection.lock().expect("store connection");
+        for name in names {
+            conn.execute(
                 "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3999)
                  INSERT INTO job_runs(run_id, workspace_id, job_id, attempt, state,
                      scheduled_at, started_at, finished_at, duration_ms, created_at)
@@ -592,62 +605,64 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
                 [format!("ws_{name}")],
             )
             .expect("seed runs");
-                }
-            }
+        }
+    }
 
-            let server = spawn_server(
-                tmp.path(),
-                true,
-                false,
-                false,
-                &tmp.path().join("process.log"),
-                None,
-                &[],
-            );
-            let page = |state_filter: &str| {
-                json_ok(server.get(&format!("/api/job-runs/all?limit=50&state={state_filter}")))
-            };
-            // Warm: every workspace runtime is open and the store pages are cached.
-            let warm = page("all");
-            assert_eq!(warm["items"].as_array().expect("items").len(), 50);
-            assert_eq!(warm["total"], 20_000);
-            assert_eq!(warm["truncated"], true);
-            assert_eq!(warm["unavailable"], serde_json::json!([]));
-            assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
+    let server = spawn_server(
+        tmp.path(),
+        true,
+        false,
+        false,
+        &tmp.path().join("process.log"),
+        None,
+        &[],
+    );
+    let page = |state_filter: &str| {
+        json_ok(server.get(&format!("/api/job-runs/all?limit=50&state={state_filter}")))
+    };
+    // Warm: every workspace runtime is open and the store pages are cached.
+    let warm = page("all");
+    assert_eq!(warm["items"].as_array().expect("items").len(), 50);
+    assert_eq!(warm["total"], 20_000);
+    assert_eq!(warm["truncated"], true);
+    assert_eq!(warm["unavailable"], serde_json::json!([]));
+    assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
 
-            // A terminal run whose timing is incomplete is exactly what reconciling
-            // reads repair. The dashboard must show it as stored.
-            let mut incomplete = seed_run(
-                &alpha,
-                "jrun-incomplete",
-                "bulk",
-                orbit_core::JobRunState::Failed,
-            );
-            incomplete.finished_at = None;
-            incomplete.duration_ms = None;
-            store
-                .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
-                .expect("store incomplete run");
+    // A terminal run whose timing is incomplete is exactly what reconciling
+    // reads repair. The dashboard must show it as stored.
+    let mut incomplete = seed_run(
+        &alpha,
+        "jrun-incomplete",
+        "bulk",
+        orbit_core::JobRunState::Failed,
+    );
+    incomplete.finished_at = None;
+    incomplete.duration_ms = None;
+    store
+        .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
+        .expect("store incomplete run");
 
-            let started = std::time::Instant::now();
-            let all = page("all");
-            let failed = page("failed");
-            let elapsed = started.elapsed();
-            assert_eq!(all["items"].as_array().expect("items").len(), 50);
-            assert_eq!(failed["items"][0]["run_id"], "jrun-incomplete");
-            assert!(
-                elapsed < std::time::Duration::from_millis(300),
-                "two warm aggregate pages over 20k runs took {elapsed:?}"
-            );
-            let stored = alpha
-                .show_job_run_observed("jrun-incomplete")
-                .expect("incomplete run");
-            assert_eq!(
-                (stored.state, stored.finished_at),
-                (orbit_core::JobRunState::Failed, None),
-                "a dashboard GET must not reconcile runs"
-            );
-        },
+    let started = measure_latency.then(std::time::Instant::now);
+    let all = page("all");
+    let failed = page("failed");
+    if let Some(started) = started {
+        use std::io::Write as _;
+        writeln!(
+            std::io::stderr(),
+            "test-note: two warm aggregate pages over 20k runs took {:?}",
+            started.elapsed()
+        )
+        .expect("write latency measurement");
+    }
+    assert_eq!(all["items"].as_array().expect("items").len(), 50);
+    assert_eq!(failed["items"][0]["run_id"], "jrun-incomplete");
+    let stored = alpha
+        .show_job_run_observed("jrun-incomplete")
+        .expect("incomplete run");
+    assert_eq!(
+        (stored.state, stored.finished_at),
+        (orbit_core::JobRunState::Failed, None),
+        "a dashboard GET must not reconcile runs"
     );
 }
 

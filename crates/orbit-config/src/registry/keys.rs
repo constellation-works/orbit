@@ -333,8 +333,8 @@ const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass ro
      evolution ledger. Delete the key. This key stops being recognised after 2026-12-07";
 
 const UX_RULES_REMOVED_NOTE: &str = "ignored: the ux-rules routine and its findings filer were \
-     removed; run scripts/ux-rules/run.mjs by hand and delete the [ux_rules] table. This key \
-     stops being recognised after 2026-12-07";
+     removed, so nothing runs UI rule checks on a schedule or files tasks from them; delete the \
+     [ux_rules] table. This key stops being recognised after 2026-12-07";
 
 const VERIFY_FINDINGS_REMOVED_NOTE: &str = "ignored: finding verification was removed, so a \
      review-filed bug is approved and promoted like any other task; delete the key. This key \

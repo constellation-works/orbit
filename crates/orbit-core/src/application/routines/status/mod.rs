@@ -33,13 +33,13 @@ mod toggle;
 
 pub use crate::application::contracts::ScheduleDisplayState;
 pub(crate) use checkout::{
-    checkout_edit_report, checkout_refusal, checkout_routine_statuses, toggle_checkout_routine,
+    checkout_edit_report, checkout_routine_statuses, toggle_checkout_routine,
 };
 pub use display::{FireField, RoutineFailureStreak, RoutineField, RoutineStatus, project_fire};
 pub use fires::recent_fires;
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
 pub use toggle::{
-    RoutineToggleOutcome, RoutineToggleRefusal, pause_routine, resume_routine,
-    select_listed_routine, set_routine_enabled, toggle_listed_routine,
+    RoutineToggleOutcome, pause_routine, resume_routine, select_listed_routine,
+    set_routine_enabled, toggle_listed_routine,
 };
 pub(crate) use toggle::{next_scheduled_occurrence, rewrite_enabled_line};

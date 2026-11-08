@@ -441,8 +441,7 @@ fn a_stale_grant_raises_a_request_with_both_digests_and_the_diff() {
     assert!(
         !payload
             .diff
-            .contains(&format!("+++ .orbit/resources/scripts/{SCRIPT}.yaml"))
-            || payload.diff.contains("-schemaVersion"),
+            .contains(&format!("+++ .orbit/resources/scripts/{SCRIPT}.yaml")),
         "an unchanged manifest adds no lines: {}",
         payload.diff
     );

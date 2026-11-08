@@ -170,15 +170,15 @@ prove that a particular task or run succeeded.
 |---|---|
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
 | **Drain** | Shown only at 1000px and narrower. Above that width the Tasks dock's Drain tab sits beside the list instead. On a narrow window the item opens the Drain tab in place of the task list, where you start and stop a window by touch. While a drain runs, the item shows its state on every view. |
-| **Runs** | Job runs, newest first, and run detail. |
+| **Jobs** | Job runs and the job catalogue: **Live** (runs pending or running now), **History** (every run, newest first, and run detail), and **Catalogue** (jobs you can run by hand). See [Runs and errors](#runs-and-errors) and [Jobs](#jobs). |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
-| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, **Jobs**, and **Residents**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
 | **[Leases](#leases)** | Read-only path holders, waiters and recent landing notices for the selected workspace. |
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
-| **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
+| **Settings** | Workflow, Execution, Review, Crews, Machine, Hosts, and All keys. |
 
 The rail foot shows live load, memory, and disk readings for the serving host
 (plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
@@ -190,10 +190,11 @@ pressure means; click or **Pin open** keeps it open, and Esc or a click outside
 closes it. `+N more` (and, on narrower screens, the single summary chip) lists
 every provider. At 1024px wide or less, the top bar leaves out the provider chips
 and the warning chip; at 760px or less, the rail also leaves out its foot.
-Counts in
-the selected window sit on the rail: failed, timed-out, and interrupted runs
-under **Runs**, and doctor errors, warnings, and failing routines under
-**Health**. Click a rail count to open the view behind it. The rail has no
+The rail
+also carries counts: under **Jobs**, the job runs pending or running now
+(whatever the History window), plus an **N failing** pill for jobs whose recent
+runs failed in a row; under **Health**, doctor errors, warnings, and failing
+routines. Click a rail count to open the view behind it. The rail has no
 denial count. **Health → Incidents → Events** can be filtered to denials with
 its **denied** status.
 
@@ -211,8 +212,12 @@ CLI or MCP tools instead; see [Hold paths with leases](../path-leases/).
 
 ## Notices
 
-**Notices** shows open fleet notices in the selected workspaces, followed by
-notices closed or expired in the last 24 hours. A banner also shows open
+**Notices** has two tabs: **Open** fleet notices in the selected workspaces,
+and **Recently closed** (closed or expired in the last 24 hours). Select a row
+to read its body. With an [operator session](#authorization), **Post** opens a
+form for the title, kind, body, scope, an optional linked task and expiry, and
+**Close** on a row asks for a reason. Neither is available in **All
+workspaces**. A banner also shows open
 incident and maintenance notices, with each notice's kind, title, scope, age,
 and expiry. Its **Notices** link opens this view. The banner hides when no open
 incident or maintenance notices remain and clears when the selected workspace
@@ -626,8 +631,8 @@ their owner and that cancelling one fails its claim. See
 
 ## Runs and errors
 
-**Runs** lists job runs for the selected workspace. Filter by **All**,
-**Live**, or **Failed**, narrow the list with a task id or job id, and use
+**Jobs › History** lists job runs for the selected workspace; runs in flight
+are also on **Jobs › Live**. Filter by **All** or **Failed**, narrow the list with a task id or job id, and use
 the same time window as the rest of the dashboard. The address keeps
 `run_state`, `task_id`, `job_id`, and `window`, so a shared link reopens the
 same list. A task id such as `ORB-15159` keeps that task's runs; any other
@@ -662,8 +667,8 @@ These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
-| Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
+| **Jobs** rail count | Job runs pending or running now, not tasks. It ignores the History window and filters. Click it to open **Jobs › Live**. |
+| **Jobs › History** **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Health → Incidents → Events**, **denied** status | Audited calls recorded as denied. This is a filtered list, not a rail count. |
 | **Health → Incidents → Errors** | Step and event failures in the selected window. When paging, errors appear one page at a time (8 per page on desktop, 4 at widths up to 600px), with **Previous** and **Next** controls. The panel header shows the current range as `Showing a–b of N`, names the window, and reports when retention or the stderr read cap leaves part of it unread. |
 
@@ -1443,7 +1448,8 @@ appears in the timeline with actor `dashboard`.
 ## Automation
 
 **Automation** has these views: **Routines** (with the host scheduler clock),
-**Auto-tasks**, **Scripts**, **Jobs**, and [**Residents**](#residents). Its controls need a single active workspace and
+**Auto-tasks**, **Scripts**, and [**Residents**](#residents). Jobs you can run
+by hand are under [**Jobs › Catalogue**](#jobs). Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
 [Schedule Recurring Work](../recurring-work/).
@@ -1524,14 +1530,14 @@ does not count it as a scheduler hold.
 
 ### Jobs
 
-**Jobs** lists the jobs this workspace's routines target or recently ran,
-with **Running now** above them. They are grouped **Sweeps** (housekeeping and
-intake, safe to run by hand), **Delivery** (task and workspace pipelines), and
-**Other**.
+**Jobs › Catalogue** lists the jobs you can run by hand that this workspace's
+routines target or recently ran, grouped **Sweeps** (housekeeping and intake,
+safe to run by hand) and **Other**. Delivery and other jobs that need a task or
+a window are not listed: use **ship** or the [auto-drain](#auto-drain), and
+find their runs under **Live** and **History**.
 
 **Run ▸** starts the job in this workspace with no input and reports the new
-run ID. It is disabled on **Delivery** rows, which need a task or a window:
-use **ship** or the [auto-drain](#auto-drain). **Details** shows the
+run ID. **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
 
@@ -1832,105 +1838,144 @@ about every 30 seconds.
 
 ## Settings
 
-**Settings** shows the configuration this workspace runs on, with the same
-layering and descriptions as `orbit config show`.
+**Settings** groups configuration by topic. Open it in the left rail, then
+choose a view:
 
 | View | Shows |
 |---|---|
-| **Effective** | The merged result: workspace values over global values over built-in defaults. |
-| **Workspace file** | The keys `.orbit/config.toml` sets, and what each would fall back to if removed. |
-| **Global file** | The keys `~/.orbit/config.toml` sets, and whether each reaches the selected workspace. Edits here write the global file. |
+| **Workflow** | Shipping, crew routing, task pilot, recovery, and steering settings, plus other workflow keys. |
+| **Execution** | Execution policy, its inheritance warning, and resolved paths. |
+| **Review** | Review layers, timing, reviewer pools, and before-landing settings. |
 | **Crews** | The crew table. |
-| **Keys** | Every settable key with its type, section, description, and accepted values. |
-| **System** | Live resource readings, throttle marks, resume thresholds, and the host's current admission verdict. |
+| **Machine** | Machine identity, auto-concurrency, machine settings, resource throttle, and task ID start. Edits write the global file only. |
 | **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
+| **All keys** | The complete key list with layer and topic filters, search, workspace cleanup, and raw TOML. |
 
-To browse **Keys**, search by key, label, or value. Filter by **Layer** (all,
-built-in, global, or workspace) or **Topic** (all, workflow, execution,
-review, machine, crews, or housekeeping). Changing the search or either filter
-returns to the first page. Results show 25 keys per page; use **Previous** and
-**Next** to move between pages. The range reads `Showing a–b of N keys · Page
-x of y`. When no keys match, the view reads `No keys match`.
+The topic rows show the key's label, description, name, value, and source
+layer. Where the key declares accepted values, the row shows choices with
+the current value marked, or a short range or format summary. Rows also show
+shadowed values, a removal fallback, or the built-in value when available.
+Use **Edit** to inspect how a value resolves and choose where to save it.
 
-**Effective** opens with a strip naming both files, then one panel per section
-(Delivery, Crews, Execution, Review, Housekeeping) and a read-only **Paths**
-grid. Each row shows the value, where it came from, and the key's description.
-The source is `workspace`, `global`, `default` (no file sets it), `unset` (no
-value at all), or `registry` (from the workspace registry, not
-`config.toml`).
+### Workflow
 
-Rows also flag two things the value alone hides:
+**Workflow** (`#config/workflow`) groups keys into **Shipping**, **Crew
+routing**, **Task pilot**, **Recovery**, **Steering**, and **Other workflow
+keys** when any remain. A registry note shows the selected workspace's
+`base_branch` and `ship_mode`. These come from the workspace registry;
+change them with `orbit workspace`.
 
-- `overrides global: trunk`: the workspace file replaced a global value.
-- `global sets … — not inherited while a workspace file exists`: a workspace
-  `config.toml` must restate the security keys `execution.codex.sandbox`,
-  `execution.codex.approval_policy`, and `execution.env.pass` to keep them.
-  The Execution panel shows a badge, and the strip warns whenever a workspace
-  file exists.
+Use the **Sections** buttons to jump to a section and expand it. **Search**
+matches a key, label, or value and shows only matching rows and sections.
+Each section has **Collapse** or **Expand**; **Collapse all** and **Expand
+all** act on the sections currently shown. Clearing the search restores the
+layout you had before searching.
 
-A **registry strip** shows the registered `base_branch` and `ship_mode`.
-Delivery uses these, not `workflow.base_branch`, and the strip flags a
-disagreement. Change them with `orbit workspace`; the strip is read-only.
+### Execution
 
-### Tidy the workspace file
+**Execution** (`#config/execution`) shows `execution.*` settings and a
+read-only **Paths** section. When this workspace sets execution policy,
+a warning explains that `execution.*` keys in the global file are not
+inherited. The workspace's values are in force; omitted security keys use
+built-in defaults. Check this warning before creating or removing a
+workspace policy value.
 
-**Workspace file** lists only the keys `.orbit/config.toml` sets, grouped by
-TOML table. Three cards count them by what removing a key would do:
+### Review
 
-- **Own value**: the effective value would change.
-- **Restates global**: the global file sets the same value.
-- **Restates built-in default**: Orbit ships the same value.
+**Review** (`#config/review`) opens with **Review layers**: **Before PR**,
+**Before landing**, and **After landing**, each with an on/off indicator and
+a description of the resolved behavior. A diagnostic warning appears if
+review diagnostics are unavailable.
 
-Click a card to filter the table to that kind of key.
+**Timing** controls `review.timing`. **Reviewer pool** contains the review
+and pre-landing review crew pools. **Before landing** contains the review
+interval, host list, and baseline commands; its rows are marked inactive
+when `review.timing` is off. Remaining settings appear under **Other review
+keys** when present. **Full review diagnostics** opens Diagnostics.
 
-Each row's **If removed** column names the layer and value the key would fall
-back to, followed by `no change` or `value changes`. When that fallback is not
-reported, it says `may change`. Execution keys fall back to the built-in
-default, not the global value, while the workspace file exists, and the row
-says so.
+### Machine
 
-When some keys only restate a value, a callout counts them. Its **Select**
-button checks those rows. **Remove from file** then removes each checked key
-from the file in turn and lists each key's outcome. A key the server refuses
-to remove stays checked, with the reason on its row. **Edit**
-changes a value in place and previews the matching `orbit config set`
-command. **+ Add key** offers the registered keys the file does not set yet.
+**Machine** (`#config/machine`) states that edits write only
+`~/.orbit/config.toml`. **Machine identity** shows the ID and task prefix as
+read-only values; use **Edit** on the name to change it. **Auto-concurrency**
+and **Machine** group the remaining machine settings, and **Tasks** includes
+`tasks.id_start`.
 
-### Check what the global file reaches
+**Resource throttle** shows live resource readings, **throttle at** marks,
+**resume below** thresholds, and the host's current admission verdict.
+Disk I/O appears only when the host reports it. Use the pencil beside a
+throttle value to edit it. These global values control this host's top-bar
+readings and admission. A warning and workspace markers identify values the
+workspace overrides for its own runtimes.
 
-**Global file** opens with **This machine**: the machine id and task prefix,
-which no edit changes, and the name, which **Rename** changes. Three cards
-count the keys the file sets, relative to the workspace selected in the
-sidebar:
+### All keys
 
-- **In effect**: the workspace runs the global value.
-- **Overridden by its workspace file**: the workspace file sets the key, and
-  the card says how many set the same value.
-- **Not inherited**: an execution key the workspace takes from its own file or
-  the built-in default, because it has a workspace file.
+**All keys** (`#config/all-keys`) lets you search by key, label, or value.
+Filter by **Layer** (all, built-in, global, or workspace) or **Topic** (all,
+workflow, execution, review, machine, crews, or housekeeping). Changing the
+search or either filter returns to the first page. Results show 25 keys per
+page; use **Previous** and **Next** to move between pages. The range reads
+`Showing a–b of N keys · Page x of y`. When no keys match, it reads
+`No keys match`.
 
-Click a card to filter the table. Each row's **In** column says the same for
-one key, with the workspace file's value when it sets one. When you edit a
-key, the editor previews the matching `orbit config set --global` command and
-says whether the change reaches the selected workspace or only workspaces that
-do not set the key.
+#### Tidy the workspace file
+
+When workspace values can be removed without changing the resolved value,
+**All keys** shows **Keys that only repeat the global or built-in value**.
+The group includes only keys whose reported removal fallback equals the
+current value. A key with an unknown fallback stays out of this group, as
+does an intentional override whose removal would change the value.
+
+Review those rows, then use **Remove all N workspace values** to remove
+them in turn. The result reports how many were removed and names any
+failures. For one key, open **Edit**, check the **if removed** line, and use
+**Remove workspace value**. Execution security keys may fall back to
+built-in defaults rather than the global value while a workspace policy
+file exists.
+
+#### Check what the global file reaches
+
+Use **Layer: global** to find keys whose resolved source is global. To
+inspect a workspace override, find the key with **Layer: all** and open
+**Edit**: the value chain shows the built-in value, any shadowed values,
+and the effective value with its source layer. When supplied, **if removed**
+shows the fallback. This lets you check whether a global value reaches this
+workspace before changing it.
+
+At the bottom, **Raw TOML** offers **Show workspace file** and **Show global
+file**. Each loads a read-only view labelled with the file and its scope.
+**Jump to Raw TOML** takes you there from the controls above the key list.
 
 ### Edit a value
 
-Click a row, or its pencil, to edit it. The editor matches the key's type: a
-choice list, toggle, number field, or chip list. Each row saves on its own.
+Use a topic row's **Edit** button to open its drawer. The drawer shows the
+key's description, further detail when available, an **Accepts** line, the
+value chain, and the removal fallback when reported.
 
-- In **Effective**, saves go to the workspace file (`.orbit/config.toml`,
-  per-user and git-ignored). Only **Global file** writes `~/.orbit/config.toml`.
-- A save passes the same checks as `orbit config set`. A refused value shows
-  that command's message on the row.
-- If the workspace has no `config.toml` yet, the first save is refused,
-  because creating the file moves the security keys off global policy. The row
-  offers **Copy global policy** (`--seed-from-global`) or **Start empty**
-  (`--fresh`).
-- Writes need an operator session. Each records a `config.set` audit event
-  with the key, the old and new values, and the file. Without the capability,
-  rows are read-only.
+Choose **This workspace (.orbit/config.toml)** or **Every workspace on this
+machine (~/.orbit/config.toml)**. The initial choice follows the current
+source: global for a global value, workspace otherwise. Machine rows and
+global-only keys lock the choice to global. The workspace file is per-user
+and git-ignored.
+
+The field is a choice list, a bounded number input, or a text area depending
+on the key. Enter lists one item per line and tables as JSON objects.
+The `orbit config set` preview updates as you type and includes `--global`
+for a global write. **Save** writes that key and reloads the settings;
+**Close** dismisses the drawer. A refused value leaves the drawer open with
+the error so you can correct it.
+
+If this workspace has no config policy file yet, a workspace write offers
+**Seed from global** (`--seed-from-global`) and **Start empty** (`--fresh`)
+instead of **Save**. Creating policy changes execution inheritance:
+**Seed from global** copies the global policy, while **Start empty** uses
+built-in security defaults. **Close** leaves the file uncreated. A file
+holding only plugin toggles also requires this choice on its first policy
+write.
+
+**Remove workspace value** always removes the workspace entry, even when
+the save scope is global. Check **if removed** before using it. Writes need
+an [operator session](#authorization); without one, settings are read-only.
 
 **Crews** shows one row per crew with its provider, model, effort, tags, and
 source layer. The crew named by `workflow.default_crew` is marked. Use the
@@ -2121,7 +2166,7 @@ session does not grant operator capability.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| **Runs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Jobs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Reload the page. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |

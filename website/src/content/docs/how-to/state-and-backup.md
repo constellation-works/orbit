@@ -40,7 +40,8 @@ Back up and restore these. You can't regenerate them.
   candidates from active or failed runs. Keep them until the run is settled.
 
 You can lose and regenerate these: `<repo>/.orbit/state/semantic.db` (rebuilt by
-`orbit search reindex`), `~/.orbit/state/logs/`, and `~/.orbit/embed/`.
+`orbit search reindex`) and `~/.orbit/state/logs/`. `~/.orbit/embed/` holds
+retired search downloads; delete it once no older Orbit binary is running.
 [The state and backup runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/state-and-backup.md)
 has the complete inventory, including retired directories you can delete.
 

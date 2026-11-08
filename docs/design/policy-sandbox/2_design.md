@@ -189,7 +189,7 @@ other runtime-opening processes have restarted on the new build; rollback
 must restore the old concrete values before restarting old readers. The
 runbook specifies the staged rollout and authoritative-MCP verification order.
 
-The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true` (an `agent_explore` run instead takes the provider-read-only fallback described in §7.1) [ORB-20133]. A `sandbox-exec` that exists but whose `sandbox_apply` is refused (exit 71) is not "missing": the availability check is an executable-file existence and mode check, not a profile-application probe, so the wrapper is kept and that failure is reported at completion instead. When the binary is missing, the error names the trusted location that was probed ([T20260509-30]).
+The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true`, and then dispatches bare exec for every activity (see the fallback paragraph below). A `sandbox-exec` that exists but whose `sandbox_apply` is refused (exit 71) is not "missing": the availability check is an executable-file existence and mode check, not a profile-application probe, so the wrapper is kept and that failure is reported at completion instead. When the binary is missing, the error names the trusted location that was probed ([T20260509-30]).
 
 Availability is resolved before provider argv construction. An allowed bare
 fallback retains provider-native sandbox flags, starts no plugin broker, and
@@ -606,7 +606,7 @@ database/lock and asserts 100 collision-free dense IDs per artifact kind ([ORB-1
 - [ORB-14538] — Restrict Codex side-write roots to validated runtime stores.
 - [ORB-15117] — Apply worktree-anchored macOS modify rules and retain terminal host-clock denies.
 - [ORB-19224] — Defer `orbit plugin test` inside a macOS worker to the claim host's replay instead of failing every case on the nested Seatbelt refusal, and type the refusal `validation_route_unavailable`.
-- [ORB-20133] — Allow read-only exploration fallback when the OS sandbox backend is unavailable.
+- [ORB-20133] — Allowed a read-only exploration fallback when the OS sandbox backend was unavailable (retired with the explorer in [ORB-20383]; a missing backend now fails closed unless `allow_fallback: true`, then uses bare exec).
 - [ORB-20350] — Keep nested Landlock write grants from reopening caller read exclusions.
 - [T20260427-51] — wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
 - [T20260508-13] — add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.

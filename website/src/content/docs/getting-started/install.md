@@ -159,7 +159,10 @@ the fix for each failure.
 
 `orbit init` writes `~/.orbit/config.toml` with the built-in crews, enabling
 those whose agent CLI it detects. It picks a default from those available;
-with none detected, enable a crew before dispatching. To pick a different
+with none detected, enable a crew before dispatching. It also seeds purpose
+pools and sets experiments, mid-run steering and machine auto-concurrency to
+values that differ from the built-in defaults; see [What `orbit init`
+seeds](../../reference/config/#what-orbit-init-seeds). To pick a different
 default, choose an enabled crew and set `workflow.default_crew`. Seed the
 workspace config on its first edit, then check the workspace:
 

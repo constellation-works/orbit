@@ -22,6 +22,11 @@ fn fixture_orbit(work: &Path, home: &Path) -> assert_cmd::Command {
 
 #[test]
 fn audit_warning_survives_cli_field_and_artifact_put_projections() {
+    if crate::isolated_test::run_in_child(
+        "tool_run_audit_warning::audit_warning_survives_cli_field_and_artifact_put_projections",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("fixture");
     let home = root.path().join("home");
     let work = root.path().join("work");
@@ -33,8 +38,16 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
         .assert()
         .success();
 
+    crate::fixture_crew::configure_sol(&home.join(".orbit"));
+    let routine_path = work.join(".orbit/routines/resident_cycle.yaml");
+    std::fs::create_dir_all(routine_path.parent().unwrap()).unwrap();
+    std::fs::write(routine_path,
+        "schemaVersion: 1\nname: artifact-cycle\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:resident_cycle_pipeline\n",
+    ).unwrap();
+
     let seed_input = json!({
         "title": "Audit warning artifact target",
+        "tags": ["resident"],
         "description": "Target for the artifact.put output projection.",
         "acceptance_criteria": ["Keep the artifact write visible."],
         "complexity": "low",
@@ -165,6 +178,69 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
             .is_some_and(|message| message.contains("injected audit write failure")),
         "the default projection must explain the missing audit row: {put}"
     );
+
+    let mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Keep attachment warnings visible",
+        "exit_criteria": ["The warning reaches the caller"],
+        "workspaces": ["audit-warning-fixture"],
+        "crew": "sol",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    std::fs::write(&source_path, mandate.to_string()).expect("mandate source");
+    let mandate_input = json!({
+        "id": task_id,
+        "path": "resident/mandate.json",
+        "source_path": source_path,
+        "model": "codex",
+    })
+    .to_string();
+    for flags in [vec!["--full"], vec![], vec!["--fields", "id"]] {
+        let output = fixture_orbit(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.task.artifact.put",
+                "--input",
+                &mandate_input,
+                "--format",
+                "json",
+            ])
+            .args(&flags)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).expect("mandate put JSON");
+        assert_eq!(result["id"], task_id, "{result}");
+        assert_eq!(
+            result["audit_warning"]["code"], "audit_row_unpersisted",
+            "{result}"
+        );
+        if flags.first() == Some(&"--fields") {
+            assert_eq!(
+                result.as_object().unwrap().len(),
+                2,
+                "explicit fields stay filtered: {result}"
+            );
+        } else {
+            assert_eq!(result["cycle_routine_disabled"], true, "{result}");
+            assert!(result["cycle_routine_name"].as_str().is_some(), "{result}");
+            assert!(result["warning"].as_str().is_some(), "{result}");
+            assert!(
+                !result["warnings"].as_array().unwrap().is_empty(),
+                "{result}"
+            );
+            assert_eq!(result["redactions_applied"], false, "{result}");
+            assert_eq!(result["redactions"], json!([]), "{result}");
+            assert_eq!(
+                result.get("description").is_some(),
+                flags.first() == Some(&"--full"),
+                "{result}"
+            );
+        }
+    }
 
     let get_input = json!({"id": task_id, "path": "audit-warning.txt"}).to_string();
     let stored_output = fixture_orbit(&work, &home)

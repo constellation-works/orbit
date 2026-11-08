@@ -2,18 +2,16 @@
 //! cases. Whether a widening applies or becomes a grant request is the
 //! application layer's decision, made from the session passed through here.
 
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::governance::resident::ResidentVerb;
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::ResidentRight;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::resident::{
     ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentGrantCaller,
-    ResidentGrantParams, ResidentRelayParams,
+    ResidentRelayParams, resident_grant_params_from_input,
 };
 
 pub(super) fn dispatch(
@@ -35,7 +33,8 @@ pub(super) fn dispatch(
                     .or_else(|| model.map(ToOwned::to_owned)),
                 orchestrator: input.optional_string("orchestrator")?,
             };
-            let outcome = runtime.grant_resident_authority(&caller, grant_params(&input)?)?;
+            let outcome = runtime
+                .grant_resident_authority(&caller, resident_grant_params_from_input(&input)?)?;
             serde_json::to_value(outcome)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))
         }
@@ -114,47 +113,5 @@ fn channel_caller(
             .optional_string("model")?
             .or_else(|| model.map(ToOwned::to_owned)),
         orchestrator: input.optional_string("orchestrator")?,
-    })
-}
-
-fn rights(input: &OperationInput, field: &str) -> Result<Vec<ResidentRight>, OrbitError> {
-    input
-        .optional_string_list(field)?
-        .unwrap_or_default()
-        .iter()
-        .map(|name| {
-            ResidentRight::parse(name).ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "unknown right `{name}` in `{field}`; rights are {}",
-                    ResidentRight::NAMES
-                ))
-            })
-        })
-        .collect()
-}
-
-fn grant_params(input: &OperationInput) -> Result<ResidentGrantParams, OrbitError> {
-    let deadline = input
-        .optional_string("deadline")?
-        .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|at| at.with_timezone(&Utc))
-                .map_err(|_| {
-                    OrbitError::InvalidInput("`deadline` must be an RFC 3339 timestamp".into())
-                })
-        })
-        .transpose()?;
-    Ok(ResidentGrantParams {
-        task_id: input.required_string("task_id")?,
-        add: rights(input, "add")?,
-        workspaces: input
-            .optional_string_list("workspaces")?
-            .unwrap_or_default(),
-        remove: rights(input, "remove")?,
-        drop_workspaces: input
-            .optional_string_list("drop_workspaces")?
-            .unwrap_or_default(),
-        deadline,
-        quote: input.optional_raw_string("quote")?,
     })
 }

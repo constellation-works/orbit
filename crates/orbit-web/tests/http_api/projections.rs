@@ -1053,16 +1053,19 @@ projections_test!(
             "workspace_mismatch",
         );
         check_eq!(fs::read(&gc_path).unwrap() => gc_before; "workspace_mismatch wrote");
-        error_code(toggle("replica-gc", ci_job), 409, "target_mismatch");
+        let retargeted = error_code(toggle("replica-gc", ci_job), 409, "target_mismatch");
+        assert_fields!(retargeted, "actual_target": json!(gc_job));
         check_eq!(fs::read(&gc_path).unwrap() => gc_before; "target_mismatch wrote");
-        error_code(
+        let stale = error_code(
             toggle_from("replica-gc", "fixture", gc_job, true),
             409,
             "stale_routine_state",
         );
+        assert_fields!(stale, "actual_enabled": json!(false));
         check_eq!(fs::read(&gc_path).unwrap() => gc_before; "stale_routine_state wrote");
         let refused = error_code(toggle("replica-ci-sweep", ci_job), 409, "owner_authority");
         assert_contains(&refused, "error", "hm_fixture_remote");
+        check!(refused["owner_machine"].is_string(); "owner refusal names the owner machine: {refused}");
         check_eq!(fs::read(&ci_sweep_path).unwrap() => ci_sweep_before; "owner toggle wrote");
         let enabled = json_ok(toggle("replica-gc", gc_job));
         assert_fields!(enabled, "changed": json!(true));
