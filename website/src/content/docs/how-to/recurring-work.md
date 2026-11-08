@@ -483,6 +483,14 @@ service units, launch agent plists or environment values.
   that configuration, so rename services in your service manager, not in Orbit.
 - **Orbit's own log.** The global Orbit log, and the workspace's log directory
   when it exists.
+- **Version and migrations.** The installed version, the executable's path and
+  digest, a recorded local-candidate source commit, whether a newer release or
+  a lagging source commit exists, whether running processes would block an
+  upgrade, pending workspace migrations, and doctor's retired-config findings.
+  The pass only records these. It does not install, apply a migration, or
+  change config. On the owner, a follower whose report shows a different
+  version or source commit is filed as drift. A missing or stale follower
+  report stays a coverage gap.
 
 A log signature qualifies only after three distinct events across two completed
 collection windows on the same host within seven days. A single error does not

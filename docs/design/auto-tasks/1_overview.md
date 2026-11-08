@@ -134,7 +134,7 @@ missing file as `enabled: false`, except `host-health`, which it writes enabled;
 re-init does not overwrite a workspace-authored definition of the same name.
 
 - `qa-sweep` — hands-on validation of recent changes (ORB-10148, embedded by ORB-10550).
-- `host-health` — enabled-by-default daily review of host doctor findings and Orbit service logs, with actionable operator resolution steps.
+- `host-health` — enabled-by-default daily review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps.
 - `friction-curation` — disabled-by-default daily evidence-first pass that deduplicates open
   friction records, re-verifies survivors against current behavior, resolves
   records that no longer reproduce, and files non-duplicate fix tasks for

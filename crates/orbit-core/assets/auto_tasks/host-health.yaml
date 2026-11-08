@@ -1,11 +1,11 @@
 schemaVersion: 1
 name: host-health
-description: Daily doctor and recurring service-log findings with owner dedupe, human routing and executable resolution steps
+description: Daily doctor, service-log, Orbit version and migration findings with owner dedupe, human routing and executable resolution steps
 enabled: true
 schedule:
   cron: 10 7 * * *
 template:
-  title: Track doctor warnings and recurring host service errors
+  title: Track doctor warnings, Orbit updates and migrations, and recurring host service errors
   description: |-
     Read host health without repairing the host. Turn standing doctor findings and recurring
     service errors into actionable, deduplicated tasks. Attach host-health-report.json and
@@ -33,18 +33,20 @@ template:
       than 36 hours, an unreachable host or a missing report is missing coverage, never healthy
       or zero findings. Report the gap and retain that host's cursor. Followers never file.
     - Collection is read-only: no doctor repair flags, service restarts, config writes,
-      credential reads, installs, dispatch, or status changes. Do not read Orbit databases
-      or state files directly, except the log inputs named below. This pass may only
-      create finding tasks, comment counts on
-      covering open tasks, and update its own summary/artifacts. Read the installed orbit
-      skill's task-authoring reference and each tool's schema before filing.
+      credential reads, installs, dispatch, or status changes. No `orbit migrate --confirm`,
+      no `orbit migrate --adopt-authority`, and no acting on `orbit update --preflight`.
+      Do not read Orbit databases or state files directly, except the log inputs named
+      below and the local-candidate manifests named in the version section. This pass may
+      only create finding tasks, comment counts on covering open tasks, and update its own
+      summary/artifacts. Read the installed orbit skill's task-authoring reference and
+      each tool's schema before filing.
 
     ## Inputs and service configuration
 
     - Run `orbit doctor --json` on the execution host, capture its exit status and parse all
       warning/error checks (check, status, message, remediation) even when doctor exits
-      nonzero. An execution or parse failure is unavailable coverage, not a clean bill of health. Record the Orbit version and
-      `git rev-parse HEAD` where a source checkout exists.
+      nonzero. An execution or parse failure is unavailable coverage, not a clean bill of health.
+      Version, update and migration checks are the next section; a version string alone is not that check.
     - Unit names come from the host's installed service configuration, never a baked-in list.
       On Linux enumerate `systemctl --user list-unit-files --type=service --no-legend --no-pager`
       plus loaded services, then inspect only selected properties (Id, FragmentPath, DropInPaths,
@@ -73,6 +75,88 @@ template:
       first; stream rather than buffering unbounded logs. A limit produces a partial report
       with the last consumed source position, not a failed pass or a claim of full coverage.
 
+    ## Orbit version and migrations
+
+    Run this on the execution host, owner or collector, before filing. It stays read-only:
+    no `orbit update` except `--check` and `--preflight`, no install, no
+    `orbit migrate --confirm`, no `orbit migrate --adopt-authority`, no
+    `orbit doctor --fix-retired-config-keys`, and no fetch, pull or checkout.
+    Record every result below even when a command exits nonzero. A command that
+    fails before it prints JSON is unavailable coverage for that check, not a
+    clean result and not a guessed finding. Two nonzero exits are the record
+    itself, not unavailable coverage: `orbit update --preflight` names what
+    would block, and `orbit migrate --dry-run` lists pending migrations on
+    stderr without the status JSON.
+
+    - Version. Record `orbit --version`. Record the installed executable from
+      `orbit update --check --json`: `executable`, `current_version`,
+      `target_version`, `outcome`, `install_channel`, `updatable` and
+      `remediation`, plus the process exit code. Exit 3 with `outcome`
+      `update_available` means a newer published release. Exit 0 with
+      `already_current` means no newer release. SHA-256 the `executable` path
+      (`sha256sum` on Linux, `shasum -a 256` on macOS) and read that file only.
+      Where Orbit recorded a `--local-candidate` install, the manifest is a
+      regular `.json` file inside a directory directly under the global Orbit
+      root's `deployments/` (`global_root` from `orbit update --preflight
+      --json`). Read only those regular files. Do not follow symlinks and do
+      not open anything else. Keep a file whose `kind` is
+      `orbit-local-candidate`, whose `schema_version` is 1, and whose
+      `executable_sha256` equals that digest. Record that manifest's
+      `source_commit` and path. Disagreeing commits are a recorded
+      disagreement, not a commit you pick. No match means no recorded source
+      commit.
+    - Source lag. When a source checkout of Orbit is already on the host and a
+      source commit was recorded, count how many commits that commit trails the
+      workspace integration branch: `git -C <checkout> rev-list --count
+      <source_commit>..origin/<base_branch>`. `<base_branch>` is `base_branch`
+      from `orbit workspace show --json` for that checkout, not a fixed name.
+      Use the origin ref already present. Do not fetch. A missing ref or commit
+      is a coverage gap with a null count. A count above zero is a lagging
+      source commit even when no newer release is published.
+    - Update readiness. Record `orbit update --preflight --json` with no
+      `--candidate`. Exit 0 and `admitted` true means this observation saw no
+      blocking process. `handover` is not a blocker, and `reservation` false
+      means nothing was held. A nonzero exit names the processes or authority
+      that would block. Record them. Do not stop, kill or update anything.
+    - Pending migrations. For each workspace `orbit workspace list --all --json`
+      returns, record `orbit migrate --dry-run --json --workspace <id>` using
+      that record's `id`: stdout, stderr and the exit code. Exit 0 prints JSON
+      with `layout.pending`, `schema.pending`, `up_to_date` and
+      `forward_compatible`. A nonzero exit prints no status JSON. Its stderr
+      lists `Pending migrations:` with `layout vN` and `schema vN` lines and
+      the remediation (`orbit migrate --confirm` when that is what it prints).
+      Copy those lines into `pending_layout` and `pending_schema`, set
+      `up_to_date` false, and quote the remediation. A workspace newer than
+      this binary (`forward_compatible` on exit 0, or stderr that says to
+      upgrade orbit) is recorded on that entry and follows the update route,
+      not `--confirm`. Dry-run does not apply and does not adopt authority.
+    - Authority. A generation-authority problem is an `upgrade admission refused`
+      or `recorded no generation authority` message from this pass's doctor run
+      or from that dry-run's stderr. Record the message and the remedy it
+      prints, including `orbit migrate --adopt-authority` when it names that
+      command. Do not run the remedy, and do not read authority files. Silence
+      is not an authority gap: dry-run lists pending migrations and does not
+      itself decide authority.
+    - Retired config. Copy doctor checks whose `check` is `retired-config-keys`
+      and whose status is warning or error into this section's record (check,
+      status, message, remediation). That is the retired-key repair territory.
+      Report the checks. Do not fix them.
+    - A pending migration, a recorded authority gap, an available update and a
+      lagging source commit are standing conditions, eligible on first sight,
+      like a doctor warning. They share the filing cap. File doctor errors
+      first, then pending migrations and authority gaps, then available
+      updates, source lag and cross-host drift, then doctor warnings, then
+      eligible logs. A `retired-config-keys` row is recorded here and filed
+      only as that doctor check, not as a second task.
+
+    Cross-host drift is owner only. Collector reports carry the same `version`
+    object. Compare each imported host's `orbit_version`, recorded
+    `source_commit` and executable SHA-256 with the owner's. A follower whose
+    version, source commit or digest differs is a drift finding: hosts that
+    run the fleet deploy the same build together. A missing report, an
+    unreachable host or a report older than 36 hours is missing coverage, as
+    elsewhere, not a drift finding and not healthy.
+
     ## Windows, signatures and recurrence
 
     - Find the newest completed pass of the same role and machine using orbit.task.list,
@@ -89,6 +173,9 @@ template:
       UUIDs, SHAs, timestamps, home-directory paths and ports with typed placeholders; strip
       volatile counts. Keep distinct error codes/checks/actions separate. Store machine ID
       separately, so the same code defect can group across hosts without losing attribution.
+      An update, source-lag or drift signature keeps its target version or commit
+      literal, so a resolved older target is not the same finding. Every other SHA
+      still becomes a placeholder.
     - A doctor warning/error is a standing condition: eligible on first sight. A log signature
       is eligible only with at least 3 distinct events across at least 2 non-overlapping
       completed collection windows within 7 days, on the same host. Carry the 7-day per-window
@@ -123,6 +210,40 @@ template:
       own fenced shell block, and a closing Verify line with one fenced command, under 2000
       characters. Keep the evidence table in the report artifact, not the body. orbit.task.add
       warns on a human-crew body that misses this; fix it before moving on.
+    - An available update (`outcome` `update_available`, or `updatable` false with
+      a newer `target_version`) and a lagging source commit are operator chores
+      for the human crew, as other host conditions are. The signature is
+      `update:<install_channel>:<target version or commit>` and keeps that target
+      literal. One open task per signature: a resolved older target does not cover
+      a newer one. Resolve steps name one command for the recorded
+      `install_channel`, each in its own fenced shell block, and this pass does
+      not run it. `managed` uses `orbit update`. A recorded local-candidate source
+      commit uses the `--local-candidate` flow: `--write-candidate-manifest` for
+      the build, then that candidate with `--candidate-manifest`, `--source-commit`
+      and `--install-target` set to the installed executable. `homebrew`, `npm`
+      and `cargo` use the `remediation` string from the check, unchanged.
+      `local-build` says to update that checkout and rebuild. When `remediation`
+      is missing, quote the check and name the recorded channel; do not invent a
+      package-manager command.
+    - A pending migration or an authority gap is a human chore. Its signature is
+      `migrate:<workspace>:<pending layout and schema versions>` or
+      `authority:<workspace>:<recorded authority or none>`. Resolve steps say to
+      stop Orbit processes that use that workspace first, then quote the
+      remediation the dry-run or the refusal printed (`orbit migrate --confirm`,
+      or `orbit migrate --adopt-authority <path>` when that is the printed
+      remedy). This pass does not run them.
+    - Cross-host drift is a human chore. Its signature is
+      `drift:<follower machine id>:<owner version or source commit>`, so a newer
+      owner build does not reuse a resolved older target. Resolve steps name the
+      follower host and the command for that follower's recorded
+      `install_channel`, aiming at the owner's version and source commit. A
+      follower report that omits `install_channel` states that gap instead of
+      guessing a command.
+    - A defect in `orbit update` or `orbit migrate` (JSON that contradicts the
+      text, or a refusal that prints no remediation) is a bug task with the
+      verified mechanism, as for any other code defect. A network failure, a
+      missing checkout and a preflight that names a blocking process are not
+      that defect.
     - With no matching human crew, file a setup chore tagged host-health, setup,
       needs-operator and no-auto-approve. orbit.task.add leaves it proposed: verify that on
       read-back, never approve, promote, dispatch or present it as agent-ready. State that an
@@ -173,8 +294,10 @@ template:
 
     ## Bounded completion, report and cursor
 
-    - File at most 5 new tasks per owner pass, prioritizing doctor errors, then doctor warnings,
-      then eligible recurring logs by count, with signature as tie-breaker. Cover every group
+    - File at most 5 new tasks per owner pass, prioritizing doctor errors, then pending
+      migrations and authority gaps, then available updates, source lag and cross-host
+      drift, then doctor warnings, then eligible recurring logs by count, with signature
+      as tie-breaker. Cover every group
       with filed, commented, covered, rejected, counted, unconfirmed or deferred disposition.
       Collectors have a zero filing cap. A cap is successful partial completion, never a blocker.
     - Freeze the pending eligible groups with their sanitized evidence and stable ordering.
@@ -191,11 +314,23 @@ template:
       {"schema_version":1,"role":"owner|collector","machine_id":"...","scan_start":"RFC3339",
        "window_start":"RFC3339","window_end":"RFC3339","partial":false,"filing_cap":5,
        "log_threshold":{"events":3,"windows":2,"days":7},"groups":[],
+       "version":{"orbit_version":"...","executable":{"path":"...","sha256":"...","source_commit":null},
+        "update_check":{"exit_code":0,"outcome":"already_current|update_available|unavailable","current_version":"...","target_version":"...","install_channel":"...","updatable":true,"remediation":null},
+        "source_lag":{"commits_behind":null,"integration_ref":null,"checkout":null},
+        "preflight":{"exit_code":0,"admitted":true,"blocking":[]}},
+       "migrations":[{"workspace":"...","exit_code":0,"up_to_date":true,"pending_layout":[],"pending_schema":[],"authority":null,"retired_config":[],"remediation":null}],
        "hosts":[{"machine_id":"...","doctor":"ok|findings|unavailable","records_read":0,
-       "services":[],"gaps":[],"counts":{"doctor":0,"log":0,"eligible":0,"filed":0}}]}
+       "services":[],"gaps":[],"version":{},"counts":{"doctor":0,"log":0,"eligible":0,"filed":0}}]}
       Each group carries its signature, per-host/per-window counts, source positions,
       first/last seen, route, disposition, covering record ID, sanitized evidence and any
       omitted-excerpt reason. Imported evidence includes collector task/artifact and window.
+      `version` is the execution host. Each imported host entry copies that collector's
+      `version`. `migrations` has one object per workspace from `orbit workspace list --all`.
+      On a nonzero dry-run, `pending_layout` and `pending_schema` are the stderr version
+      lines and `up_to_date` is false. `authority` is null when no refusal was printed.
+      `retired_config` copies the `retired-config-keys` doctor rows that name that
+      workspace, or is empty; a row that names no workspace is copied onto the first
+      entry only.
 
       host-health-cursor.json:
       {"schema_version":1,"role":"owner|collector","machine_id":"...","window_start":"RFC3339",
@@ -210,8 +345,11 @@ template:
       both artifacts. No host repairs, repository edits, commits or validation gates are needed.
   acceptance_criteria:
     - host-health-report.json and host-health-cursor.json are attached, with per-host doctor/log coverage, grouped counts, routes, dispositions and any partial resume point, including when no finding is eligible.
+    - The report version object records orbit --version, the executable path and SHA-256, the source commit when a local-candidate manifest matches, orbit update --check, source-commit lag when a checkout and a recorded commit exist, and orbit update --preflight. Nothing was installed or applied.
+    - The migrations array has one entry per workspace with orbit migrate --dry-run, any authority refusal those commands printed, and doctor's retired-config-keys findings. The owner files a human-crew drift finding when an imported follower version, source commit or executable digest differs, and treats a missing or stale report as missing coverage.
     - Every new finding task has a Resolve section with host/shell-specific commands or an attached resolve.sh (or concrete numbered operator steps), a verification command, the correct human/setup or agent route, and a spawned_from relation; covering tasks and rejected matches are recorded without duplicate filings.
-    - The report records first-sight doctor eligibility, the 3-event/2-window log threshold, open/recent-closed task and friction dedupe, bounded redacted evidence and at most 5 owner filings (zero collector filings); capped passes preserve pending evidence in the cursor.
+    - Update, source-lag, migration, authority and drift findings are human-crew chores whose signatures include the target version or commit and whose Resolve steps name the install-type command or the printed migrate remediation and say to stop Orbit processes before a migration. A defect in update or migrate, with a verified mechanism, is a bug task.
+    - The report records first-sight doctor, migration, authority, update and drift eligibility, the 3-event/2-window log threshold, open/recent-closed task and friction dedupe, bounded redacted evidence and at most 5 owner filings (zero collector filings); capped passes preserve pending evidence in the cursor.
   task_type: chore
   tags:
     - host-health
