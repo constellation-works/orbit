@@ -816,8 +816,8 @@
     </section>
     <section class="tab-pane" data-tab="leases" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- Path leases per path and the recent landing notices, read through
-           Orbit Web's lease routes. Read-only: requests, renewals and
-           releases stay on `orbit lease` and the lease tools. -->
+           Orbit Web's lease routes. Read-only, and hidden while path leases
+           are disabled [ORB-22808]. -->
       <main class="leases-layout">
         <section class="panel" id="leases-panel">
           <header>
@@ -826,7 +826,6 @@
           </header>
           <p class="leases-explainer">
             Active and queued path leases in this workspace, by path: who holds each path and who waits for it, oldest request first.
-            Leases are requested, renewed and released with <span class="mono">orbit lease</span> or the lease tools.
           </p>
           <div class="body" id="leases-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>

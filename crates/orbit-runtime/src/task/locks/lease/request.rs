@@ -37,9 +37,9 @@ const REQUEST_TOOL: &str = "orbit.lease.request";
 /// lease, and no queued request or expansion ranked ahead of it wants those
 /// paths; otherwise it queues (`granted: false`, `queued: true`) with those
 /// holders and its queue position, or with `wait = false` is refused with
-/// them. A class whose
-/// `lease.hard` is `never` is granted advisory instead, and the answer says
-/// so. A priority above the class's `lease.max_priority` is refused.
+/// them. A hard request from a class the policy allows no hard leases is
+/// granted advisory instead, and the answer says so. A priority above the
+/// class's policy ceiling is refused.
 pub fn request(
     runtime: &RuntimeKernel,
     input: Value,
@@ -153,7 +153,7 @@ fn request_as(
         let limit = if priority_rank(class_ceiling) > priority_rank(ceiling) {
             "the lease token's priority ceiling".to_string()
         } else {
-            format!("`lease.max_priority.{}`", principal_class.as_str())
+            format!("the lease policy's {} ceiling", principal_class.as_str())
         };
         return Err(OrbitError::InvalidInput(format!(
             "lease priority `{}` is above the `{}` principal ceiling `{}` ({limit})",
@@ -354,7 +354,8 @@ fn request_as(
             "granted as advisory: the lease token does not allow hard leases".to_string()
         } else {
             format!(
-                "granted as advisory: `lease.hard.{}` is `never` for this principal class",
+                "granted as advisory: the lease policy allows no hard leases for the {} \
+                 principal class",
                 principal_class.as_str()
             )
         }

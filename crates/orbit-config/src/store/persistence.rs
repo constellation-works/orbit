@@ -161,8 +161,8 @@ impl ConfigStore {
             Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
         store.global_config_path = Some(global_config_path.to_path_buf());
         if mode == WorkspaceInitMode::SeedFromGlobal {
-            // Global-only keys (`[machine]`, crew env, lease intake and
-            // listener) are rejected in workspace configs. Remove them from
+            // Global-only keys (`[machine]`, crew env) are rejected in
+            // workspace configs. Remove them from
             // the parsed document so all other global settings and their
             // formatting/comments survive seeding.
             strip_workspace_refused_keys(&mut store.doc);

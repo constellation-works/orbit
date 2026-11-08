@@ -306,6 +306,7 @@ pub(crate) fn build_context_from_roots(
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let operation = runtime_config.operation.clone();
+    let lease_policy = crate::task::locks::LeasePolicy::admit(&paths.orbit_dir);
 
     Ok(OrbitContext::new(
         paths,
@@ -400,7 +401,7 @@ pub(crate) fn build_context_from_roots(
             ),
             runtime_config.snapshot.task_types().to_vec(),
             runtime_config.snapshot.decision_channel_enabled,
-            crate::task::locks::LeasePolicy::admit(&runtime_config.snapshot)?,
+            lease_policy,
             runtime_config.snapshot.experiments(),
             runtime_config.snapshot.notice(),
             runtime_config.snapshot.machine_labels.clone(),

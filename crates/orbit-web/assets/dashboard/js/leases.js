@@ -3,8 +3,9 @@
 //
 // The view reads only Orbit Web's lease routes, `GET /api/leases` and
 // `GET /api/leases/notices`, which the dashboard serves to any local reader:
-// no operator session and no lease token. Requesting, renewing and releasing
-// stay on `orbit lease` and the lease tools. Every node is built with `el()`.
+// no operator session and no lease token. Path leases are not configurable
+// [ORB-22808], so the rail hides this tab wherever `lease_enabled` is false.
+// Every node is built with `el()`.
 
 import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, isPanelPoll, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 
@@ -21,8 +22,8 @@ let landings = { revision: null, cursor: 0, notices: [], caughtUp: false, readin
 const text = (value) => (typeof value === "string" ? value : "");
 const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
 
-// While `lease.enabled` is false, every lease route answers 400 with an error
-// naming that key. That is the feature's state, not a failed load: the panels
+// While path leases are disabled, every lease route answers 400 with an error
+// saying so. That is the feature's state, not a failed load: the panels
 // show it as a neutral note, and a poll tick stops asking until a refresh (or a
 // workspace change) rechecks it.
 const OFF = { off: true };
@@ -49,7 +50,7 @@ export function syncLeasesRailItem(workspaces, workspaceId) {
 }
 
 function isLeasesOffError(error) {
-  return error?.status === 400 && /\blease\.enabled\b/.test(String(error.message));
+  return error?.status === 400 && /\bpath leases are disabled\b/.test(String(error.message));
 }
 
 // Reads one lease route for the workspace `revision` it was started in. A
@@ -220,7 +221,7 @@ function renderLeases(leases) {
   const count = $("leases-count");
   if (count) count.textContent = String(active.length);
   if (!active.length) {
-    const note = el("div", { class: "panel-placeholder", text: "No active or queued leases in this workspace. `orbit lease request --principal <name> <selectors>` takes one." });
+    const note = el("div", { class: "panel-placeholder", text: "No active or queued leases in this workspace." });
     note.dataset.key = "leases-empty";
     note.dataset.hash = "empty";
     syncNodes(body, [note]);
@@ -266,7 +267,7 @@ function renderLeasesOff() {
   if (!body) return;
   const count = $("leases-count");
   if (count) count.textContent = "—";
-  const note = el("div", { class: "panel-placeholder", text: "Path leases are off in this workspace. Set `lease.enabled = true` to accept lease operations." });
+  const note = el("div", { class: "panel-placeholder", text: "Path leases are off in this workspace." });
   note.dataset.key = "leases-off";
   note.dataset.hash = "off";
   syncNodes(body, [note]);

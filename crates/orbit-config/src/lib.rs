@@ -170,11 +170,10 @@ pub use provider_limit::{
 };
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigAllowedValues, ConfigKeyDescriptor,
-    ConfigKeyTier, ConfigSection, ConfigSnapshot, ExperimentSettings, LeaseListenerSettings,
-    LeaseListenerTlsSettings, MachineSettings, MidRunSteeringSettings, NoticeKindHours,
-    NoticeSettings, ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
-    admit_settable_config_key, config_key_options, describe as describe_config_key,
-    immutable_key_note, is_global_only_key,
+    ConfigKeyTier, ConfigSection, ConfigSnapshot, ExperimentSettings, MachineSettings,
+    MidRunSteeringSettings, NoticeKindHours, NoticeSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
+    describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,
@@ -208,35 +207,6 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
     match read_global_config_document(global_root)? {
         Some((path, document)) => MachineSettings::admit(&document, &path),
         None => Ok(MachineSettings::default()),
-    }
-}
-
-/// Read `lease.intake.peer_user` from the global `config.toml` at
-/// `global_root`: the OS user Orbit Web accepts lease operations from over
-/// its intake socket, or `None` when it serves no socket.
-///
-/// As narrow as [`load_machine_settings`], so an unrelated problem elsewhere
-/// in the file leaves the dashboard as it was. The key is global-only; a
-/// workspace file is never read here.
-pub fn load_lease_intake_peer_user(global_root: &Path) -> Result<Option<String>, OrbitError> {
-    let Some((path, document)) = read_global_config_document(global_root)? else {
-        return Ok(None);
-    };
-    registry::admit_lease_intake_peer_user(&document, &path)
-}
-
-/// Read `lease.listener.*` from the global `config.toml` at `global_root`,
-/// the lease listener user's own Orbit home. Defaults when there is no file.
-///
-/// As narrow as [`load_lease_intake_peer_user`]: the listener reads nothing
-/// else, and never a workspace file.
-pub fn load_lease_listener_settings(
-    global_root: &Path,
-) -> Result<LeaseListenerSettings, OrbitError> {
-    let empty = toml::Value::Table(toml::map::Map::new());
-    match read_global_config_document(global_root)? {
-        Some((path, document)) => registry::admit_lease_listener_settings(&document, &path),
-        None => registry::admit_lease_listener_settings(&empty, global_root),
     }
 }
 

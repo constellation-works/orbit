@@ -18,7 +18,6 @@ pub mod host;
 pub(crate) mod host_route;
 pub mod init;
 pub mod job;
-pub mod lease;
 pub mod locks;
 pub mod log;
 pub mod mcp;
@@ -135,7 +134,6 @@ Advanced:
   decision     List, show and answer human decision requests on held work
   evolution    Record and inspect capability gaps and their measured costs
   experiment   Define, run and conclude experiments over agent treatments
-  lease        Coordinate path leases with the workspace owner
   resident     Grant, narrow and inspect resident orchestrator mandates
 
 Options:
@@ -211,7 +209,6 @@ pub enum Commands {
     Decision(decision::DecisionCommand),
     Evolution(evolution::EvolutionCommand),
     Experiment(experiment::ExperimentCommand),
-    Lease(lease::LeaseCommand),
     Resident(resident::ResidentCommand),
 
     // ── plugin-derived command groups ──

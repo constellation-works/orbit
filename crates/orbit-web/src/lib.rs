@@ -11,10 +11,11 @@
 //! workspace (global mode; see ORB-10029). [`lease_router`] exposes just the
 //! lease API over a [`LeaseBackend`] for servers with their own authentication.
 //! [`lease_intake`] is the Unix socket Orbit Web serves to the lease listener
-//! user when `lease.intake.peer_user` is set, and the client the listener
-//! calls it with. [`lease_listener`] is that listener: the lease routes and
-//! `/healthz` behind lease-token authentication, run by `orbit lease listen`
-//! as the listener user.
+//! user when there is an intake peer user, and the client the listener calls
+//! it with. [`lease_listener`] is that listener: the lease routes and
+//! `/healthz` behind lease-token authentication, run as the listener user.
+//! Path leases are not configurable [ORB-22808], so Orbit Web serves no
+//! intake socket and no command starts the listener.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;

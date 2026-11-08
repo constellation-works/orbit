@@ -126,7 +126,7 @@ toolsets it enables. `orbit tool show <tool>` names a tool's toolset, and
 | `ui` | None. `orbit.visual.capture` was removed; the name is kept so selections that list `ui` still load |
 | `exec` | `orbit.command.exec` |
 | `plugins` | Plugin tools |
-| `leases` | `orbit.lease.*` |
+| `leases` | None. The `orbit.lease.*` tools were removed; the name is kept so selections that list `leases` still load |
 | `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show` and `orbit.orchestrator.scorecard` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |

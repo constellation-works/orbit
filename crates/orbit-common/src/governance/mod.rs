@@ -8,7 +8,6 @@ pub mod drain;
 pub mod evolution;
 pub mod experiment;
 pub mod friction;
-pub mod lease;
 pub mod notice;
 pub mod operation;
 pub mod orchestrator;

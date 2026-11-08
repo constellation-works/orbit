@@ -620,7 +620,7 @@ only reader of forwarding headers; malformed chains use the TCP peer for rejecti
 per 300 seconds; IPv6 /64; 60 token reads and 20 token writes/minute; 2 streams and 8 in-flight
 requests/token; 64 connections; 16 in-flight requests globally; 65536 body bytes; 5 seconds
 for headers/TLS handshake and 10 seconds for the handler/body read; 4096 tracked keys including
-two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#lease-listener).
+two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#path-leases).
 Live budgets are never evicted at capacity; new addresses and new tokens share distinct
 conservative overflow keys. Idle keys are reclaimed during periodic maintenance.
 

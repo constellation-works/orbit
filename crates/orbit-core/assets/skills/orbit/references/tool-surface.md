@@ -375,7 +375,7 @@ subprocess, and external authentication checks.
   is advertised. Named toolsets and toolsets stamped for a managed activity
   add to the selected role or default tier. `decision-channel` tools may be
   called only by the bound channel plugin or the operator.
-- `--toolset` takes a comma-separated list (`leases`, `experiments`,
+- `--toolset` takes a comma-separated list (`experiments`,
   `analytics`, `decision-channel`, `notice`, `resident`,
   `tasks-write`, `dispatch`; `default` names the default surface and `all`
   every toolset) advertised beside the role's, or beside the default surface
@@ -388,14 +388,14 @@ subprocess, and external authentication checks.
 ### MCP toolsets
 
 `orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus
-the opt-in toolsets the host enables: `leases` (path leases), `experiments`
-(experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
-show), `decision-channel` (decision submit and digest; decision
+the opt-in toolsets the host enables: `experiments` (experiment tools),
+`analytics` (agent scorecards, orchestrator scorecard and show),
+`decision-channel` (decision submit and digest; decision
 list and show stay default), `notice`
 (`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
 mandates; widening their authority from an MCP session raises a decision
 request for the human). Enable them per server with
-`--toolset leases,analytics` (or `all`), or for the host with
+`--toolset experiments,analytics` (or `all`), or for the host with
 `orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
 replaces the config. A call to a tool outside the server's toolsets is refused
 `toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
@@ -650,49 +650,6 @@ a session with a shell on the owning host uses `orbit run history --json`.
 Submission success means a durable run exists, not that the
 change landed. An operator session resumes with `orbit_workflow_run_resume`;
 it returns a new linked run; preserve both IDs.
-
-## Path leases
-
-`orbit.lease.request`, `.renew`, `.expand`, `.release`, `.show`, `.list`,
-`.check` and `.notices` are `orbit tool run` tools, and MCP tools (advertised as
-`orbit_lease_request`, etc.) on a server that enables the `leases` toolset. They all answer for the owner's coordination store and
-require an identified agent, operator or runner. Federated calls must target
-the owner; replicas refuse the `control_plane` class, including lease reads.
-Enable `lease.enabled` in the workspace first.
-
-Request takes `principal`, `selectors` (`file:...` or `dir:...`), optional
-`mode` (`advisory` or `hard`), `priority` (`low`, `normal`, `high`),
-`ttl_seconds` (1–14400; default 1800), `wait` (default true), tags and
-branch/machine attribution. It returns `granted` and a `lease` with `lease_id`,
-mode, principal, priority and expiry. Advisory never blocks; a hard request
-overlapping task locks, reservations or other hard leases returns
-`granted: false, queued: true` with the holders and `queue_position`, and its
-lease (state `queued`) holds nothing until a `granted` notice; `wait: false`
-returns `queued: false` and the holders instead. The queue orders by priority,
-then age, and `lease.aging_minutes` lifts a long waiter one level. A lease
-never preempts an in-progress or review task. Workspace
-policy may downgrade hard to advisory or refuse priority above the caller's
-ceiling. Over SSH, principal/class policy is attribution and a guard.
-
-Renew, release and show take `lease_id`; renew optionally takes `ttl_seconds`.
-Expand takes `lease_id` and `selectors`: free paths are `added` at once, and
-on a hard lease blocked ones are `queued` while the lease keeps what it holds.
-A mutual expansion wait refuses the expansion ranked last in queue order
-(lowest effective priority, then youngest) with a `deadlock` notice
-(`deadlock` is set in that caller's answer).
-List returns active leases, queued ones included. Check takes `paths` and optional `lease_id` and
-reports coverage, unlocked policy and overlapping holders without mutations.
-Show and list expire stale leases and can write expiry audit events.
-
-The CLI is `orbit lease request <selector>... --principal <name>
-[--mode advisory|hard | --hard] [--priority low|normal|high] [--ttl 30m]
-[--no-wait]`, `renew <lease-id> [--ttl 30m]`, `expand <lease-id> <selector>...`,
-`release <lease-id>`, `show <lease-id>`, `list`, and
-`check <path>... [--lease-id <lease-id>]`. All support `--json`.
-A refused or queued request, and a deadlock-refused expansion, exit 3. `orbit task locks list` shows leases alongside
-reservations with mode and principal; task/reservation counts retain their
-existing meaning, with `by_lease` and `total_leases` added separately; a queued request holds
-nothing and is not listed there. Preemption belongs to a later phase.
 
 ## Fleet notices
 
