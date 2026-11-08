@@ -883,6 +883,82 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
     );
 }
 
+/// [ORB-23445] A repaired head adopted or published after the original
+/// push checkpoint must be re-evaluated against `completion.hold` before
+/// any merge: the original head changes only a safe file, while the
+/// repaired candidate may add a held path.
+#[test]
+fn completion_hold_reevaluated_for_repaired_heads() {
+    auto_fix_table(
+        "auto_fix::completion_hold_reevaluated_for_repaired_heads",
+        "published_held published_safe local_held local_safe",
+        |case, row| {
+            let fx = Fixture::new(row);
+            let host = auto_fix_resume_fixture(&fx, RUN_ID);
+            let held = case.ends_with("held");
+            let repair_file = if held {
+                "risky/auth.rs"
+            } else {
+                "safe/repair.txt"
+            };
+            let repair = if case.starts_with("published") {
+                let repair = fx.commit(repair_file, "repair\n");
+                seed_auto_fix_history(
+                    &host,
+                    PR_AUTO_FIX_PUSHED_EVENT,
+                    &PrAutoFixPush {
+                        pr_number: PR_NUMBER.into(),
+                        from_head_sha: fx.candidate.clone(),
+                        to_head_sha: repair.clone(),
+                        blocker: PrAutoFixBlocker::FailedChecks,
+                        run_id: RUN_ID.into(),
+                    },
+                );
+                git(&fx.repo, &["reset", "--hard", &fx.candidate]);
+                repair
+            } else {
+                let path = fx.repo.join(repair_file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, "repair\n").unwrap();
+                git(&fx.repo, &["add", repair_file]);
+                git(&fx.repo, &["commit", "-m", "admitted local repair"]);
+                host.require_commands(&[&format!("test -f {repair_file}")]);
+                fx.head()
+            };
+            fx.script_checks(&["success"]);
+            host.set_completion_hold_rules(vec![orbit_types::workflow::CompletionHoldRule {
+                name: Some("risky-paths".into()),
+                paths: vec!["risky/**".into()],
+                ..Default::default()
+            }]);
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            let output = action_ok(&host, "pr_complete", &input);
+            if held {
+                assert_eq!(output["held_task_ids"], json!([TASK_ID]), "{case}");
+                assert_eq!(output["completed_task_ids"], json!([]), "{case}");
+                assert_eq!(output["completion_hold"]["rule"], "risky-paths", "{case}");
+                assert_eq!(output["completion_hold"]["pattern"], "risky/**", "{case}");
+                assert_eq!(
+                    output["completion_hold"]["matched"], "risky/auth.rs",
+                    "{case}"
+                );
+                assert!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == orbit_types::workflow::COMPLETION_HELD_EVENT),
+                    "{case}: hold must be recorded"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+            } else {
+                assert_eq!(output["completed_task_ids"], json!([TASK_ID]), "{case}");
+                assert_eq!(fx.merge_requests(), squash(&repair), "{case}");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+            }
+        },
+    );
+}
+
 // CI API answers belong to the same bare-remote head read by the forge.
 // Unlike a scripted green status, source_contract evaluates the published tree.
 pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> Option<Value> {

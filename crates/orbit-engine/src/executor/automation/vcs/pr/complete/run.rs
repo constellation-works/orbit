@@ -8,7 +8,8 @@ use crate::context::{ReviewLandingRequest, RuntimeHost};
 use super::super::super::super::input::input_string_field;
 use super::super::super::super::task_update::{authorization_note, complete_tasks};
 use super::super::super::completion_hold::{
-    ChangedPaths, evaluate_completion_hold, pull_request_changed_paths, record_completion_hold,
+    ChangedPaths, CompletionHoldCheck, evaluate_completion_hold, pull_request_changed_paths,
+    record_completion_hold,
 };
 use super::super::super::handoff::load_handoff_context;
 use super::super::auto_fix::AutoFix;
@@ -101,13 +102,35 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
             }
         }
         let auto_fix = AutoFix::from_input(host, input, &task_ids, &context.batch_id)?;
+        // [ORB-23445] The driver may adopt or publish a repaired head, or
+        // refresh the candidate, after the check above evaluated the
+        // originally published head. Carry the policy in so every actual
+        // candidate is re-evaluated before a merge/auto-merge request.
+        let hold_check = (!hold_rules.is_empty()).then(|| CompletionHoldCheck {
+            rules: hold_rules.clone(),
+            tasks: context.tasks.clone(),
+            run_id: context.batch_id.clone(),
+        });
         let delivered = match drive_pr_to_merged(
             host,
             input,
             &workspace_path,
             &pr_number,
             auto_fix.as_ref(),
+            hold_check.as_ref(),
         )? {
+            Delivery::Held(hold) => {
+                record_completion_hold(host, &task_ids, &hold)?;
+                return held_without_merge(
+                    host,
+                    input,
+                    &context.batch_id,
+                    &task_ids,
+                    &workspace_path,
+                    &pr_number,
+                    &hold,
+                );
+            }
             Delivery::Merged(delivered) => delivered,
             Delivery::RebasedForReview { rebased, reason } => {
                 return Ok(json!({
@@ -237,8 +260,12 @@ fn held_without_merge<H: RuntimeHost + ?Sized>(
             workspace_path,
             pr_number,
             Some(&auto_fix),
+            None,
         )? {
             Delivery::Watched(outcome) => held_output(false, outcome, task_ids, hold, false, None),
+            // A watch carries no hold check, so this arm is unreachable;
+            // keep the tasks in review either way.
+            Delivery::Held(_) => held_output(false, unmerged, task_ids, hold, false, None),
             Delivery::RebasedForReview { rebased, reason } => {
                 let mut merge = unmerged;
                 merge["reason"] = json!(reason);

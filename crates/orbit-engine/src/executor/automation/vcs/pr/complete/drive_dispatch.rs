@@ -59,6 +59,15 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 })))));
             }
             PrMergeState::Merged => {
+                // A merge someone else made of a held candidate must not
+                // complete the task either [ORB-23445].
+                let candidate = status
+                    .head_sha
+                    .clone()
+                    .or_else(|| self.pin.candidate_sha().map(ToOwned::to_owned));
+                if let Some(held) = self.completion_hold_for_candidate(candidate.as_deref())? {
+                    return Ok(DispatchFlow::Deliver(Box::new(held)));
+                }
                 return Ok(DispatchFlow::Deliver(Box::new(
                     self.delivered_merge(&status)?,
                 )));
@@ -513,6 +522,17 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let observation_budget = self.observation_budget;
         let mutated = self.mutated;
         let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
+        // [ORB-23445] Evaluate the actual candidate before any merge
+        // request: it may be an adopted/published repair or refreshed
+        // head the pre-drive check never saw.
+        let candidate = self
+            .pin
+            .candidate_sha()
+            .map(ToOwned::to_owned)
+            .or_else(|| status.head_sha.clone());
+        if let Some(held) = self.completion_hold_for_candidate(candidate.as_deref())? {
+            return Ok(SubFlow::Deliver(Box::new(held)));
+        }
         if !self.merge_requested {
             let capabilities = resolved_capabilities(
                 host,
@@ -586,7 +606,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         Ok(SubFlow::WaitPoll)
     }
 
-    fn dispatch_pending(&mut self, _status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
+    fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -599,6 +619,19 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         // once checks settle, including on queue-only branches where
         // that mutation refuses the unsupported merge. Only an
         // unpinned ungated run may hand the merge to GitHub.
+        // [ORB-23445] Re-evaluate before an auto-merge request too, and
+        // for a pinned/reviewed candidate before it later becomes
+        // mergeable: the reported head is the candidate that would merge.
+        if !self.watch_only {
+            let candidate = self
+                .pin
+                .candidate_sha()
+                .map(ToOwned::to_owned)
+                .or_else(|| status.head_sha.clone());
+            if let Some(held) = self.completion_hold_for_candidate(candidate.as_deref())? {
+                return Ok(SubFlow::Deliver(Box::new(held)));
+            }
+        }
         if !self.watch_only
             && self.reviewed_head_sha.is_none()
             && self.pin.candidate_sha().is_none()

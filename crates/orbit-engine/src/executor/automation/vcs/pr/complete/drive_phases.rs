@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
+use super::super::super::completion_hold::CompletionHoldCheck;
 use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
@@ -101,9 +102,46 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) base_modified_refusals: u32,
     pub(super) base_race: Option<String>,
     pub(super) mutated: bool,
+    pub(super) hold_check: Option<CompletionHoldCheck>,
+    pub(super) hold_cleared_candidate: Option<String>,
 }
 
 impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
+    /// Re-evaluate `completion.hold` against the actual candidate that
+    /// would reach a merge request [ORB-23445]. Repairs adopted or
+    /// published before the loop, local repairs, base/conflict refreshes
+    /// and landed repairs all move `pin` (or the reported head) past the
+    /// originally published head the pre-drive check evaluated; every
+    /// such candidate passes through a merge dispatch, so checking there
+    /// covers each refresh. A candidate already cleared is not re-diffed
+    /// until it changes.
+    pub(super) fn completion_hold_for_candidate(
+        &mut self,
+        candidate: Option<&str>,
+    ) -> Result<Option<Delivery>, OrbitError> {
+        let Some(check) = &self.hold_check else {
+            return Ok(None);
+        };
+        if candidate.is_some() && self.hold_cleared_candidate.as_deref() == candidate {
+            return Ok(None);
+        }
+        let hold = check.evaluate(
+            Path::new(self.workspace_path),
+            super::super::super::super::input::input_string_field(self.input, "base").as_deref(),
+            super::super::super::super::input::input_string_field(self.input, "base_sync")
+                .as_deref()
+                == Some("local"),
+            candidate,
+        )?;
+        match hold {
+            Some(hold) => Ok(Some(Delivery::Held(hold))),
+            None => {
+                self.hold_cleared_candidate = candidate.map(ToOwned::to_owned);
+                Ok(None)
+            }
+        }
+    }
+
     /// Run the poll loop until a phase delivers or fails.
     pub(super) fn run(mut self) -> Result<Delivery, OrbitError> {
         loop {
