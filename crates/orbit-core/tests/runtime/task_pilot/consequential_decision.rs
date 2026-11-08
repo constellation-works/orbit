@@ -140,6 +140,64 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
     );
     assert_public_hold(&workspace, &negated_resolution, "the ownership policy");
 
+    let never_resolution = filed(
+        &workspace,
+        "The ownership policy was undecided. Never preserve the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &never_resolution, json!([])),
+        "the ownership policy",
+        "never preserve must not count as a resolution",
+    );
+    assert_public_hold(&workspace, &never_resolution, "the ownership policy");
+
+    let adverb_negated_resolution = filed(
+        &workspace,
+        "The ownership policy was undecided. Do not automatically preserve the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &adverb_negated_resolution, json!([])),
+        "the ownership policy",
+        "do not automatically preserve must not count as a resolution",
+    );
+    assert_public_hold(
+        &workspace,
+        &adverb_negated_resolution,
+        "the ownership policy",
+    );
+
+    let never_keep = filed(
+        &workspace,
+        "The ownership policy was undecided. Never keep the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &never_keep, json!([])),
+        "the ownership policy",
+        "never keep must not count as a resolution",
+    );
+    assert_public_hold(&workspace, &never_keep, "the ownership policy");
+
+    let adverb_negated_retain = filed(
+        &workspace,
+        "The ownership policy was undecided. Do not automatically retain the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &adverb_negated_retain, json!([])),
+        "the ownership policy",
+        "do not automatically retain must not count as a resolution",
+    );
+    assert_public_hold(&workspace, &adverb_negated_retain, "the ownership policy");
+
+    let affirmative_adverb_resolution = filed(
+        &workspace,
+        "The ownership policy was undecided. Automatically preserve the current ownership policy.",
+    );
+    assert_no_consequential_hold(
+        &assess(&workspace, &affirmative_adverb_resolution, json!([])),
+        "an affirmative adverbial preserve must still clear the hold",
+    );
+    assert_public_clear(&workspace, &affirmative_adverb_resolution);
+
     let different_choice = filed(
         &workspace,
         "The retry policy is undecided. Preserve the current ownership policy.",
