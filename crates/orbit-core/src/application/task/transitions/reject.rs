@@ -113,6 +113,29 @@ impl OrbitRuntime {
         .map(|_| ())
     }
 
+    /// Archive as the dashboard's archive button does: refused while a
+    /// local run owns the task unless `force`, in which case the move is
+    /// applied under the forced authority and recorded as `forced`. The
+    /// plain [`Self::archive_task`] stays the internal path its in-process
+    /// callers own.
+    pub fn archive_task_for_dashboard(&self, id: &str, force: bool) -> Result<(), OrbitError> {
+        if force {
+            return self
+                .force_update_task_with_identity(
+                    id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Archived),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .map(|_| ());
+        }
+        ensure_status_change_not_run_owned(self, id)?;
+        self.archive_task(id)
+    }
+
     pub fn delete_task(&self, id: &str) -> Result<(), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.with_mutation(|| {
@@ -161,7 +184,10 @@ fn ensure_task_delete_allowed(id: &str, status: TaskStatus, force: bool) -> Resu
         return Ok(());
     }
 
-    Err(OrbitError::InvalidInput(format!(
-        "task '{id}' is in status '{status}'; use --force to delete tasks not in proposed or rejected status"
-    )))
+    Err(OrbitError::force_overridable_delete(
+        status.to_string(),
+        format!(
+            "task '{id}' is in status '{status}'; use --force to delete tasks not in proposed or rejected status"
+        ),
+    ))
 }

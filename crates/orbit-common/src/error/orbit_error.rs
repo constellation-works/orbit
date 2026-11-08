@@ -3,10 +3,10 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
-    DependencyNotDelivered, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind,
-    NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
+    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -154,6 +154,11 @@ pub enum OrbitError {
         kind: ClaimRefusalKind,
         message: String,
     },
+    /// A refusal `--force` overrides. Displays exactly as
+    /// [`Self::InvalidInput`]; the refusal's `kind` is what callers branch
+    /// on, never the message.
+    #[error("invalid input: {}", .0.message)]
+    ForceOverridable(Box<ForceOverridableRefusal>),
     #[error("sensitive input rejected for `{field}`: {reason}")]
     SensitiveInput { field: String, reason: String },
     #[error("invalid input: {message}")]

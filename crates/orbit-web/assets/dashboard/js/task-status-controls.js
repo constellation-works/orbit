@@ -1,6 +1,6 @@
 // Orbit dashboard task status and crew controls: the status and crew selects, their forced-status confirmation and their apply functions.
 
-import { captureWorkspaceVisit, el, patchJson, isAggregateView } from './common.js';
+import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
 import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
@@ -264,13 +264,13 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   const previousValue = task.status;
   taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
   rerender(context);
-  try {
-    const updatedTask = await patchJson(mutationPath, payload);
+  const sendStatus = async (payloadToSend, wasForced) => {
+    const updatedTask = await patchJson(mutationPath, payloadToSend);
     if (!visit.isCurrent()) return;
     const merged = applyUpdatedTask(updatedTask, context) || task;
     const feedback = {
       kind: "success",
-      text: forced ? "status forced" : "status saved",
+      text: wasForced ? "status forced" : "status saved",
     };
     const reverse = statusTransition(updatedTask, previousValue);
     if (usesHumanCrewBypass(updatedTask) || (reverse && !reverse.required_field)) {
@@ -286,14 +286,46 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
       collapseTask(task.id);
       taskState.foldedStatusTasks.set(task.id, merged);
     }
+  };
+  try {
+    await sendStatus(payload, forced);
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.statusFeedback.set(task.id, {
-      kind: "error",
-      text: `status update failed: ${error.message || String(error)}`,
-    });
-    console.error(error);
+    // A guard `--force` overrides refused a governed target: offer the
+    // override instead of a dead failure line. The server's structured
+    // code decides, never its message text.
+    if (!forced && error && error.code === "force_overridable") {
+      const confirmed = await confirmForceOverride({
+        heading: `Force ${task.id} from ${previousValue} to ${nextStatus}?`,
+        guard: forceOverrideGuardText(error.body),
+        effect: "Forcing does not cancel the run. The status change is applied and recorded in task history as forced.",
+      });
+      if (!visit.isCurrent()) return;
+      if (!confirmed) {
+        refuse("status update cancelled");
+        return;
+      }
+      taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
+      rerender(context);
+      try {
+        await sendStatus({ ...payload, force: true }, true);
+      } catch (retryError) {
+        if (!visit.isCurrent()) return;
+        taskState.statusFeedback.set(task.id, {
+          kind: "error",
+          text: `status update failed: ${retryError.message || String(retryError)}`,
+        });
+        console.error(retryError);
+      }
+    } else {
+      taskState.statusFeedback.set(task.id, {
+        kind: "error",
+        text: `status update failed: ${error.message || String(error)}`,
+      });
+      console.error(error);
+    }
   }
+  if (!visit.isCurrent()) return;
   rerender(context);
   scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }

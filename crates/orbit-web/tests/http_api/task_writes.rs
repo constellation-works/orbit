@@ -245,6 +245,139 @@ fn dashboard_force_still_overrides_the_lifecycle_table() {
     );
 }
 
+/// A governed status change on a run-owned task returns the structured
+/// force-overridable code; `force: true` retries it, records it as forced
+/// and leaves the owning run untouched.
+#[test]
+fn dashboard_status_change_on_a_run_owned_task_offers_the_force_override() {
+    isolated(
+        "task_writes::dashboard_status_change_on_a_run_owned_task_offers_the_force_override",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Run-owned status change", TaskStatus::Proposed);
+            let run = own_pending(&fixture, &id);
+            let server = fixture.server(true);
+            let uri = format!("/api/tasks/{id}{WORKSPACE}");
+
+            let refused = server.send("PATCH", &uri, json!({ "status": "backlog" }));
+            assert_eq!(refused.status().as_u16(), 400);
+            let body: Value = refused.json().expect("error body");
+            assert_eq!(body["code"], json!("force_overridable"), "{body}");
+            assert_eq!(body["guard"], json!("run_still_owns_task"), "{body}");
+            assert_eq!(body["run_id"], json!(run.run_id), "{body}");
+            assert_eq!(body["run_state"], json!("pending"), "{body}");
+            assert_eq!(
+                fixture.runtime.get_task(&id).expect("task").status,
+                TaskStatus::Proposed,
+                "a refused change writes nothing"
+            );
+
+            let forced =
+                json_ok(server.send("PATCH", &uri, json!({ "status": "backlog", "force": true })));
+            assert_eq!(forced["status"], json!("backlog"), "{forced}");
+            assert!(
+                forced["history"]
+                    .as_array()
+                    .expect("history")
+                    .iter()
+                    .any(|entry| entry["event"] == json!("forced")),
+                "the override is recorded as forced: {forced}"
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .show_job_run(&run.run_id)
+                    .expect("run")
+                    .state,
+                JobRunState::Pending,
+                "forcing does not cancel the owning run"
+            );
+        },
+    );
+}
+
+/// Archiving through the archive button refuses a run-owned task with the
+/// same structured code, and `force: true` archives it as forced.
+#[test]
+fn dashboard_archive_of_a_run_owned_task_offers_the_force_override() {
+    isolated(
+        "task_writes::dashboard_archive_of_a_run_owned_task_offers_the_force_override",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Run-owned archive", TaskStatus::Backlog);
+            let run = own_pending(&fixture, &id);
+            let server = fixture.server(true);
+            let uri = format!("/api/tasks/{id}/archive{WORKSPACE}");
+
+            let refused = server.send("POST", &uri, json!({}));
+            assert_eq!(refused.status().as_u16(), 400);
+            let body: Value = refused.json().expect("error body");
+            assert_eq!(body["code"], json!("force_overridable"), "{body}");
+            assert_eq!(body["guard"], json!("run_still_owns_task"), "{body}");
+            assert_eq!(body["run_id"], json!(run.run_id), "{body}");
+            assert_eq!(
+                fixture.runtime.get_task(&id).expect("task").status,
+                TaskStatus::Backlog,
+                "a refused archive writes nothing"
+            );
+
+            let archived = json_ok(server.send("POST", &uri, json!({ "force": true })));
+            assert_eq!(archived["ok"], json!(true), "{archived}");
+            let task = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
+            assert_eq!(task["status"], json!("archived"), "{task}");
+            assert!(
+                task["history"]
+                    .as_array()
+                    .expect("history")
+                    .iter()
+                    .any(|entry| entry["event"] == json!("forced")),
+                "the forced archive is recorded as forced: {task}"
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .show_job_run(&run.run_id)
+                    .expect("run")
+                    .state,
+                JobRunState::Pending,
+                "forcing does not cancel the owning run"
+            );
+        },
+    );
+}
+
+/// Deleting a task outside `proposed` or `rejected` carries the structured
+/// force-overridable code, and `force` still deletes it.
+#[test]
+fn delete_outside_proposed_or_rejected_carries_the_force_overridable_code() {
+    isolated(
+        "task_writes::delete_outside_proposed_or_rejected_carries_the_force_overridable_code",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Delete guard", TaskStatus::Backlog);
+            let refused = fixture
+                .runtime
+                .delete_task_guarded(&id, false)
+                .expect_err("delete must refuse");
+            let refusal = refused.force_overridable().expect("typed refusal");
+            assert_eq!(
+                refusal.kind,
+                orbit_common::ForceOverridableKind::DeleteOutsideProposedOrRejected
+            );
+            assert_eq!(refusal.task_status.as_deref(), Some("backlog"));
+            assert_eq!(
+                fixture.runtime.get_task(&id).expect("task").status,
+                TaskStatus::Backlog,
+                "a refused delete writes nothing"
+            );
+            fixture
+                .runtime
+                .delete_task_guarded(&id, true)
+                .expect("force deletes");
+        },
+    );
+}
+
 /// The owning-run relaxation of the update context check needs a caller
 /// bound to the task's run. A dashboard request carries no run binding, so a
 /// task a run owns still gets the strict check, with its escape named.

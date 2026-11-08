@@ -265,6 +265,9 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             Json(json!({"error": message, "code": code.as_str()})),
         )
             .into_response(),
+        error @ orbit_core::OrbitError::ForceOverridable(_) => {
+            force_overridable_response(error)
+        }
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
@@ -417,6 +420,31 @@ fn artifact_conflict(error: orbit_core::OrbitError, code: &'static str) -> Respo
         })),
     )
         .into_response()
+}
+
+/// A refusal `--force` overrides: the dashboard matches on `code` (never
+/// the message) and names the guard from `guard` plus its facts.
+fn force_overridable_response(error: orbit_core::OrbitError) -> Response {
+    let refusal = error.force_overridable();
+    let mut body = json!({
+        "error": refusal.map_or_else(|| error.to_string(), |refusal| refusal.message.clone()),
+        "code": "force_overridable",
+        "guard": refusal.map(|refusal| refusal.kind.as_str()),
+    });
+    if let Some(refusal) = refusal
+        && let Some(object) = body.as_object_mut()
+    {
+        if let Some(run_id) = &refusal.run_id {
+            object.insert("run_id".to_string(), json!(run_id));
+        }
+        if let Some(run_state) = &refusal.run_state {
+            object.insert("run_state".to_string(), json!(run_state));
+        }
+        if let Some(task_status) = &refusal.task_status {
+            object.insert("task_status".to_string(), json!(task_status));
+        }
+    }
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 
 pub(super) fn bad_request(message: String) -> Response {

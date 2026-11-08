@@ -255,6 +255,14 @@ where
 {
     Option::<String>::deserialize(deserializer).map(Some)
 }
+/// Body for `POST /tasks/:id/archive`: `force` is the dashboard's
+/// `--force` equivalent for a run-owned task.
+#[derive(Deserialize, Default)]
+pub(in crate::api) struct ArchiveBody {
+    #[serde(default)]
+    pub(super) force: bool,
+}
+
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct RequeueBody {
     #[serde(default)]

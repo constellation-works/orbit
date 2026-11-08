@@ -212,6 +212,54 @@ impl ClaimRefusalKind {
     }
 }
 
+/// Which guard refused a write that `--force` (the dashboard's Force)
+/// overrides. Callers branch on this kind, never on message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForceOverridableKind {
+    /// A non-terminal local run still owns the task.
+    RunStillOwnsTask,
+    /// Delete was asked for a task outside `proposed` or `rejected`.
+    DeleteOutsideProposedOrRejected,
+}
+
+impl ForceOverridableKind {
+    /// The stable token every surface reports for this guard.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RunStillOwnsTask => "run_still_owns_task",
+            Self::DeleteOutsideProposedOrRejected => "delete_outside_proposed_or_rejected",
+        }
+    }
+}
+
+impl std::fmt::Display for ForceOverridableKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Evidence behind [`crate::OrbitError::ForceOverridable`]: the guard that
+/// refused, its human message, and the facts a caller needs to name the
+/// guard without parsing the message. Boxed so the rare refusal does not
+/// widen every `Result<_, OrbitError>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForceOverridableRefusal {
+    /// The guard that refused.
+    pub kind: ForceOverridableKind,
+    /// The refusal text, without the `invalid input: ` prefix.
+    pub message: String,
+    /// The owning run, for [`ForceOverridableKind::RunStillOwnsTask`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The owning run's state, for [`ForceOverridableKind::RunStillOwnsTask`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_state: Option<String>,
+    /// The task's status, for [`ForceOverridableKind::DeleteOutsideProposedOrRejected`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+}
+
 /// Stable refusal codes of the operator host registry (`orbit host`, the
 /// host file and its consumers). The serialized name is the code callers
 /// match on, so each variant is protocol.

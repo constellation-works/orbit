@@ -31,11 +31,12 @@ pub mod test_process;
 
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
-    DecisionRefusalCode, DependencyNotDelivered, ForgePushHoldFailure, HostRegistryCode,
-    LOCK_BUSY_ERROR_CODE, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
-    PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld, is_lock_busy_message,
+    DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
+    ForgePushHoldFailure, HostRegistryCode, LOCK_BUSY_ERROR_CODE, NotFoundKind, NoticeRefusalCode,
+    OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
+    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

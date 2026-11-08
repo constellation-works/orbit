@@ -39,6 +39,20 @@ pub fn error_payload(error: &OrbitError) -> Value {
     {
         object.insert("artifact_origin".to_string(), json!(artifact_origin));
     }
+    if let Some(refusal) = error.force_overridable()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("guard".to_string(), json!(refusal.kind.as_str()));
+        if let Some(run_id) = &refusal.run_id {
+            object.insert("run_id".to_string(), json!(run_id));
+        }
+        if let Some(run_state) = &refusal.run_state {
+            object.insert("run_state".to_string(), json!(run_state));
+        }
+        if let Some(task_status) = &refusal.task_status {
+            object.insert("task_status".to_string(), json!(task_status));
+        }
+    }
     if let Some((source_run_id, run_id)) = error.resume_run_in_flight()
         && let Some(object) = payload.as_object_mut()
     {
@@ -121,6 +135,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::HostConfiguration { .. } => {
             const { RemoteToolCode::HostConfiguration.as_str() }
         }
+        OrbitError::ForceOverridable(_) => "force_overridable",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
         | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
