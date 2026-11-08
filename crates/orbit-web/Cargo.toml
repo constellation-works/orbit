@@ -19,7 +19,6 @@ chrono.workspace = true
 clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
-getrandom.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util = { workspace = true, features = ["service"] }
 # Lease intake socket: the token scope the lease listener sends.

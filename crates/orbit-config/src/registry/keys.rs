@@ -318,7 +318,17 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
     ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
     ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
+    // [ORB-22808] Web terminal browser sessions were removed on 2026-11-08.
+    // Each key loads, warns and is ignored; code-health-sweep deletes these
+    // entries after 2026-12-08, when they become ordinary unknown settings.
+    ("machine.web_terminal.enabled", WEB_TERMINAL_REMOVED_NOTE),
+    ("machine.web_session.ttl", WEB_TERMINAL_REMOVED_NOTE),
 ];
+
+const WEB_TERMINAL_REMOVED_NOTE: &str = "ignored: dashboard browser sessions and `orbit web \
+     open` were removed; the dashboard opens its plain URL and operator capability still comes \
+     from `orbit web serve --operator`. Delete the [machine.web_terminal] and \
+     [machine.web_session] tables. This key stops being recognised after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
      removed; resident.evolution.window_days and decline_suppress_days still apply to the \

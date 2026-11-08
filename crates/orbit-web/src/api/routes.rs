@@ -16,10 +16,6 @@ pub(crate) fn request_shutdown() {
 
 pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
     Router::new()
-        .route(
-            "/session",
-            get(session::session_identity).post(session::exchange_session),
-        )
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
         .route("/dashboard/chrome", get(dashboard_chrome::dashboard_chrome))

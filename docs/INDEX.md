@@ -178,13 +178,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
-### Parked (3)
+### Parked (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume | claude |
 
 ## Designs
 
@@ -247,7 +246,6 @@ a conservative title/status fallback.
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Implemented | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | Draft | Orbit |
 
 ### Archived designs
@@ -264,6 +262,7 @@ They are reference only and are not authoritative.
 | [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |
 | [Ux Rules](./design/_archived/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work | Deprecated | claude |
 | [Visual Review](./design/_archived/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Deprecated | claude |
+| [Web Terminal](./design/_archived/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Deprecated | claude |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
 [design conventions](./design/CONVENTIONS.md).

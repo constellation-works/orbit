@@ -347,53 +347,12 @@ task_prefix = "ORB"
 | `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. The macOS watchdog counts processes only. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | **Advanced.** Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
 | `machine.application_consent_max_days` | `30` | Yes (`--global`) | **Advanced.** Longest lifetime, in days (`1..=365`), of an application consent with constrained, named or rate-limited scopes (schema v2); `orbit application consent` refuses a later `expires_at`. Consents whose every scope is exact are not capped. |
-| `machine.web_terminal.enabled` | `false` | Yes (`--global`) | Enable private dashboard browser credentials at startup. |
-| `machine.web_session.ttl` | `43200` (12h) | Yes (`--global`) | Session lifetime in seconds (`1..=604800`); restart the dashboard to apply. See [browser sessions](#browser-sessions). |
 | `machine.mcp.toolsets` | `[]` | Yes (`--global`) | MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one (`leases`, `notice`, `tasks-write`, `default`, `all`, …). A server's `--toolset` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
 | `machine.mcp.role` | unset | Yes (`--global`) | The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
 
 ### MCP roles and toolsets
 
 Every tool belongs to exactly one MCP toolset (`orbit tool list` shows it), and a role is a named set of toolsets defined in one place (`McpRole` in `orbit-types`). `orbit mcp serve --role <role>` serves the role's toolsets plus the always-on `core` (workspace discovery); `--toolset` or `machine.mcp.toolsets` add to it. With no `--role` and no `machine.mcp.role` a server advertises exactly the surface it did before roles existed, so running long-lived clients are unaffected. A role limits only what MCP lists and dispatches; it never grants authority, so operator-only tools still need operator capability under any role. A call outside the role is refused `toolset_not_enabled`, naming the toolset, the role and the roles that include it. `--mode remote` forwards `--role` to the destination; `--mode federated` applies the role to every destination at the mux. `orbit tool list --role <role>` reports a role's tool count and approximate token size; `crates/orbit-mcp/tests/boundary/mcp_role_budgets.json` holds each role's size budget, and a test fails when a role exceeds it. Design: [federated MCP §roles](design/federated-mcp/specs/mcp-roles.md).
-
-### Browser sessions
-
-`machine.web_terminal.enabled` defaults to `false`. Set it to `true` in the
-global config and restart the dashboard to enable browser credentials. This
-prepares the authentication boundary for terminal routes; it does not grant
-operator capability or change authorization on existing dashboard routes.
-
-`machine.web_session.ttl` is the session lifetime in seconds, from `1` to
-`604800`, default `43200` (12 hours). The server reads both settings at startup.
-Sessions live only in memory and expire on restart, even if a browser retains
-its cookie. Cookies are HttpOnly, SameSite=Strict and scoped to `/api`.
-
-The host's private startup key is replaced atomically in
-`~/.orbit/run/web-session.secret` (0600, directory 0700). In the terminal design,
-“Orbit home” means this machine-global `~/.orbit`, just as it does for SSH
-control sockets; neither `--root` nor a workspace relocates credentials.
-Orbit's sandbox masks the whole `~/.orbit/run` tree, including temporary
-credential writes and private browser-launch documents. Insecure existing
-permissions or symlinks are refused. Only Unix hosts support this feature.
-
-`orbit web open` prints a fresh one-time URL for the running dashboard and
-opens it unless `--no-open` is given. Treat its output as a credential. The
-startup key stays on the host: the URL carries a signed random ticket valid for
-five minutes and one exchange. The page immediately removes the fragment from
-history and exchanges the ticket at `POST /api/session`. There are at most 1024
-live sessions and 4096 recently used tickets; excess exchanges fail closed.
-`web serve` and `web connect` print private URLs only to an interactive terminal,
-so redirected service logs never contain them. Browser launchers receive a
-private local redirect-file path, not the credential. These launch documents
-remain in the masked directory; their tickets expire after five minutes.
-`web connect` obtains the ticket over authenticated SSH and uses the forwarded
-local port. If ticket retrieval or the private browser launch fails, it warns,
-keeps the tunnel connected and opens the plain local dashboard URL unless
-`--no-open` is given. Existing dashboard routes remain available; features
-requiring a browser session need a fresh ticket. With `--no-open` and redirected
-stdout, it skips ticket retrieval because no browser or interactive terminal
-will consume the URL. A dashboard without the setting serves `/api/session` as
-404.
 
 ### `[machine.auto_concurrency]` — host forecast admission
 
@@ -3040,4 +2999,5 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `visual_review.manifests`, `default_width`, `mode`, `max_mocks`, `reviewer`, `max_images`, `max_image_tokens`, `max_findings`, `require_established`, `block_at`, `file_at`; `workflow.purpose_crews.visual_review` | Ignored: visual review (mock comparison, the `verify-mock-ui` capture, checks, comparison review and post-landing follow-ups) was removed [ORB-22807]. No delivery captures or compares mocks, `mocks/` and `visual/` are ordinary artifact names, and `orbit visual` and the `orbit.visual.*` tools are gone. Delete the `[visual_review]` table and the purpose pool. Recognised until 2026-12-07. |
 | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes`, `max_proposals` | Ignored: the weekly evolution pass routine (`evolution_pass_pipeline` and its rank, draft and apply activities) was removed [ORB-22844], so nothing files evolution proposal tasks automatically. The evolution ledger, `orbit evolution`, the `orbit.evolution.*` tools and `orbit resident digest` stay, and `resident.evolution.window_days` and `decline_suppress_days` still apply. Delete the keys. Recognised until 2026-12-07. |
 | `ux_rules.surfaces`, `runner`, `ui_base_url`, `max_new_tasks`, `file_at`, `disabled` | Ignored: the `ux-rules` routine, `ux_rules_pipeline` and its rule-findings filer were removed [ORB-22844]; nothing runs the rules on a schedule or files tasks from them, and no `ux_rules_runner` script grant is needed. Run `scripts/ux-rules/run.mjs` by hand ([its README](../scripts/ux-rules/README.md)). Delete the `[ux_rules]` table. Recognised until 2026-12-07. |
+| `machine.web_terminal.enabled`, `machine.web_session.ttl` | Ignored: dashboard browser sessions and `orbit web open` were removed [ORB-22808]. The dashboard opens its plain URL, and operator capability still comes from `orbit web serve --operator`. Delete the `[machine.web_terminal]` and `[machine.web_session]` tables. Recognised until 2026-12-08; after that they are unknown keys. |
 | `review.verify_findings` | Ignored: the `finding_verification` routine and `finding_verification_pipeline` were removed [ORB-22844], and nothing holds a review-filed bug as `unverified_review_finding`; it is approved and promoted like any other task. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding with a REJECTED verdict, and verdicts the removed job wrote still load. Delete the key. Recognised until 2026-12-07. |

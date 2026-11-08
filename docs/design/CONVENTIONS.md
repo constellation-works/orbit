@@ -306,7 +306,6 @@ Retired features are removed from this table along with their folder.
 | Scheduled Tasks | [docs/design/scheduled-tasks/](./scheduled-tasks/) | claude |
 | Script Steps | [docs/design/script-steps/](./script-steps/) | claude |
 | Task Risk | [docs/design/task-risk/](./task-risk/) | codex |
-| Web Terminal | [docs/design/web-terminal/](./web-terminal/) | claude |
 | Workspace Agent Corpus | [docs/design/workspace-agent-corpus/](./workspace-agent-corpus/) | Orbit |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.
