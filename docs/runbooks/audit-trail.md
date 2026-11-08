@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-runtime/src/audit/run/trail.rs", "crates/orbit-runtime/src/audit/run/projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228, ORB-16383]
-last_validated: 2026-10-19
+last_validated: 2026-11-08
 ---
 
 # Inspect the Audit Trail
@@ -74,12 +74,21 @@ peer's host PID). Secret metadata contains names and update outcomes only;
 secret values are never exported. Rows without this metadata use `null` for
 optional fields, empty arrays/maps for collections, and `false` for `brokered`.
 
-CSV export appends the same six columns after the existing columns. `plugin`,
-`plugin_secrets` and `plugin_secret_updates` are compact JSON within CSV cells;
-the CSV writer escapes their quotes and commas. An absent plugin is `null`,
-empty secret collections are `[]` and `{}`, `brokered` is `true` or `false`,
-and an absent `peer_pid` or `self_reported_actor` is an empty cell. The
+CSV export appends the same columns after the existing ones, plus
+`session_model`. `plugin`, `plugin_secrets` and `plugin_secret_updates` are
+compact JSON within CSV cells; the CSV writer escapes their quotes and commas.
+An absent plugin is `null`, empty secret collections are `[]` and `{}`,
+`brokered` is `true` or `false`, and an absent `peer_pid`,
+`self_reported_actor` or `session_model` is an empty cell. The
 `self_reported_actor` column is unverified attribution, separate from `role`.
+
+`session_model` is the server-derived model on an MCP tool call, and it is
+never taken from tool input. The order is the brokered job's resolved crew
+model, otherwise a managed worker's `ORBIT_AGENT_MODEL`, otherwise the
+`orbit mcp serve --orchestrator` crew's configured model, otherwise the MCP
+client's `clientInfo` name. It is not the authenticated `role`. CLI rows and
+rows written before the column existed leave it empty; the Tools failure
+breakdown then uses the role-derived actor model, then family.
 
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the

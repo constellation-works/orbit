@@ -19,7 +19,8 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      capabilities_json, origin_session_id, mcp_call_id, lease_id, task_id, \
      job_run_id, activity_id, step_index, trace_id, caller_ip, \
      self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest, \
-     plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid, application_json";
+     plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid, \
+     application_json, session_model";
 
 pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
     let ts_raw: String = row.get(2)?;
@@ -104,6 +105,7 @@ pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<
             .unwrap_or_default(),
         brokered: row.get::<_, Option<i64>>(43)?.is_some_and(|flag| flag != 0),
         peer_pid: row.get(44)?,
+        session_model: row.get(46)?,
     })
 }
 

@@ -559,6 +559,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 // presentation is bounded.
 const AUDIT_TOOL_FAILURES_VISIBLE_ROWS = 10;
 const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures-by-tool";
+const AUDIT_TOOL_MODEL_FAILURES_CARD_KEY = "tool-call-failures-by-model";
 const expandedAuditSummaryCards = new Set();
 let lastAuditSummaryPayload = null;
 
@@ -715,6 +716,23 @@ function renderAuditSummary(data, ctx) {
       ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools"),
       true,
     ), [namedToolFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
+  }
+
+  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
+  if (namedModelFailures.length) {
+    addCard(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, createCard(
+      `Tool call failures by model · window ${windowLabel}`,
+      boundedAuditSummaryTable(namedModelFailures, [
+        { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
+        { key: "tool", label: "tool" },
+        { key: "failed", label: "failed", num: true },
+        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
+        { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
+        { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
+      ], filterByTool, AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, "models"),
+      true,
+    ), [namedModelFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY)]);
   }
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));

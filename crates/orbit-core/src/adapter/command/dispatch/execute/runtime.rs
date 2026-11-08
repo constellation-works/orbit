@@ -140,6 +140,7 @@ impl OrbitRuntime {
                     entry_point,
                     session_context: Some(session_context),
                     brokered: None,
+                    orchestrator_model: None,
                 },
                 |_| Err(error),
             );
@@ -206,6 +207,7 @@ impl OrbitRuntime {
                             entry_point,
                             session_context: Some(session_context),
                             brokered: None,
+                            orchestrator_model: None,
                         },
                         |_| Err(error),
                     );
@@ -264,6 +266,7 @@ impl OrbitRuntime {
                 entry_point,
                 session_context: Some(audit_session_context),
                 brokered: None,
+                orchestrator_model: None,
             },
             |input| {
                 let enforcement = match entry_point {
@@ -400,6 +403,7 @@ impl OrbitRuntime {
                 entry_point,
                 session_context: Some(session_context),
                 brokered: None,
+                orchestrator_model: None,
             },
             dispatch,
         )
@@ -429,6 +433,7 @@ impl OrbitRuntime {
                 entry_point,
                 session_context: Some(session_context),
                 brokered: Some(brokered),
+                orchestrator_model: None,
             },
             dispatch,
         )
@@ -455,6 +460,18 @@ impl OrbitRuntime {
             .tool_registry()
             .plugin_binding(name)
             .map(|binding| binding.provenance.clone());
+        let mut audit = audit;
+        if audit.orchestrator_model.is_none() {
+            audit.orchestrator_model = audit
+                .session_context
+                .as_ref()
+                .and_then(|session| session.orchestrator.as_deref())
+                .and_then(|name| {
+                    orbit_types::identity::find_crew(name, self.context.settings().crews())
+                })
+                .map(|crew| crew.assignment.model)
+                .filter(|model| !model.trim().is_empty());
+        }
         let mut application_session = audit.session_context.clone().unwrap_or_default();
         let application_enforcement = match audit.entry_point {
             ToolEntryPoint::Cli => CapabilityEnforcement::Enforce,

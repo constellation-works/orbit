@@ -240,8 +240,9 @@ rather than a start. No work starts, so another run's execution claim on the
 same files does not refuse the write, and you don't need `--force`. Add `plan`
 to that write if the task has none. Operator capability comes from an
 interactive terminal or `ORBIT_OPERATOR=1`; an `ssh host '<command>'`
-invocation has no terminal, so it needs the variable. Don't pass `model`,
-because naming an agent makes the write an agent's. Without the summary, from
+invocation has no terminal, so it needs the variable. Do not set
+`ORBIT_AGENT_*` or pass CLI `--model`: either names an agent and makes the
+write an agent's. Without the summary, from
 an agent, or without operator capability, the write starts work. While a
 claim overlaps, that start is refused with the claim's task and run named.
 The refusal covers the whole write: field edits sent with the start (a

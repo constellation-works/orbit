@@ -495,7 +495,7 @@ capture both outputs as explicitly retrospective records. Attach those records a
 `orbit.task.artifact.put`, staging each file under `.orbit/tmp/`:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
 ```
 
 `source_path` is the local file; `path` is the stored artifact name.

@@ -10,6 +10,7 @@ use rusqlite::params;
 use crate::Store;
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate, AuditToolAggregate,
+    AuditToolModelAggregate,
 };
 
 use super::row::invalid_text;
@@ -197,6 +198,42 @@ impl Store {
             })
             .map_err(sqlite_store_error)?;
 
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
+    /// Callable tool calls (`run` and `run-mcp`) at or after `since`, grouped
+    /// by tool and server-derived model. `session_model` wins; older rows
+    /// fall back to the role-derived actor model, then family.
+    pub fn get_audit_event_aggregates_by_tool_model(
+        &self,
+        since: &DateTime<Utc>,
+    ) -> Result<Vec<AuditToolModelAggregate>, OrbitError> {
+        let conn = self.read()?;
+        let sql = "SELECT COALESCE(NULLIF(tool_name, ''), 'unknown') AS tool, \
+                   COALESCE(NULLIF(session_model, ''), NULLIF(actor_model, ''), NULLIF(actor_family, ''), 'unknown') AS model, \
+                   COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN status = 'denied' THEN 1 ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN status = 'failure' \
+                     AND orbit_failure_class(COALESCE(NULLIF(tool_name, ''), 'unknown'), status, error_message) = 'unexpected' THEN 1 ELSE 0 END), 0) \
+                   FROM audit_events \
+                   WHERE timestamp >= ?1 AND command = 'tool' AND subcommand IN ('run', 'run-mcp') \
+                   GROUP BY tool, model \
+                   ORDER BY model ASC, tool ASC";
+        let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(params![since.to_rfc3339()], |row| {
+                Ok(AuditToolModelAggregate {
+                    tool_name: row.get(0)?,
+                    model: row.get(1)?,
+                    successes: row.get(2)?,
+                    failures: row.get(3)?,
+                    denials: row.get(4)?,
+                    unexpected_failures: row.get(5)?,
+                })
+            })
+            .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
     }

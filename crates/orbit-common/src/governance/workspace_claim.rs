@@ -6,8 +6,8 @@
 use orbit_types::tool::McpIdRouteDeclaration;
 
 use crate::governance::operation::{
-    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
-    ToolOnlyRegistration, UnknownFields, operation_registry,
+    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
+    RETIRED_AGENT_FIELD, Redaction, ToolOnlyRegistration, UnknownFields, operation_registry,
 };
 
 operation_registry! {
@@ -72,21 +72,9 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
             false,
             "Optional session identity, recorded for diagnostics only; never load-bearing, so a reconnecting client does not orphan the workspace.",
         ),
-        param(
-            "agent",
-            ParamType::String,
-            false,
-            "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        ),
-        param(
-            "model",
-            ParamType::String,
-            false,
-            "Agent family or full model ID for provenance.",
-        ),
     ]],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
@@ -113,21 +101,9 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
             false,
             "Release the claim without its token, for a holder that has gone away. Audited with who forced it and whom they displaced.",
         ),
-        param(
-            "agent",
-            ParamType::String,
-            false,
-            "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        ),
-        param(
-            "model",
-            ParamType::String,
-            false,
-            "Agent family or full model ID for provenance.",
-        ),
     ]],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,

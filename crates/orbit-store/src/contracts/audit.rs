@@ -93,6 +93,21 @@ pub struct AuditToolAggregate {
     pub avg_duration_ms: f64,
 }
 
+/// One callable tool (`run` or `run-mcp`) grouped by its server-derived model.
+///
+/// `model` prefers `session_model`, then the role-derived `actor_model` and
+/// `actor_family`, so rows written before the session column still group.
+/// `unknown` is the bucket when none of those is set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditToolModelAggregate {
+    pub tool_name: String,
+    pub model: String,
+    pub successes: i64,
+    pub failures: i64,
+    pub denials: i64,
+    pub unexpected_failures: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditRoleAggregate {
     pub role: String,
@@ -168,6 +183,9 @@ pub struct AuditInvocationFields<'a> {
     /// authenticated peer's PID. The row is then written `brokered`. `None`
     /// for every in-process call.
     pub brokered_peer_pid: Option<u32>,
+    /// Server-derived model for this MCP tool call. `None` for every
+    /// non-MCP producer and for an MCP call with no job, crew, or client name.
+    pub session_model: Option<&'a str>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

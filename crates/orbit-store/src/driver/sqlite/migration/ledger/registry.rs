@@ -800,12 +800,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_crew_memory,
     },
+    // Nullable MCP session model. Existing rows stay NULL. An older binary
+    // never reads or writes the column, and it is not part of `role`.
+    Migration {
+        version: 88,
+        name: "audit_session_model",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_audit_session_model,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 87;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 88;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

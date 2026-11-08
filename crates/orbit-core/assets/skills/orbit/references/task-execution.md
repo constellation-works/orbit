@@ -1,9 +1,9 @@
 # Executing a task
 
 Carry a task from intent to verified implementation with explicit lifecycle
-tracking. Every `orbit.task.*` call needs `model` — your agent family. The
-operator close of a rescued blocked task omits `model`, so the write is not
-attributed to an agent; see
+tracking. MCP task tools do not take `model`; attribution is the session
+(`ORBIT_AGENT_*` or the `--orchestrator` crew). The operator close of a
+rescued blocked task is not attributed to an agent; see
 [Close a rescued blocked task](../../orbit-orchestrate/references/recovery.md#close-a-rescued-blocked-task).
 
 No task ID yet? Use the authorized intent, clarify only missing requirements,
@@ -30,7 +30,7 @@ Search statuses require the corpus prefix, such as `task:rejected` or
 To attach evidence, write a local file under `.orbit/tmp/` and use:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
 ```
 
 `source_path` is the local file; `path` is the stored artifact name.
@@ -58,7 +58,7 @@ hits before reformulating. Include `all: true` when checking closed history.
 For personal execution or an authorized takeover, check that the task's `crew`
 represents your configured crew; correct stale delegation metadata through the
 task tools. A managed worker follows its assigned run and must not reassign
-itself to evade the operator's crew choice. Keep `model` provenance separate.
+itself to evade the operator's crew choice. Do not reassign `crew` to change provenance.
 
 ## Step 2 — Plan
 
@@ -80,7 +80,7 @@ authorization, not a new grant. Supply a real plan from every source except
 `backlog`:
 
 ```bash
-orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","plan":"<implementation and validation steps>","note":"<authorized pickup>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","plan":"<implementation and validation steps>","note":"<authorized pickup>"}'
 ```
 
 Reconsider `rejected` only when a reviewer or other authorized decision
@@ -89,7 +89,7 @@ explicitly requests a revision. The table allows `backlog` or `in-progress`.
 a later pickup from `backlog` is a separate update:
 
 ```bash
-orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","comment":"Authorized revision: <reviewer decision>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","comment":"Authorized revision: <reviewer decision>"}'
 ```
 
 ## Step 4 — Implement and validate
@@ -189,7 +189,7 @@ for a single-task delivery, `pr_open` reads the task artifact. In owner mode,
 attach the file before PR creation:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/pr-sections.json","path":"pr-sections.json","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/pr-sections.json","path":"pr-sections.json"}'
 ```
 
 In claimed mode, return it in `task_artifacts` so the owner durably attaches it:
@@ -396,11 +396,11 @@ through an ordinary new task. In the execution summary mark each owed criterion 
 **Keep `context_files` current.** You may declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
 rules. `orbit.task.update` replaces the whole context list when `context_files`
-or the legacy `context` alias is supplied. Omitting both preserves the list;
-use `context_files: []` to clear it. A comma-only string such as `","` also
-clears the list through either field. An empty string is rejected by the tool
-(the human CLI's `--context ""` clears it). The string `"[]"` is treated as a
-selector, not an empty list.
+is supplied. Omitting `context_files` preserves the list; use
+`context_files: []` to clear it. A comma-only string such as `","` also clears
+the list. An empty string is rejected by the tool (the human CLI's
+`--context ""` clears it). The string `"[]"` is treated as a selector, not an
+empty list. A `context` input is refused; the only field is `context_files`.
 
 To extend scope, first read the current durable `context_files` with
 `orbit.task.show`. Send the deduplicated union of **all existing selectors and
@@ -408,9 +408,9 @@ the additions**, never just the additions. For example, if the current list is
 `["file:src/existing.rs", "dir:tests"]` and the task creates `src/new.rs`:
 
 ```bash
-orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["context_files"]}'
-orbit tool run orbit.task.update --input '{"id":"<task-id>","model":"<agent-family>","context_files":["file:src/existing.rs","dir:tests","file:src/new.rs"],"allow_missing_context":true}'
-orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["context_files"]}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["context_files"]}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","context_files":["file:src/existing.rs","dir:tests","file:src/new.rs"],"allow_missing_context":true}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["context_files"]}'
 ```
 
 Re-read after every context update and verify that every prior selector and

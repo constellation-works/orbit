@@ -667,11 +667,7 @@ fn tool_run_input_identity(
         return (None, None);
     };
     (
-        map.get("agent")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
+        None,
         map.get("model")
             .and_then(Value::as_str)
             .map(str::trim)

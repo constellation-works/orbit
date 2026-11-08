@@ -844,7 +844,7 @@ fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
         .assert()
         .failure()
         .stderr(predicates::str::contains(
-            "orbit.friction.add no longer accepts `agent`; use `model` with the agent family for attribution",
+            "orbit.friction.add no longer accepts `agent`; attribution comes from the session, not an `agent` input",
         ));
 }
 

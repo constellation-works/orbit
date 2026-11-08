@@ -27,7 +27,7 @@ use crate::contracts::v2_audit::{
 };
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate,
+    AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
 };
 
 pub trait SessionLogStoreBackend: Send + Sync {
@@ -407,6 +407,13 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolAggregate>, OrbitError>;
+    /// Callable tool calls in the same window, grouped by tool and
+    /// server-derived model. Does not change
+    /// [`Self::get_audit_event_aggregates_by_tool`].
+    fn get_audit_event_aggregates_by_tool_model(
+        &self,
+        since: &DateTime<Utc>,
+    ) -> Result<Vec<AuditToolModelAggregate>, OrbitError>;
     fn get_audit_event_aggregates_by_role(
         &self,
         since: &DateTime<Utc>,

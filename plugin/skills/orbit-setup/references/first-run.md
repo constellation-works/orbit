@@ -278,7 +278,7 @@ a `preset` key. Check the enabled routines and auto-tasks with
 ```bash
 orbit --version
 orbit workspace show
-orbit tool run orbit.task.list --input '{"model":"<agent-family>","workspace":"<workspace-id>"}'
+orbit tool run orbit.task.list --input '{"workspace":"<workspace-id>"}'
 orbit doctor
 ```
 

@@ -14,7 +14,9 @@ use serde_json::Value;
 
 use crate::redact_sensitive_env_text;
 
-use super::super::audit::{AuditContext, audit_role_label_for_entry_point, resolve_audit_context};
+use super::super::audit::{
+    AuditContext, audit_role_label_for_entry_point, mcp_audit_session_model, resolve_audit_context,
+};
 use super::super::callback::take_callback_plugin_provenance;
 use super::entry::{ToolEntryPoint, mark_tool_audit_recorded};
 use super::finalize::finalize_successful_dispatch;
@@ -34,6 +36,9 @@ pub(super) struct ToolDispatchAuditContext {
     pub(super) entry_point: ToolEntryPoint,
     pub(super) session_context: Option<ToolSessionContext>,
     pub(super) brokered: Option<BrokeredAudit>,
+    /// Resolved model of the session `--orchestrator` crew. The workspace
+    /// runtime fills this from the crew registry. It is never tool input.
+    pub(super) orchestrator_model: Option<String>,
 }
 
 /// What a call a run's plugin broker executes is recorded under (design
@@ -48,6 +53,8 @@ pub(in crate::adapter::command::dispatch) struct BrokeredAudit {
     pub(in crate::adapter::command::dispatch) context: AuditContext,
     /// The `cwd` the agent made the call from.
     pub(in crate::adapter::command::dispatch) working_directory: String,
+    /// The job's resolved crew model, when the run recorded one.
+    pub(in crate::adapter::command::dispatch) session_model: Option<String>,
 }
 
 pub(super) fn execute_tool_dispatch_with_audit_store<F, S>(
@@ -69,7 +76,11 @@ where
         entry_point,
         session_context,
         brokered,
+        orchestrator_model,
     } = audit;
+    let brokered_session_model = brokered
+        .as_ref()
+        .and_then(|brokered| brokered.session_model.clone());
     let start = Instant::now();
     let (role_label, working_directory, audit_context, brokered_peer_pid) = match brokered {
         Some(brokered) => (
@@ -218,7 +229,16 @@ where
     // ORB-10890: the session's self-reported actor rides to the audit row and
     // stops there. `role_label` above was computed without it, and no field of
     // `ToolContext` reads it, so an MCP client naming itself cannot move its
-    // own trust label off `unverified`.
+    // own trust label off `unverified`. `session_model` is the same kind of
+    // attribution: it is recorded beside the role, and it never becomes one.
+    let session_model = mcp_audit_session_model(
+        entry_point,
+        brokered_session_model.as_deref(),
+        orchestrator_model.as_deref(),
+        session_context
+            .as_ref()
+            .and_then(|context| context.mcp_client_name.as_deref()),
+    );
     // Rebuilt for the lock retry. The fields only borrow this call's
     // session, so a second insert does not observe a different invocation.
     let invocation = || AuditInvocationFields {
@@ -236,6 +256,7 @@ where
         plugin_secrets: &plugin_secrets,
         plugin_secret_updates: Some(&plugin_secret_updates),
         brokered_peer_pid,
+        session_model: session_model.as_deref(),
     };
     let mut audit_write = persist_audit(&params, invocation());
     // The tool's store and the global audit database are different files, so

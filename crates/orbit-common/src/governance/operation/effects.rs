@@ -80,10 +80,11 @@ impl RetiredField {
     }
 }
 
-/// The legacy top-level `agent` field: attribution was consolidated to
-/// `model`-only.
-pub const RETIRED_AGENT_FIELD: RetiredField =
-    RetiredField::no_longer_accepts("agent", "use `model` with the agent family for attribution");
+/// The legacy top-level `agent` field. Attribution comes from the session.
+pub const RETIRED_AGENT_FIELD: RetiredField = RetiredField::no_longer_accepts(
+    "agent",
+    "attribution comes from the session, not an `agent` input",
+);
 
 /// What an operation does with an input field it does not declare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

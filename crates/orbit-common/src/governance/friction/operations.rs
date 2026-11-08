@@ -154,9 +154,7 @@ const ADD: FrictionOperation = FrictionOperation {
             preserve_empty: false,
             default: None,
             redact: Redaction::None,
-            mcp_description: Some(Description::Static(
-                "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)",
-            )),
+            mcp_description: None,
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("model"),

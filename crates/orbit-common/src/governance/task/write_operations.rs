@@ -60,22 +60,20 @@ const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::plain("rejected"),
 ];
 
-/// The attribution field of the write tools, whose description predates the
-/// shared one.
-const WRITE_MODEL_PARAM: ParamSpec = both(
+/// CLI `--model` on the write tools. The MCP schema does not advertise it;
+/// the tool boundary still reads the key when the session asserts no model.
+const WRITE_MODEL_PARAM: ParamSpec = cli_only(
     "model",
     ParamType::String,
-    "Agent family or full model ID for provenance.",
     CliArgKind::flag("model"),
     "Explicit agent model to persist on the task artifact",
 );
 
-/// `orbit.task.add`'s attribution field: a create also keeps a full model
-/// string, as `created_by_model`.
-const ADD_MODEL_PARAM: ParamSpec = both(
+/// `orbit task add --model`: a create also keeps a full model string, as
+/// `created_by_model`. Not an MCP parameter.
+const ADD_MODEL_PARAM: ParamSpec = cli_only(
     "model",
     ParamType::String,
-    "Agent family or full model ID for provenance.",
     CliArgKind::flag("model"),
     "Creator's agent family or full model id (e.g. claude-opus-5-5); created_by records the family and a full model id is also kept as created_by_model",
 );
@@ -152,7 +150,7 @@ const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RetiredField::unknown_field("parent_id", "set it with orbit.task.update"),
     RetiredField::unknown_field("source_task_id", "set it with orbit.task.update"),
     RetiredField::unknown_field("external_refs", "set it with orbit.task.update"),
-    RetiredField::unknown_field("context", "set it with orbit.task.update"),
+    RetiredField::unknown_field("context", "use `context_files`"),
     RetiredField::unknown_field("comment", "set it with orbit.task.update"),
     RetiredField::unknown_field("dependencies", "set it with orbit.task.update"),
 ];
@@ -411,6 +409,7 @@ const UPDATE_RETIRED_FIELDS: &[RetiredField] = &[
         "artifacts",
         "orbit.task.update does not accept inline artifacts; use orbit.task.artifact.put",
     ),
+    RetiredField::unknown_field("context", "use `context_files`"),
 ];
 
 const REQUIRED_TOOLS_REFUSAL: &str = "orbit.task.update does not accept `required_tools`; task tool requirements are immutable after creation";
@@ -677,7 +676,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             path(preserve_empty(both(
                 "context_files",
                 ParamType::StringList,
-                "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
+                "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
                 flag_with_delimiter("context", &["context-files"], None),
                 "Replace the whole context selector list; to extend, resend existing ones too (empty string clears)",
             ))),
@@ -688,11 +687,6 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 CliArgKind::flag("allow-missing-context"),
                 "Accept context selectors for files this task will create",
             ),
-            path(mcp_only(
-                "context",
-                ParamType::String,
-                "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`.",
-            )),
         ],
         WRITE_PROJECTION_PARAMS,
         &[

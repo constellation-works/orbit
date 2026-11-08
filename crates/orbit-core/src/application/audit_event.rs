@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditInvocationFields, AuditRoleAggregate, AuditToolAggregate, FailureIncidentQuery,
-    FailureIncidentReport,
+    AuditInvocationFields, AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
+    FailureIncidentQuery, FailureIncidentReport,
 };
 use orbit_types::identity::{infer_agent_family_from_model, normalize_attribution_label};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
@@ -680,6 +680,17 @@ impl OrbitRuntime {
         self.stores()
             .audit_events()
             .get_audit_event_aggregates_by_tool(since)
+    }
+
+    /// Callable tool calls at or after `since`, one row per tool and
+    /// server-derived model. The per-tool aggregate is unchanged.
+    pub fn audit_event_aggregates_by_tool_model(
+        &self,
+        since: &DateTime<Utc>,
+    ) -> Result<Vec<AuditToolModelAggregate>, OrbitError> {
+        self.stores()
+            .audit_events()
+            .get_audit_event_aggregates_by_tool_model(since)
     }
 
     /// Per-role aggregate of audit events at or after `since`, with the

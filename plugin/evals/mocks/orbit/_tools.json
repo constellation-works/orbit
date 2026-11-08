@@ -1,67 +1,6 @@
 {
   "tools": [
     {
-      "name": "orbit_agent_invoke",
-      "description": "Submit one asynchronous agent invocation for exploration or debugging and return its run ID, or wait for its answer with `wait_seconds`. An operator's invocation is deprecated: it runs outside Orbit's filesystem sandbox as the same OS user as Orbit, so it can reach anything that user can, and needs operator capability. An implement or review-repair agent may instead delegate a read-only question to a sandboxed explorer that reads its own worktree and writes nothing when `workflow.explore.enabled` is on; with no eligible explorer crew the call is refused before any run exists, so continue without delegating. Every other caller is refused, a refusal never stops the caller's run, and an invocation changes no task, opens no pull request and dispatches nothing. Queueing, budgets, answer and progress fields, and run observation: installed Orbit skill `references/tool-surface.md`, section `Host agent invocation`.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "prompt": {
-            "type": "string",
-            "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change. An explorer lists the paths it read in `answer.paths_read`."
-          },
-          "cwd": {
-            "type": "string",
-            "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller. An explorer's must be inside the calling run's own worktree."
-          },
-          "crew": {
-            "type": "string",
-            "description": "Configured crew selecting the provider, model, and reasoning effort. Defaults to the workspace's default crew. An explorer's must be in `workflow.purpose_crews.explorer`, which it is drawn from when omitted."
-          },
-          "timeout_seconds": {
-            "type": "integer",
-            "description": "Provider wall-clock bound in seconds, excluding queue time. Defaults to 1800; must be from 1 to 7200, the activity's enforced ceiling. An explorer defaults to, and may not exceed, `workflow.explore.timeout_seconds`.",
-            "minimum": 1,
-            "maximum": 7200
-          },
-          "wait_seconds": {
-            "type": "integer",
-            "description": "Wait up to this many seconds (integer from 0 to 600). Returns `answer` and `agent_invocation` if finished; otherwise returns the run ID and actual state so you can keep observing it. The deadline never cancels the run. Omit for an asynchronous submission.",
-            "minimum": 0,
-            "maximum": 600
-          },
-          "idempotency_key": {
-            "type": "string",
-            "description": "Retry handle. A resubmission carrying a key a recent submission already used resolves that run instead of starting a second agent."
-          },
-          "provider_sandbox": {
-            "type": "string",
-            "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`. Operator invocations only: an explorer is always read-only."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
-          }
-        },
-        "required": [
-          "prompt",
-          "cwd"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
       "name": "orbit_agents_scorecard",
       "description": "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit_agents_show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
       "inputSchema": {
@@ -83,6 +22,10 @@
             "type": "string",
             "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed."
           },
+          "until": {
+            "type": "string",
+            "description": "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now."
+          },
           "by_type": {
             "type": "boolean",
             "description": "Split implementers into (crew, model, tier, type) cells using workflow.task_types, with two-level shrinkage; implementers only."
@@ -91,18 +34,14 @@
             "type": "boolean",
             "description": "Export one row per implemented task for offline analysis, with its crew, model, tier, configured type, tags, context-file path prefixes and per-term counts; implementers only, and not with by_type."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "role"
+          "role",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -141,19 +80,19 @@
             "type": "string",
             "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed."
           },
-          "model": {
+          "until": {
             "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
+            "description": "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now."
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "role",
-          "crew"
+          "crew",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -442,13 +381,14 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "name",
           "schedule",
-          "template"
+          "template",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -483,10 +423,13 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -513,7 +456,8 @@
           }
         },
         "required": [
-          "name"
+          "name",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -598,7 +542,8 @@
           }
         },
         "required": [
-          "name"
+          "name",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -623,18 +568,14 @@
             "type": "string",
             "description": "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "definition"
+          "definition",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -677,17 +618,15 @@
             "type": "string",
             "description": "Count only regressions found this way, read from the regression task's tags, else its filer."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -716,18 +655,14 @@
             "type": "integer",
             "description": "Maximum partners, from 1 to 100. Default: 10."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "path"
+          "path",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -773,18 +708,14 @@
             "type": "string",
             "description": "Count only regressions found this way, read from the regression task's tags, else its filer."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "path"
+          "path",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -825,19 +756,15 @@
             "type": "string",
             "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "argv",
-          "working_directory"
+          "working_directory",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -858,18 +785,14 @@
             "type": "string",
             "description": "The registered decision channel the digest is for, as `orbit decision channel list` shows it."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "channel"
+          "channel",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -899,17 +822,15 @@
             "type": "boolean",
             "description": "Include answered, superseded and expired requests beside the open ones."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true
@@ -940,20 +861,16 @@
             "type": "string",
             "description": "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "task_id",
           "question",
-          "options"
+          "options",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -971,18 +888,14 @@
             "type": "string",
             "description": "The decision request id, as `orbit_decision_list` prints it."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1028,21 +941,17 @@
             "type": "string",
             "description": "The raw reply message the transport forwards for core-side DKIM verification, at most 262144 bytes (256 KiB). When present, core verifies the message's DKIM signature itself and refuses when its result contradicts the forwarded verdicts. Required on a channel registered with require_dkim_verification; optional otherwise."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
           "channel",
           "answer",
-          "token"
+          "token",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1078,18 +987,14 @@
             "type": "string",
             "description": "Optional cycle identifier; requires mandate."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "event"
+          "event",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1114,17 +1019,15 @@
             "type": "string",
             "description": "RFC 3339 lower bound for occurrence aggregates. Records without occurrences in the window are omitted."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -1141,18 +1044,14 @@
             "type": "string",
             "description": "Evolution record identifier."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family for provenance (codex, claude, gemini, grok or muse)."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1175,19 +1074,15 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1213,20 +1108,16 @@
             "type": "string",
             "description": "The active arm to assign."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
           "task_id",
-          "arm"
+          "arm",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1252,19 +1143,15 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
-          "name"
+          "name",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1290,19 +1177,15 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1329,7 +1212,7 @@
             "items": {
               "type": "object"
             },
-            "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused."
+            "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}), config ({\"values\": {key: value}, \"roles\"}) and memory ({\"roles\", \"global\"}: deliver the drawn crew's model memory, and the global memory when global is true, as data; experimental). Roles default to implement. Unknown fields are refused."
           },
           "population": {
             "anyOf": [
@@ -1379,18 +1262,14 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "name"
+          "name",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1408,17 +1287,15 @@
             "type": "string",
             "description": "Only experiments in this status: draft, running, paused, concluded or abandoned."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true
@@ -1438,19 +1315,15 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1472,18 +1345,14 @@
             "type": "string",
             "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1505,18 +1374,14 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1566,19 +1431,15 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "id",
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1596,18 +1457,14 @@
             "type": "string",
             "description": "The experiment's id or name, as `orbit_experiment_list` prints it."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1617,7 +1474,7 @@
     },
     {
       "name": "orbit_experiment_start",
-      "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+      "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, config overlays only for keys on experiments.config_keys, and crew_memory.enabled true for a memory overlay. Operator only: an agent session is refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1629,18 +1486,14 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1671,7 +1524,7 @@
             "items": {
               "type": "object"
             },
-            "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused."
+            "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}), config ({\"values\": {key: value}, \"roles\"}) and memory ({\"roles\", \"global\"}: deliver the drawn crew's model memory, and the global memory when global is true, as data; experimental). Roles default to implement. Unknown fields are refused."
           },
           "population": {
             "anyOf": [
@@ -1721,18 +1574,14 @@
             "type": "string",
             "description": "Why, recorded on the experiment's event."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1771,7 +1620,6 @@
                     "other",
                     "policy",
                     "skill-guidance",
-                    "standards",
                     "tooling"
                   ]
                 }
@@ -1780,25 +1628,20 @@
                 "type": "string"
               }
             ],
-            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `standards` \u2014 Canon gap or wrong rule in the constellation standards (STD-nn); `tooling` \u2014 Orbit tool/CLI/MCP failures."
+            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
           },
           "during_task": {
             "type": "string",
             "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused"
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)"
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "body",
-          "model"
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1839,7 +1682,6 @@
                     "other",
                     "policy",
                     "skill-guidance",
-                    "standards",
                     "tooling"
                   ]
                 }
@@ -1848,7 +1690,7 @@
                 "type": "string"
               }
             ],
-            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `standards` \u2014 Canon gap or wrong rule in the constellation standards (STD-nn); `tooling` \u2014 Orbit tool/CLI/MCP failures."
+            "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` \u2014 Scheduler, auto-task, or delivery-automation friction; `build` \u2014 make/fmt/lint friction; `docs` \u2014 Stale or missing CLAUDE.md or design docs; `history-diverged` \u2014 A rewritten branch history orphaned recorded automation state; `lifecycle` \u2014 Task lifecycle confusion or transition issues; `naming` \u2014 Naming drift or duplicated sources of truth; `other` \u2014 Fallback; `policy` \u2014 fsProfile or sandboxing surprises; `skill-guidance` \u2014 Misleading or incorrect skill instructions; `tooling` \u2014 Tool, CLI, or MCP failures. The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
           },
           "body": {
             "type": "string",
@@ -1869,11 +1711,137 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_memory_propose",
+      "description": "Propose a note for the global memory every model receives, for an operator to accept or reject. Only a crew memory dreaming task's run may propose, at most 2 proposals per run. The note is refused, naming the rule, when it breaks the global memory's caps (3 KiB), provenance (at least one evidence task id, each from the run's evidence pack), the score-blind lint or the not-instructions lint. Refused while crew_memory.enabled is false.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The proposed global-memory note, at most 3 KiB of Markdown. It passes the same rules as a global-memory write."
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Evidence task ids the note rests on, at least one, each from this run's evidence pack."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
+          }
+        },
+        "required": [
+          "text",
+          "evidence",
+          "workspace"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_memory_show",
+      "description": "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a crew memory dreaming task's run or a run in a memory experiment arm, and reads only its own model's space (the default key) or `global`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Memory key: a model id or `global`. Omit to summarise every space."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Show this revision instead of the newest. Requires key."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
+          }
+        },
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "orbit_memory_write",
+      "description": "Replace a crew memory space's files with a new revision. Refused while crew_memory.enabled is false. A write is refused whole, naming the rule, when it breaks caps (a model space at most 8 files and 6 KiB, global 1 file and 3 KiB, names [a-z0-9-]{1,40}.md), provenance (a dreaming run cites at least one evidence task id, each from its evidence pack), the score-blind lint (scorecard vocabulary or another crew's or model's name), the not-instructions lint (a URL, an Orbit tool name, a shell command block or an injection phrase) or rewrite-whole (each file once); a refusal is recorded in the space's history. An agent may write only from a crew memory dreaming task's run, and only that task's own key: another model's key and `global` are refused (propose a global note instead).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Memory key: the model id a space belongs to, as runs record it, or `global`. A dreaming run may name only its own task's key."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "The space's complete new content as {path, text} objects. It replaces every file; there is no append."
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Evidence task ids the notes rest on. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the space changes; stored on the revision."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
+          }
+        },
+        "required": [
+          "key",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1906,18 +1874,14 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1983,11 +1947,6 @@
           "orchestrator": {
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           },
           "workspace": {
             "type": "string",
@@ -2068,19 +2027,15 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "kind",
-          "title"
+          "title",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2105,18 +2060,14 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2139,17 +2090,15 @@
             "type": "integer",
             "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -2178,18 +2127,14 @@
             "type": "integer",
             "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "orchestrator"
+          "orchestrator",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2233,19 +2178,11 @@
           "default_input": {
             "type": "boolean",
             "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay."
-          },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           }
         },
         "required": [
-          "job_name"
+          "job_name",
+          "workspace"
         ],
         "additionalProperties": true,
         "allOf": [
@@ -2268,8 +2205,7 @@
                 "enum": [
                   "workspace",
                   "job_name",
-                  "default_input",
-                  "model"
+                  "default_input"
                 ]
               }
             },
@@ -2316,19 +2252,15 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "task_id",
-          "record"
+          "record",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2369,20 +2301,16 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "task_id",
           "action",
-          "reason"
+          "reason",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2411,17 +2339,15 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -2506,18 +2432,14 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "task_id"
+          "task_id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2542,17 +2464,15 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -2581,17 +2501,15 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true
@@ -2637,20 +2555,16 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
           "task_id",
           "quote",
-          "source"
+          "source",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2675,18 +2589,14 @@
             "type": "string",
             "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "task_id"
+          "task_id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -2760,11 +2670,6 @@
           "limit": {
             "type": "integer",
             "description": "List size 1 through 50; default 25"
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Diagnostic model attribution; never grants authority"
           }
         },
         "required": [
@@ -2851,14 +2756,9 @@
             "type": "boolean",
             "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "additionalProperties": true,
@@ -2887,6 +2787,9 @@
               }
             ]
           }
+        ],
+        "required": [
+          "workspace"
         ]
       },
       "annotations": {
@@ -3166,15 +3069,11 @@
           "request_id": {
             "type": "string",
             "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           }
         },
         "required": [
-          "title"
+          "title",
+          "workspace"
         ],
         "additionalProperties": false,
         "allOf": [
@@ -3194,7 +3093,6 @@
                 "enum": [
                   "workspace",
                   "request_id",
-                  "model",
                   "title",
                   "description",
                   "acceptance_criteria",
@@ -3247,15 +3145,6 @@
             "type": "string",
             "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected."
           },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
             "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
@@ -3290,14 +3179,9 @@
             "type": "string",
             "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`)."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Optional workspace filter; omit to resolve the task ID on this server."
           }
         },
         "required": [
@@ -3365,19 +3249,11 @@
           "observed_tree": {
             "type": "string",
             "description": "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout"
-          },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           }
         },
         "required": [
-          "action"
+          "action",
+          "workspace"
         ],
         "additionalProperties": false
       },
@@ -3420,21 +3296,15 @@
             "type": "boolean",
             "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it."
           },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -3561,21 +3431,15 @@
             "type": "string",
             "description": "Optional external reference system filter: keep tasks with any reference in this system"
           },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -3670,7 +3534,8 @@
           "expected_phase",
           "status",
           "reason",
-          "request_key"
+          "request_key",
+          "workspace"
         ],
         "additionalProperties": false
       },
@@ -3880,7 +3745,8 @@
           "expected_candidate_commit",
           "expected_base_commit",
           "reason",
-          "request_key"
+          "request_key",
+          "workspace"
         ],
         "additionalProperties": false
       },
@@ -3904,15 +3770,6 @@
           "snapshot": {
             "type": "boolean",
             "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections."
-          },
-          "agent": {
-            "type": "string",
-            "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           },
           "fields": {
             "anyOf": [
@@ -4267,15 +4124,11 @@
                 "type": "string"
               }
             ],
-            "description": "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
+            "description": "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
           },
           "allow_missing_context": {
             "type": "boolean",
             "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`."
-          },
-          "context": {
-            "type": "string",
-            "description": "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`."
           },
           "fields": {
             "anyOf": [
@@ -4372,14 +4225,9 @@
             "type": "boolean",
             "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Optional workspace filter; omit to resolve the task ID on this server."
           }
         },
         "required": [
@@ -4427,7 +4275,6 @@
                     "enum": [
                       "workspace",
                       "request_id",
-                      "model",
                       "id",
                       "expected_revision",
                       "verdict",
@@ -4443,7 +4290,6 @@
                     "enum": [
                       "workspace",
                       "request_id",
-                      "model",
                       "id",
                       "expected_revision",
                       "comment"
@@ -4455,7 +4301,6 @@
                     "enum": [
                       "workspace",
                       "request_id",
-                      "model",
                       "id",
                       "expected_revision",
                       "status",
@@ -4683,11 +4528,6 @@
           "workspace": {
             "type": "string",
             "description": "Exact selector returned by workspace discovery. No implicit destination."
-          },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
           }
         },
         "required": [
@@ -4713,18 +4553,14 @@
             "type": "string",
             "description": "The task in review whose delivery pull request lands."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "task_id"
+          "task_id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -4775,10 +4611,13 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
-        "additionalProperties": true
+        "additionalProperties": true,
+        "required": [
+          "workspace"
+        ]
       },
       "annotations": {
         "readOnlyHint": true,
@@ -4797,11 +4636,12 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -4839,11 +4679,12 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -4878,11 +4719,12 @@
           },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "id"
+          "id",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -4941,18 +4783,14 @@
             "type": "string",
             "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
           },
-          "model": {
-            "type": "string",
-            "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-            "description": "Agent family or full model ID for provenance."
-          },
           "workspace": {
             "type": "string",
-            "description": "Optional in this session; select another registered workspace by name, ID or path."
+            "description": "Required in this session; copy a workspace ID from orbit_workspace_list."
           }
         },
         "required": [
-          "task_ids"
+          "task_ids",
+          "workspace"
         ],
         "additionalProperties": true
       },

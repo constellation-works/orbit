@@ -12,11 +12,11 @@
 
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-use super::operations::{IDENTITY_PARAMS, TASK_HOST_HELP, TaskOperation, TaskVerb};
+use super::operations::{TASK_HOST_HELP, TaskOperation, TaskVerb};
 use super::write_operations::WRITE_PROJECTION_PARAMS;
 use crate::governance::operation::{
-    CliAction, CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, UnknownFields, both,
-    cli_actions, cli_only, free_text, mcp_only, required,
+    CliAction, CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD,
+    UnknownFields, both, cli_actions, cli_only, free_text, mcp_only, required,
 };
 
 /// `--host`, inherited by every reconcile-review action.
@@ -341,64 +341,61 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
     effect: Effect::Write,
-    params: &[
-        &[
-            WORKSPACE_PARAM,
-            required(mcp_only(
-                "action",
-                ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
-                "candidates, propose, or report",
-            )),
-            mcp_only(
-                "subject",
-                ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
-                "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold",
-            ),
-            mcp_only(
-                "id",
-                ParamType::String,
-                "propose and report: the pilot-held task",
-            ),
-            free_text(mcp_only(
-                "summary",
-                ParamType::String,
-                "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code",
-            )),
-            free_text(mcp_only(
-                "reason",
-                ParamType::String,
-                "report: the exact action only a human outside Orbit can take",
-            )),
-            mcp_only(
-                "options",
-                ParamType::Array,
-                "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
-            ),
-            mcp_only(
-                "recommended",
-                ParamType::Integer,
-                "propose: 1-based index of the recommended option",
-            ),
-            mcp_only(
-                "source_revision",
-                ParamType::String,
-                "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
-            ),
-            mcp_only(
-                "observed_revision",
-                ParamType::String,
-                "inspection proof: `git rev-parse HEAD` in the inspection checkout",
-            ),
-            mcp_only(
-                "observed_tree",
-                ParamType::String,
-                "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
-            ),
-        ],
-        IDENTITY_PARAMS,
-    ],
+    params: &[&[
+        WORKSPACE_PARAM,
+        required(mcp_only(
+            "action",
+            ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
+            "candidates, propose, or report",
+        )),
+        mcp_only(
+            "subject",
+            ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
+            "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold",
+        ),
+        mcp_only(
+            "id",
+            ParamType::String,
+            "propose and report: the pilot-held task",
+        ),
+        free_text(mcp_only(
+            "summary",
+            ParamType::String,
+            "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code",
+        )),
+        free_text(mcp_only(
+            "reason",
+            ParamType::String,
+            "report: the exact action only a human outside Orbit can take",
+        )),
+        mcp_only(
+            "options",
+            ParamType::Array,
+            "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+        ),
+        mcp_only(
+            "recommended",
+            ParamType::Integer,
+            "propose: 1-based index of the recommended option",
+        ),
+        mcp_only(
+            "source_revision",
+            ParamType::String,
+            "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
+        ),
+        mcp_only(
+            "observed_revision",
+            ParamType::String,
+            "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+        ),
+        mcp_only(
+            "observed_tree",
+            ParamType::String,
+            "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
@@ -431,10 +428,9 @@ pub(super) const REJECT: TaskOperation = TaskOperation {
             )),
         ],
         WRITE_PROJECTION_PARAMS,
-        IDENTITY_PARAMS,
     ],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Task,

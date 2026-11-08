@@ -112,6 +112,19 @@ pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitE
 /// deriving one from `role` would retroactively attribute traffic Orbit never
 /// authenticated. Existing `unverified` rows therefore stay valid and read as
 /// anonymous.
+/// v88 `audit_session_model`: the model an MCP tool call is counted under.
+///
+/// Written by the server from the job's resolved crew model, else the
+/// session `--orchestrator` crew's configured model, else MCP `clientInfo`.
+/// It is not backfilled: older rows keep NULL and the tools breakdown falls
+/// back to the role-derived actor. The column never feeds `role` or `actor_*`.
+pub(super) fn apply_audit_session_model(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "audit_events")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "audit_events", "session_model", "TEXT")
+}
+
 pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema_v17(conn)?;
 

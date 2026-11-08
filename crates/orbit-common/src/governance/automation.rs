@@ -4,7 +4,7 @@
 //! clear of a stalled condition.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -49,11 +49,6 @@ const EXPLAIN_PARAMS: &[ParamSpec] = &[
         "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
         CliArgKind::flag("subject"),
         "Subject whose clause tree to show (a task ID, or workspace)",
-    ),
-    mcp_only(
-        "model",
-        ParamType::String,
-        "Agent family or full model ID for provenance.",
     ),
 ];
 

@@ -111,7 +111,7 @@ records the crew's configured model as the task's `orchestrator_model`; pass
 `orchestrator_model` on the call only when your session runs a different model.
 
 ```bash
-orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>","model":"<agent-family>"}'
+orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>"}'
 ```
 
 Treat the flag as configuration, not as evidence of who is calling. An MCP
@@ -157,8 +157,8 @@ output schema. Once the task carries verified `context_files` (or a
 `backlog`:
 
 ```bash
-orbit tool run orbit.task.show --input '{"workspace":"<selector>","id":"<task-id>","model":"<agent-family>"}'
-orbit tool run orbit.task.update --input '{"workspace":"<selector>","id":"<task-id>","status":"backlog","model":"<agent-family>"}'
+orbit tool run orbit.task.show --input '{"workspace":"<selector>","id":"<task-id>"}'
+orbit tool run orbit.task.update --input '{"workspace":"<selector>","id":"<task-id>","status":"backlog"}'
 ```
 
 **Never file with `--status backlog`, or promote, a task whose
@@ -171,7 +171,7 @@ now holds such a task (`awaiting_footprint`, then `awaiting_exclusive_slot`)
 and runs it only alone, which serializes the drain behind it. Task add and
 update warn when they leave one in the backlog.
 
-Use your own agent family for `model`. Ordinary pilot runs prepare context;
+Attribution is your session, not a `model` argument. Ordinary pilot runs prepare context;
 they do not promote. The CI sweep has a separate, explicit admission path
 that can pilot and promote its own warning-free repairs.
 

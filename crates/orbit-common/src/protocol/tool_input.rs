@@ -12,10 +12,11 @@ pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
 
 /// Top-level attribution keys the tool boundary reads for every Orbit builtin.
 ///
-/// Identity resolution takes the caller's agent family from these keys when
-/// the session asserts none, so they are meaningful input even for an
-/// operation that declares no parameter of that name.
-pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["agent", "model"];
+/// Identity resolution takes a model id from this key when the session asserts
+/// none, so it is meaningful input even for an operation that does not
+/// advertise a `model` parameter. The MCP schema does not list it. `agent` is
+/// not an identity key; operations that used to accept it refuse it.
+pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["model"];
 
 /// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
 ///

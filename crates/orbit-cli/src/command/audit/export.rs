@@ -143,6 +143,7 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
             "plugin_secret_updates",
             "brokered",
             "peer_pid",
+            "session_model",
         ])
         .map_err(|e| OrbitError::Io(format!("write csv header: {e}")))?;
 
@@ -209,6 +210,7 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
                     .peer_pid
                     .map(|value| value.to_string())
                     .unwrap_or_default(),
+                event.session_model.clone().unwrap_or_default(),
             ])
             .map_err(|e| OrbitError::Io(format!("write csv row: {e}")))?;
     }

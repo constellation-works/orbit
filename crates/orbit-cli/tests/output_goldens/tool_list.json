@@ -234,12 +234,6 @@
         "description": "Export one row per implemented task for offline analysis, with its crew, model, tier, configured type, tags, context-file path prefixes and per-term counts; implementers only, and not with by_type.",
         "param_type": "boolean",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "analytics"
@@ -291,12 +285,6 @@
       {
         "name": "until",
         "description": "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -593,12 +581,6 @@
         "description": "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "automation"
@@ -652,12 +634,6 @@
         "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "codebase"
@@ -692,12 +668,6 @@
         "name": "top",
         "description": "Maximum partners, from 1 to 100. Default: 10.",
         "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -758,12 +728,6 @@
         "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "codebase"
@@ -799,12 +763,6 @@
         "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "exec"
@@ -822,12 +780,6 @@
         "description": "The registered decision channel the digest is for, as `orbit decision channel list` shows it.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "decision-channel"
@@ -862,12 +814,6 @@
         "name": "include_closed",
         "description": "Include answered, superseded and expired requests beside the open ones.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -904,12 +850,6 @@
         "description": "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "decisions"
@@ -927,12 +867,6 @@
         "description": "The decision request id, as `orbit.decision.list` prints it.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "decisions"
@@ -990,12 +924,6 @@
       {
         "name": "raw_message",
         "description": "The raw reply message the transport forwards for core-side DKIM verification, at most 262144 bytes (256 KiB). When present, core verifies the message's DKIM signature itself and refuses when its result contradicts the forwarded verdicts. Required on a channel registered with require_dkim_verification; optional otherwise.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -1183,12 +1111,6 @@
         "description": "Optional cycle identifier; requires mandate.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -1212,12 +1134,6 @@
         "description": "RFC 3339 lower bound for occurrence aggregates. Records without occurrences in the window are omitted.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -1235,12 +1151,6 @@
         "description": "Evolution record identifier.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family for provenance (codex, claude, gemini, grok or muse).",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -1264,12 +1174,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1299,12 +1203,6 @@
         "description": "The active arm to assign.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1332,12 +1230,6 @@
       {
         "name": "reason",
         "description": "Why, recorded on the experiment's event.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -1369,12 +1261,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1446,12 +1332,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1467,12 +1347,6 @@
       {
         "name": "status",
         "description": "Only experiments in this status: draft, running, paused, concluded or abandoned.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -1498,12 +1372,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1527,12 +1395,6 @@
         "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1554,12 +1416,6 @@
       {
         "name": "reason",
         "description": "Why, recorded on the experiment's event.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -1597,12 +1453,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1620,12 +1470,6 @@
         "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1647,12 +1491,6 @@
       {
         "name": "reason",
         "description": "Why, recorded on the experiment's event.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -1732,12 +1570,6 @@
         "description": "Why, recorded on the experiment's event.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "experiments"
@@ -1773,12 +1605,6 @@
         "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)",
-        "param_type": "string",
-        "required": true
       }
     ],
     "mcp_toolset": "tasks-write"
@@ -1948,12 +1774,6 @@
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "notice"
@@ -2023,12 +1843,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2114,12 +1928,6 @@
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "notice"
@@ -2141,12 +1949,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2171,12 +1973,6 @@
         "name": "min_support",
         "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
         "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -2212,12 +2008,6 @@
         "name": "min_support",
         "description": "Units of work a row needs before it is ranked, at least 1; rows below it are listed last without a rank. Default: 10.",
         "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -2260,18 +2050,6 @@
         "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
         "param_type": "boolean",
         "required": false
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "dispatch"
@@ -2301,18 +2079,6 @@
         "description": "Optional poll cadence in seconds (default 5, clamped to a 1-second floor).",
         "param_type": "number",
         "required": false
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "local"
@@ -2340,12 +2106,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2395,12 +2155,6 @@
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -2428,12 +2182,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2495,12 +2243,6 @@
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -2522,12 +2264,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2563,12 +2299,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2618,12 +2348,6 @@
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "resident"
@@ -2645,12 +2369,6 @@
       {
         "name": "orchestrator",
         "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -2724,12 +2442,6 @@
         "description": "List size 1 through 50; default 25",
         "param_type": "integer",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Diagnostic model attribution; never grants authority",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "automation"
@@ -2788,12 +2500,6 @@
         "name": "all_workspaces",
         "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -2938,12 +2644,6 @@
         "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "tasks-write"
@@ -2967,18 +2667,6 @@
         "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       },
       {
         "name": "workspace",
@@ -3012,12 +2700,6 @@
       {
         "name": "path",
         "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -3097,18 +2779,6 @@
         "description": "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "task-repair"
@@ -3143,18 +2813,6 @@
         "name": "explain",
         "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -3291,18 +2949,6 @@
       {
         "name": "has_ref",
         "description": "Optional external reference system filter: keep tasks with any reference in this system",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }
@@ -3736,18 +3382,6 @@
         "required": false
       },
       {
-        "name": "agent",
-        "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
-      },
-      {
         "name": "fields",
         "description": "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
         "param_type": "string_list",
@@ -3982,7 +3616,7 @@
       },
       {
         "name": "context_files",
-        "description": "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
+        "description": "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
         "param_type": "string_list",
         "required": false
       },
@@ -3990,12 +3624,6 @@
         "name": "allow_missing_context",
         "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "context",
-        "description": "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`.",
-        "param_type": "string",
         "required": false
       },
       {
@@ -4032,12 +3660,6 @@
         "name": "complete",
         "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -4146,12 +3768,6 @@
         "description": "Exact selector returned by workspace discovery. No implicit destination.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "dispatch"
@@ -4169,12 +3785,6 @@
         "description": "The task in review whose delivery pull request lands.",
         "param_type": "string",
         "required": true
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "dispatch"
@@ -4360,12 +3970,6 @@
       {
         "name": "claim_token",
         "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
         "param_type": "string",
         "required": false
       }

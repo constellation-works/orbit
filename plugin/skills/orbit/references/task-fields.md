@@ -16,18 +16,18 @@ A separate approval continues to authorize backlog admission on its own.
 ## Context selectors
 
 `orbit.task.update` accepts `context_files` as a comma-separated string or an
-array of strings. The legacy `context` alias accepts a string;
-`context_files` takes precedence when both are supplied.
+array of strings. A `context` input is refused; the only field is
+`context_files`.
 
-- Omitting both fields preserves the current list. Supplying either replaces
+- Omitting `context_files` preserves the current list. Supplying it replaces
   the **whole list**, never appends.
 - To extend the list, first read the durable `context_files` with
   `orbit.task.show`, then send the deduplicated union of **all existing
   selectors and the additions**. Re-read afterward to verify none were lost.
 - `context_files: []` clears the list. A comma-only string such as `","`
-  also clears it through either field. An empty string is rejected by the
-  tool; the human CLI's `--context ""` clears it. The string `"[]"` is a
-  selector, not an empty list.
+  also clears it. An empty string is rejected by the tool; the human CLI's
+  `--context ""` clears it. The string `"[]"` is a selector, not an empty
+  list.
 - Add only files, directories or symbols the task expects to modify or
   delete, or files it will create as described below. Do not add entries only
   for background reading. Prefer `symbol:path#name:kind` for existing
@@ -109,10 +109,11 @@ never bypasses an agent gate. Its body is short: a 1-2 line summary, numbered
 steps, fenced `sh` commands and a `Verify:` command, at most 2000 characters;
 filing warns otherwise (see [task-authoring.md](task-authoring.md#work-only-a-human-can-do)).
 `orchestrator` records separate orchestration
-attribution. `created_by` is the creator's agent family; `created_by_model` is
-the full model id (`claude-opus-5-5`) recorded once when `orbit.task.add` was
-given one as `model`. It is never rewritten, and it is `null` for family-only
-creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
+attribution. `created_by` is the creator's agent family from the session
+(`ORBIT_AGENT_*`, the `--orchestrator` crew, or CLI `--model`);
+`created_by_model` is the full model id (`claude-opus-5-5`) recorded once
+when that session identity is a full id. It is never rewritten, and it is
+`null` for family-only creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
 OS tags intersected with the stored crew executor `host_os`, its source, and
 unresolved/conflict states.
 

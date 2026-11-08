@@ -247,16 +247,16 @@ accepted `flaky` record. Ineligible failures remain failures as well.
 List a task's artifact paths and history first:
 
 ```bash
-orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["artifacts","history"]}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["artifacts","history"]}'
 ```
 
 For the relevant command index, fetch the original candidate log, its base
 comparison log, and the replay log when present:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.json","model":"<agent-family>"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json","model":"<agent-family>"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.json"}'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json"}'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json"}'
 ```
 
 The original log's `candidate_rerun` field links to the last path. The replay
@@ -311,7 +311,7 @@ alone does not establish a code defect or an abandoned run.
    orbit run show <landing-run-id> --step land --no-reconcile --json
    orbit run events <landing-run-id> --no-reconcile --json
    orbit run logs <landing-run-id> --step land --no-reconcile --json
-   orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["status","job_run_id","external_refs","history","comments"]}'
+   orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["status","job_run_id","external_refs","history","comments"]}'
    ```
 
    Copy actual step IDs when a job is customized. Run JSON uses `.run.state`;
@@ -471,7 +471,7 @@ a new run or a resume; use a task workflow for new work.
 ## Check Task State
 
 ```bash
-orbit tool run orbit.task.show --full --input '{"id":"<task_id>","model":"<agent-family>"}'
+orbit tool run orbit.task.show --full --input '{"id":"<task_id>"}'
 ```
 
 Check status/history, plan/execution_summary, comments, workspace_path, external_refs/PR metadata, dependencies/resolved_dependencies. If implementation succeeded but a later workflow step failed, the task may already have a useful execution summary — preserve that context.

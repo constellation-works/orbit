@@ -2,14 +2,14 @@
 
 `orbit search` and `orbit.search` retrieve tasks and frictions using lexical
 matching. For source callers, symbols, and implementations, read repository
-files or use `rg`. Include `model` and the returned workspace selector when
-calling task tools.
+files or use `rg`. Include the returned workspace selector when calling
+task tools.
 
 ```bash
 orbit search "scheduler retry" --kind task --limit 5
 orbit search "scheduler" --tag perf --kind all
 orbit search "recovery" --all
-orbit tool run orbit.search --input '{"query":"scheduler retry","kind":"task","limit":5,"model":"<agent-family>","workspace":"<workspace-id>"}'
+orbit tool run orbit.search --input '{"query":"scheduler retry","kind":"task","limit":5,"workspace":"<workspace-id>"}'
 ```
 
 Task search ranks indexed title, description, acceptance criteria, plan, and

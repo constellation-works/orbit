@@ -3,7 +3,7 @@
 //! row's terms with the tasks behind each count.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, defaulted, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -126,12 +126,6 @@ const PER_TASK: &[ParamSpec] = &[both(
     "Export one row per implemented task for offline analysis",
 )];
 
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family or full model ID for provenance.",
-)];
-
 const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
@@ -147,7 +141,7 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[ROLE, SELECTION, BY_TYPE, PER_TASK, MODEL],
+    params: &[ROLE, SELECTION, BY_TYPE, PER_TASK],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -155,8 +149,8 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
-/// The row a detail names. The row's model travels as `row_model`, since
-/// `model` is the caller's attribution on every tool.
+/// The row a detail names. The row's model travels as `row_model`. Caller
+/// provenance is the session, not a tool argument.
 const ROW: &[ParamSpec] = &[
     required(both(
         "crew",
@@ -189,7 +183,7 @@ const SHOW: OperationSpec<AgentsVerb> = OperationSpec {
     cli_about: "Show one row's terms and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[ROLE, ROW, SELECTION, MODEL],
+    params: &[ROLE, ROW, SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

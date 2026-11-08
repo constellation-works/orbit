@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::fs::physical::resolve_symlinks;
-use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
+use orbit_common::protocol::tool_input::{TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields};
 use orbit_common::tracing;
 use orbit_types::policy::FsOperation;
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact, canonical_artifact_path};
@@ -54,10 +54,14 @@ fn source_presence_error(input: &Value) -> Option<OrbitError> {
     {
         return None;
     }
-    let allowed = spec
+    // `model` is an unadvertised identity key (CLI / session), not a wire
+    // param, so an incomplete call that still sends it must keep the
+    // missing-source_path remedy instead of failing as an unknown field.
+    let mut allowed = spec
         .wire_params()
         .flat_map(|param| std::iter::once(param.name).chain(param.aliases.iter().copied()))
         .collect::<Vec<_>>();
+    allowed.extend(TOOL_INPUT_IDENTITY_KEYS.iter().copied());
     let result = (|| {
         reject_unknown_tool_fields(input, &allowed)?;
         orbit_common::protocol::tool_input::required_string(input, &["id"], "id")?;
