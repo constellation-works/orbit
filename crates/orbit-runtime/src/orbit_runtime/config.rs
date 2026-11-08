@@ -8,18 +8,6 @@ impl RuntimeKernel {
         self.context.settings().resource_throttle()
     }
 
-    /// Minutes a deferred delivery-automation reason may persist before the
-    /// evaluator escalates it to a warning and one friction record.
-    pub fn automation_stall_window_minutes(&self) -> u32 {
-        self.context.settings().automation_stall_window_minutes()
-    }
-
-    /// Longest lifetime, in days, of a constrained application consent
-    /// (`machine.application_consent_max_days`, default 30).
-    pub(crate) fn application_consent_max_days(&self) -> u32 {
-        self.context.settings().application_consent_max_days()
-    }
-
     pub fn pr_config(&self) -> &orbit_engine::PrConfig {
         self.context.settings().pr_config()
     }

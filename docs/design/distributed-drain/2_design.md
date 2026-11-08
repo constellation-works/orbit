@@ -1651,7 +1651,7 @@ file, and `/run` is a tmpfs, so the hold lifts on its own either way. A `dry-*` 
 scheduled". Other platforms have no probe and never hold. Tests inject a fixed probe
 (`with_host_signal_probe`; the sweep takes one explicitly), and orbit-core's unit-test build never
 reads the real host. Admission holds only while the schedule is within
-`machine.host_shutdown_hold_minutes` (default 180), including that instant. A later schedule is
+180 minutes (fixed since [ORB-22808]), including that instant. A later schedule is
 still reported — readiness, doctor, and the pass record name the mode and time — and unattended
 admission continues, so a reboot set for tomorrow does not idle the host all day. Work admitted
 on the near side of the horizon can finish before the reboot. A schedule already in the past
@@ -1680,7 +1680,7 @@ reboot.
   explicit drain started during a hold still holds its own waves.
 - **Surfaces.** `orbit run readiness` names the schedule either way. Inside the horizon every
   waiting backlog task has reason `host_shutdown_scheduled` and the text says admissions are held.
-  Beyond it, admissions continue and the text names `machine.host_shutdown_hold_minutes`.
+  Beyond it, admissions continue and the text names the 180-minute hold.
   `orbit doctor` warns only while the schedule holds; a further schedule is `ok` and names the time.
 
 ## 8. Required validation scenarios
@@ -1734,7 +1734,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
 | Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
 | Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
-| Host shutdown or reboot scheduled | Inside `machine.host_shutdown_hold_minutes` (default 180, the instant included): sweep fires and mints nothing, drain waves admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
+| Host shutdown or reboot scheduled | Inside 180 minutes (the instant included): sweep fires and mints nothing, drain waves admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
 | Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations

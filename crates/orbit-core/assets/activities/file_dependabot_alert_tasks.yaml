@@ -37,8 +37,7 @@ spec:
         enum: [low, moderate, high, critical]
         description: >
           Optional run override for the minimum severity filed for Dependabot
-          and Code scanning alerts. Otherwise use security_alert_sweep.min_severity
-          from workspace then global config, with a built-in default of moderate.
+          and Code scanning alerts. Otherwise the fixed floor of moderate applies.
           Secret scanning alerts are always filed regardless of this floor.
       skip_when_dependabot_pr_open:
         type: boolean

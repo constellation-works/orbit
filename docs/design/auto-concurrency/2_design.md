@@ -180,7 +180,7 @@ class in `worker/delivery_class.rs`, the host reads in
 - **Retention.** Rows past 30 days are pruned, whatever
   `retention.runs_days` says, except what the count-based readers still
   need. A run minute stays while its delivery is among the newest
-  `max(200, profile_window)` deliveries of its (workspace, work class,
+  200 deliveries of its (workspace, work class,
   complexity) key. An admission forecast stays while it is among the newest
   10,000, and a host minute while it is no older than the oldest kept
   forecast's minute. A month with no deliveries therefore leaves the
@@ -440,11 +440,11 @@ historical evidence. This changes profile inputs only; admission mode and
 the shadow rollout remain unchanged.
 
 A **resource profile** for one key is built from that key's most recent
-completed deliveries: the last `profile_window` (50), however old. Crew
+completed deliveries: the last 50 (fixed since [ORB-22808]), however old. Crew
 model is a profile dimension, not a filter:
 
 - Each delivery carries the crew model its runs named. A key has one
-  **crew profile** per crew model, over the last `profile_window` of that
+  **crew profile** per crew model, over the last 50 of that
   model's deliveries, and the key's own profile, the **union** over every
   crew model. Deliveries that recorded no crew model count only toward the
   union.
@@ -490,8 +490,8 @@ profile for the lookup's crew model while it has at least
 - A pull drain's work-fit request carries no task, so the owner's offered
   work is priced by the union.
 
-Retention keeps what these windows read: per key, the newest `max(200,
-profile_window)` deliveries by admission and the newest eligible ones by
+Retention keeps what these windows read: per key, the newest 200
+deliveries by admission and the newest eligible ones by
 finish, and the same count per key and crew model, so one model's
 deliveries never push another's history out.
 
@@ -700,7 +700,7 @@ Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
   the series counts it as zero. The forecast reports the host minute `B` was
   measured over as `baseline_minute`.
 - **Output.** `HostLoadForecast`: the CPU (cores) and memory (bytes) series
-  for `t = 0 … horizon_cap_minutes`, each with its baseline and its peak and
+  for `t = 0 … 120` minutes, each with its baseline and its peak and
   minute, plus the running deliveries and reservations with the profile step
   that described each, and the profiles a caller looks candidates up in.
 
@@ -711,7 +711,7 @@ deliveries forecasts the case where every one of them is at its 90th
 percentile at once, which is far rarer than one in ten, so the over-statement
 grows with `N`. On dk-server-1 on 2026-10-17, four deliveries measured
 4.4 GiB on average and 9.4 GiB at most, against a sum of percentiles of about
-15.6 GiB for five or six, and admission was held at `admit_memory_percent`
+15.6 GiB for five or six, and admission was held at the 75% memory limit
 with 24 GiB available.
 
 At minute `t`, each profiled delivery or reservation `i`, still running with
@@ -961,7 +961,7 @@ every `t` in `0 … H_c`:
 
 ```
 F_cpu(t) + P_c.cpu(t) · alive_c(t) ≤ admit_cpu_percent    × host cores
-F_mem(t) with P_c in its summed quantile ≤ admit_memory_percent × host memory
+F_mem(t) with P_c in its summed quantile ≤ 75%                 × host memory
 ```
 
 The candidate joins the memory quantile of §4.1 as one more delivery with
@@ -1103,7 +1103,7 @@ Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
 
 A gap that small tasks keep filling can block a heavy task forever. When the
 first candidate in priority order has failed gap fit for longer than
-`head_max_wait_minutes` (30), the drain admits nothing else until that
+30 minutes, the drain admits nothing else until that
 candidate fits.
 
 The head waits only on running deliveries and reservations: a candidate is
@@ -1135,7 +1135,7 @@ changes.
   the reference (another resource fails, it fails at a later minute, or by at
   least one percentage point less, so baseline noise does not count) becomes
   the new reference and the count starts again from one.
-- **Stuck.** Once the count reaches `head_stuck_passes` (20, about ten
+- **Stuck.** Once the count reaches 20 (about ten
   minutes at the default 30-second poll, after the 30-minute wait), the stall
   is `stuck`. An `enforce` drain files one friction (tag `automation`) naming
   the drain, the head task, its profile source and key, the miss and the
@@ -1144,7 +1144,7 @@ changes.
   filing twice. The drain persists the pass and stall start before filing,
   then saves the returned friction id. If the first write fails, reporting
   waits for a later pass without changing admissions; if the id write fails,
-  retry reuses the durable stall start. This also covers `head_stuck_passes = 1`
+  retry reuses the durable stall start. This also covers a one-pass threshold
   and progress resets, while a later distinct stall gets its own friction.
   `shadow` records the stall without filing, since it holds nothing.
 - **While it lasts.** `orbit run show` and `orbit run readiness` print a
@@ -1249,7 +1249,7 @@ Limitations:
 
 | Surface | Proposed change |
 |---|---|
-| Machine config | Host defaults in `[machine.auto_concurrency]`, registered in `crates/orbit-config/src/registry/settings/table/` (cross-field checks in `crates/orbit-config/src/registry/settings/machine.rs` and `crates/orbit-config/src/registry/settings/snapshot.rs`): `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `admit_memory_percent` (75, forecast non-reclaimable memory as a percentage of host memory), `profile_window` (50 completed deliveries), `min_profile_deliveries` (10), `horizon_cap_minutes` (120 minutes), `head_max_wait_minutes` (30 minutes), `head_stuck_passes` (20 passes, §5.3). `admit_memory_percent` stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because the default Linux throttle CPU source is load-based and can exceed 100%. `workflow.resource_throttle.cpu_source = "utilization"` selects busy tick accounting for the throttle with independent high/resume marks. |
+| Machine config | Host defaults in `[machine.auto_concurrency]`, registered in `crates/orbit-config/src/registry/settings/table/` (cross-field checks in `crates/orbit-config/src/registry/settings/machine.rs` and `crates/orbit-config/src/registry/settings/snapshot.rs`): `mode` (`off` / `shadow` / `enforce`, default `off`), `admit_cpu_percent` (90, forecast utilization as a percentage of host cores), `min_profile_deliveries` (10). [ORB-22808] fixed the rest at their former defaults: forecast non-reclaimable memory at most 75% of host memory, a 50-delivery profile window, a 120-minute horizon, a 30-minute head wait and 20 stuck passes (§5.3); `admit_memory_percent`, `profile_window`, `horizon_cap_minutes`, `head_max_wait_minutes` and `head_stuck_passes` load with a deprecation warning and are ignored until 2026-12-08. The 75% memory limit stays below the global `workflow.resource_throttle.memory_high_percent`; CPU utilization is not compared with the throttle's CPU percentage because the default Linux throttle CPU source is load-based and can exceed 100%. `workflow.resource_throttle.cpu_source = "utilization"` selects busy tick accounting for the throttle with independent high/resume marks. |
 | `drain_last_pass` | Implemented for local drains (§5.1): an `admission_forecast` block with the peak forecast over the horizon, admitted and skipped candidates with the failing minute and resource and their profile source, and whether the head is being protected, with its miss and, once protected, its stall (§5.3) |
 | `drain_pass_counters` | Implemented for local and pull drains: cumulative per-drain counters on the run state that say why each admission pass admitted nothing. Every counted pass adds one to `passes` and to exactly one of `outcomes`, the first that applies. A local pass is `admitted` (it started work), `held` (an operator stop or a scheduled host shutdown), `throttle` (host pressure), `no_candidate` (an empty or wholly excluded backlog), `ceiling_full` (no free slot; no forecast is built or recorded), `gap_fit_held` (enforce gap fit held every candidate) or `deferred` (every candidate deferred on a lock or footprint); a pass deferred because the store was locked (`lock_busy`) is `failed`. A pull pass with its admission window open is `admitted`, `failed` (the pass errored), `held` (the reason it sent no request: the failure breaker's `pass_failures`, a refusal code such as `circuit_open`, `admissions_stopped` for an observed stop/cancel, or `reconciliation_held` for another pending reconciliation), `throttle`, `gap_fit_held` (`forecast_no_headroom`, judged before a slot is allocated or when a carried request or claim cannot reacquire forecast capacity), `ceiling_full` or `no_candidate` (the owner answered idle); settle-only, cancelling and protocol-skew passes are not counted. `held_by_reason` and `throttle_by_resource` (`cpu`, `memory`, `io`, `disk`) split those two outcomes; `waiting_by_reason` counts the passes in which at least one task waited for a reason (a backlog exclusion, a deferral, `gap_fit`, or an idle owner's reasons), so its entries overlap. `since` and `last_counted_at` bound the counted passes. Resume copies the checkpoint, so the counters cover the drain's whole lineage. |
 | `orbit run show` | Implemented: an `Admission:` line from the recorded pass, e.g. `forecast — skipped heavy candidate (cpu 94% at +6m)`, with candidate titles, shadow decisions labelled hypothetical, and a protected head named by the starvation guard; a `Stuck head:` line while that head is stuck (§5.3). After an idle pass, it names the last built forecast's timestamp, decisions and peaks, and says the current pass built none. JSON preserves `pipeline_state.drain_last_pass.admission_forecast` and retains built history in `pipeline_state.drain_last_forecast`. The Auto-concurrency section adds an `Admission passes:` line from `drain_pass_counters`, e.g. `12 passes since 2026-10-18 07:00Z: ceiling_full 7 (58%), admitted 3 (25%), held 2 (17%); held by circuit_open 2; waiting: context_lock_conflict in 9 (75%)`, and JSON carries `pipeline_state.drain_pass_counters`. |
@@ -1334,7 +1334,7 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   writes one `admission_forecasts` row (introduced in store schema v48): the drain's
   workspace and run, the forecast time, the mode, the host's cores and
   memory, and the forecast at +5, +10, +20 and +30 minutes for CPU and
-  memory. An offset past `horizon_cap_minutes` is not recorded. The row also
+  memory. An offset past the 120-minute horizon is not recorded. The row also
   holds the tasks the pass admitted after the pull admission section, and
   the tasks gap fit admitted and skipped; under `shadow` those differ. A
   pass that built no forecast, because no slot or candidate was free, and

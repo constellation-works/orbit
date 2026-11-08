@@ -21,5 +21,16 @@ mod skills;
 mod view;
 
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};
+
+/// Experiments that may run at once in one workspace.
+///
+/// The former `experiments.max_running` default, fixed when the key was removed [ORB-22808].
+pub const EXPERIMENTS_MAX_RUNNING: u32 = 3;
+
+/// Share of a treatment arm's settled tasks that must have received its
+/// treatment; below it, a readout gives no verdict.
+///
+/// The former `experiments.min_delivered_rate` default, fixed when the key was removed [ORB-22808].
+pub const EXPERIMENTS_MIN_DELIVERED_RATE: f64 = 0.9;
 pub use readout::ExperimentReadout;
 pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};

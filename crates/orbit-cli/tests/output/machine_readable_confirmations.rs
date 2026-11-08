@@ -280,20 +280,14 @@ fn config_path_and_set_print_json_documents() {
         "config",
         "set",
         "--global",
-        "automation.stall_window_minutes",
+        "retention.audit_days",
         "45",
         "--format",
         "json",
     ]);
-    assert_eq!(set["key"], "automation.stall_window_minutes");
+    assert_eq!(set["key"], "retention.audit_days");
     assert_eq!(set["scope"], "global");
-    let value = fixture.json(&[
-        "config",
-        "get",
-        "automation.stall_window_minutes",
-        "--format",
-        "json",
-    ]);
+    let value = fixture.json(&["config", "get", "retention.audit_days", "--format", "json"]);
     assert_eq!(value["value"], 45);
 }
 
@@ -637,7 +631,7 @@ fn config_set_rejections_leave_config_files_byte_identical() {
         ("non-bool crew flag", &["crews.sol.enabled", "maybe"]),
         (
             "invalid global value",
-            &["--global", "automation.stall_window_minutes", "soon"],
+            &["--global", "retention.audit_days", "soon"],
         ),
     ] {
         fixture

@@ -47,3 +47,14 @@ pub use script_step::{
 pub use steering::{SteeringGateReading, SteeringRoundAdmission};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
 pub use worktree_gc::WorktreeGcTaskLookup;
+
+/// Minutes a provider process may sit idle before its step fails as stalled.
+///
+/// The former `execution.agent_stall_minutes` default, fixed when the key was removed [ORB-22808].
+pub const AGENT_STALL_MINUTES: u64 = 30;
+
+/// Hours a task must have been parked in `someday` before the scheduled
+/// worktree sweep may remove its run's worktree.
+///
+/// The former `worktree.parked_reclaim_after_hours` default, fixed when the key was removed [ORB-22808].
+pub const WORKTREE_PARKED_RECLAIM_AFTER_HOURS: u64 = 336;

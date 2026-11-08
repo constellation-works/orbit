@@ -64,7 +64,7 @@
 //!
 //! Every other reason a pass requests nothing although its window is open —
 //! an owner probe refusal, a refused settlement, the failure breaker, a
-//! shutdown inside `machine.host_shutdown_hold_minutes`
+//! shutdown inside the 180-minute hold
 //! (`host_shutdown_scheduled`), or no runnable crew — is recorded on the
 //! drain's last pass as `admission_refusal`, so `orbit run show` and
 //! readiness name it [ORB-15637]. A schedule further away is reported and

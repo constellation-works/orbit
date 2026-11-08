@@ -48,7 +48,7 @@ spec:
     files a new task naming the cover as a fix that did not hold. Unavailable
     cover evidence stays explicitly withheld, and a closed unmerged cover
     releases its key. Plain archive/rejection holds the same evidenced cause for
-    ci_failure.operator_suppression_hours (default 6) from the status event; a
+    6 hours from the status event; a
     different retained diagnostic under the same broad key files. An undetermined
     cause is held as a candidate owner, without attribution.
     Every operator hold appears in withheld and audit.withheld with outcome,

@@ -1527,7 +1527,7 @@
   },
   {
     "name": "orbit.experiment.resume",
-    "description": "Resume a paused experiment. Refused while experiments.max_running other experiments are already running. Operator only: an agent session is refused.",
+    "description": "Resume a paused experiment. Refused while 3 other experiments are already running. Operator only: an agent session is refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1620,7 +1620,7 @@
   },
   {
     "name": "orbit.experiment.start",
-    "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while experiments.max_running experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+    "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -4530,7 +4530,7 @@
   },
   {
     "name": "proc.spawn",
-    "description": "Spawn a process with timeout and capture output. The timeout ceiling is 60000 ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most the operator's execution.proc_spawn_max_timeout_minutes (default 45 min)",
+    "description": "Spawn a process with timeout and capture output. The timeout ceiling is 60000 ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most 45 min",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -4550,7 +4550,7 @@
       },
       {
         "name": "timeout_ms",
-        "description": "Execution timeout in milliseconds (default 15000). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: 60000 outside a managed activity, or the smaller of the activity's remaining budget and execution.proc_spawn_max_timeout_minutes inside one",
+        "description": "Execution timeout in milliseconds (default 15000). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: 60000 outside a managed activity, or the smaller of the activity's remaining budget and 45 min inside one",
         "param_type": "u64",
         "required": false
       }

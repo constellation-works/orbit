@@ -27,6 +27,31 @@ use orbit_types::tool::{
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Strictly increasing severity age thresholds, in hours.
+///
+/// The former `attention.age_bump_hours` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_AGE_BUMP_HOURS: [u32; 2] = [24, 72];
+/// Failed-run lookback, in hours.
+///
+/// The former `attention.run_window_hours` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_RUN_WINDOW_HOURS: u32 = 48;
+/// Wall-clock minutes after which a running run counts as stuck.
+///
+/// The former `attention.run_stuck_after_minutes` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_RUN_STUCK_AFTER_MINUTES: u32 = 120;
+/// Provider CI read cache lifetime, in seconds.
+///
+/// The former `attention.ci_cache_seconds` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_CI_CACHE_SECONDS: u64 = 60;
+/// Per-source read deadline, in seconds.
+///
+/// The former `attention.source_timeout_seconds` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_SOURCE_TIMEOUT_SECONDS: u64 = 10;
+/// Maximum candidates one workspace contributes.
+///
+/// The former `attention.per_workspace_item_cap` default, fixed when the key was removed [ORB-22808].
+const ATTENTION_PER_WORKSPACE_ITEM_CAP: usize = 200;
+
 fn attention_local_workspace(runtime: &OrbitRuntime) -> Result<AttentionWorkspace, OrbitError> {
     let id = match runtime.workspace_runtime_binding() {
         Some(binding) => binding.logical_workspace_id.clone(),
@@ -59,7 +84,6 @@ pub fn attention_query(
     let reads_host_health = filter.selected(AttentionKind::HostUnhealthy)
         && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let operator = resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
-    let settings = runtime.context.settings().attention_settings();
     let machine = orbit_config::load_machine_settings(&runtime.global_root())?;
     let host = AttentionHost {
         machine_id: runtime
@@ -192,34 +216,28 @@ pub fn attention_query(
                 }
             }
         };
-        let mut candidates = match sources::read_attention_sources(
-            selected,
-            &workspace,
-            &host,
-            &filter,
-            now,
-            selected.context.settings().attention_settings(),
-        ) {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                for kind in filter.kinds.iter().filter(|kind| {
-                    AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
-                        || **kind == AttentionKind::NoticeOpen
-                }) {
-                    degraded.push(AttentionDegraded {
-                        scope: format!("workspace:{}", workspace.id),
-                        kind: kind.as_str().into(),
-                        code: "source_unavailable".into(),
-                        message: error.to_string(),
-                    });
+        let mut candidates =
+            match sources::read_attention_sources(selected, &workspace, &host, &filter, now) {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    for kind in filter.kinds.iter().filter(|kind| {
+                        AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
+                            || **kind == AttentionKind::NoticeOpen
+                    }) {
+                        degraded.push(AttentionDegraded {
+                            scope: format!("workspace:{}", workspace.id),
+                            kind: kind.as_str().into(),
+                            code: "source_unavailable".into(),
+                            message: error.to_string(),
+                        });
+                    }
+                    sources::AttentionCandidates {
+                        items: Vec::new(),
+                        degraded: Vec::new(),
+                        timings: BTreeMap::new(),
+                    }
                 }
-                sources::AttentionCandidates {
-                    items: Vec::new(),
-                    degraded: Vec::new(),
-                    timings: BTreeMap::new(),
-                }
-            }
-        };
+            };
         runtime_sources::read_runtime_attention(
             selected,
             &workspace,
@@ -235,7 +253,6 @@ pub fn attention_query(
             &host,
             &filter,
             now,
-            selected.context.settings().attention_settings(),
             session_context,
             &mut candidates,
         );
@@ -256,11 +273,7 @@ pub fn attention_query(
         candidates.items.retain(|item| filter.matches(item));
         matching_before_cap += candidates.items.len();
         attention_order(&mut candidates.items);
-        let cap = selected
-            .context
-            .settings()
-            .attention_settings()
-            .per_workspace_item_cap as usize;
+        let cap = ATTENTION_PER_WORKSPACE_ITEM_CAP;
         if candidates.items.len() > cap {
             let dropped = candidates.items[cap..]
                 .iter()
@@ -305,7 +318,6 @@ pub fn attention_query(
             AttentionPageCursor {
                 since: filter.input["since"].as_str(),
                 limit: filter.limit,
-                ttl_hours: settings.cursor_ttl_hours,
             },
             now,
         )

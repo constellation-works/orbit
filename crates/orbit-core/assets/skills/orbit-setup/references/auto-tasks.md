@@ -800,7 +800,7 @@ the same branch share one record rather than filing hundreds.
 
 Find stalled consumers with `orbit doctor` (the `automation-consumers` row) or
 `orbit auto-task recover <name>`, whose stall reason names the cause. A stall
-that persists past `automation.stall_window_minutes` (default 60) is also logged
+that persists past 60 minutes is also logged
 at `warn`, so `orbit log tail --level warn` shows it.
 
 ### Clearing a stall

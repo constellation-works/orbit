@@ -101,14 +101,6 @@ impl OrbitContext {
         &self.policy.codex_execution_policy
     }
 
-    pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
-        self.policy.proc_spawn_max_timeout_ms
-    }
-
-    pub fn agent_stall_minutes(&self) -> u32 {
-        self.policy.agent_stall_minutes
-    }
-
     pub fn persistence(&self) -> &PersistenceConfig {
         &self.runtime.persistence
     }
@@ -123,6 +115,14 @@ impl OrbitContext {
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
         self.runtime.set_host_shutdown_hold_minutes(minutes);
+    }
+
+    pub(crate) fn set_worktree_parked_reclaim_after_hours(&mut self, hours: u64) {
+        self.runtime.set_worktree_parked_reclaim_after_hours(hours);
+    }
+
+    pub(crate) fn set_auto_concurrency_head_guard(&mut self, guard: (u32, u32)) {
+        self.runtime.set_auto_concurrency_head_guard(guard);
     }
 
     pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {

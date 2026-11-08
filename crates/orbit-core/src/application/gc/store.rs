@@ -36,6 +36,13 @@ const BATCH_PAUSE: Duration = Duration::from_millis(20);
 /// forecasts ([`ResourceHistoryKeep`]), so a break never empties the history
 /// profiles and the accuracy report read.
 pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
+/// Days after a task commit is applied before its journal row may be
+/// deleted. Recovery never reads an applied journal row, so the window only
+/// keeps recent commit decisions for diagnosis; at about 600 rows of about
+/// 80 KB a day, 60 days would let the table pass 2.5 GiB before anything went.
+///
+/// The former `retention.journal_days` default, fixed when the key was removed [ORB-22808].
+pub const JOURNAL_RETENTION_DAYS: u32 = 14;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
 const BLOB_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -202,7 +209,7 @@ impl OrbitRuntime {
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,
-            journal: config.snapshot.retention_journal_days,
+            journal: JOURNAL_RETENTION_DAYS,
         })
     }
 
@@ -339,7 +346,7 @@ impl OrbitRuntime {
         };
         let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
         let keep = ResourceHistoryKeep {
-            deliveries_per_key: usize::try_from(self.auto_concurrency_settings().profile_window)
+            deliveries_per_key: usize::try_from(orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW)
                 .unwrap_or(usize::MAX)
                 .max(RESOURCE_HISTORY_DELIVERIES_PER_KEY),
             forecasts: ACCURACY_FORECASTS_KEPT,
@@ -397,7 +404,7 @@ impl OrbitRuntime {
     /// Another registered workspace keeps its own window. The rows are
     /// selected once, by a read, then deleted by primary key in batches of
     /// `RETENTION_BATCH_ROWS`, so no write transaction scans the table.
-    /// `retention_days` overrides `retention.journal_days`.
+    /// `retention_days` overrides [`JOURNAL_RETENTION_DAYS`].
     pub fn gc_journal(
         &self,
         apply: bool,

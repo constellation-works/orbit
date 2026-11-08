@@ -906,12 +906,13 @@ fn park(pair: &Pair, task: &str) {
 }
 
 /// [ORB-16385] A failed run's worktree whose task is parked in `someday` past
-/// `worktree.parked_reclaim_after_hours` is reclaimed. A Git worktree lock, an
+/// the parked-reclaim window (zero in this fixture) is reclaimed. A Git worktree lock, an
 /// unsettled claim or a backlog task keeps it, and so do run branch commits
 /// that exist on no published ref and in no rescue patch: the branch is the
 /// only copy of a run that committed before publication failed.
 fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
-    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 0\n");
+    let mut pair = gc_pair_with(1, "");
+    pair.follower = pair.follower.with_worktree_parked_reclaim_after_hours(0);
     let drain = pair.start_drain();
     // Cancellation's terminal hook and the launch pass both try delivery,
     // so the leaf's claim stays unsettled.
@@ -1040,7 +1041,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
 /// its run's end: a run that failed long ago keeps its worktree when its task
 /// was parked just now.
 fn a_parked_age_is_measured_from_the_status_change() {
-    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 24\n");
+    let pair = gc_pair_with(1, "");
     let task = pair.tasks[0].clone();
     let (leaf, path) =
         terminal_worktree_at(&pair, &[&task], Utc::now() - chrono::Duration::days(30));

@@ -712,8 +712,9 @@ problem well.
 
 A proposal needed a measured cost and recurrence before the pass filed it. Defaults, in
 `[resident.evolution]`. Since [ORB-22844] only `window_days` (the digest window) and
-`decline_suppress_days` apply; the other five load with a deprecation warning and are ignored
-until 2026-12-07:
+`decline_suppress_days` applied; the other five load with a deprecation warning and are ignored
+until 2026-12-07. [ORB-22808] then fixed those two at 14 and 30 days; they too are ignored, until
+2026-12-08:
 
 | Key | Default | Meaning |
 |---|---|---|

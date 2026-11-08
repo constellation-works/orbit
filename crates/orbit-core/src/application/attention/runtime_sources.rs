@@ -86,17 +86,10 @@ impl RuntimeAttention<'_> {
     }
 
     fn finish(&self, mut item: AttentionItem, state: Value, high: bool) -> AttentionItem {
-        let aged = self
-            .runtime
-            .context
-            .settings()
-            .attention_settings()
-            .age_bump_hours
-            .iter()
-            .any(|hours| {
-                item.age_seconds
-                    .is_some_and(|age| age >= u64::from(*hours) * 3600)
-            });
+        let aged = super::ATTENTION_AGE_BUMP_HOURS.iter().any(|hours| {
+            item.age_seconds
+                .is_some_and(|age| age >= u64::from(*hours) * 3600)
+        });
         if high || aged {
             item.severity = AttentionSeverity::High;
         }
@@ -189,7 +182,6 @@ impl RuntimeAttention<'_> {
         runs: &[JobRun],
         folded: &BTreeSet<String>,
     ) -> Result<Vec<AttentionItem>, OrbitError> {
-        let settings = self.runtime.context.settings().attention_settings();
         let mut items = Vec::new();
         // Newest submission wins per (job, task), even if it is active or
         // successful. A newer attempt cannot resurrect an older failure.
@@ -235,7 +227,8 @@ impl RuntimeAttention<'_> {
                                 continue;
                             };
                             if finished
-                                < self.now - Duration::hours(i64::from(settings.run_window_hours))
+                                < self.now
+                                    - Duration::hours(i64::from(super::ATTENTION_RUN_WINDOW_HOURS))
                             {
                                 continue;
                             }
@@ -268,7 +261,9 @@ impl RuntimeAttention<'_> {
                             {
                                 "dead_owner"
                             } else if self.now - since
-                                >= Duration::minutes(i64::from(settings.run_stuck_after_minutes))
+                                >= Duration::minutes(i64::from(
+                                    super::ATTENTION_RUN_STUCK_AFTER_MINUTES,
+                                ))
                             {
                                 "wall_clock_bound"
                             } else {
@@ -506,13 +501,7 @@ pub(super) fn read_runtime_attention(
                     .jobs()
                     .list_job_runs_filtered(&JobRunQuery {
                         recency_since: Some(
-                            now - Duration::hours(i64::from(
-                                runtime
-                                    .context
-                                    .settings()
-                                    .attention_settings()
-                                    .run_window_hours,
-                            )),
+                            now - Duration::hours(i64::from(super::ATTENTION_RUN_WINDOW_HOURS)),
                         ),
                         include_steps: false,
                         ..Default::default()
@@ -591,15 +580,7 @@ pub(super) fn read_runtime_attention(
         candidates
             .timings
             .insert(kind.as_str().into(), elapsed.as_micros());
-        if elapsed.as_secs()
-            >= u64::from(
-                runtime
-                    .context
-                    .settings()
-                    .attention_settings()
-                    .source_timeout_seconds,
-            )
-        {
+        if elapsed.as_secs() >= super::ATTENTION_SOURCE_TIMEOUT_SECONDS {
             candidates.degraded.push(degraded(
                 kind,
                 "source_timeout",

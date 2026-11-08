@@ -291,7 +291,7 @@ The digest is the manager's view of the bound workspace. Read it to see what a p
 
 Its flags:
 
-- `--since <window>` sets the window for the decisions, the pains and the metrics line. It takes the forms that `metrics --since` takes. The default is `resident.evolution.window_days`, which is 14 days unless you change it (see [Configuration](../config/)). Open escalations, proposals and residents are current state, so `--since` does not limit them.
+- `--since <window>` sets the window for the decisions, the pains and the metrics line. It takes the forms that `metrics --since` takes. The default is 14 days. Open escalations, proposals and residents are current state, so `--since` does not limit them.
 - `--top <n>` caps the pains shown, from 1 to 100. The default is 5.
 
 ### Metrics

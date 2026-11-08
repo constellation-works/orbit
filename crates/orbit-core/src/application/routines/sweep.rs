@@ -180,7 +180,7 @@ pub fn run_sweep_with_providers(
     // untouched so tests never rotate real logs.
     log_rotation::rotate_and_prune(
         &super::clock::sweep_log_path(&global_root),
-        &LogRotationConfig::load_global_best_effort(),
+        &LogRotationConfig::default(),
     );
     run_sweep_at_with_providers(&global_root, options, local_machine, workspace_provider)
 }
@@ -352,9 +352,9 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // stands down for it. A later schedule does not. Cursors are not advanced
     // while held, so once the schedule is cancelled, the horizon lifts, or
     // the host is back, each routine's own `missed_run` policy decides what
-    // the held slots become, exactly as after any other downtime. The horizon
-    // is the global machine setting, judged against this tick's clock.
-    if let Some(shutdown) = shutdown_holding_admission(global_root, host_signals, now_utc)? {
+    // the held slots become, exactly as after any other downtime. The fixed
+    // horizon is judged against this tick's clock.
+    if let Some(shutdown) = shutdown_holding_admission(host_signals, now_utc) {
         let reason = shutdown.hold_reason();
         tracing::warn!(
             target: "orbit.core.sweep",
@@ -834,24 +834,19 @@ fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> 
     ))
 }
 
-/// The global shutdown horizon, and the schedule when it holds this tick.
-///
-/// A missing config file is the built-in default. An invalid global config
-/// fails the tick rather than silently admitting into a reboot.
+/// The pending shutdown when it falls inside the fixed hold horizon
+/// ([`crate::runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`]) of this tick.
 fn shutdown_holding_admission(
-    global_root: &Path,
     host_signals: &dyn HostSignalProbe,
     now_utc: chrono::DateTime<Utc>,
-) -> Result<Option<ScheduledShutdown>, OrbitError> {
-    let Some(shutdown) = host_signals.scheduled_shutdown() else {
-        return Ok(None);
-    };
-    let loaded =
-        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))?;
-    let minutes = loaded.snapshot.host_shutdown_hold_minutes();
-    Ok(shutdown
-        .holds_admission(now_utc, minutes)
-        .then_some(shutdown))
+) -> Option<ScheduledShutdown> {
+    let shutdown = host_signals.scheduled_shutdown()?;
+    shutdown
+        .holds_admission(
+            now_utc,
+            crate::runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES,
+        )
+        .then_some(shutdown)
 }
 
 /// Bind a routine sweep to the same cadence the host clock installer renders.

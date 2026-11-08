@@ -18,6 +18,11 @@ use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::{full_revision, landed_task_commit};
 
+/// Hours an archived or rejected CI sweep task suppresses re-filing.
+///
+/// The former `ci_failure.operator_suppression_hours` default, fixed when the key was removed [ORB-22808].
+pub(crate) const OPERATOR_SUPPRESSION_HOURS: i64 = 6;
+
 pub(super) struct OperatorAssessment {
     pub(super) withheld: Option<Value>,
     pub(super) failed_covers: Vec<Value>,
@@ -47,21 +52,11 @@ pub(super) struct OperatorCovers<'a> {
 
 impl<'a> OperatorCovers<'a> {
     pub(super) fn new(runtime: &'a OrbitRuntime) -> Result<Self, OrbitError> {
-        let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
-            runtime.global_root(),
-            runtime.shared_root(),
-        ))?;
-        let hours = config
-            .value_for("ci_failure.operator_suppression_hours")
-            .and_then(|value| value.as_u64())
-            .ok_or_else(|| {
-                OrbitError::InvalidInput("CI operator suppression setting unavailable".into())
-            })?;
         Ok(Self {
             runtime,
             source: Source::new(&runtime.paths().repo_root),
             now: runtime.ci_failure_time.unwrap_or_else(Utc::now),
-            suppression: Duration::hours(hours as i64),
+            suppression: Duration::hours(OPERATOR_SUPPRESSION_HOURS),
             covers: BTreeMap::new(),
             decisions: BTreeMap::new(),
         })

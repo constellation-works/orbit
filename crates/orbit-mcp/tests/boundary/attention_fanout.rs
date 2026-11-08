@@ -170,7 +170,6 @@ fn mux(fleet: &Fleet, budget: Duration) -> FederatedMcpHost {
     )
     .with_attention_fanout(AttentionFanout {
         budget,
-        cursor_ttl_hours: 24,
         host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
     })
 }

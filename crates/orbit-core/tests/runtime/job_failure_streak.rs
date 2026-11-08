@@ -187,14 +187,6 @@ fn runs_agree_on_one_error_signature_despite_ids_and_counts_scenario() {
     );
 }
 
-fn the_warn_threshold_defaults_to_five_and_zero_turns_it_off_scenario() {
-    assert_eq!(Fixture::new("").runtime.job_failure_streak_warn(), 5);
-    let configured = Fixture::new("[jobs]\nfailure_streak_warn = 8\n");
-    assert_eq!(configured.runtime.job_failure_streak_warn(), 8);
-    let off = Fixture::new("[jobs]\nfailure_streak_warn = 0\n");
-    assert_eq!(off.runtime.job_failure_streak_warn(), 0);
-}
-
 crate::scenario_table!(
     a_success_ends_the_streak_and_the_newest_failures_are_counted,
     a_success_ends_the_streak_and_the_newest_failures_are_counted_scenario
@@ -210,8 +202,4 @@ crate::scenario_table!(
 crate::scenario_table!(
     runs_agree_on_one_error_signature_despite_ids_and_counts,
     runs_agree_on_one_error_signature_despite_ids_and_counts_scenario
-);
-crate::scenario_table!(
-    the_warn_threshold_defaults_to_five_and_zero_turns_it_off,
-    the_warn_threshold_defaults_to_five_and_zero_turns_it_off_scenario
 );

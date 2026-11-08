@@ -27,10 +27,11 @@ const SIGNATURE_RUN_LIMIT: usize = 25;
 /// Longest latest-error line returned.
 const LATEST_ERROR_CHARS: usize = 200;
 
-/// `jobs.failure_streak_warn`: the streak length at which the dashboard warns.
-const WARN_KEY: &str = "jobs.failure_streak_warn";
-/// The key's built-in default, used only when the config cannot be loaded.
-const DEFAULT_WARN: u32 = 5;
+/// Consecutive failed runs of one job at which the dashboard warns it is
+/// failing.
+///
+/// The former `jobs.failure_streak_warn` default, fixed when the key was removed [ORB-22808].
+pub const JOB_FAILURE_STREAK_WARN: u32 = 5;
 
 /// A job's current run of consecutive failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,27 +67,6 @@ impl JobFailureStreak {
 }
 
 impl OrbitRuntime {
-    /// `jobs.failure_streak_warn` from the effective config: the streak
-    /// length that raises the warning, `0` when the warning is off. An
-    /// unreadable config reads as the default so a bad file cannot hide it.
-    pub fn job_failure_streak_warn(&self) -> u32 {
-        orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
-            self.global_root(),
-            self.shared_root(),
-        ))
-        .ok()
-        .and_then(|config| {
-            config
-                .values()
-                .iter()
-                .find(|entry| entry.key == WARN_KEY)
-                .and_then(|entry| entry.value.as_u64())
-        })
-        .map_or(DEFAULT_WARN, |value| {
-            u32::try_from(value).unwrap_or(u32::MAX)
-        })
-    }
-
     /// The current failure streak of every job in `job_ids` whose newest
     /// finished run failed, in `job_ids` order. Reads recorded runs without
     /// reconciling them.

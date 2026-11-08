@@ -71,9 +71,6 @@ pub struct ResolvedConfig {
     pub persistence: PersistenceConfig,
     /// Config-owned PR settings.
     pub pr: PrSettings,
-    /// Minutes a deferred delivery-automation reason may persist before it is
-    /// escalated (`[automation] stall_window_minutes`; default 60).
-    pub automation_stall_window_minutes: u32,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
@@ -137,7 +134,6 @@ impl ResolvedConfig {
                     .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
@@ -379,7 +375,6 @@ impl ResolvedConfig {
                     .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),

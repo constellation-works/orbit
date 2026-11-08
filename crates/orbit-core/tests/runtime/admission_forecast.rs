@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
+use orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast,
@@ -23,6 +24,9 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+/// The fixed forecast horizon; a series holds one point per minute through it.
+const H: usize = AUTO_CONCURRENCY_HORIZON_CAP_MINUTES as usize;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 const GIB_F: f64 = GIB as f64;
@@ -40,13 +44,9 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Profiles from one delivery, a ten-minute horizon, and a host whose
-    /// `/proc` holds nothing until a test writes it.
+    /// Profiles from one delivery and a host whose `/proc` holds nothing
+    /// until a test writes it.
     fn new() -> Self {
-        Self::with_horizon(10)
-    }
-
-    fn with_horizon(horizon: u32) -> Self {
         let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace_root = root.path().join("repo/.orbit");
@@ -56,10 +56,7 @@ impl Fixture {
         }
         std::fs::write(
             global.join("config.toml"),
-            format!(
-                "[machine.auto_concurrency]\nmin_profile_deliveries = 1\n\
-                 horizon_cap_minutes = {horizon}\n"
-            ),
+            "[machine.auto_concurrency]\nmin_profile_deliveries = 1\n",
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace_root)
@@ -360,7 +357,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
     );
 
     let before = fixture.forecast_at(now);
-    assert_eq!(before.horizon_minutes, 10);
+    assert_eq!(before.horizon_minutes, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES);
     assert!(
         before.host.is_none() && before.cpu.baseline.is_none(),
         "an unreadable host has no baseline"
@@ -381,7 +378,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
     assert_eq!(y.age_minutes, 5);
     assert!(y.held_flat, "five minutes is past the small profile's last");
     // x: cpu(1) = mean(3, 1) = 2, then cpu 1 at alive (1/3)/(2/3); y: 0.75.
-    let tail = [0.75; 8];
+    let tail = [0.75; H - 2];
     assert_series(
         &before.cpu.minutes,
         &[&[2.75, 1.25, 1.25][..], &tail].concat(),
@@ -392,7 +389,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
     let memory: Vec<f64> = before.memory.minutes.iter().map(|b| b / GIB_F).collect();
     assert_series(
         &memory,
-        &[&[4.5, 2.5, 2.5][..], &[0.5; 8]].concat(),
+        &[&[4.5, 2.5, 2.5][..], &[0.5; H - 2]].concat(),
         "memory GiB before the reservation",
     );
 
@@ -416,7 +413,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
     let memory: Vec<f64> = forecast.memory.minutes.iter().map(|b| b / GIB_F).collect();
     assert_series(
         &memory,
-        &[&[5.5, 4.5, 2.5][..], &[0.5; 8]].concat(),
+        &[&[5.5, 4.5, 2.5][..], &[0.5; H - 2]].concat(),
         "memory GiB",
     );
     assert_eq!(forecast.memory.peak.minute, 0);
@@ -450,7 +447,7 @@ fn a_live_leaf_of_another_workspace_counts() {
         ProfileSource::None,
         "this host has no profiles, so it holds its measured use"
     );
-    assert_series(&forecast.cpu.minutes, &[2.0; 11], "cpu");
+    assert_series(&forecast.cpu.minutes, &[2.0; H + 1], "cpu");
 }
 
 /// The baseline is `/proc/stat` utilization and `MemTotal - MemAvailable`
@@ -488,7 +485,7 @@ fn the_baseline_is_measured_utilization_minus_running_use() {
         (baseline - 2.0).abs() < 1e-9,
         "the baseline is 6 measured cores minus 4 of the delivery, not the load average: {baseline}"
     );
-    assert_series(&forecast.cpu.minutes, &[6.0; 11], "cpu");
+    assert_series(&forecast.cpu.minutes, &[6.0; H + 1], "cpu");
     assert_eq!(forecast.memory.baseline, Some(4.0 * GIB_F));
     assert_series(
         &forecast
@@ -497,7 +494,7 @@ fn the_baseline_is_measured_utilization_minus_running_use() {
             .iter()
             .map(|b| b / GIB_F)
             .collect::<Vec<_>>(),
-        &[12.0; 11],
+        &[12.0; H + 1],
         "memory GiB",
     );
 }
@@ -514,11 +511,11 @@ fn gib(series: &[f64]) -> Vec<f64> {
 
 /// A 250 ms reading of 14 busy cores, against a last complete minute of 6
 /// with a four-core delivery in it, leaves the baseline at that minute's 2
-/// cores at every offset out to +30. The same tick delta over a window of
+/// cores at every offset out to the horizon. The same tick delta over a window of
 /// more than a minute is load the host sustained, such as a manual build that
 /// began after the minute: it floors the baseline.
 fn a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does() {
-    let fixture = Fixture::with_horizon(30);
+    let fixture = Fixture::new();
     fixture.finished_delivery("ORB-p", "medium", &[2.0; 3], &[GIB; 3]);
     let now = into_a_minute();
     let minute = now - Duration::seconds(90);
@@ -548,7 +545,7 @@ fn a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does() {
     // The delivery, two minutes into a three-minute profile, adds 2 cores at +0.
     assert_series(
         &forecast.cpu.minutes,
-        &[&[4.0][..], &[2.0; 30]].concat(),
+        &[&[4.0][..], &[2.0; H]].concat(),
         "cpu",
     );
     assert_eq!(forecast.memory.baseline, Some(4.0 * GIB_F));
@@ -563,7 +560,7 @@ fn a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does() {
     );
     assert_series(
         &later.cpu.minutes,
-        &[14.0; 31],
+        &[14.0; H + 1],
         "cpu after a sustained window",
     );
 }
@@ -589,8 +586,8 @@ fn a_delivery_without_a_minute_is_counted_once() {
     fixture.write_proc(10_000, 90_000, 5 * GIB);
     fixture.forecast_at(now);
     fixture.write_proc(10_250, 91_250, 5 * GIB);
-    let expected_cpu = [&[3.5, 5.0][..], &[2.0; 9]].concat();
-    let expected_memory = [&[7.0, 6.0][..], &[4.0; 9]].concat();
+    let expected_cpu = [&[3.5, 5.0][..], &[2.0; H - 1]].concat();
+    let expected_memory = [&[7.0, 6.0][..], &[4.0; H - 1]].concat();
 
     let forecast = fixture.forecast_at(now);
     assert_eq!(forecast.baseline_minute, None);
@@ -695,14 +692,14 @@ fn a_task_holds_one_reservation_priced_at_its_age() {
     );
     assert_series(
         &forecast.cpu.minutes,
-        &[&[1.0, 3.0, 2.0][..], &[0.0; 8]].concat(),
+        &[&[1.0, 3.0, 2.0][..], &[0.0; H - 2]].concat(),
         "cpu counts the task once",
     );
 
     let forecast = fixture.forecast_at(later + Duration::seconds(61));
     assert_series(
         &forecast.cpu.minutes,
-        &[&[3.0, 2.0][..], &[0.0; 9]].concat(),
+        &[&[3.0, 2.0][..], &[0.0; H - 1]].concat(),
         "cpu of a reservation a minute old",
     );
 
@@ -725,7 +722,7 @@ fn a_task_holds_one_reservation_priced_at_its_age() {
     // The pending pull counts the heavier alternative once: 4 cores, not 5.
     assert_series(
         &forecast.cpu.minutes,
-        &[&[5.0, 7.0, 6.0][..], &[0.0; 8]].concat(),
+        &[&[5.0, 7.0, 6.0][..], &[0.0; H - 2]].concat(),
         "cpu",
     );
 }
@@ -760,7 +757,7 @@ fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
     // A minute old, each is priced from its second profile minute, the last.
     assert_series(
         &forecast.cpu.minutes,
-        &[&[2.0][..], &[0.0; 10]].concat(),
+        &[&[2.0][..], &[0.0; H]].concat(),
         "cpu",
     );
 
@@ -783,7 +780,7 @@ fn a_reservation_ends_when_its_run_exists_or_after_five_minutes() {
         reserved(&forecast).is_empty(),
         "dispatch failed five minutes ago"
     );
-    assert_series(&forecast.cpu.minutes, &[0.0; 11], "cpu");
+    assert_series(&forecast.cpu.minutes, &[0.0; H + 1], "cpu");
 }
 
 /// Nothing a forecast reads about the host's live load is kept between

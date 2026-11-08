@@ -24,7 +24,7 @@ const MAX_LAST: usize = 1_000;
 #[derive(Deserialize, Default)]
 pub(super) struct ResourceProfilesQuery {
     /// A count of deliveries per key, or `all` for the maximum explicit
-    /// selection; absent is `profile_window`, which may be larger.
+    /// selection; absent is the fixed 50-delivery profile window.
     #[serde(default)]
     last: Option<String>,
 }
@@ -67,13 +67,14 @@ pub(super) async fn resource_profiles(
             built_at: set.built_at,
             host: runtime.host_capacity(),
             admit_cpu_percent: settings.admit_cpu_percent,
-            admit_memory_percent: settings.admit_memory_percent,
-            profile_window: settings.profile_window,
+            admit_memory_percent: orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
+            profile_window: orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW,
             last: selected,
-            delivery_limit: window.unwrap_or(settings.profile_window as usize),
+            delivery_limit: window
+                .unwrap_or(orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW as usize),
             max_last: MAX_LAST,
             min_profile_deliveries: settings.min_profile_deliveries,
-            horizon_cap_minutes: settings.horizon_cap_minutes,
+            horizon_cap_minutes: orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
             profiles: &profiles,
         })
         .map_err(|error| {

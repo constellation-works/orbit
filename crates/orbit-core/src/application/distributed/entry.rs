@@ -94,7 +94,7 @@ pub struct DrainEntryAdmission {
     /// retained entry cannot disagree about it.
     pub claim_admission_refusal: Option<String>,
     /// The host shutdown pending when the decision was taken, however far
-    /// away it is. Inside `machine.host_shutdown_hold_minutes` the entry is
+    /// away it is. Inside the 180-minute hold the entry is
     /// admitted with a warning; a later schedule is reported and does not
     /// warn. A drain started during a hold still holds its own waves.
     pub host_shutdown: Option<ScheduledShutdown>,

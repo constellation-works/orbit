@@ -498,7 +498,7 @@ fn host_shutdown_line(shutdown: &Value, holding: Option<bool>) -> Option<String>
     if holding == Some(false) {
         return Some(format!(
             "Host {mode} scheduled for {at}. Admissions continue until \
-             machine.host_shutdown_hold_minutes of that time; in-flight runs are not touched."
+             180 minutes before that time; in-flight runs are not touched."
         ));
     }
     Some(format!(

@@ -32,7 +32,7 @@ fn orbit_help_does_not_create_or_open_the_jsonl_log() {
     fs::create_dir_all(home.join(".orbit")).expect("orbit dir");
     fs::write(
         home.join(".orbit/config.toml"),
-        "[runtime]\nlog_retention_days = 7\nlog_max_total_mb = 10\nlog_max_file_mb = 1\n",
+        "[retention]\naudit_days = 60\n",
     )
     .expect("seed config.toml so a regression that still parses it has a file to open");
 

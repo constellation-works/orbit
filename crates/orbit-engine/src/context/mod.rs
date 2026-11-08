@@ -16,18 +16,20 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 #[cfg(feature = "test-support")]
 pub use hosts::NullRuntimeHost;
 pub use hosts::{
-    AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest,
-    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
-    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
-    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    AGENT_STALL_MINUTES, AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness,
+    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission, CrewConfig,
+    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+    FinalRecoveryApplied, GeneratedPath, HandoffLandingContext, HandoffLandingStep,
+    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
     ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
-    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WorktreeGcTaskLookup,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree,
+    WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,

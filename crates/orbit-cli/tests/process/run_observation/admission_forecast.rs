@@ -31,16 +31,17 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
         ])
         .assert()
         .success();
-    for (key, value) in [
-        ("machine.auto_concurrency.admit_cpu_percent", "89"),
-        ("machine.auto_concurrency.admit_memory_percent", "74"),
-    ] {
-        fixture
-            .orbit()
-            .args(["config", "set", key, value, "--global"])
-            .assert()
-            .success();
-    }
+    fixture
+        .orbit()
+        .args([
+            "config",
+            "set",
+            "machine.auto_concurrency.admit_cpu_percent",
+            "89",
+            "--global",
+        ])
+        .assert()
+        .success();
     let runtime =
         OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
             .unwrap();
@@ -161,7 +162,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             shown["pipeline_state"]["drain_last_pass"]["admission_forecast"]["cpu_peak"]
         );
         assert_eq!(view["headroom"]["cpu_percent"], -1.0);
-        assert_eq!(view["headroom"]["memory_percent"], 34.0);
+        assert_eq!(view["headroom"]["memory_percent"], 35.0);
         let tasks = readiness["tasks"].as_array().unwrap();
         let heavy = tasks.iter().find(|task| task["task_id"] == ids[0]).unwrap();
         assert_eq!(heavy["admission_forecast"]["profile_source"], "exact");
@@ -197,7 +198,7 @@ fn recorded_forecast_explains_skips_shadow_headroom_and_starvation_without_write
             "{ready_text}"
         );
         assert!(
-            ready_text.contains("Forecast peak: memory 8.0 GiB (40.0%) at +2m; headroom: 34.0"),
+            ready_text.contains("Forecast peak: memory 8.0 GiB (40.0%) at +2m; headroom: 35.0"),
             "{ready_text}"
         );
         assert!(!ready_text.contains("Last forecast"), "{ready_text}");

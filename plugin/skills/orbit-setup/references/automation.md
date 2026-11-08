@@ -128,7 +128,7 @@ on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for 336 hours (14 days), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
@@ -754,18 +754,14 @@ standalone `task_pilot_pipeline` run carry no such authority. Set the CI
 integration branch explicitly when it differs from GitHub's default branch.
 CI defaults bound investigation to six runs and filing to five tasks. The
 security job defaults to `moderate` and above for Dependabot/code-scanning
-findings. Set `[security_alert_sweep] min_severity = "high"` in the workspace
-`.orbit/config.toml` or global `~/.orbit/config.toml` to change the floor for
-scheduled routines and manual runs. Allowed values are `low`, `moderate`,
-`high` and `critical`; precedence is explicit run/job `min_severity` input >
-workspace config > global config > built-in `moderate`. The `--input
-min_severity=high` example overrides config for that run only. Invalid config
-values fail validation with `security_alert_sweep.min_severity` named in the
-error. Secret-scanning findings are always considered regardless of this floor;
+findings; the floor is fixed. A run's `--input min_severity=high` (`low`,
+`moderate`, `high` or `critical`) overrides it for that run only.
+`security_alert_sweep.min_severity` loads with a deprecation warning, is
+ignored, and stops being recognised after 2026-12-08. Secret-scanning findings are always considered regardless of this floor;
 dependency alerts with an open Dependabot PR are skipped by default. Its catalog
 exposes per-source collection caps. The file step records the effective
-`min_severity`, `min_severity_source` (`input`, `workspace`, `global` or
-`built-in`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
+`min_severity`, `min_severity_source` (`input` or `built-in`; runs recorded
+before the fixed floor may name `workspace` or `global`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
 summarizes the filed count, floor and source, and excluded alert count and
 numbers, including for a successful sweep.
 Secret values must not be copied into task prose or logs.
@@ -774,7 +770,7 @@ A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
 filing honors operator `covered_by` relations and timed archive/reject
 suppression of the same evidenced cause
-(`ci_failure.operator_suppression_hours`, default 6; see
+(a fixed 6 hours; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
 A job whose log has a line starting with an entry of

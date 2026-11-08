@@ -478,8 +478,7 @@ another OS (see [Native host evidence](#native-host-evidence)).
   the MCP surface to be widened to match a criterion's wording.
   `proc.spawn` clamps a larger `timeout_ms` to its ceiling: 60 seconds (60000
   ms) outside a managed activity; inside one, the activity's remaining
-  wall-clock budget, at most `execution.proc_spawn_max_timeout_minutes`
-  (default 45). Its result reports the applied `timeout_ms`,
+  wall-clock budget, at most 45 minutes. Its result reports the applied `timeout_ms`,
   `timeout_ceiling_ms`, `timeout_ceiling_source`, `timeout_clamped` with a
   `timeout_notice` when clamped, and the explicit `requested_timeout_ms` when
   supplied. A timed-out result includes a `hint` with `transport: native_shell`

@@ -979,8 +979,7 @@ Orbit CLI and MCP calls. Without a complete marker and list, the nested
 server applies `ORBIT_PROC_ALLOWED_PROGRAMS` exactly as before.
 Every managed CLI agent also receives `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`, the
 provider's wall-clock deadline. A nested `proc.spawn` may then run up to the
-smaller of the time left and `execution.proc_spawn_max_timeout_minutes`
-(default 45) instead of the 60-second ceiling an interactive call keeps. The
+smaller of the time left and 45 minutes (fixed since [ORB-22808]) instead of the 60-second ceiling an interactive call keeps. The
 nested call honors it only behind the managed-run marker, and dispatch strips
 an outer run's value before stamping its own.
 For the six shipped activities, a deny-mode run also stamps each activity's

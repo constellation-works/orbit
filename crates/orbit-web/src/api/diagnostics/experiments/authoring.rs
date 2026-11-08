@@ -50,7 +50,7 @@ pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: boo
         "update": capability(&DASHBOARD_EXPERIMENT_UPDATE),
         "start": capability(&DASHBOARD_EXPERIMENT_START),
         "enabled": settings.enabled,
-        "max_running": settings.max_running,
+        "max_running": orbit_core::application::experiment::EXPERIMENTS_MAX_RUNNING,
         "config_keys": settings.config_keys,
         "metrics": EXPERIMENT_METRICS,
         "step_local_metrics": STEP_LOCAL_METRICS,
@@ -198,7 +198,7 @@ fn refuse_unauthorized(
 }
 
 /// Run one core write and answer its view. A workspace policy refusal
-/// (`experiments.enabled` false, `experiments.max_running` reached) is a 409
+/// (`experiments.enabled` false, three experiments already running) is a 409
 /// carrying core's message; every other refusal maps as elsewhere, keeping
 /// core's text.
 async fn experiment_write<F>(runtime: Arc<OrbitRuntime>, label: &'static str, write: F) -> Response

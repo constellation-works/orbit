@@ -2535,8 +2535,8 @@ and is listed `owner-only`.
 When the host has a shutdown or reboot pending (for example
 `unattended-upgrades` running `shutdown -r 04:00`), Orbit holds new
 unattended work only while that schedule is within
-`machine.host_shutdown_hold_minutes` (default 180; see
-[CONFIG.md](../CONFIG.md#machine--who-this-machine-is)). A reboot set
+a fixed 180 minutes (see
+[CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)). A reboot set
 further ahead is still reported, and routines, auto-tasks, and drain waves
 admit as usual, so the host is not idle for the whole lead time. Inside the
 horizon, routines and auto-tasks do not fire, drain waves admit no leaves, a
@@ -2547,7 +2547,7 @@ signalled.
 ```bash
 orbit doctor                 # warning while the schedule is inside the horizon; ok, naming the time, when it is further away
 orbit run readiness          # inside: "Admissions held: host reboot scheduled for …"
-                             # beyond: "Host reboot scheduled for …. Admissions continue until machine.host_shutdown_hold_minutes …"
+                             # beyond: "Host reboot scheduled for …. Admissions continue until 180 minutes …"
 cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 ```
 
@@ -2676,8 +2676,8 @@ its window was open: the `Requests held:` line, from `admission_refusal` under
 `settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
 (a claimed leaf was released because the owner's store stayed locked; requests resume by
 themselves at the time it names),
-`host_shutdown_scheduled` (a shutdown or reboot inside
-`machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
+`host_shutdown_scheduled` (a shutdown or reboot inside the 180-minute
+hold), or the owner probe's refusal.
 
 The dashboard run detail shows the same refusal in its **Requests held** panel beside
 crew and waiting information. It includes the breaker failure classes, the time until

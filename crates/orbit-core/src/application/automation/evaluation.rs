@@ -224,10 +224,6 @@ impl DeliveryHost for Host<'_> {
         }
     }
 
-    fn stall_window_minutes(&self) -> u32 {
-        self.runtime.automation_stall_window_minutes()
-    }
-
     fn replay_history(
         &self,
         branch: &str,

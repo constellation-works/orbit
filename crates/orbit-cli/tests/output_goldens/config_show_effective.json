@@ -7,63 +7,7 @@
     "workspace_exists": true
   },
   "provenance": {
-    "attention.age_bump_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.ci_cache_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.cursor_ttl_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.fanout_budget_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.per_workspace_item_cap": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.run_stuck_after_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.run_window_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.source_timeout_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "automation.stall_window_minutes": {
+    "assistance": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -77,16 +21,23 @@
       "path": null,
       "shadowed_by": []
     },
-    "ci_failure.operator_suppression_hours": {
+    "commit.body_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.orchestrated_by_trailer": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
-    "commit.body_template": {
+    "commit.regression_trailers": {
       "scope": "built-in",
-      "state": "unset",
+      "state": "default",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
@@ -148,13 +99,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "execution.agent_stall_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "execution.codex.approval_policy": {
       "scope": "built-in",
       "state": "unset",
@@ -182,13 +126,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "execution.proc_spawn_max_timeout_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "experiments.config_keys": {
       "scope": "built-in",
       "state": "default",
@@ -197,27 +134,6 @@
       "shadowed_by": []
     },
     "experiments.enabled": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "experiments.max_running": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "experiments.min_delivered_rate": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "jobs.failure_streak_warn": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -413,45 +329,10 @@
       "path": null,
       "shadowed_by": []
     },
-    "machine.application_consent_max_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "machine.auto_concurrency.admit_cpu_percent": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.admit_memory_percent": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.head_max_wait_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.head_stuck_passes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.horizon_cap_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -466,20 +347,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.profile_window": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.host_shutdown_hold_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -574,6 +441,160 @@
       "path": null,
       "shadowed_by": []
     },
+    "notice.agent_posting": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.agent_posts_per_task_per_day": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_body_chars": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_delivery": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_max_items": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.brief_read_timeout_ms": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.default_expiry_hours.incident": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.default_expiry_hours.info": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.default_expiry_hours.maintenance": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_body_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_evidence": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_expiry_hours.agent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_expiry_hours.operator": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_expiry_hours.orchestrator.incident": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_expiry_hours.orchestrator.info": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_expiry_hours.orchestrator.maintenance": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_open_global_per_owner": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_open_per_agent_task": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_open_per_workspace": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.max_title_chars": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.orchestrator_posts_per_hour": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "notice.retention_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.agent_sections": {
       "scope": "built-in",
       "state": "default",
@@ -588,7 +609,28 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.close_on_terminal": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.delivery_authors": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.draft": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.freshness_section": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -609,6 +651,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.orchestration_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.required_sections": {
       "scope": "built-in",
       "state": "default",
@@ -617,6 +666,20 @@
       "shadowed_by": []
     },
     "pr.reviewers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.screenshot_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.signature": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -665,20 +728,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "resident.evolution.decline_suppress_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.window_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "retention.audit_days": {
       "scope": "built-in",
       "state": "default",
@@ -686,24 +735,10 @@
       "path": null,
       "shadowed_by": []
     },
-    "retention.journal_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "retention.runs_days": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "retention.store_warn_bytes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -763,34 +798,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "runtime.log_max_file_mb": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "runtime.log_max_total_mb": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "runtime.log_retention_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "security_alert_sweep.min_severity": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "seeding.auto_tasks": {
       "scope": "built-in",
       "state": "default",
@@ -812,7 +819,21 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.admission_affinity": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.auto_effort.bands": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.auto_effort.explore_share": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -946,6 +967,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.provider_limit_max_used_pct": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.provider_limit_overrides": {
       "scope": "built-in",
       "state": "default",
@@ -1030,6 +1058,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.resource_throttle.cpu_light_leaves": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.resource_throttle.cpu_resume_percent": {
       "scope": "built-in",
       "state": "default",
@@ -1062,6 +1097,20 @@
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.io_full_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.io_full_resume_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
@@ -1128,10 +1177,31 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.usage_pressure_cap": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.usage_pressure_strength": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.validation_env.build_output_env": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.cargo_incremental": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -1142,17 +1212,24 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.xhard_complexity_crews": {
+    "workflow.validation_env.path_mode": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.validation_env.shell_probe": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
-    "worktree.parked_reclaim_after_hours": {
+    "workflow.xhard_complexity_crews": {
       "scope": "built-in",
       "state": "default",
-      "tier": "advanced",
+      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },

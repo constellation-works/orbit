@@ -122,7 +122,7 @@ It must not fall back to a local workspace, another host with a matching `ws_*`,
 
 ### 6.1 The named fan-out read
 
-One tool is a named exception to "a workspace-scoped call needs a host-qualified selector": `orbit.attention` [ORB-21171]. Called without one (no `workspace`, or registered names and `ws_*` ids rather than a copied selector), the mux does not answer `unknown_selector`. It sends one **candidate read** to every in-scope destination in parallel — the implicit local one plus every host in the host file, narrowed by the call's `host` — under one outer deadline (`attention.fanout_budget_seconds`), and merges the answers itself:
+One tool is a named exception to "a workspace-scoped call needs a host-qualified selector": `orbit.attention` [ORB-21171]. Called without one (no `workspace`, or registered names and `ws_*` ids rather than a copied selector), the mux does not answer `unknown_selector`. It sends one **candidate read** to every in-scope destination in parallel — the implicit local one plus every host in the host file, narrowed by the call's `host` — under one fixed 20-second outer deadline, and merges the answers itself:
 
 - The hop carries `all: true`, or the workspaces that destination itself lists for the named ones, the item filters and `candidate_read: true`. It never carries `since` or `limit`; the mux sets `candidate_read` itself and refuses a caller-supplied one (`candidate_read_not_permitted`). A destination honours it only on a session whose `clientInfo.name` is `orbit-federated-mux`.
 - Every merged item names its host, and the mux attaches the `selector` the destination lists for its workspace. Ordering, the delta cursor and the public limit are applied once, by the mux, after the merge.

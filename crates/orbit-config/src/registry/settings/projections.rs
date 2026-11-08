@@ -6,28 +6,11 @@
 use std::collections::BTreeMap;
 
 use super::ConfigSnapshot;
-use crate::attention::AttentionSettings;
 use crate::crew_task_types::TaskTypeDefinition;
 use crate::provider_limit::{
     CrewSelection, ProviderLimitBudget, ProviderLimitExplicitCrews, ProviderLimitPolicy,
     ProviderLimitTarget, UsagePressurePolicy, stored_provider_limit_override,
 };
-
-impl AttentionSettings {
-    /// Read the canonical admitted registry values.
-    pub fn from_snapshot(snapshot: &ConfigSnapshot) -> Self {
-        Self {
-            cursor_ttl_hours: snapshot.attention_cursor_ttl_hours,
-            run_window_hours: snapshot.attention_run_window_hours,
-            run_stuck_after_minutes: snapshot.attention_run_stuck_after_minutes,
-            ci_cache_seconds: snapshot.attention_ci_cache_seconds,
-            source_timeout_seconds: snapshot.attention_source_timeout_seconds,
-            fanout_budget_seconds: snapshot.attention_fanout_budget_seconds,
-            per_workspace_item_cap: snapshot.attention_per_workspace_item_cap,
-            age_bump_hours: snapshot.attention_age_bump_hours.clone(),
-        }
-    }
-}
 
 impl ConfigSnapshot {
     /// The admitted `workflow.task_types`, in configured order.

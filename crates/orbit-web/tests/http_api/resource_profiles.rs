@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::support::{Fixture, isolated, json_ok};
 
 const GIB: i64 = 1024 * 1024 * 1024;
+const WINDOW: u32 = orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW;
 
 #[test]
 fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries() {
@@ -16,10 +17,6 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
         "resource_profiles::resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries",
         || {
             let fixture = Fixture::new();
-            set_global_config(
-                &fixture,
-                &[("machine.auto_concurrency.profile_window", "1500")],
-            );
             let runtime = admitting_runtime(&fixture);
             let ws = runtime.workspace_id().unwrap();
             let admitted = Utc::now() - chrono::Duration::days(1);
@@ -53,7 +50,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
 
             let server = fixture.server(false);
             let default = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
-            assert_eq!(default["profiles"][0]["delivery_count"], json!(1500));
+            assert_eq!(default["profiles"][0]["delivery_count"], json!(WINDOW));
 
             let all =
                 json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture&last=all"));
@@ -74,7 +71,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
                 "a union reports each crew model's share of its window and own profile"
             );
             assert_eq!(all["last"], json!("all"));
-            assert_eq!(all["profile_window"], json!(1500));
+            assert_eq!(all["profile_window"], json!(WINDOW));
             assert_eq!(
                 all["delivery_limit"],
                 json!(1000),
@@ -82,7 +79,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             );
             assert_eq!(all["max_last"], json!(1000));
             assert_eq!(default["last"], Value::Null);
-            assert_eq!(default["delivery_limit"], json!(1500));
+            assert_eq!(default["delivery_limit"], json!(WINDOW));
 
             for count in [200, 1000] {
                 let body = json_ok(server.get(&format!(
@@ -101,7 +98,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             let after = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
             assert_eq!(
                 after["profiles"], default["profiles"],
-                "history selection must leave admission's larger window intact"
+                "history selection must leave admission's window intact"
             );
         },
     );
@@ -200,9 +197,7 @@ fn resource_profiles_serve_admissions_profiles_for_the_selected_workspace_with_h
                 &fixture,
                 &[
                     ("machine.auto_concurrency.admit_cpu_percent", "80"),
-                    ("machine.auto_concurrency.admit_memory_percent", "60"),
                     ("machine.auto_concurrency.min_profile_deliveries", "2"),
-                    ("machine.auto_concurrency.profile_window", "5"),
                 ],
             );
             let runtime = admitting_runtime(&fixture);
@@ -269,9 +264,12 @@ fn resource_profiles_serve_admissions_profiles_for_the_selected_workspace_with_h
 
             assert_eq!(body["workspace_id"], json!(ws));
             assert_eq!(body["admit_cpu_percent"], json!(80));
-            assert_eq!(body["admit_memory_percent"], json!(60));
+            assert_eq!(
+                body["admit_memory_percent"],
+                json!(orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT)
+            );
             assert_eq!(body["min_profile_deliveries"], json!(2));
-            assert_eq!(body["profile_window"], json!(5));
+            assert_eq!(body["profile_window"], json!(WINDOW));
             let host = &body["host"];
             assert!(host["cpu_count"].as_u64().unwrap() > 0, "{host}");
             assert!(host["memory_total_bytes"].as_u64().unwrap() > 0, "{host}");

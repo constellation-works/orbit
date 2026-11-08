@@ -64,7 +64,7 @@ pub use admissions_stop::{
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
 pub(crate) use delivery::CodebaseDeliveryScan;
 pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
-pub use failure_streak::JobFailureStreak;
+pub use failure_streak::{JOB_FAILURE_STREAK_WARN, JobFailureStreak};
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::running_run_owner_is_stale;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};

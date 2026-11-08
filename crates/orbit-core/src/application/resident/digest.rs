@@ -20,7 +20,7 @@ impl OrbitRuntime {
                 "top must be between 1 and 100".into(),
             ));
         }
-        let default_window = format!("{}d", self.evolution_digest_window_days()?);
+        let default_window = format!("{}d", crate::application::evolution::EVOLUTION_WINDOW_DAYS);
         let since = since.unwrap_or(&default_window);
         let now = Utc::now();
         let start = super::metrics::parse_window_start(Some(since), now)?;

@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
     Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
@@ -205,28 +204,8 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
     logins
 }
 
-/// Default `execution.proc_spawn_max_timeout_minutes`: long enough for a
-/// cold workspace build and test gate, still bounded below a typical activity.
-pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
-
-/// Default `execution.agent_stall_minutes`: long enough that a provider
-/// thinking quietly is not cut off, short enough that a wedged one does not
-/// hold a deploy for hours. Zero disables the check.
-pub(super) const DEFAULT_AGENT_STALL_MINUTES: u32 = 30;
-
 /// Default `retention.audit_days` and `retention.runs_days`.
 pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
-
-/// Default `retention.journal_days`. Recovery never reads an applied journal
-/// row, so the window only keeps recent commit decisions for diagnosis; at
-/// about 600 rows of about 80 KB a day, 60 days would let the table pass
-/// 2.5 GiB before anything went.
-pub(super) const DEFAULT_JOURNAL_RETENTION_DAYS: u32 = 14;
-
-/// Default `retention.store_warn_bytes`: 1 GiB. A host store past this with
-/// store GC disabled is worth a warning; a normal fixture store is not.
-/// Zero is allowed and warns for any non-empty store file.
-pub(super) const DEFAULT_STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(super) fn resolve_retention_days(
     raw: Option<u32>,
@@ -252,16 +231,6 @@ pub(super) fn resolve_retention_days(
         }
         _ => resolve_bounded_range(raw, default, key),
     }
-}
-
-/// Admit `execution.agent_stall_minutes`. Zero disables the stall check and
-/// leaves only the wall-clock deadline. A day is the ceiling.
-pub(super) fn resolve_agent_stall_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        DEFAULT_AGENT_STALL_MINUTES,
-        "execution.agent_stall_minutes",
-    )
 }
 
 /// Default `machine.worker_memory_high`: throttle one run well before it can
@@ -298,24 +267,11 @@ pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitErr
     resolve_bounded_range(raw, DEFAULT_WORKER_TASKS_MAX, "machine.worker_tasks_max")
 }
 
-/// Default `machine.host_shutdown_hold_minutes`: long enough for work admitted
-/// now to finish, short enough that a reboot scheduled for tomorrow does not
-/// idle the host all day.
-pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
-
 /// Admit `machine.labels`: opaque capability labels, normalized the way a
 /// task's `requires_labels` are, so the two compare exactly.
 pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     orbit_types::task::normalize_host_labels(raw.unwrap_or_default(), "machine.labels")
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-}
-
-pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    resolve_bounded_range(
-        raw,
-        DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES,
-        "machine.host_shutdown_hold_minutes",
-    )
 }
 
 /// Default `workflow.mid_run_steering.max_rounds`.
@@ -502,10 +458,6 @@ pub(super) fn resolve_default_crew(
     )))
 }
 
-pub(super) fn default_log_rotation() -> LogRotationConfig {
-    LogRotationConfig::default()
-}
-
 pub(super) fn default_pass_list() -> Vec<String> {
     #[allow(unused_mut)]
     let mut vars = vec!["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER"];
@@ -536,11 +488,6 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
 pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
     resolve_bounded_range(raw, default, key)
 }
-
-/// Default `machine.application_consent_max_days`: the longest lifetime of a
-/// constrained application consent, so a stolen credential has a bounded
-/// window and the operator re-reviews the profile at least monthly.
-pub(super) const DEFAULT_APPLICATION_CONSENT_MAX_DAYS: u32 = 30;
 
 /// A bounded whole-number setting: `default` when unset, else a value within
 /// the key's declared [`ConfigAllowedValues::Integer`] bounds, so what
@@ -812,8 +759,4 @@ fn resolve_optional_non_empty_raw(
         }
         other => Ok(other),
     }
-}
-
-pub(super) fn resolve_experiments_min_delivered_rate(raw: Option<f64>) -> Result<f64, OrbitError> {
-    resolve_bounded_number(raw, 0.9, "experiments.min_delivered_rate")
 }
