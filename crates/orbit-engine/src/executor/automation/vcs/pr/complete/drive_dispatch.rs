@@ -30,9 +30,7 @@ use super::conflict::{
 use super::drive::{DeliveredMerge, Delivery};
 use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, SubFlow};
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
-use super::reviewed::{
-    ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_condition_sha,
-};
+use super::reviewed::{ensure_pr_head_is_reviewed, merge_condition_sha};
 
 impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     pub(super) fn dispatch_state(
@@ -190,11 +188,6 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 ));
             }
             ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
-            ensure_pr_head_matches_selection(
-                &status,
-                self.pr_number,
-                self.selective_head_sha.as_deref(),
-            )?;
             self.delivered_merge(&status)
         };
         match reconcile() {

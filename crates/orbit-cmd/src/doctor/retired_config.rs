@@ -1,4 +1,5 @@
-//! Retired, deprecated and unknown `config.toml` settings.
+//! Retired, deprecated and unknown `config.toml` settings, and workspace
+//! script manifests left behind by a retired routine.
 //!
 //! Diagnosis lists each key with the file that still sets it. The repair
 //! writes each deprecated key's replacement into the file that set it, as
@@ -119,6 +120,77 @@ pub(super) fn doctor_check_retired_config_keys(
             CHECK,
             WorkspaceDoctorStatus::Ok,
             "no retired, deprecated or unknown config keys".to_string(),
+        )]
+    } else {
+        warnings
+    }
+}
+
+const RETIRED_SCRIPTS_CHECK: &str = "retired-scripts";
+
+/// A script manifest the old setup guidance had operators copy into
+/// `.orbit/resources/scripts/`, for a routine that has since been removed.
+struct RetiredScriptManifest {
+    name: &'static str,
+    /// The workspace-relative entry the shipped template named. A manifest
+    /// is recognised only when it still names it, so an operator's own
+    /// script under the same name is left alone.
+    entry: &'static str,
+    retired_by: &'static str,
+}
+
+const RETIRED_SCRIPT_MANIFESTS: &[RetiredScriptManifest] = &[RetiredScriptManifest {
+    name: "ux_rules_runner",
+    entry: "scripts/ux-rules/step.mjs",
+    retired_by: "the ux-rules routine was removed",
+}];
+
+/// Report each retired script manifest still in the workspace scripts
+/// directory. Every job dispatch loads the whole script catalog, so one
+/// whose entry no longer exists refuses every job in the workspace.
+pub(super) fn doctor_check_retired_scripts(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+    let paths = runtime.paths();
+    let mut warnings = Vec::new();
+    for retired in RETIRED_SCRIPT_MANIFESTS {
+        for extension in ["yaml", "yml"] {
+            let manifest = paths
+                .scripts_dir
+                .join(format!("{}.{extension}", retired.name));
+            let Ok(contents) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            if !contents.contains(retired.entry) {
+                continue;
+            }
+            let consequence = if paths.repo_root.join(retired.entry).is_file() {
+                "nothing runs it any more"
+            } else {
+                "its entry no longer exists, so every job dispatch in this workspace refuses \
+                 while the manifest stays"
+            };
+            warnings.push(actionable_check(
+                RETIRED_SCRIPTS_CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!(
+                    "{} is the manifest of the retired `{}` script ({}; entry `{}`): {consequence}",
+                    manifest.display(),
+                    retired.name,
+                    retired.retired_by,
+                    retired.entry
+                ),
+                format!(
+                    "Delete {}, then run `orbit script revoke {}` to drop its grant.",
+                    manifest.display(),
+                    retired.name
+                ),
+            ));
+        }
+    }
+    if warnings.is_empty() {
+        vec![check(
+            RETIRED_SCRIPTS_CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "no retired script manifests".to_string(),
         )]
     } else {
         warnings

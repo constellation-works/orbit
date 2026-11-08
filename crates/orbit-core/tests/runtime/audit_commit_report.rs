@@ -176,6 +176,7 @@ fn audit_rows(runtime: &OrbitRuntime) -> Vec<orbit_types::telemetry::AuditEvent>
 }
 
 fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf, PathBuf) {
+    crate::scenarios::require_isolated_mutable_fixture("audit_commit_report::test_runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");

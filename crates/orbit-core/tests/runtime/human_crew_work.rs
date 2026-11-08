@@ -39,6 +39,9 @@ impl HumanCrewFixture {
     /// A committed Git repository whose workspace config declares the agent
     /// crew `sol` and the human crew `dk`.
     fn new() -> Self {
+        crate::scenarios::require_isolated_mutable_fixture(
+            "human_crew_work::HumanCrewFixture::new",
+        );
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");

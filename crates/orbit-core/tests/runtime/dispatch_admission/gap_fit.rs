@@ -253,6 +253,7 @@ fn build(
     mode: &str,
     guard: Option<(u32, u32)>,
 ) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::gap_fit::build");
     std::fs::write(
         global.join("config.toml"),
         format!(

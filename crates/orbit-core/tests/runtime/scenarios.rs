@@ -7,6 +7,33 @@ use std::process::Command;
 type Scenario<T> = (&'static str, fn() -> T);
 const ROW: &str = "ORBIT_RUNTIME_SCENARIO_ROW";
 
+/// Markers a re-executed child already carries. `dispatch_admission::isolated`
+/// sets the dispatch marker; [`run`] sets the task-fixture marker and [`ROW`].
+/// A row re-executed with only [`ROW`] is still that child.
+const MUTABLE_FIXTURE_CHILD_MARKERS: &[&str] = &[
+    "ORBIT_TEST_DISPATCH_ADMISSION_CHILD",
+    "ORBIT_TEST_TASK_FIXTURE_CHILD",
+    ROW,
+];
+
+/// Refuse `constructor` outside a re-executed mutable-fixture child.
+///
+/// The panic names the Safe mutable CLI fixtures rule and the helper to call:
+/// `dispatch_admission::isolated` or a `scenario_table!` row.
+pub(super) fn require_isolated_mutable_fixture(constructor: &str) {
+    let in_child = MUTABLE_FIXTURE_CHILD_MARKERS
+        .iter()
+        .any(|marker| std::env::var_os(marker).is_some());
+    if in_child {
+        return;
+    }
+    panic!(
+        "Safe mutable CLI fixtures: a runtime test that mutates Orbit state must run in a \
+         re-executed child. Call `dispatch_admission::isolated` or place the case in a \
+         `scenario_table!` row. `{constructor}` ran outside that child"
+    );
+}
+
 /// Conditional rows award execution credit only after their assertions run.
 pub(super) enum Outcome {
     Passed,

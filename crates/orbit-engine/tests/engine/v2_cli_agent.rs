@@ -41,8 +41,8 @@ use orbit_store::{Store, V2AuditEventFilter};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobKind, JobV2, JobV2Step,
-    JobV2StepBody, LoopBlock, OnDenial, Provider, RetiredFeatureError, TargetStep,
-    ToolAllowlistError, V2AuditEvent, validate_job_retired_sessions,
+    JobV2StepBody, LoopBlock, Provider, RetiredFeatureError, TargetStep, ToolAllowlistError,
+    V2AuditEvent, validate_job_retired_sessions,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -1599,31 +1599,13 @@ fn agent_relay_uses_an_independent_persistent_feed() {
 
 pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "cli smoke".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
-        on_denial: OnDenial::Terminate,
         model: Some(orbit_common::model_defaults::CLAUDE_DEFAULT_STRONG.to_string()),
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: provider.unwrap_or(Provider::Claude),
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "cli smoke".to_string(),
+            provider.unwrap_or(Provider::Claude),
+            30,
+        )
     }
 }
 
@@ -1716,33 +1698,11 @@ fn synthetic_loop_session_job() -> JobV2 {
         reuse_when: None,
         require_result: None,
         body: JobV2StepBody::Target(TargetStep {
-            spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
-                crew_name: None,
-                tool_disallow_list: None,
-                instruction: String::new(),
-                steering_instruction: None,
-                notice_instruction: None,
-                notice_posting_instruction: None,
-                fleet_notices: Default::default(),
-                tools: vec![],
-                on_denial: OnDenial::Terminate,
-                model: None,
-                reasoning_effort: None,
-                max_iterations: 1,
-                backend: None,
-                provider: Provider::Claude,
-                wall_clock_timeout_seconds: 30,
-                require_response_envelope: false,
-                require_completion_envelope: true,
-                proc_allowed_programs: None,
-                proc_disallowed_programs: None,
-                trusted_host_execution: false,
-                crew_env: Vec::new(),
-                crew_account: None,
-                crew_vision_disabled: false,
-                incomplete_continuation: None,
-                response_correction: None,
-            }),
+            spec: ActivityV2Spec::AgentLoop(AgentLoopSpec::for_provider(
+                String::new(),
+                Provider::Claude,
+                30,
+            )),
             activity_name: None,
             input_schema_json: None,
             fs_profile: None,

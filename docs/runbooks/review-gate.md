@@ -4,7 +4,7 @@ summary: Inspect before-PR and before-landing review verdicts, findings, and evi
 tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
-related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
+related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
 last_validated: 2026-10-27
 ---
 
@@ -45,21 +45,11 @@ readiness holds that backlog as `local_route_before_pr` or
 > `before_pr` input and internal handlers is a later separately scoped
 > decision; ORB-20087 consumed this deprecation without waiting for it.
 
-> Selective before-landing review [ORB-20087]: with `review.timing = "off"`,
-> `[review.selective_before_landing]` may `observe` or `enforce` review
-> selection by estimated `diff_lines` risk (strictly above
-> `risk_threshold`) and/or repository-relative `paths` globs over the
-> complete pinned PR diff. It ships `off`; nothing here enables it. To
-> adopt: configure a pre-landing reviewer crew, set `mode = "observe"`,
-> inspect the host-authored `review-selection.json` receipts (selection
-> volume per predicate, unknown/unavailable counts, gaps) and the doctor /
-> `orbit config show` selective line, then separately decide on
-> `mode = "enforce"`. An enforced `required` decision runs the ordinary
-> before-landing reviewer and cannot be skipped by review-skip tags; a
-> `selection_unavailable` or `selection_stale` hold means the diff could
-> not be read or the live head moved after selection — re-evaluate with a
-> fresh delivery run rather than merging around it. Observations and
-> skips are selection evidence only, never a passed review.
+> Selective before-landing review [ORB-20087] was removed [ORB-22808]: no
+> candidate is selected by risk or path, and the
+> `[review.selective_before_landing]` keys load with a deprecation warning and
+> are ignored until 2026-12-08. Delete the table. Review before landing with
+> `review.timing = "before_landing"` or `review.before_landing_hosts`.
 
 ## 1. What the gate does
 

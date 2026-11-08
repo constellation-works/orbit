@@ -116,6 +116,7 @@ fn run_isolated_test(test_name: &str) -> bool {
     let output = command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
+        .env("ORBIT_TEST_TASK_FIXTURE_CHILD", test_name)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path())

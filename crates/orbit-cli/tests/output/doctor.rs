@@ -1763,3 +1763,37 @@ fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
     let fix_rows = rows(&fix);
     expect_status(&fix_rows, "fix-retired-config-keys", "ok");
 }
+/// ORB-22883: a `ux_rules_runner` manifest left from the retired ux-rules
+/// routine names a deleted entry and refuses every job dispatch; doctor
+/// names the manifest and how to remove it before dispatch fails.
+#[test]
+fn doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal() {
+    if in_child("doctor::doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "retired-script"]);
+    let scripts = f.work.join(".orbit/resources/scripts");
+    mkdir(&scripts);
+    let manifest = scripts.join("ux_rules_runner.yaml");
+    put(
+        &manifest,
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: ux_rules_runner\nspec:\n  \
+         description: Measure configured UX rule surfaces.\n  entry: scripts/ux-rules/step.mjs\n  \
+         interpreter: [/opt/node/bin/node]\n",
+    );
+    let check = |f: &WorkCheckout| -> Value {
+        let output = doctor(f, &["--check", "retired-scripts"]);
+        serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"))
+    };
+    let reported = check(&f);
+    assert_eq!(reported["status"], "warning", "{reported}");
+    msg_has(&reported, &manifest.display().to_string());
+    msg_has(&reported, "every job dispatch");
+    fix_has(&reported, &format!("Delete {}", manifest.display()));
+    fix_has(&reported, "orbit script revoke ux_rules_runner");
+    assert!(manifest.is_file(), "diagnosis leaves the manifest in place");
+    fs::remove_file(&manifest).expect("remove manifest");
+    assert_eq!(check(&f)["status"], "ok");
+}

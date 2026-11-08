@@ -320,13 +320,6 @@ pub(crate) fn build_context_from_roots(
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            runtime_config
-                .snapshot
-                .publication_routine_attachments
-                .clone(),
-            runtime_config
-                .snapshot
-                .publication_routine_allow_unscanned_attachments,
             pr_config,
             runtime_config.pr.clone(),
             workflow_base_branch,

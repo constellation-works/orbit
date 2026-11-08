@@ -21,6 +21,11 @@ fn triage(fx: &Fixture, input: Value) -> Result<Value, String> {
 
 #[test]
 fn a_proposal_opens_a_decision_card_and_a_human_answer_approves_the_task() {
+    if !super::dispatch_admission::isolated(
+        "pilot_warning_cards::a_proposal_opens_a_decision_card_and_a_human_answer_approves_the_task",
+    ) {
+        return;
+    }
     let fx = fixture();
     let task = held_pilot_warning(&fx, None);
     // An approval option is refused for a task the backlog would not admit, so
@@ -107,6 +112,11 @@ fn a_proposal_opens_a_decision_card_and_a_human_answer_approves_the_task() {
 
 #[test]
 fn a_report_opens_one_done_card_with_the_exact_human_action() {
+    if !super::dispatch_admission::isolated(
+        "pilot_warning_cards::a_report_opens_one_done_card_with_the_exact_human_action",
+    ) {
+        return;
+    }
     let fx = fixture();
     let task = held_pilot_warning(&fx, None);
     triage(
@@ -139,6 +149,11 @@ fn a_report_opens_one_done_card_with_the_exact_human_action() {
 
 #[test]
 fn the_retired_block_subject_is_refused_by_the_triage_tool() {
+    if !super::dispatch_admission::isolated(
+        "pilot_warning_cards::the_retired_block_subject_is_refused_by_the_triage_tool",
+    ) {
+        return;
+    }
     let fx = fixture();
     let task = fx.task(&[]);
     fx.escalate(&task);

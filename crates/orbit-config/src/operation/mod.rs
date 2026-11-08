@@ -52,7 +52,6 @@ mod layer;
 mod legacy;
 mod minutes;
 mod policy;
-mod selective;
 mod timing;
 
 pub use crew::{ReviewCrewPool, ReviewCrewSetting};
@@ -62,13 +61,9 @@ pub use keys::{
     BEFORE_PR_VALUE_DEPRECATION_NOTE, LEGACY_REVIEW_BEFORE_LANDING_KEY,
     LEGACY_REVIEW_BEFORE_PR_KEY, LEGACY_REVIEW_CREW_KEY, PRE_LANDING_REVIEW_CREW_KEY,
     REVIEW_CREW_KEY, REVIEW_HOST_EVIDENCE_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
-    SELECTIVE_MODE_KEY, SELECTIVE_PATHS_KEY, SELECTIVE_RISK_THRESHOLD_KEY,
-    SELECTIVE_UNKNOWN_RISK_KEY,
 };
 pub use layer::{OperationField, OperationLayer, OperationLayerSource};
 pub(crate) use legacy::legacy_policy_before_pr;
 pub(crate) use minutes::{MAX_REVIEW_MINUTES, review_minutes, translate_legacy_review_minutes};
-pub use policy::{OPERATION_POLICY_VERSION, OperationPolicy, SelectiveResolved};
-pub use selective::{SelectiveLayer, selective_mode_parse, selective_unknown_risk_parse};
-pub(crate) use selective::{selective_paths, selective_threshold_value};
+pub use policy::{OPERATION_POLICY_VERSION, OperationPolicy};
 pub use timing::ReviewTimingSetting;

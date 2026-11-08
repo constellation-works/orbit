@@ -69,6 +69,7 @@ pub(crate) use schedule::schedule_hold_in;
 mod terminal_dates;
 pub(in crate::application) use terminal_dates::latest_status_entry_at;
 pub use terminal_dates::{DatedTerminalTask, TerminalTaskDates};
+mod resident_port;
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod ci_sweep_filing;
@@ -108,10 +109,10 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
-pub use decision::DecisionRequestListing;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
 pub(crate) use decision::decision_request_json;
+pub use decision::{DecisionListProfile, DecisionRequestListing};
 #[cfg(feature = "test-support")]
 pub use decision_channel::dkim::test_support::with_decision_dkim_resolver;
 pub use decision_channel::dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
@@ -179,6 +180,7 @@ pub use pull_request_links::PullRequestLinks;
 pub(crate) use record_json::task_listing_field_json;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub(crate) use records::TaskRecords;
+pub(in crate::application) use resident_port::TaskResidentPort;
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;

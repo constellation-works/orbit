@@ -1,11 +1,13 @@
 use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
-use crate::application::task::{AgentDecisionRaise, DecisionSubmitCaller, DecisionSubmitParams};
+use crate::application::task::{
+    AgentDecisionRaise, DecisionListProfile, DecisionSubmitCaller, DecisionSubmitParams,
+};
 use crate::runtime::authorization::resolved_caller_capabilities;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::{DecisionRefusalCode, OrbitError};
-use orbit_types::task::{AgentDecisionOptionInput, DecisionGate};
+use orbit_types::task::AgentDecisionOptionInput;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 
@@ -20,33 +22,17 @@ pub(super) fn dispatch(
     let input = verb.spec().parse_input(input)?;
     match verb {
         DecisionVerb::List => {
-            let gate = input
-                .optional_string("gate")?
-                .map(|name| {
-                    DecisionGate::from_name(&name).ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
-                        ))
-                    })
-                })
-                .transpose()?;
+            let gate = input.optional_string("gate")?;
             let task_id = input.optional_string("task_id")?;
             let topic = input.optional_string("topic")?;
             let include_closed = input.optional_bool("include_closed")?.unwrap_or(false);
-            let mut listing = runtime.list_decision_requests_with_warnings(gate, task_id.as_deref(), include_closed)?;
-            if let Some(topic) = topic {
-                listing
-                    .requests
-                    .retain(|request| request.topic.as_deref() == Some(topic.as_str()));
-            }
-            let mut value = json!({
-                "requests": listing.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "count": listing.requests.len(),
-            });
-            if !listing.warnings.is_empty() {
-                value["warnings"] = json!(listing.warnings);
-            }
-            Ok(value)
+            runtime.list_decision_requests_projected(
+                gate.as_deref(),
+                task_id.as_deref(),
+                topic.as_deref(),
+                include_closed,
+                DecisionListProfile::Tool,
+            )
         }
         DecisionVerb::Show => {
             let id = input.required_string("id")?;

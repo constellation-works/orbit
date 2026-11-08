@@ -4,21 +4,6 @@
 macro_rules! assemble_config_settings {
     () => {
         with_tail_keys! {
-    publication_routine_attachments: String => String {
-        key: "publication.routine_attachments", value_type: "string",
-        description: "Scheduled task publication attachment policy.",
-        section: ConfigSection::Housekeeping, order: 22,
-        allowed: one_of(&["omit", "fail", "include"]),
-        resolve: |raw: Option<String>| resolve_choice(raw, "omit", "publication.routine_attachments"),
-    },
-    publication_routine_allow_unscanned_attachments: bool => bool {
-        key: "publication.routine_allow_unscanned_attachments", value_type: "boolean",
-        description: "Allow scheduled included attachments without a sensitivity scanner.",
-        section: ConfigSection::Housekeeping, order: 23,
-        tier: ConfigKeyTier::Advanced,
-        detail: "Path and size checks still apply.",
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     codex_approval_policy: Option<String> => String {
         key: "execution.codex.approval_policy", value_type: "string",
         description: "Codex approval policy.",
@@ -248,42 +233,6 @@ macro_rules! assemble_config_settings {
         section: ConfigSection::Review, order: 20,
         allowed: integers(1, operation::MAX_REVIEW_MINUTES as u64, "minutes"),
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
-    },
-    review_selective_before_landing_mode: String => String {
-        key: "review.selective_before_landing.mode", value_type: "string",
-        description: "Selective before-landing review.",
-        section: ConfigSection::Review, order: 22,
-        tier: ConfigKeyTier::Advanced,
-        allowed: one_of(orbit_types::workflow::SelectiveBeforeLandingMode::CHOICES),
-        detail: "observe records which candidates would review; enforce reviews the selected candidates before landing.",
-        resolve: |raw: Option<String>| operation::selective_mode_parse(raw.as_deref().unwrap_or("off")).map(|mode| mode.as_str().to_string()),
-    },
-    review_selective_before_landing_risk_threshold: Option<String> => f64 {
-        key: "review.selective_before_landing.risk_threshold", value_type: "number",
-        description: "Select a candidate whose estimated regression risk is above this probability.",
-        section: ConfigSection::Review, order: 23,
-        tier: ConfigKeyTier::Advanced,
-        allowed: numbers(0.0, 1.0),
-        detail: "Strictly above; unset disables the risk predicate.",
-        resolve: |raw: Option<f64>| operation::selective_threshold_value(raw),
-    },
-    review_selective_before_landing_paths: Vec<String> => Vec<String> {
-        key: "review.selective_before_landing.paths", value_type: "array<string>",
-        description: "Path globs that select a candidate for before-landing review.",
-        section: ConfigSection::Review, order: 24,
-        tier: ConfigKeyTier::Advanced,
-        allowed: format("path globs"),
-        detail: "Repository-relative; a stated list replaces the lower layer's.",
-        resolve: |raw: Option<Vec<String>>| operation::selective_paths(raw).map(Option::unwrap_or_default),
-    },
-    review_selective_before_landing_unknown_risk: String => String {
-        key: "review.selective_before_landing.unknown_risk", value_type: "string",
-        description: "What the risk predicate does without a usable estimate.",
-        section: ConfigSection::Review, order: 25,
-        tier: ConfigKeyTier::Advanced,
-        allowed: one_of(orbit_types::workflow::SelectiveUnknownRisk::CHOICES),
-        detail: "Never applies to an unreadable path diff.",
-        resolve: |raw: Option<String>| operation::selective_unknown_risk_parse(raw.as_deref().unwrap_or("review")).map(|value| value.as_str().to_string()),
     },
     retention_audit_days: u32 => u32 {
         key: "retention.audit_days", value_type: "integer",

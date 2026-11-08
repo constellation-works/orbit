@@ -242,9 +242,10 @@ pub(super) fn update(
         .stores()
         .tasks()
         .with_task_write_lock(&id, &mut || {
+            // The same stable refusal codes as `orbit task repilot`.
             runtime
                 .check_explicit_task_pilot(&id)
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                .map_err(OrbitError::from)?;
             let caller = caller
                 .take()
                 .ok_or_else(|| OrbitError::Execution("repilot update repeated its write".into()))?;

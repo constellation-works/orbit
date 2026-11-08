@@ -12,9 +12,10 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_SCRIPT_GRANT};
 use orbit_core::OrbitError;
+use orbit_core::application::task::DecisionListProfile;
 use orbit_types::task::DecisionGate;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::routines::{authorization_denied, authorized_caller};
 use super::tasks::human_comment_author;
@@ -54,39 +55,17 @@ pub(super) async fn list_decisions(
     Ws(runtime): Ws,
     Query(query): Query<DecisionListQuery>,
 ) -> Response {
-    let gate = match query.gate.as_deref() {
-        None => None,
-        Some(name) => match DecisionGate::from_name(name) {
-            Some(gate) => Some(gate),
-            None => {
-                return bad_request(format!(
-                    "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
-                ));
-            }
-        },
-    };
+    let gate = query.gate;
     let task_id = query.task_id;
     let include_closed = query.include_closed;
     match blocking("decision list", move || {
-        let listing = runtime.list_decision_requests_with_warnings(
-            gate,
+        runtime.list_decision_requests_projected(
+            gate.as_deref(),
             task_id.as_deref(),
+            None,
             include_closed,
-        )?;
-        let items = listing
-            .requests
-            .iter()
-            .map(|request| {
-                serde_json::to_value(request).map_err(|error| {
-                    OrbitError::Execution(format!("serialize decision request: {error}"))
-                })
-            })
-            .collect::<Result<Vec<Value>, _>>()?;
-        let mut value = json!({ "items": items, "total": items.len() });
-        if !listing.warnings.is_empty() {
-            value["warnings"] = json!(listing.warnings);
-        }
-        Ok(value)
+            DecisionListProfile::Dashboard,
+        )
     })
     .await
     {

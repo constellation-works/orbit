@@ -77,6 +77,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(auth_ok: bool) -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("attention_provider::Fixture::new");
         let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
@@ -453,6 +454,9 @@ fn ci_red_folds_into_existing_repair_task() {
 }
 
 fn friction_untriaged_lists_only_open() {
+    crate::scenarios::require_isolated_mutable_fixture(
+        "attention_provider::friction_untriaged_lists_only_open",
+    );
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let orbit = root.path().join("repo/.orbit");

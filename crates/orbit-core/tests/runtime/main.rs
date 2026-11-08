@@ -85,6 +85,7 @@ mod fixture_template;
 mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
+mod friction_stats_observation;
 mod git_protection;
 mod granted_mutation_proposals;
 mod granted_tools;
@@ -168,7 +169,6 @@ mod resident_cycle;
 mod resident_digest;
 mod resident_metrics;
 mod resource_profiles;
-mod risk_history;
 
 mod run_cli_invocations;
 mod run_history;

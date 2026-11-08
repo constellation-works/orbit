@@ -197,32 +197,6 @@ impl ConfigSnapshot {
             .unwrap_or(crate::operation::ReviewTimingSetting::Off)
     }
 
-    /// The admitted selective before-landing policy, or `None` while its
-    /// mode is `off`. Provenance and timing-conflict validation live in
-    /// the layered [`crate::OperationPolicy`] an admission captures; this
-    /// snapshot view carries the same predicates without layer labels.
-    pub fn selective_before_landing_policy(
-        &self,
-    ) -> Option<orbit_types::workflow::SelectiveBeforeLandingPolicy> {
-        let mode =
-            crate::operation::selective_mode_parse(&self.review_selective_before_landing_mode)
-                .unwrap_or(orbit_types::workflow::SelectiveBeforeLandingMode::Off);
-        if !mode.is_active() {
-            return None;
-        }
-        let unknown_risk = crate::operation::selective_unknown_risk_parse(
-            &self.review_selective_before_landing_unknown_risk,
-        )
-        .unwrap_or_default();
-        Some(orbit_types::workflow::SelectiveBeforeLandingPolicy::new(
-            mode,
-            self.review_selective_before_landing_risk_threshold.clone(),
-            self.review_selective_before_landing_paths.clone(),
-            unknown_risk,
-            std::collections::BTreeMap::new(),
-        ))
-    }
-
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
     pub fn purpose_crews(&self) -> crate::PurposeCrewPools {
         crate::PurposeCrewPools::new([

@@ -1,27 +1,31 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-08
 last_validated: 2026-11-05
-status: Draft
-stage: parked
-next: "Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume"
+status: Deprecated
 feature: web-terminal
 doc_role: scope
 type: design
 summary: "Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read."
 tags: [web-terminal, orbit-web, remote-access, security]
-paths: ["crates/orbit-web/**", "crates/orbit-exec/src/credential_paths.rs", "crates/orbit-common/src/governance/authorization/catalog/operations.rs"]
 related_features: [remote-access, user-interface, policy-sandbox]
 ---
 
 # Scope: a terminal in the dashboard
 
+Retired in [ORB-22808] (2026-11-08): Daniel removed dashboard browser sessions while simplifying
+Orbit's configuration. Phase 1 (the browser-session credential, `orbit web open` and connect's
+ticket fetch) is gone and no terminal was built; `machine.web_terminal.enabled` and
+`machine.web_session.ttl` load with a deprecation warning and are ignored until 2026-12-08. The
+sandbox still masks `~/.orbit/run`, where a host that ran sessions may hold an old key. The text
+below is the record of the design as it stood.
+
 Status: parked; phase 1 landed ([ORB-18488], done); phases 2–5 archived as deferred ([ORB-18489], [ORB-18491], [ORB-18492], [ORB-18493]) under the 2026-10-29 disposition, preserved for a future scheduled effort.
 Bearing: the dashboard already reaches every registered host. `/api/on/<host>/…` forwards a
 request to that host's own `orbit web serve` over an SSH local forward the serving dashboard
 opens on demand, and unsafe methods need the serving dashboard's operator session through
-the governed `host.forward` operation ([remote-access](../remote-access/1_overview.md),
+the governed `host.forward` operation ([remote-access](../../remote-access/1_overview.md),
 [ORB-14679], [ORB-14680]). Each dashboard is loopback-only, guarded against browser CSRF
 and DNS rebinding by `api/origin.rs`, and serves a CSP with `script-src 'self'`.
 `orbit.command.exec` runs one argv on a host for an operator holding the workspace claim
@@ -35,7 +39,7 @@ path again. The dashboard already knows the host, the worktree and the run, and 
 an authenticated route to the host.
 
 `orbit.command.exec` cannot fill the gap, and should not be stretched to. It is deliberately
-the opposite of a terminal ([`command_exec.rs`](../../../crates/orbit-runtime/src/command_exec.rs)):
+the opposite of a terminal ([`command_exec.rs`](../../../../crates/orbit-runtime/src/command_exec.rs)):
 an argv with no shell, no PTY and no stdin; output buffered and capped at 4 MB per stream and
 discarded on timeout; a 10-minute ceiling; a workspace claim; and a working directory confined
 to a workspace checkout. `sudo` on dk-server-2 needs an interactive password, so even a plain
@@ -46,7 +50,7 @@ The fact that shapes the fix is who can reach a loopback dashboard. Its operator
 is a process-wide flag (`orbit web serve --operator`, `DashboardState::operator_session`), not
 a per-client credential, and `api/origin.rs` says plainly that its checks are on headers curl
 can set, "NOT an access-control boundary". Agent runs keep the host network namespace on both
-platforms ([policy-sandbox](../policy-sandbox/2_design.md): bubblewrap retains it, the macOS
+platforms ([policy-sandbox](../../policy-sandbox/2_design.md): bubblewrap retains it, the macOS
 profile allows network), while the sandbox masks `~/.ssh` and other credentials so a confined
 worker cannot SSH anywhere. A shell endpoint guarded only by the operator flag would therefore
 hand a confined worker an unconfined shell as the operator on every registered host: a sandbox
@@ -72,7 +76,7 @@ check, so it gets one, scoped to the terminal routes:
    CSPRNG and writes it to `$ORBIT_HOME/run/web-session.secret` (mode 0600 in a 0700 directory,
    created atomically, replaced on every start).
 2. That path joins the shared credential mask in
-   [`credential_paths.rs`](../../../crates/orbit-exec/src/credential_paths.rs), so bubblewrap,
+   [`credential_paths.rs`](../../../../crates/orbit-exec/src/credential_paths.rs), so bubblewrap,
    the macOS profile and the plugin broker all hide it from confined children. A plan that
    cannot mask it is refused, as for every other entry.
 3. `orbit web serve` (and `orbit web connect`) opens the browser at a one-time URL carrying a
@@ -258,5 +262,6 @@ defaults, not current runtime keys.
 - [ORB-18491] — the dashboard terminal pane
 - [ORB-18492] — the terminal through the host forward
 - [ORB-18493] — Open terminal in a run worktree or checkout
+- [ORB-22808] — retired browser sessions and this design
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

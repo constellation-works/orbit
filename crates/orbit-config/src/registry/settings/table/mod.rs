@@ -10,18 +10,18 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value as JsonValue, json};
 
-use super::super::allowed::{PERCENT, each_of, format, integers, integers_from, numbers, one_of};
+use super::super::allowed::{PERCENT, each_of, format, integers, integers_from, one_of};
 use super::super::{
     CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues,
     ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
 };
 use super::resolve::{
     DEFAULT_RETENTION_DAYS, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
-    default_pass_list, normalize_logins, normalize_pass_list, resolve_at, resolve_bounded_range,
-    resolve_branch_template, resolve_build_output_env, resolve_choice,
-    resolve_commit_subject_template, resolve_distributed_completion, resolve_generated_paths,
-    resolve_light_delivery_paths, resolve_machine_id, resolve_machine_labels, resolve_machine_name,
-    resolve_material_fields, resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
+    default_pass_list, normalize_logins, normalize_pass_list, resolve_at, resolve_branch_template,
+    resolve_build_output_env, resolve_choice, resolve_commit_subject_template,
+    resolve_distributed_completion, resolve_generated_paths, resolve_light_delivery_paths,
+    resolve_machine_id, resolve_machine_labels, resolve_machine_name, resolve_material_fields,
+    resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
     resolve_mid_run_steering_max_rounds, resolve_name_list, resolve_non_code_paths,
     resolve_non_empty, resolve_non_reviewable_paths, resolve_optional_choice,
     resolve_optional_non_empty, resolve_percent, resolve_pr_body_template, resolve_reclaim,

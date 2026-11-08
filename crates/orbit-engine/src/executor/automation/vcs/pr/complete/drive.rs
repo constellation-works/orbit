@@ -15,7 +15,7 @@ use super::super::head_lag::HeadLag;
 use super::super::merge::PermittedMerge;
 use super::ci_rerun_hold::CiRerunHold;
 use super::drive_phases::PollDriver;
-use super::reviewed::{reviewed_head_sha, selective_selection_head_sha};
+use super::reviewed::reviewed_head_sha;
 
 /// Default budget for waiting out required checks before giving up.
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
@@ -142,7 +142,6 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     let base_race: Option<String> = None;
 
     let reviewed_head_sha = reviewed_head_sha(input);
-    let selective_head_sha = selective_selection_head_sha(input);
     // [ORB-11982] The candidate this run is authorized to deliver. It moves
     // through authenticated repair publications, or when bounded conflict
     // repair rewrites and lease-pushes the same branch.
@@ -201,7 +200,6 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         base_candidate,
         base_adopted,
         reviewed_head_sha,
-        selective_head_sha,
         watch_only,
         unsettled_polls,
         unreported,

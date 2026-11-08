@@ -9,7 +9,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::ExecutorDef;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
 fn seed_grok_executor(runtime: &OrbitRuntime) {
     let resource: ExecutorResource =
@@ -60,31 +60,13 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
     )
     .expect("build audit writer");
     let spec = AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
         model: Some("grok-4.6".to_string()),
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Grok,
-        wall_clock_timeout_seconds: 120,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Grok,
+            120,
+        )
     };
 
     let outcome = dispatch_v2_activity(V2DispatchInput {

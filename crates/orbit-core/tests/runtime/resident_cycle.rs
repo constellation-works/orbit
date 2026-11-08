@@ -53,6 +53,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("resident_cycle::fixture");
     let env = std::cell::RefCell::new(Some(orbit_common::test_env::unset(TOOL_ENV)));
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");

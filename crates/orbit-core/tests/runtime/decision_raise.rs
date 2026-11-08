@@ -28,6 +28,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("decision_raise::Fixture::new");
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");

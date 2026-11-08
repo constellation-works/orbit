@@ -41,7 +41,6 @@ mod runs;
 mod schedule_edits;
 mod scripts;
 mod search;
-pub(crate) mod session;
 mod tasks;
 mod workspaces;
 

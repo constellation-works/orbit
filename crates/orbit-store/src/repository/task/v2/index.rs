@@ -7,9 +7,10 @@ use super::*;
 use crate::contracts::{
     EnvelopeStampRecord, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
+use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::driver::sqlite::task_registry::TaskIndexProofRow;
 use orbit_common::StorageLayer;
-use orbit_common::fs::io::hold_step;
+use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 
 /// Steps a boundary section's hold report names for index work
 /// ([`hold_step`]). The freshness step is the scan's own time — metadata
@@ -276,6 +277,27 @@ impl TaskV2Store {
         })
     }
 
+    /// Whether this task's bundle writer currently holds its exclusive lock.
+    ///
+    /// The probe opens the sibling `.{file}.lock` of the bundle lock target
+    /// and does not acquire that lock. `false` on any probe error, so a real
+    /// mismatch is never hidden.
+    fn bundle_writer_holds(&self, task_id: &str) -> bool {
+        let Ok(bundle_dir) = self.bundle_store.bundle_path(task_id) else {
+            return false;
+        };
+        let target = bundle_lock_target(&bundle_dir);
+        let Some(file_name) = target.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let lock_path = target.with_file_name(format!(".{file_name}.lock"));
+        let lock_path = match lock_path.parent().map(std::fs::canonicalize) {
+            Some(Ok(parent)) => parent.join(format!(".{file_name}.lock")),
+            _ => lock_path,
+        };
+        matches!(probe_file_lock(&lock_path), Ok(FileLockProbe::Held))
+    }
+
     /// Wait for the writer publishing `task_id`, if there is one.
     ///
     /// Envelope reads take no lock, and every writer shows its envelope before
@@ -331,6 +353,22 @@ impl TaskV2Store {
         for (row, stamp) in rows.iter().zip(stamps) {
             match self.settled_envelope_matches(row, stamp, &mut proofs)? {
                 Some(true) => {}
+                Some(false) if !persist_proofs && self.bundle_writer_holds(&row.task_id) => {
+                    // A commit shows the decided envelope before deferred apply
+                    // updates this index row, and it holds the bundle lock for
+                    // that whole apply. The parse above is already that
+                    // envelope, cached for selection. Waiting the writer out
+                    // (or rebuilding the workspace when the wait expires) is
+                    // what stalls an observational read for seconds. A mismatch
+                    // with nobody holding the lock is still stale and falls
+                    // through to the caller's rebuild.
+                    orbit_common::tracing::debug!(
+                        target: "orbit.store.task_query",
+                        workspace_id = %self.workspace_id,
+                        task_id = %row.task_id,
+                        "task index freshness kept an in-flight commit envelope",
+                    );
+                }
                 Some(false) => return Ok(IndexFreshness::Mismatch(row.task_id.clone())),
                 None => unsettled.push(row.task_id.clone()),
             }

@@ -13,7 +13,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::activity_job::{
-    ActivityV2Spec, AgentLoopSpec, OnDenial, Provider, ResponseCorrectionPolicy,
+    ActivityV2Spec, AgentLoopSpec, Provider, ResponseCorrectionPolicy,
 };
 use orbit_types::workflow::{ClaimFailureClass, ExecutorDef, is_provider_unavailable};
 
@@ -118,31 +118,13 @@ fn seed_antigravity_executor(runtime: &OrbitRuntime, program: &Path, keep_sandbo
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
         model: Some("gemini-3.8-flash-high".to_string()),
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Antigravity,
-        wall_clock_timeout_seconds: timeout_seconds,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Antigravity,
+            timeout_seconds,
+        )
     }
 }
 

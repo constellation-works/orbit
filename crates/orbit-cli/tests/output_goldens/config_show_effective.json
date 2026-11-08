@@ -182,20 +182,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "machine.web_session.ttl": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.web_terminal.enabled": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "machine.worker_containment": {
       "scope": "built-in",
       "state": "default",
@@ -308,20 +294,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "publication.routine_allow_unscanned_attachments": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "publication.routine_attachments": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "retention.audit_days": {
       "scope": "built-in",
       "state": "default",
@@ -354,34 +326,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "review.selective_before_landing.mode": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "review.selective_before_landing.paths": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "review.selective_before_landing.risk_threshold": {
-      "scope": "built-in",
-      "state": "unset",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "review.selective_before_landing.unknown_risk": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

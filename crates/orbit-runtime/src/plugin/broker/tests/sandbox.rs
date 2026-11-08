@@ -24,7 +24,7 @@ use orbit_engine::{
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -257,31 +257,8 @@ impl BrokerHost {
         )
         .expect("audit writer");
         let spec = AgentLoopSpec {
-            crew_name: None,
-            tool_disallow_list: None,
-            instruction: String::new(),
-            steering_instruction: None,
-            notice_instruction: None,
-            notice_posting_instruction: None,
-            fleet_notices: Default::default(),
-            tools: Vec::new(),
-            on_denial: OnDenial::Terminate,
-            model: None,
-            reasoning_effort: None,
-            max_iterations: 1,
-            backend: None,
-            provider: Provider::Codex,
-            wall_clock_timeout_seconds: timeout.as_secs(),
-            require_response_envelope: false,
             require_completion_envelope: false,
-            proc_allowed_programs: None,
-            proc_disallowed_programs: None,
-            trusted_host_execution: false,
-            crew_env: Vec::new(),
-            crew_account: None,
-            crew_vision_disabled: false,
-            incomplete_continuation: None,
-            response_correction: None,
+            ..AgentLoopSpec::for_provider(String::new(), Provider::Codex, timeout.as_secs())
         };
         run_cli_backend(
             self,

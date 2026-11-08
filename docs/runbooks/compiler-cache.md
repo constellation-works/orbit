@@ -679,27 +679,45 @@ scripts/bench-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
 ```
 
-The benchmark requires Python 3 for path admission. Use a dedicated, exclusively
-owned `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it from another process
-while the benchmark runs. Before any build, daemon control, write or cleanup,
-the harness resolves parent components and symlink ancestors, including for
-paths that do not yet exist. `SCCACHE_DIR` must resolve strictly below that
-workdir, separate from generated source trees, targets, the installed binary,
-socket and output files. The workdir itself is never a cache reset destination.
-Escaping paths and cache aliases of reserved destinations are refused.
-An ordinary nested private cache, including an alias resolving inside the
-workdir, is accepted; the canonical path is used by resets and daemon controls.
-`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and stay
-separate from the cache and reserved destinations. Existing symlinks at reserved
-destinations or at the result file are refused. Source and target trees are
-replaced as directory entries before reuse so old symlinks within them cannot
-redirect extraction or target clearing. This admission check assumes exclusive
-ownership; it does not protect against concurrent filesystem changes.
+The benchmark requires Python 3 for path admission and ownership claiming.
+Use a dedicated one-run `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it
+from another process while the benchmark runs. Before the cleanup trap, any
+build, daemon control, write or transport, the harness resolves parent
+components and symlink ancestors, including for paths that do not yet exist,
+and claims the workdir: a missing workdir is created with an atomic `mkdir`,
+and a pre-existing workdir is claimed only while it contains no file at all
+(empty subdirectories and symlinks resolving inside the workdir, as in
+private cache layouts, are fine). Either way it writes an
+`.orbit-compiler-cache-bench-owner` marker with `O_EXCL` and a per-run token;
+a workdir that already holds a marker, a result, cache contents, an installed
+binary or any other file — for example an unrelated `a/operator.txt` or an
+`a-target` sentinel — is refused with every pre-existing byte unchanged.
+Delete a claimed workdir yourself before reusing its path. Every setup,
+tree/target reset, cache reset, isolated install, namespace handoff and the
+EXIT cleanup re-verify that marker and token; a missing or mismatched marker
+preserves the generated trees instead of deleting them. Signal exits
+(129/130/143 for HUP/INT/TERM) run the same verified cleanup. `SCCACHE_DIR`
+must resolve strictly below that workdir, separate from generated source
+trees, targets, the installed binary, socket and output files. The workdir
+itself is never a cache reset destination. Escaping paths and cache aliases
+of reserved destinations are refused. An ordinary nested private cache,
+including an alias resolving inside the workdir, is accepted; the canonical
+path is used by resets and daemon controls.
+`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and
+stay separate from the cache and reserved destinations; an existing result
+file is refused rather than truncated, and a new result is created with
+`noclobber`. Existing symlinks at reserved destinations or at the result
+file are refused. Source and target trees are replaced as directory entries
+before reuse so old symlinks within them cannot redirect extraction or
+target clearing. The claim does not protect against a process that modifies
+the workdir concurrently after the claim.
 
 The disposable public-script regression uses fake build/cache transports and
 a deletion recorder that never deletes. It covers parent and symlink escapes,
-literal external caches, workdir equality, cache/target overlap and private
-cache operation without compiling or starting daemons:
+literal external caches, workdir equality, cache/target overlap, refusal of
+a pre-existing unowned workdir (with `a`, `a-target` and cache sentinels
+verified unchanged and no recorded transport events) and private cache
+operation without compiling or starting daemons:
 
 ```bash
 python3 scripts/test-bench-compiler-cache.py

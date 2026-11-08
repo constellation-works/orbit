@@ -15,8 +15,13 @@ use orbit_engine::{RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_acti
 use orbit_store::V2AuditEventFilter;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::activity_job::{
-    ActivityV2Spec, AgentLoopSpec, OnDenial, Provider, V2AuditEventKind,
+    ActivityV2Spec, AgentLoopSpec, Provider, V2AuditEventKind,
 };
+
+fn open_runtime(global: &Path, workspace: &Path) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("sandbox_off::open_runtime");
+    OrbitRuntime::from_roots(global, workspace).expect("runtime open")
+}
 
 fn seed_global(global: &Path) {
     init_workspace_at_root(
@@ -65,7 +70,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
 
     for _ in 0..2 {
         seed_global(&global);
-        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("fresh runtime open");
+        let runtime = open_runtime(&global, &workspace);
         assert_eq!(
             runtime
                 .get_executor_def("codex")
@@ -83,7 +88,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
         );
     }
 
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("dispatch runtime");
+    let runtime = open_runtime(&global, &workspace);
     let resolved = runtime
         .resolve_executor_sandbox("codex", Some("implementer"), None)
         .expect("resolve off")
@@ -164,31 +169,12 @@ fn dispatch_codex(
     )
     .expect("audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Codex,
-        wall_clock_timeout_seconds: 15,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested response envelope.".to_string(),
+            Provider::Codex,
+            15,
+        )
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

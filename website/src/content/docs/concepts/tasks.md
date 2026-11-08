@@ -576,9 +576,7 @@ review are alternatives: `review.timing` selects at most one of them.
 `before_pr` is deprecated; new setups use `off` or `before_landing`.
 After-landing review is a separate switch and can be enabled alongside either
 one. `review.timing` defaults to `off`; the after-landing auto-task ships
-disabled. With `review.timing = "off"`, selective before-landing review
-(`review.selective_before_landing`) can instead select candidates by risk or
-changed paths; see [Configuration](../../reference/config/#settable-keys).
+disabled.
 
 | Layer | When it runs | What it can change | How to enable it | What it blocks |
 |---|---|---|---|---|

@@ -13,7 +13,6 @@
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -32,7 +31,6 @@ use tower::ServiceExt;
 use super::audit::AUDIT_NEXT_BEFORE_HEADER;
 use super::host::{host_error_code, status_for};
 use super::routines::{action_capability, authorization_denied, authorized_caller};
-use super::session::BrowserSessions;
 use crate::host_tunnels::{ForwardError, HostTarget, Lease, RemoteIdentity};
 use crate::ssh_tunnel::TunnelOrigin;
 use crate::state::DashboardState;
@@ -383,14 +381,9 @@ async fn answer_locally(
     // as axum's private `UrlParams` (plus `MatchedPath`). The inner router
     // would extend, not replace, those params, so an inner `Path<_>` would
     // see the outer host/rest alongside its own capture. Rebuild with a
-    // clean extension set that carries only the browser session the inner
-    // session handlers read; method, headers, query and body stay untouched
+    // clean extension set; method, headers, query and body stay untouched
     // and the inner router's origin guard still runs.
-    let browser_sessions = parts.extensions.get::<Arc<BrowserSessions>>().cloned();
     parts.extensions = Default::default();
-    if let Some(sessions) = browser_sessions {
-        parts.extensions.insert(sessions);
-    }
     match format!("/{raw_rest}{query}").parse() {
         Ok(uri) => parts.uri = uri,
         Err(error) => {

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{ReviewTiming, ReviewVerdict, SelectiveReviewReceipt, automation::SourceRevision};
+use super::{ReviewTiming, ReviewVerdict, automation::SourceRevision};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,12 +100,12 @@ pub struct HandoffReviewEvidence {
 pub struct HandoffReview {
     pub policy: ReviewTiming,
     pub disposition: HandoffReviewDisposition,
-    /// The leaf gate's host-authored selective-selection receipt, when the
-    /// claim captured an active selective policy. The owner verifies its
-    /// policy digest and pinned base/head against the candidate; a
-    /// `not_required` receipt is selection evidence, never review evidence.
+    /// [ORB-22808] The selective-selection receipt an earlier leaf sent.
+    /// Selective review was removed: this build never sends one and the
+    /// owner ignores it. Kept until 2026-12-08 because this type denies
+    /// unknown fields, so such a handoff still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selective_receipt: Option<SelectiveReviewReceipt>,
+    pub selective_receipt: Option<serde_json::Value>,
 }
 
 impl HandoffReview {
