@@ -381,7 +381,7 @@ function phoneSheet() {
 }
 
 // At phone width the open pane is a full-screen sheet: a modal dialog whose
-// background is inert until Back closes it.
+// background is inert until Close or Esc dismisses it.
 function syncPaneChrome(open) {
   const pane = $("task-detail-pane");
   if (!pane) return;
