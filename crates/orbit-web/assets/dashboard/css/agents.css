@@ -346,8 +346,12 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   .agents-score-col > .agents-bar { width: 40px; }
   .agents-score-value { min-width: 0; margin-left: 6px; }
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
-  /* Count and calendar windows together outgrow a phone: wrap them. */
-  #agents-window-selector { flex-wrap: wrap; max-width: 100%; }
+  /* Count and calendar windows together outgrow a phone: wrap them. Rank
+     adds its own window, the settled/live board and the execution selector. */
+  #agents-window-selector,
+  #agents-rank-window-selector,
+  #agents-settle-selector,
+  #agents-execution-selector { flex-wrap: wrap; max-width: 100%; }
   #agents-tier { height: 44px; }
 }
 
@@ -375,6 +379,80 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 #agents-controls [hidden] { display: none; }
 #agents-tier { height: 28px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 6px; font-size: 12px; }
 #agents-tier-unavailable { margin: 0; }
+
+/* Rank is one column: its sections are not the scorecard's ranking/detail grid. */
+.agents-body.agents-body-rank {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: none;
+}
+.agents-body.agents-body-rank > * {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.agents-provisional {
+  margin-left: 8px;
+  color: var(--warn-fg);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.agents-rank-banner {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 70ch;
+}
+.agents-rank-banner-provisional { color: var(--warn-fg); font-weight: 600; }
+.agents-rank-expand {
+  min-height: 44px;
+  padding: 6px 10px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+}
+.agents-rank-breakdown { padding: 8px 4px 12px; }
+.agents-rank-breakdown h3,
+.agents-rank-shown h4 { margin: 8px 0; font-size: 13px; }
+.agents-rank-measures td,
+.agents-rank-measures th { white-space: normal; }
+.agents-rank-note { margin: 4px 0 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; max-width: 78ch; }
+.agents-rank-chart { min-width: 0; }
+.agents-rank-chart-head { display: flex; align-items: center; gap: 8px; }
+.agents-rank-chart-head h3 { margin: 0; }
+.agents-rank-plot { width: 100%; height: auto; display: block; }
+.agents-rank-axis { stroke: var(--hair); stroke-width: 1; }
+.agents-rank-axis-label { fill: var(--fg-mute); font-size: 11px; }
+.agents-rank-dot { fill: var(--fg-dim); }
+.agents-rank-dot.is-frontier { fill: var(--accent); stroke: var(--fg); stroke-width: 1.5; }
+.agents-rank-front { fill: none; stroke: var(--accent); stroke-dasharray: 4 3; }
+.agents-rank-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  min-height: 32px;
+}
+.agents-rank-legend li { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 12.5px; }
+.agents-rank-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
+.agents-rank-swatch.is-frontier { background: var(--accent); box-shadow: 0 0 0 1.5px var(--fg); }
+.agents-rank-frontier-label { color: var(--fg); font-weight: 600; }
+.agents-rank-how-list { margin: 8px 0 0; padding-left: 18px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; }
 
 /* Recorded effort populations wrap inside the existing crew identity column. */
 .agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }

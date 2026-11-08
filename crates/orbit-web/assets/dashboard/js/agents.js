@@ -18,15 +18,20 @@ import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
 import { implementersPanel } from './agents-implementers.js';
+import { fetchAndRenderRank } from './agents-rank.js';
 
 const $ = (id) => document.getElementById(id);
 
-export const AGENT_ROLES = ["orchestrators", "implementers", "reviewers", "pilots"];
+export const AGENT_ROLES = ["orchestrators", "implementers", "reviewers", "pilots", "rank"];
+// The attribution strip and the scorecard counts. Rank is a view of the
+// implementer board, not an owner of problems.
+const SCORECARD_ROLES = ["orchestrators", "implementers", "reviewers", "pilots"];
 const ROLE_LABELS = {
   orchestrators: "Orchestrators",
   implementers: "Implementers",
   reviewers: "Reviewers",
   pilots: "Pilots",
+  rank: "Rank",
 };
 // Each role's panel below the shared layout: `{ title, render(context) }`,
 // where `render` returns the panel's child nodes. Optional hooks:
@@ -78,6 +83,11 @@ let implementerTier = "";
 // default), all or interactive. Other roles ignore it.
 const EXECUTIONS = ["managed", "all", "interactive"];
 let execution = "managed";
+// The ranking rejects a count window, so its window stays its own. 7d and 30d
+// are also scorecard windows; 90d and all are ranking-only.
+const RANK_WINDOWS = ["7d", "30d", "90d", "all"];
+let rankWindow = "30d";
+let rankLive = false;
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
 let countsRequest = 0;
@@ -132,6 +142,7 @@ export function placeholdAgentsAggregate() {
   requestScope = null;
   resetView();
   renderPanelPlaceholder(BODY_ID);
+  syncRankChrome();
   syncTierControl();
   const count = $(COUNT_ID);
   if (count) count.textContent = "—";
@@ -158,14 +169,28 @@ function agentWindow() {
 
 /// The Agents window on screen, as its `span` link parameter names it.
 export function agentsSpan() {
+  if (role === "rank") return rankWindow;
   return agentWindow();
+}
+
+function setRankWindow(next) {
+  if (!RANK_WINDOWS.includes(next) || next === rankWindow) return false;
+  rankWindow = next;
+  const selector = $("agents-rank-window-selector");
+  if (selector) selector.dataset.panelWindow = next;
+  return true;
 }
 
 /// Adopt the Agents window a link names in its `span` parameter: a count
 /// window is the panel's own, a calendar one becomes the shared window. A link
 /// without a valid `span` keeps the current selection, so a fresh visit opens
-/// on the count default.
+/// on the count default. `90d` and `all` belong only to Rank.
 export function adoptAgentsSpan(raw) {
+  if (raw === "90d" || raw === "all") {
+    setRankWindow(raw);
+    return;
+  }
+  if (raw === "7d" || raw === "30d") setRankWindow(raw);
   if (AGENT_COUNT_WINDOWS.includes(raw)) {
     if (setCountWindow(raw)) syncWindowSelectors();
     return;
@@ -195,6 +220,14 @@ export function wireAgentControls() {
     panelWindows: AGENT_COUNT_WINDOWS,
     onPanelWindow: setCountWindow,
   });
+  const rankSelector = $("agents-rank-window-selector");
+  if (rankSelector) rankSelector.dataset.panelWindow = rankWindow;
+  wireWindowSelector("agents-rank-window-selector", {
+    windows: RANK_WINDOWS,
+    panelWindows: RANK_WINDOWS,
+    onPanelWindow: (next) => (next ? setRankWindow(next) : false),
+  });
+  wireSettleSelector();
   const executions = $("agents-execution-selector");
   if (executions) {
     executions.addEventListener("click", (event) => {
@@ -217,9 +250,69 @@ export function wireAgentControls() {
   }
 }
 
+function wireSettleSelector() {
+  const selector = $("agents-settle-selector");
+  if (!selector || selector.dataset.wired === "true") return;
+  selector.dataset.wired = "true";
+  const pick = (button) => {
+    if (!button) return;
+    const next = button.dataset.settle === "live";
+    if (next === rankLive) return;
+    rankLive = next;
+    syncRankChrome();
+    fetchAndRenderAgents();
+  };
+  selector.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-settle]");
+    if (!button || !selector.contains(button)) return;
+    pick(button);
+  });
+  selector.addEventListener("keydown", (event) => {
+    const tabs = Array.from(selector.querySelectorAll("[data-settle]"));
+    const index = tabs.indexOf(event.target.closest("[data-settle]"));
+    if (index < 0) return;
+    let nextIndex = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    tabs[nextIndex].focus();
+    pick(tabs[nextIndex]);
+  });
+}
+
+function syncRankChrome() {
+  const ranking = role === "rank" && !isAggregateView();
+  const scorecardWindow = $("agents-window-control");
+  if (scorecardWindow) scorecardWindow.hidden = ranking;
+  const rankWindowControl = $("agents-rank-window-control");
+  if (rankWindowControl) rankWindowControl.hidden = !ranking;
+  const settle = $("agents-settle-control");
+  if (settle) settle.hidden = !ranking;
+  const provisional = $("agents-rank-provisional");
+  if (provisional) provisional.hidden = !(ranking && rankLive);
+  for (const button of document.querySelectorAll("#agents-rank-window-selector [data-window]")) {
+    const on = button.dataset.window === rankWindow;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
+  }
+  for (const button of document.querySelectorAll("#agents-settle-selector [data-settle]")) {
+    const on = (button.dataset.settle === "live") === rankLive;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
+  }
+  const body = $(BODY_ID);
+  if (body && !ranking) body.classList.remove("agents-body-rank");
+  syncExecutionSelector();
+}
+
 function syncExecutionSelector() {
   const control = $("agents-execution-control");
-  if (control) control.hidden = role !== "implementers";
+  if (control) control.hidden = role !== "implementers" && role !== "rank";
   for (const button of document.querySelectorAll("#agents-execution-selector [data-execution]")) {
     const on = button.dataset.execution === execution;
     button.classList.toggle("on", on);
@@ -247,9 +340,35 @@ function syncTierControl() {
 }
 
 export function fetchAndRenderAgents() {
+  syncRankChrome();
   if (isAggregateView()) {
     placeholdAgentsAggregate();
     return Promise.resolve();
+  }
+  if (role === "rank") {
+    const body = $(BODY_ID);
+    if (body) body.classList.add("agents-body-rank");
+    const activeWindow = rankWindow;
+    const activeExecution = execution;
+    const activeLive = rankLive;
+    const revision = getWorkspaceRevision();
+    const scope = `${revision}\0rank\0${activeWindow}\0${activeExecution}\0${activeLive}`;
+    if (requestScope !== scope) {
+      requestScope = scope;
+      resetView();
+    }
+    refreshRoleCounts("rank", agentWindow(), revision);
+    return fetchAndRenderRank({
+      window: activeWindow,
+      execution: activeExecution,
+      live: activeLive,
+      onCount: (text, title) => {
+        const node = $("agents-count-rank");
+        if (!node) return;
+        node.textContent = text;
+        node.title = title || "";
+      },
+    });
   }
   const activeRole = role;
   const selectedWindow = agentWindow();
@@ -289,7 +408,7 @@ export function fetchAndRenderAgents() {
 // its own scorecard; the others are read beside it and never block the panel.
 function refreshRoleCounts(activeRole, selectedWindow, revision) {
   const request = ++countsRequest;
-  for (const each of AGENT_ROLES) {
+  for (const each of SCORECARD_ROLES) {
     if (each === activeRole) continue;
     fetchJson(scorecardPath(each, selectedWindow)).then((payload) => {
       if (request !== countsRequest || getWorkspaceRevision() !== revision) return;
@@ -545,7 +664,7 @@ function contribution(term, row) {
 }
 
 function render() {
-  syncExecutionSelector();
+  syncRankChrome();
   syncTierControl();
   const body = $(BODY_ID);
   if (!body || !scorecard) return;
@@ -663,7 +782,7 @@ function stripNode() {
   const notScored = owners.not_scored || { count: 0, reasons: {} };
   const total = attribution && typeof attribution.total === "number" ? attribution.total : 0;
   const segments = [
-    ...AGENT_ROLES.map((each) => ({ key: each, label: ROLE_LABELS[each], count: owners[each] || 0 })),
+    ...SCORECARD_ROLES.map((each) => ({ key: each, label: ROLE_LABELS[each], count: owners[each] || 0 })),
     { key: "not_scored", label: "Not scored", count: notScored.count || 0 },
   ];
   const bar = el("div", { class: "agents-strip-bar", role: "img" });

@@ -320,9 +320,14 @@ change starts a new season (§4.2).
   (`p10`, `p90`), `rank` and `rank_label` (`2=`), `cost` (`ratio`, `per_task`,
   `expected_per_task`, `coverage`, `cost_unknown`), per-measure `actual`, `expected`,
   `residual`, `units`, `contribution` (score points before shrinkage) and `status`,
-  eligibility, `crews` and `effort_split`. Per board: `measures` with their scales,
-  `season`, `scales_source`, `rules`, `qualified`, `unattributed` and
-  `paired_probabilities`. The dashboard Rank tab and the weekly snapshot are later work.
+  eligibility, `crews` and `effort_split`. Each row also carries `tiers`
+  (tasks, an unsmoothed score, cost per task, coverage and `cost_unknown`),
+  `lines` (landed lines changed) and `execution` (managed, interactive and
+  unclassified tasks). Per board: `measures` with their scales, `season`,
+  `scales_source`, `rules`, `qualified`, `unattributed`, `execution_split`,
+  `not_scored` and `paired_probabilities`. A tier score is `100 + 10 × z`
+  on that tier's tasks only, before the board's shrinkage; the page computes
+  the frontier from those points. The weekly snapshot is later work.
 - **Band threshold.** R2 uses 80%; the R3 shadow recommendation in §4.4 is 95%.
 
 ## 7. Validation and rollout

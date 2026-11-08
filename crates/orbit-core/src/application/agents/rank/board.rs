@@ -35,6 +35,12 @@ pub(super) struct ModelRow {
     /// Tier and recorded cost per task.
     pub(super) costs: Vec<(&'static str, Option<f64>)>,
     pub(super) landed: f64,
+    /// Landed lines summed across tasks that recorded a diff size. A task
+    /// two crews of one model both worked is summed once per crew, as the
+    /// scorecard pools that task.
+    pub(super) lines: u64,
+    /// How many of those tasks recorded a diff size.
+    pub(super) sized_tasks: usize,
 }
 
 impl ModelRow {
@@ -89,10 +95,16 @@ pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
             records: Vec::new(),
             costs: Vec::new(),
             landed: 0.0,
+            lines: 0,
+            sized_tasks: 0,
         });
         *model.crews.entry(row.crew).or_default() += row.tasks.len();
         for task in row.tasks {
             model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
+            if let Some(lines) = task.lines {
+                model.lines = model.lines.saturating_add(lines);
+                model.sized_tasks += 1;
+            }
             model.costs.push((task.tier, task.cost));
             model.records.push(Record {
                 tier: task.tier,
@@ -361,6 +373,53 @@ fn costs(rows: &[ModelRow]) -> Vec<Cost> {
                 ratio,
                 coverage,
                 unknown: coverage < MIN_COST_COVERAGE || ratio.is_none(),
+            }
+        })
+        .collect()
+}
+
+/// One tier's score and cost for the value chart. The score is
+/// `100 + 10 × z` from that tier's observations only. Board shrinkage is
+/// not applied: shrinkage is defined for the whole board, and a per-tier
+/// board would be a different statistic.
+pub(super) struct TierPoint {
+    pub(super) tier: &'static str,
+    pub(super) tasks: usize,
+    pub(super) score: Option<f64>,
+    pub(super) cost_per_task: Option<f64>,
+    pub(super) cost_coverage: f64,
+    pub(super) cost_unknown: bool,
+}
+
+pub(super) fn tier_points(row: &ModelRow, scales: &[Option<f64>; MEASURE_COUNT]) -> Vec<TierPoint> {
+    by_tier(&row.records)
+        .into_iter()
+        .map(|(tier, records)| {
+            let tasks = records.len();
+            let score = composite(
+                &totals(records.iter().map(|record| &record.observed)),
+                scales,
+            )
+            .map(|z| 100.0 + 10.0 * z);
+            let priced: Vec<f64> = row
+                .costs
+                .iter()
+                .filter_map(|(cost_tier, cost)| (*cost_tier == tier).then_some(*cost).flatten())
+                .collect();
+            let coverage = if tasks == 0 {
+                0.0
+            } else {
+                priced.len() as f64 / tasks as f64
+            };
+            let per_task =
+                (!priced.is_empty()).then(|| priced.iter().sum::<f64>() / priced.len() as f64);
+            TierPoint {
+                tier,
+                tasks,
+                score,
+                cost_per_task: per_task,
+                cost_coverage: coverage,
+                cost_unknown: coverage < MIN_COST_COVERAGE || per_task.is_none(),
             }
         })
         .collect()

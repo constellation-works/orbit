@@ -26,6 +26,8 @@ pub(in crate::application::agents) struct LedgerTask {
     /// Recorded cost of the row's runs on the task; `None` when the task is
     /// not managed or any counted attempt has no priced run.
     pub(in crate::application::agents) cost: Option<f64>,
+    /// Landed diff size (lines added plus deleted) when the scan recorded one.
+    pub(in crate::application::agents) lines: Option<u64>,
 }
 
 /// One crew-and-model row of the implementer scorecard and its tasks.
@@ -101,6 +103,7 @@ pub(in crate::application::agents) fn implementer_ledger(
                         actual,
                         expected: expectation.expected.clone(),
                         cost,
+                        lines: facts.landed_lines.get(&task.id).copied(),
                     }
                 })
                 .collect();
