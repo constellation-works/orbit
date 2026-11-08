@@ -122,6 +122,68 @@ yourself. For example:
 orbit config set --global experiments.enabled true
 ```
 
+## Provider credentials
+
+Provider credentials are opt-in. Neither the shipped config nor the built-in
+`execution.env.pass` default includes `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY` or `CODEX_API_KEY`. Configure only the authentication route
+you intend to use.
+
+| Authentication route | Agent variable |
+|---|---|
+| Claude dedicated worker token (`claude setup-token`) | `CLAUDE_CODE_OAUTH_TOKEN` |
+| Claude API key | `ANTHROPIC_API_KEY` |
+| Codex noninteractive API-key override (`codex exec`) | `CODEX_API_KEY` |
+
+`CODEX_API_KEY` is Codex's documented per-run API-key override;
+`OPENAI_API_KEY` alone is not that override. See
+[OpenAI's noninteractive authentication guidance](https://developers.openai.com/codex/noninteractive#use-api-key-auth).
+
+Choose the credential's scope:
+
+- **Shared:** add the chosen name to the workspace's effective
+  `execution.env.pass`, preserving existing entries. The list replaces the
+  default and is shared by every crew. A workspace file that omits this
+  security key gets the built-in default, not the global list.
+- **Per crew:** map a separate source name through the crew's global `env`.
+  For example, add to the existing `sol` crew in `~/.orbit/config.toml`:
+
+  ```toml
+  [crews.sol]
+  env = ["CODEX_API_KEY=CODEX_CREDITS_API_KEY_1"]
+  ```
+
+  The right-hand side names a variable in the launching environment, never
+  a literal key. Only that crew receives the mapped credential; neither name
+  needs adding to `pass`. For Claude API credits, use
+  `ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1`. An owner-only
+  `file:` source avoids shell or service exports; see
+  [Scheduled credentials](#scheduled-credentials-clockenv).
+
+An unset or empty name added to shared `pass` produces a warning and reaches
+no agent; this warning alone does not refuse the start, and the provider may
+use a saved login. A missing per-crew source excludes that crew from drains
+and refuses its activities. The separate Claude-on-macOS credential check
+described below can also refuse an activity without a credential.
+
+Check the execution host with:
+
+```bash
+orbit config get execution.env.pass
+orbit config get crews.sol.env
+orbit doctor --check env-pass --json
+```
+
+Use the intended crew's name in place of `sol`. Dashboard runs inherit the
+web service's environment. A service launched with `bash -lc` reads login
+exports when it starts, but does not receive later profile edits: restart
+that service before starting a new drain. Inspect its effective unit and
+start time, and verify credential presence by name only in the live service
+or worker. Never print key values. Codex's stored `login status` alone does
+not prove which credential a worker uses with a per-run override.
+For timer-started runs, use [clock.env](#scheduled-credentials-clockenv);
+that file does not supply the web service.
+
 ## Scheduled credentials: clock.env
 
 `~/.orbit/clock.env` holds the credentials for runs no login shell starts.
