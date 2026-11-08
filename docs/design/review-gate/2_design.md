@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-11-01
-last_validated: 2026-10-26
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Implemented
 feature: review-gate
 doc_role: design
@@ -1308,7 +1308,7 @@ the SARIF is removed with the run's checkout. It then requeues the task to
 still persisted and current). The next run's `candidate_resume` resumes the
 held candidate for its implementer, `resumed_repaired` with trigger `review`,
 whose output is the findings; a claimed leaf's implementer reads them in the
-task's comments. This is not a reviewer's rework loop: a review's own
+task's comments. This is not a reviewer's rework loop ([ORB-13891], retired by [ORB-13989]): a review's own
 findings still settle as its verdict, and the repaired candidate gets a fresh
 review that needs CodeQL on its new tree again.
 The owner already runs its required validation on foreign heads under the
@@ -1866,5 +1866,11 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-18351] — publishes UI screenshots to a permanent evidence ref and renders them in the pull request body.
 - [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-21765] — `handoff_land` retries its synchronous merge on the same "Base branch was modified" (HTTP 405) refusal under the same three-request ceiling as completion, instead of failing the landing.
+- [ORB-14151] — supplied the workspace run whose engine-fixture failures the task never touched, cited for the `diagnostic` role's unrelated-failure case.
+- [ORB-14191] — supplied the replacement report that silently dropped a failed required CodeQL run, cited for `validation_incomplete`.
+- [ORB-14260] — supplied the claimed-worker case that replaced a `<workspace>` placeholder with the absolute path, cited for validation-record identity matching.
+- [ORB-14360] — supplied the prose-named required record later recorded as a concrete script invocation, cited for validation-record identity matching.
+- [ORB-14521] — supplied the reviewer repair that deleted a conjunct from an untouched production file, cited for mutation-target scope.
+- [ORB-18099] — seeded before-landing review into PR-route workspaces at init, cited for the candidate-ref evidence example.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
