@@ -22,7 +22,7 @@ const count = (value) => (typeof value === "number" && Number.isFinite(value) ? 
 const label = (tier) => TIER_LABELS[tier] || tier;
 
 function matrixTable(row, matrix) {
-  const caption = `${row.crew} · ${row.model}: assessed tier by observed tier`;
+  const caption = `${row.label || row.model}: assessed tier by observed tier`;
   const header = (text, scope, className = "") => {
     const cell = el("th", { class: className, text });
     cell.setAttribute("scope", scope);
@@ -56,7 +56,7 @@ function matrixTable(row, matrix) {
 
 // A wide matrix scrolls inside its own focusable frame at narrow widths.
 function scroller(row, matrix) {
-  const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${row.crew} · ${row.model} tier matrix` }, [matrixTable(row, matrix)]);
+  const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${row.label || row.model} tier matrix` }, [matrixTable(row, matrix)]);
   wrap.tabIndex = 0;
   return wrap;
 }
@@ -75,15 +75,15 @@ function card(row, matrix) {
   }));
   const node = el("article", { class: `agents-tier-card${row.below_support ? " agents-row-below" : ""}` }, [
     el("h4", {}, [
-      el("span", { class: "agents-tier-crew", text: row.crew }),
-      el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-tier-crew", text: row.label || row.model }),
+      el("span", { class: "agents-model", text: (row.crews || [row.crew]).join(", ") }),
     ]),
     placed
       ? scroller(row, matrix)
       : el("p", { class: "agents-muted", text: "No assessed task with a tier and a priced implementation." }),
     summary,
   ]);
-  node.dataset.row = `${row.crew}\0${row.model}`;
+  node.dataset.row = `${row.model}\0${row.reasoning_effort ?? "provider_default"}\0${row.crew || ""}`;
   return node;
 }
 

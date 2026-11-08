@@ -222,7 +222,7 @@
   },
   {
     "name": "orbit.agents.scorecard",
-    "description": "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work, to compare model-and-effort rows for that role; each row lists the crews that contributed its units, units with no recorded effort form a separate effort-unknown row, and a null effort is the provider default. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -292,6 +292,12 @@
         "description": "The row's crew; for orchestrators, the orchestrator name tasks record.",
         "param_type": "string",
         "required": true
+      },
+      {
+        "name": "row_effort",
+        "description": "The row's recorded reasoning effort (low, medium, high, xhigh or max), provider_default for a null effort, or unknown for work with no recorded effort; optional when the crew and model name one row.",
+        "param_type": "string",
+        "required": false
       },
       {
         "name": "row_model",

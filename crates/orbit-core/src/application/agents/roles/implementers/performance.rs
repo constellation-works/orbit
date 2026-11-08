@@ -4,7 +4,10 @@ use orbit_config::{TaskTypeDefinition, classify_task_type};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
-use crate::application::agents::attribution::{Charge, Credit, Owner, row_key};
+use crate::application::agents::attribution::{Charge, Credit, Owner};
+use crate::application::agents::effort::{
+    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
@@ -67,13 +70,40 @@ pub(super) fn is_implementer_review_term(key: &str) -> bool {
     REVIEW_TERM_UNITS.iter().any(|(term, _)| *term == key)
 }
 
-pub(super) type Key = (String, String);
+pub(super) type Key = ModelEffortKey;
 
-pub(super) fn key(attempt: &Attempt) -> Key {
-    row_key(
-        attempt.runner.crew.as_deref(),
-        attempt.runner.model.as_deref(),
-    )
+/// An attempt's row: its model and the recorded effort of its run's main
+/// implementing invocation for `task`.
+pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Key {
+    let effort = main_invocation_effort(
+        facts,
+        attempt.runner.run_id.as_deref(),
+        MainActivity::Implement,
+        Some(&task.id),
+    );
+    model_effort_key(attempt.runner.model.as_deref(), effort)
+}
+
+/// A charge's row, from the run it charges.
+fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
+    let effort = main_invocation_effort(
+        facts,
+        charge.run_id.as_deref(),
+        MainActivity::Implement,
+        Some(&charge.task_id),
+    );
+    model_effort_key(charge.model.as_deref(), effort)
+}
+
+/// A credit's row, from the run it credits.
+fn credit_key(facts: &AgentFacts, credit: &Credit) -> Key {
+    let effort = main_invocation_effort(
+        facts,
+        credit.run_id.as_deref(),
+        MainActivity::Implement,
+        Some(&credit.task_id),
+    );
+    model_effort_key(credit.model.as_deref(), effort)
 }
 
 pub(super) fn tier(task: &TaskFacts) -> &'static str {
@@ -105,7 +135,7 @@ pub(super) fn work_by_row(
             .attempts
             .iter()
             .filter(|a| counted(a, window))
-            .map(key)
+            .map(|attempt| key(facts, task, attempt))
             .collect();
         for row in keys {
             work.entry(row).or_default().push(task);
@@ -165,7 +195,7 @@ pub(super) fn evaluate_implementers(
             let stats = fleet.entry(tier(task)).or_default();
             stats.units += 1;
             stats.reviewed_units +=
-                usize::from(first_implementer_review(task, row, window).is_some());
+                usize::from(first_implementer_review(facts, task, row, window).is_some());
         }
     }
     for row in &rows {
@@ -199,7 +229,7 @@ pub(super) fn evaluate_implementers(
             .iter()
             .zip(regressions)
             .map(|(&task, &regressions)| {
-                let reviewed = first_implementer_review(task, key, window).is_some();
+                let reviewed = first_implementer_review(facts, task, key, window).is_some();
                 let expected = TERMS
                     .iter()
                     .map(|term| {
@@ -254,6 +284,7 @@ pub(super) fn execution_header(
 ) -> serde_json::Map<String, Value> {
     #[derive(Default)]
     struct Split {
+        crews: BTreeSet<String>,
         managed: usize,
         interactive: usize,
         unclassified: usize,
@@ -267,14 +298,24 @@ pub(super) fn execution_header(
         .collect();
     let mut splits: BTreeMap<Key, Split> = BTreeMap::new();
     for task in &facts.tasks {
-        let keys: BTreeSet<_> = task
+        let attempts: Vec<_> = task
             .attempts
             .iter()
             .filter(|a| counted(a, window))
-            .map(key)
+            .collect();
+        let keys: BTreeSet<_> = attempts
+            .iter()
+            .map(|attempt| key(facts, task, attempt))
             .collect();
         for row in keys {
-            let split = splits.entry(row).or_default();
+            let split = splits.entry(row.clone()).or_default();
+            for attempt in &attempts {
+                if key(facts, task, attempt) == row
+                    && let Some(crew) = &attempt.runner.crew
+                {
+                    split.crews.insert(crew.clone());
+                }
+            }
             match task.execution {
                 ExecutionMode::Managed => split.managed += 1,
                 ExecutionMode::Unclassified => split.unclassified += 1,
@@ -289,10 +330,14 @@ pub(super) fn execution_header(
     }
     let rows: Vec<Value> = splits
         .into_iter()
-        .map(|((crew, model), split)| {
+        .map(|((model, effort), split)| {
             json!({
-                "crew": crew,
+                "crew": split.crews.first(),
+                "crews": split.crews,
                 "model": model,
+                "reasoning_effort": effort,
+                "effort_label": crate::application::agents::effort::effort_label(&effort),
+                "label": crate::application::agents::effort::row_label(&model, &effort),
                 "managed_tasks": split.managed,
                 "interactive_tasks": split.interactive,
                 "unclassified_tasks": split.unclassified,
@@ -308,6 +353,7 @@ pub(super) fn execution_header(
 
 /// A later accept cannot erase an earlier reject of this row's candidate.
 pub(super) fn first_implementer_review<'a>(
+    facts: &AgentFacts,
     task: &'a TaskFacts,
     row: &Key,
     window: WindowBounds,
@@ -315,7 +361,7 @@ pub(super) fn first_implementer_review<'a>(
     task.reviews.iter().find(|review| {
         task.attempt_at(review.at).is_some_and(|index| {
             let attempt = &task.attempts[index];
-            counted(attempt, window) && key(attempt) == *row
+            counted(attempt, window) && key(facts, task, attempt) == *row
         })
     })
 }
@@ -389,6 +435,7 @@ impl<'a> DefectLocation<'a> {
 /// That defect counts once, as the review's verdict. A link without sites
 /// names no defect to match and always counts.
 fn charged_by_pre_landing_review(
+    facts: &AgentFacts,
     task: &TaskFacts,
     row: &Key,
     window: WindowBounds,
@@ -411,7 +458,7 @@ fn charged_by_pre_landing_review(
         .filter(|review| {
             task.attempt_at(review.at).is_some_and(|index| {
                 let attempt = &task.attempts[index];
-                counted(attempt, window) && key(attempt) == *row
+                counted(attempt, window) && key(facts, task, attempt) == *row
             })
         })
         .flat_map(|review| &review.findings)
@@ -435,6 +482,7 @@ pub(super) struct Fleet {
 
 /// The scored term tallies of one row (or one cell's task subset).
 pub(super) fn compute_tallies<'a>(
+    facts: &AgentFacts,
     row: &Key,
     tasks: &[&'a TaskFacts],
     charges: &BTreeMap<&str, Vec<&Charge>>,
@@ -443,7 +491,7 @@ pub(super) fn compute_tallies<'a>(
 ) -> BTreeMap<&'static str, Tally<'a>> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
     for &task in tasks {
-        if let Some(review) = first_implementer_review(task, row, window)
+        if let Some(review) = first_implementer_review(facts, task, row, window)
             && review.verdict == ReviewVerdict::Accept
         {
             tallies.entry("first_pass_accepts").or_default().add(
@@ -462,10 +510,7 @@ pub(super) fn compute_tallies<'a>(
             .get(task.id.as_str())
             .into_iter()
             .flatten()
-            .any(|credit| {
-                window.admits(credit.anchor)
-                    && row_key(credit.crew.as_deref(), credit.model.as_deref()) == *row
-            })
+            .any(|credit| window.admits(credit.anchor) && credit_key(facts, credit) == *row)
         {
             tallies
                 .entry("weighted_landed")
@@ -479,14 +524,14 @@ pub(super) fn compute_tallies<'a>(
             .filter(|charge| {
                 window.admits(charge.anchor)
                     && charge.owner == Owner::Role(AgentRole::Implementers)
-                    && row_key(charge.crew.as_deref(), charge.model.as_deref()) == *row
+                    && charge_key(facts, charge) == *row
             })
         {
             let term = match charge.problem {
                 Problem::ReviewReject => "review_rejects",
                 Problem::ReviewFixes => "reviewer_repairs",
                 Problem::Regression
-                    if charged_by_pre_landing_review(task, row, window, &charge.sites) =>
+                    if charged_by_pre_landing_review(facts, task, row, window, &charge.sites) =>
                 {
                     continue;
                 }
@@ -516,12 +561,12 @@ fn row_input<'a>(
     charges: &BTreeMap<&str, Vec<&Charge>>,
     credits: &BTreeMap<&str, Vec<&Credit>>,
 ) -> RowInput<'a> {
-    let tallies = compute_tallies(&row, tasks, charges, credits, window);
+    let tallies = compute_tallies(facts, &row, tasks, charges, credits, window);
     // Review coverage determines the review terms' population, including
     // the tier mix of their expectations, rather than credit or penalty.
     let reviewed_units = tasks
         .iter()
-        .filter(|task| first_implementer_review(task, &row, window).is_some())
+        .filter(|task| first_implementer_review(facts, task, &row, window).is_some())
         .count();
     let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
@@ -553,7 +598,7 @@ fn row_input<'a>(
         for attempt in task
             .attempts
             .iter()
-            .filter(|a| counted(a, window) && key(a) == row)
+            .filter(|a| counted(a, window) && key(facts, task, a) == row)
         {
             runs_without_model += usize::from(attempt.runner.model.is_none());
             if let Some(end) = attempt.end {
@@ -613,8 +658,13 @@ fn row_input<'a>(
             .collect(),
         reviewed_units: Some(reviewed_units),
         unjudged: false,
-        crew: row.0,
-        model: row.1,
+        crew: crews_of(facts, window, &row, tasks)
+            .first()
+            .cloned()
+            .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
+        crews: crews_of(facts, window, &row, tasks),
+        model: row.0,
+        effort: row.1,
         units: tasks.len(),
         runs_without_model,
         provisional: None,
@@ -673,6 +723,28 @@ fn row_input<'a>(
             ),
         ],
     }
+}
+
+/// The crews whose counted attempts on `tasks` fall in `row`, sorted.
+pub(super) fn crews_of(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    row: &Key,
+    tasks: &[&TaskFacts],
+) -> Vec<String> {
+    let mut crews = BTreeSet::new();
+    for task in tasks {
+        for attempt in task
+            .attempts
+            .iter()
+            .filter(|attempt| counted(attempt, window) && &key(facts, task, attempt) == row)
+        {
+            if let Some(crew) = &attempt.runner.crew {
+                crews.insert(crew.clone());
+            }
+        }
+    }
+    crews.into_iter().collect()
 }
 
 pub(super) fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {

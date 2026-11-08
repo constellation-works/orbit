@@ -218,7 +218,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                 AgentRole::Implementers,
                 &query,
                 "low",
-                Some("model"),
+                Some("low-model"),
                 std::time::Duration::ZERO,
             )
             .unwrap();
@@ -234,7 +234,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
             );
             let server = fixture.server(false);
             let http = json_ok(server.get(&format!(
-                "/api/agents/implementers/detail?{WS}&crew=low&model=model&min_support=1"
+                "/api/agents/implementers/detail?{WS}&crew=low&model=low-model&min_support=1"
             )));
             assert_eq!(http["row"], detail["row"]);
             assert_eq!(as_f64(&http["row"]["expected"]["review_rejects"]), 10.0);
@@ -679,7 +679,7 @@ fn implementers_review_terms_ignore_review_coverage() {
                 "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
             )));
             let detail = |crew| {
-                json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&window=30d&min_support=1&crew={crew}&model=model")))
+                json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&window=30d&min_support=1&crew={crew}&model={crew}-model")))
             };
             let dense = detail("dense");
             let sparse = detail("sparse");
@@ -1107,7 +1107,7 @@ fn escape_expectation_uses_other_rows_when_a_bucket_has_no_peer() {
             assert_eq!(isolated["expected"]["escaped_regressions"], 0);
             assert_eq!(isolated["escaped_regressions_fallback"], true);
             let detail = json_ok(server.get(&format!(
-                "/api/agents/implementers/detail?{WS}&crew=isolated&model=model&min_support=1"
+                "/api/agents/implementers/detail?{WS}&crew=isolated&model=isolated-model&min_support=1"
             )));
             let term = detail["terms"]
                 .as_array()

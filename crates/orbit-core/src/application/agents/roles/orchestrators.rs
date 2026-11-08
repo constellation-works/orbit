@@ -186,7 +186,11 @@ fn row<'a>(
         escaped_regressions_fallback: None,
         denominators: BTreeMap::new(),
         crew: name.to_string(),
+        crews: vec![name.to_string()],
         model: model.to_string(),
+        // Authorship records no dispatch effort, so orchestrator rows stay
+        // in the separate effort-unknown population.
+        effort: Some(crate::application::agents::effort::EFFORT_UNKNOWN.to_string()),
         units: tasks.len(),
         runs_without_model: 0,
         provisional: None,

@@ -1,0 +1,134 @@
+//! The shared (model, recorded effort) grouping key for the agent
+//! scorecards and the model ranking's effort split. The encoding matches
+//! `orbit_store::contracts::agent_effort_usage` exactly: a present dispatch
+//! identity with no rendered effort is `None` (the provider default), a
+//! historical invocation with no dispatch identity is `Some("unknown")`,
+//! and a rendered effort is its wire name (`low`, `medium`, `high`,
+//! `xhigh`, `max`). Scorecard rows and the ranking therefore never disagree
+//! on what a model-and-effort population is.
+//!
+//! Effort is attributed per unit of work from that unit's own invocations:
+//! the invocations of the unit's job run whose activity matches the role
+//! (implementing, reviewing or piloting). When those invocations ran at
+//! more than one effort, the unit counts under the effort of its main
+//! invocation — the matching invocation with the longest recorded
+//! duration, ties broken by the latest end time then the highest
+//! invocation id. A unit with no matching invocation is `unknown` and is
+//! never folded into a known effort.
+
+use orbit_store::contracts::InvocationAccountingFact;
+
+use super::{AgentFacts, MODEL_UNKNOWN};
+
+/// A recorded reasoning effort in the shared encoding: `None` is the
+/// provider default, `Some("unknown")` is historical work with no recorded
+/// effort, and any other `Some` is the rendered effort's wire name.
+pub(super) type RecordedEffort = Option<String>;
+
+/// The effort value of historical work with no recorded dispatch identity.
+pub(super) const EFFORT_UNKNOWN: &str = "unknown";
+
+/// Which role's invocations a unit's main invocation is drawn from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MainActivity {
+    Implement,
+    Review,
+    Pilot,
+}
+
+impl MainActivity {
+    fn matches(self, activity_id: Option<&str>) -> bool {
+        match self {
+            MainActivity::Implement => {
+                matches!(activity_id, Some("implement_one" | "agent_implement"))
+            }
+            MainActivity::Review => activity_id.is_some_and(|id| id.contains("review")),
+            MainActivity::Pilot => activity_id.is_some_and(|id| id.contains("pilot")),
+        }
+    }
+}
+
+/// One invocation's recorded effort, in the shared encoding.
+pub(super) fn effort_of_invocation(fact: &InvocationAccountingFact) -> RecordedEffort {
+    match &fact.execution {
+        Some(execution) => execution.reasoning_effort.map(|effort| effort.to_string()),
+        None => Some(EFFORT_UNKNOWN.to_string()),
+    }
+}
+
+/// The human label of a recorded effort: the wire name, `provider default`
+/// for a null effort, and `effort unknown` for historical work.
+pub(super) fn effort_label(effort: &RecordedEffort) -> String {
+    match effort {
+        None => "provider default".to_string(),
+        Some(effort) if effort == EFFORT_UNKNOWN => "effort unknown".to_string(),
+        Some(effort) => effort.clone(),
+    }
+}
+
+/// A row's display label: `model @ effort`.
+pub(super) fn row_label(model: &str, effort: &RecordedEffort) -> String {
+    format!("{model} @ {}", effort_label(effort))
+}
+
+/// Parse a detail selection's effort name into the shared encoding. Accepts
+/// the wire names plus `provider_default` / `provider default` and
+/// `unknown` / `effort unknown`.
+pub(super) fn parse_recorded_effort(value: &str) -> RecordedEffort {
+    match value.trim() {
+        "provider_default" | "provider default" => None,
+        "effort_unknown" | "effort unknown" => Some(EFFORT_UNKNOWN.to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// The shared scorecard row key: model (`model unknown` when none was
+/// recorded) and recorded effort.
+pub(super) type ModelEffortKey = (String, RecordedEffort);
+
+/// The key of a unit whose model may be unrecorded.
+pub(super) fn model_effort_key(model: Option<&str>, effort: RecordedEffort) -> ModelEffortKey {
+    (model.unwrap_or(MODEL_UNKNOWN).to_string(), effort)
+}
+
+/// The effort of a unit's main invocation: among the invocations of
+/// `run_id` (or, without a run, of `task_id`) whose activity matches
+/// `activity`, preferring those linked to `task_id`, the one with the
+/// longest recorded duration. `unknown` when none matches.
+pub(super) fn main_invocation_effort(
+    facts: &AgentFacts,
+    run_id: Option<&str>,
+    activity: MainActivity,
+    task_id: Option<&str>,
+) -> RecordedEffort {
+    let candidates = facts.invocations.iter().filter(|fact| {
+        activity.matches(fact.activity_id.as_deref())
+            && match run_id {
+                Some(run_id) => fact.job_run_id == run_id,
+                None => task_id.is_some_and(|task| fact.task_ids.iter().any(|id| id == task)),
+            }
+    });
+    let linked: Vec<_> = match task_id {
+        Some(task) => {
+            let linked: Vec<_> = candidates
+                .clone()
+                .filter(|fact| fact.task_ids.iter().any(|id| id == task))
+                .collect();
+            if linked.is_empty() {
+                candidates.collect()
+            } else {
+                linked
+            }
+        }
+        None => candidates.collect(),
+    };
+    linked
+        .into_iter()
+        .max_by(|left, right| {
+            left.duration_ms
+                .cmp(&right.duration_ms)
+                .then(left.ts.cmp(&right.ts))
+                .then(left.id.cmp(&right.id))
+        })
+        .map_or_else(|| Some(EFFORT_UNKNOWN.to_string()), effort_of_invocation)
+}

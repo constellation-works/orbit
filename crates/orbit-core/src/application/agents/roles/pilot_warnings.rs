@@ -28,7 +28,7 @@
 //! assessment-time done state is not stored, and a finished prerequisite must not
 //! turn a historical hold clean.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
@@ -38,7 +38,9 @@ use orbit_types::task::{
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Map, Value, json};
 
-use crate::application::agents::attribution::row_key;
+use crate::application::agents::effort::{
+    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::records::spec_documents;
 use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
 use crate::application::agents::{AgentFacts, WindowBounds};
@@ -99,12 +101,21 @@ pub(in crate::application::agents) struct Assessment {
 }
 
 impl Assessment {
-    fn key(&self) -> (String, String) {
+    /// The assessment's (model, recorded effort) row: the effort of its
+    /// pilot run's main piloting invocation.
+    fn key(&self, facts: &AgentFacts, task_id: &str) -> ModelEffortKey {
         let run = self.run.as_ref();
-        row_key(
-            run.and_then(|run| run.crew.as_deref()),
-            run.and_then(|run| run.model.as_deref()),
-        )
+        let effort = main_invocation_effort(
+            facts,
+            self.run_id().as_deref(),
+            MainActivity::Pilot,
+            Some(task_id),
+        );
+        model_effort_key(run.and_then(|run| run.model.as_deref()), effort)
+    }
+
+    fn crew(&self) -> Option<&str> {
+        self.run.as_ref().and_then(|run| run.crew.as_deref())
     }
 
     pub(in crate::application::agents) fn run_id(&self) -> Option<String> {
@@ -408,6 +419,8 @@ fn outcome(
 #[derive(Default)]
 pub(super) struct WarningRow<'a> {
     pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
+    /// Crews whose assessments this row groups.
+    pub(super) crews: BTreeSet<String>,
     /// Assessments whose outcome settled in the window.
     settled: usize,
     /// Assessments written in the window that are excluded or pending.
@@ -484,8 +497,8 @@ impl WarningRow<'_> {
 pub(super) fn rows(
     facts: &AgentFacts,
     window: WindowBounds,
-) -> BTreeMap<(String, String), WarningRow<'_>> {
-    let mut rows: BTreeMap<(String, String), WarningRow<'_>> = BTreeMap::new();
+) -> BTreeMap<ModelEffortKey, WarningRow<'_>> {
+    let mut rows: BTreeMap<ModelEffortKey, WarningRow<'_>> = BTreeMap::new();
     for task in &facts.tasks {
         for assessment in &task.warnings.assessments {
             let written = window.admits(assessment.at);
@@ -496,7 +509,10 @@ pub(super) fn rows(
             if !written && settled.is_none() {
                 continue;
             }
-            let row = rows.entry(assessment.key()).or_default();
+            let row = rows.entry(assessment.key(facts, &task.id)).or_default();
+            if let Some(crew) = assessment.crew() {
+                row.crews.insert(crew.to_string());
+            }
             if written {
                 row.written += 1;
                 row.held += usize::from(!assessment.held.is_empty());

@@ -25,6 +25,7 @@ mod api;
 mod attribution;
 mod candidates;
 mod ci_failures;
+pub(super) mod effort;
 mod facts;
 mod hands;
 pub(crate) mod memory_evidence;
@@ -188,8 +189,8 @@ enum WindowSpan {
 }
 
 pub use api::{
-    agent_attribution, agent_by_type_scorecard, agent_detail, agent_per_task_export,
-    agent_scorecard, agent_size_curves,
+    agent_attribution, agent_by_type_scorecard, agent_detail, agent_detail_with_effort,
+    agent_per_task_export, agent_scorecard, agent_size_curves,
 };
 pub(crate) use query::WindowBounds;
 pub use rank::{RankQuery, RankSeasons, agent_rank, agent_rank_calibration};

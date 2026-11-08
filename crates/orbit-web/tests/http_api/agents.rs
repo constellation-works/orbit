@@ -192,7 +192,16 @@ pub(super) fn implementation_run(
         retry_source_run_id: None,
         knowledge_metrics: None,
         resolved_crew: Some(crew.into()),
-        crew_model: model.map(str::to_string),
+        // Rows group by model and recorded effort, so the shared fixture
+        // model name records one model per crew; a single literal model
+        // would merge every crew's row into one.
+        crew_model: model.map(|model| {
+            if model == "model" {
+                format!("{crew}-model")
+            } else {
+                model.to_string()
+            }
+        }),
         steps: Vec::new(),
         executed_on: None,
     });
@@ -576,7 +585,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
                 "jrun-zero",
                 &zero,
                 "zero",
-                None,
+                Some("zero-model"),
                 start,
                 now - Duration::hours(2),
             );
@@ -878,7 +887,11 @@ fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_cre
                 card["execution_split"],
                 json!([{
                     "crew": "split",
+                    "crews": ["split"],
                     "model": "model unknown",
+                    "reasoning_effort": "unknown",
+                    "effort_label": "effort unknown",
+                    "label": "model unknown @ effort unknown",
                     "managed_tasks": 1,
                     "interactive_tasks": 1,
                     "unclassified_tasks": 1,
@@ -1413,13 +1426,21 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|row| row["crew"] == "luna")
+                .find(|row| row["model"] == "model unknown")
                 .unwrap();
+            assert_eq!(
+                luna["crews"],
+                json!(["luna", "nova"]),
+                "units with no recorded model share the model-unknown row, crews as detail"
+            );
             assert_eq!(
                 luna["counts"]["weighted_landed"], 0,
                 "landed credit goes only to the final implementer"
             );
-            assert_eq!(luna["counts"]["crew_rework"], 2);
+            assert_eq!(
+                luna["counts"]["crew_rework"], 3,
+                "luna's rerun and requeue plus nova's pulled requeue, in one model-unknown row"
+            );
             let cost = sol["stats"]
                 .as_array()
                 .unwrap()
@@ -1560,7 +1581,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 strip["charged"]["implementers"]
                     .as_array()
                     .unwrap()
-                    .contains(&json!({"crew": "luna", "model": "model unknown", "problems": 2})),
+                    .contains(&json!({"crew": "luna", "crews": ["luna", "nova"], "model": "model unknown", "reasoning_effort": "unknown", "effort_label": "effort unknown", "label": "model unknown @ effort unknown", "problems": 3})),
                 "a run without a model is `model unknown`: {strip}"
             );
 

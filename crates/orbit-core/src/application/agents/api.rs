@@ -61,12 +61,25 @@ impl OrbitRuntime {
         model: Option<&str>,
         surface: AgentDetailSurface,
     ) -> Result<Value, OrbitError> {
+        self.agent_role_detail_with_effort(role, query, crew, model, None, surface)
+    }
+
+    pub(crate) fn agent_role_detail_with_effort(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+        crew: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+        surface: AgentDetailSurface,
+    ) -> Result<Value, OrbitError> {
         agent_detail_for_surface(
             &self.agent_scan()?,
             role,
             query,
             crew,
             model,
+            effort,
             Duration::ZERO,
             surface,
         )
@@ -162,8 +175,14 @@ pub fn agent_scorecard(
         .iter()
         .map(|row| {
             let mut value = row.row(spec.terms);
-            value["effort_breakdown"] =
-                row_effort_breakdown(facts, role, window, &row.input.crew, &row.input.model);
+            value["effort_breakdown"] = row_effort_breakdown(
+                facts,
+                role,
+                window,
+                &row.input.crews,
+                &row.input.model,
+                &row.input.effort,
+            );
             value
         })
         .collect();
@@ -284,17 +303,43 @@ pub fn agent_detail(
         query,
         crew,
         model,
+        None,
         cache_ttl,
         AgentDetailSurface::Dashboard,
     )
 }
 
+/// [`agent_detail`] with an effort selection: a wire effort name,
+/// `provider_default` or `unknown`, narrowing to one model-and-effort row.
+pub fn agent_detail_with_effort(
+    facts: &AgentFacts,
+    role: AgentRole,
+    query: &AgentQuery,
+    crew: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    cache_ttl: Duration,
+) -> Result<Value, OrbitError> {
+    agent_detail_for_surface(
+        facts,
+        role,
+        query,
+        crew,
+        model,
+        effort,
+        cache_ttl,
+        AgentDetailSurface::Dashboard,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn agent_detail_for_surface(
     facts: &AgentFacts,
     role: AgentRole,
     query: &AgentQuery,
     crew: &str,
     model: Option<&str>,
+    effort: Option<&str>,
     cache_ttl: Duration,
     surface: AgentDetailSurface,
 ) -> Result<Value, OrbitError> {
@@ -313,9 +358,19 @@ fn agent_detail_for_surface(
         ),
         None => (None, Vec::new()),
     };
+    let effort = effort
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(super::effort::parse_recorded_effort);
     let matching: Vec<_> = scored
         .iter()
-        .filter(|row| row.input.crew == crew && model.is_none_or(|model| row.is(crew, model)))
+        .filter(|row| {
+            row.has_crew(crew)
+                && model.is_none_or(|model| row.input.model == model)
+                && effort
+                    .as_ref()
+                    .is_none_or(|effort| &row.input.effort == effort)
+        })
         .collect();
     let row = match matching.as_slice() {
         [row] => row,
@@ -351,8 +406,14 @@ fn agent_detail_for_surface(
     payload["fleet_average"] = json!(fleet_average.map(score::number));
     payload["provisional"] = json!(score::provisional(role, &scored));
     payload["row"] = row.row(spec.terms);
-    payload["row"]["effort_breakdown"] =
-        row_effort_breakdown(facts, role, window, &row.input.crew, &row.input.model);
+    payload["row"]["effort_breakdown"] = row_effort_breakdown(
+        facts,
+        role,
+        window,
+        &row.input.crews,
+        &row.input.model,
+        &row.input.effort,
+    );
     payload["terms"] = json!(row.terms(spec.terms));
     Ok(payload)
 }
@@ -378,9 +439,11 @@ fn row_effort_breakdown(
     facts: &AgentFacts,
     role: AgentRole,
     window: WindowBounds,
-    crew: &str,
+    crews: &[String],
     model: &str,
+    _effort: &super::effort::RecordedEffort,
 ) -> Value {
+    let crew = crews.first().map(String::as_str).unwrap_or_default();
     // Authors are not execution crews. Task creation/orchestration does not
     // record dispatch effort, so its historical population stays unknown.
     if role == AgentRole::Orchestrators {
@@ -393,7 +456,7 @@ fn row_effort_breakdown(
                     .execution
                     .as_ref()
                     .and_then(|execution| execution.crew.as_deref())
-                    == Some(crew)
+                    .is_some_and(|crew| crews.iter().any(|name| name == crew))
                 && fact.model.as_deref() == Some(model)
                 && match role {
                     AgentRole::Implementers => matches!(

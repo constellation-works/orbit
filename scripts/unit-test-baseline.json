@@ -206,6 +206,8 @@
         "adapter/engine_host/actions/sandbox/tests/runtime_grants.rs::rejects_a_store_that_traverses_or_escapes_the_root",
         "adapter/engine_host/actions/sandbox/tests/runtime_grants.rs::sidecar_grant_skips_a_sidecar_symlinked_outside_the_root",
         "adapter/engine_host/actions/sandbox/tests/runtime_grants.rs::sqlite_grants_reject_an_escaping_alias_without_touching_its_target",
+        "application/agents/tests/api.rs::implementer_rows_group_by_model_and_recorded_effort",
+        "application/agents/tests/api.rs::reviewer_ranks_are_dense_over_ranked_rows",
         "application/agents/tests/api.rs::sparse_tier_scorecard_retains_own_evidence_and_conserves_fleet",
         "application/agents/tests/api.rs::supported_tier_scorecard_keeps_existing_scores",
         "application/agents/tests/rank.rs::calibrated_season_stores_window_and_reference_size_and_drives_the_board",

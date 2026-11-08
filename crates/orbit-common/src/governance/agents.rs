@@ -29,7 +29,7 @@ pub const AGENTS: NounSpec<AgentsVerb> = NounSpec {
     cli_name: "agents",
     tool_prefix: "orbit.agents",
     tool_only_registration: ToolOnlyRegistration::Inactive,
-    cli_about: "Score agents by crew and model",
+    cli_about: "Score agents by model and recorded effort",
     audit_target_type: "agents",
     audit_target_param: "role",
     cli_groups: &[],
@@ -133,8 +133,8 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
-    cli_about: "Show one role's scorecard rows by crew and model",
+    tool_description: "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work, to compare model-and-effort rows for that role; each row lists the crews that contributed its units, units with no recorded effort form a separate effort-unknown row, and a null effort is the provider default. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    cli_about: "Show one role's scorecard rows by model and recorded effort",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
@@ -162,6 +162,20 @@ const ROW: &[ParamSpec] = &[
         CliArgKind::flag("crew"),
         "The row's crew, or the orchestrator name tasks record",
     )),
+    both(
+        "row_effort",
+        ParamType::String,
+        "The row's recorded reasoning effort (low, medium, high, xhigh or max), provider_default for a null effort, or unknown for work with no recorded effort; optional when the crew and model name one row.",
+        CliArgKind::Flag {
+            long: "effort",
+            delimiter: None,
+            aliases: &[],
+            visible_aliases: &[],
+            value_name: Some("EFFORT"),
+            multiple: false,
+        },
+        "The row's recorded effort; optional when the crew and model name one row",
+    ),
     both(
         "row_model",
         ParamType::String,

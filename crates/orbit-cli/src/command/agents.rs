@@ -190,9 +190,8 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     };
     let mut columns = vec![
         Column::new("RANK").number(),
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
-        Column::new("EFFORT"),
+        Column::new("ROW"),
+        Column::new("CREWS"),
         Column::new("UNITS").number(),
         Column::new("SCORE").number(),
     ];
@@ -214,9 +213,11 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
             } else {
                 number(&row["rank"])
             },
-            text(&row["crew"]),
-            text(&row["model"]),
-            effort_labels(&row["effort_breakdown"]),
+            text(&row["label"]),
+            row["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&row["crew"])),
             number(&row["units"]),
             number(&row["score"]),
         ];
@@ -389,9 +390,12 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
         format!("rank {}", number(&row["rank"]))
     };
     let mut blocks = vec![Block::text(format!(
-        "{} · {} ({standing})\n{}\n{} {} · score {} · fleet average {}",
-        text(&row["crew"]),
-        text(&row["model"]),
+        "{} ({standing}) · crews {}\n{}\n{} {} · score {} · fleet average {}",
+        text(&row["label"]),
+        row["crews"]
+            .as_array()
+            .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| text(&row["crew"])),
         selection_line(value),
         number(&row["units"]),
         text(&value["unit"]),

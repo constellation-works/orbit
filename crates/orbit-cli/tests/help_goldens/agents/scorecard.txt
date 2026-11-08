@@ -1,4 +1,4 @@
-Show one role's scorecard rows by crew and model
+Show one role's scorecard rows by model and recorded effort
 
 Usage: orbit agents scorecard [OPTIONS] --role <ROLE>
 
