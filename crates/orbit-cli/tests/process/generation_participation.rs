@@ -212,6 +212,78 @@ fn workspace_list_from_unregistered_cwd_joins_foreign_generation_without_writes(
     );
 }
 
+#[test]
+fn workspace_list_from_home_lists_registered_workspaces_without_layout_upgrade() {
+    let host = Host::new();
+    // Seed the runtime databases as a live host process would have.
+    host.orbit(&host.temp.path().join("alpha"), &["task", "list", "--json"]);
+
+    for cwd in [host.home.clone(), host.home.join("nested")] {
+        if cwd != host.home {
+            fs::create_dir_all(&cwd).expect("nested home cwd");
+        }
+        let output = host
+            .command(&cwd)
+            .args(["workspace", "list", "--json"])
+            .output()
+            .expect("run orbit workspace list from home");
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.status.success(),
+            "workspace list from home must list registered workspaces: {combined}"
+        );
+        assert!(
+            !combined.contains("pending layout upgrade")
+                && !combined.contains("upgrade admission refused")
+                && !combined.contains("adopt-authority"),
+            "workspace list must never report a layout upgrade for the global root: {combined}"
+        );
+        let workspaces: Value =
+            serde_json::from_slice(&output.stdout).expect("workspace list JSON from home");
+        let mut names = workspaces
+            .as_array()
+            .expect("workspace array")
+            .iter()
+            .map(|workspace| workspace["name"].as_str().expect("workspace name"))
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, ["alpha", "beta", "gamma"], "cwd {cwd:?}");
+    }
+}
+
+#[test]
+fn task_list_from_home_refuses_global_root_as_workspace() {
+    let host = Host::new();
+    let output = host
+        .command(&host.home)
+        .args(["task", "list", "--json"])
+        .output()
+        .expect("run orbit task list from home");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "task list from home must refuse the global root as a workspace: {combined}"
+    );
+    assert!(
+        combined.contains("is the global Orbit root, not a workspace"),
+        "task list from home must use the global-root refusal: {combined}"
+    );
+    assert!(
+        !combined.contains("pending layout upgrade")
+            && !combined.contains("upgrade admission refused")
+            && !combined.contains("adopt-authority"),
+        "task list from home must not suggest migrating the global root: {combined}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn task_list_from_unregistered_cwd_does_not_return_unbound_tasks() {
