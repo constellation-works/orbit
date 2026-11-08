@@ -126,6 +126,27 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
             assert_eq!(routine["enabled"], false, "{listed}");
 
             let id = create(&server, "Keep the release branch green.");
+            // A widening without the operator's words is refused before
+            // anything is raised or written.
+            let unquoted = server.send(
+                "POST",
+                &format!("/api/residents/{id}/grant{WS}"),
+                json!({"add": ["dispatch"], "workspaces": ["fixture"], "quote": "  "}),
+            );
+            assert_eq!(unquoted.status().as_u16(), 400);
+            let unquoted: Value = unquoted.json().unwrap();
+            assert_eq!(
+                unquoted["error"],
+                "a widening needs your words authorizing it; they are recorded verbatim on the grant request",
+                "{unquoted}"
+            );
+            let untouched = fixture.runtime.show_resident_mandate(&id).unwrap();
+            assert_eq!(untouched["authority"]["revision"], 0, "{untouched}");
+            assert_eq!(untouched["open_requests"], json!([]), "{untouched}");
+            assert_eq!(
+                audits(&fixture, "resident.grant", AuditEventStatus::Failure),
+                1
+            );
             let granted = json_ok(server.send(
                 "POST",
                 &format!("/api/residents/{id}/grant{WS}"),
@@ -133,6 +154,20 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
                        "quote": "Dispatch and promote in fixture."}),
             ));
             assert_eq!(granted["outcome"], "granted", "{granted}");
+            let keys = |value: &Value| {
+                value
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                keys(&granted),
+                ["outcome", "request", "authority", "effective_authority"],
+                "an answered widening renders the answered request and the re-read authority"
+            );
+            assert_eq!(granted["request"]["state"], "answered", "{granted}");
             let toggled = json_ok(server.send(
                 "POST",
                 &format!("/api/routines/toggle{WS}"),
@@ -174,7 +209,11 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
                        "quote": "Dispatch and promote in fixture."}),
             ));
             assert_eq!(repeated["outcome"], "unchanged", "{repeated}");
-            assert!(repeated["request"].is_null(), "{repeated}");
+            assert_eq!(
+                keys(&repeated),
+                ["outcome", "authority"],
+                "an already-held widening renders the single grant change"
+            );
             let after = json_ok(server.get(&format!("/api/residents/{id}{WS}")));
             assert_eq!(after["authority"], shown["authority"], "{after}");
             assert_eq!(after["effective_authority"], shown["effective_authority"]);
