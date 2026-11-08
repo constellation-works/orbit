@@ -47,7 +47,10 @@ impl OrbitRuntime {
     /// Why an active mandate is stalled, as attention and the reads report
     /// it; `None` for any other state. When the workspace's cycle routine
     /// is disabled (`cycle_routine_disabled` names it), that is named as
-    /// the cause, since no cycle can fire until it is enabled.
+    /// the cause, since no cycle can fire until it is enabled — and it
+    /// stalls the mandate in its own right, even one that checkpointed
+    /// recently, because no cycle will ever fire for it until the routine
+    /// is enabled or the mandate is stopped.
     pub(crate) fn resident_stall_of(
         &self,
         view: &ResidentView,
@@ -68,6 +71,25 @@ impl OrbitRuntime {
                 stall.reason,
                 resident_cycle_routine_disabled_reason(routine_name)
             );
+        }
+        if stall.is_none()
+            && let Some(routine_name) = cycle_routine_disabled
+        {
+            let last_checkpoint_at = comments.iter().rev().find_map(|comment| {
+                match ResidentComment::parse(&comment.message).ok()? {
+                    ResidentComment::Checkpoint(record)
+                        if record.mandate == view.task.id.as_str() =>
+                    {
+                        Some(comment.at)
+                    }
+                    _ => None,
+                }
+            });
+            stall = Some(due::ResidentStall {
+                reason: resident_cycle_routine_disabled_reason(routine_name),
+                since: last_checkpoint_at.unwrap_or(view.task.created_at),
+                last_checkpoint_at,
+            });
         }
         Ok(stall)
     }

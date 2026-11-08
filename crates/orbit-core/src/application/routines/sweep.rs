@@ -347,6 +347,33 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // Resident mandates whose deadline has passed end here, on the owner,
+    // whether or not their cycle routine runs: expiry starts no work, so
+    // like notice closure it runs before the host-shutdown hold. Owner
+    // entries only; the expiry itself also refuses a replica runtime.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            match runtime.expire_resident_mandates_past_deadline(now_utc) {
+                Ok(expired) if !expired.is_empty() => tracing::info!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    expired = ?expired,
+                    "sweep.resident_deadline_expired"
+                ),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.resident_deadline_expiry_failed"
+                ),
+            }
+        }
+    }
+
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
     // this tick starts, so the whole fire phase — routines and auto-tasks —
     // stands down for it. A later schedule does not. Cursors are not advanced

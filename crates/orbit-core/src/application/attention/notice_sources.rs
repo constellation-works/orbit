@@ -218,8 +218,10 @@ pub(super) fn friction_attention_items(
 }
 
 /// `resident_stalled`: every active resident mandate that has not
-/// checkpointed for twice its heartbeat, or whose last three cycles were all
-/// `incomplete`. Paused, taken-over, handed-off and ended mandates are meant
+/// checkpointed for twice its heartbeat, whose last three cycles were all
+/// `incomplete`, or whose workspace cycle routine is disabled (no cycle
+/// can fire at all; the next action is to enable it or stop the mandate).
+/// Paused, taken-over, handed-off and ended mandates are meant
 /// to wait and are never stalled.
 pub(super) fn resident_stalled_items(
     runtime: &OrbitRuntime,
@@ -256,10 +258,24 @@ pub(super) fn resident_stalled_items(
         let mut show = subject.tool_next("orbit.resident.show", "Inspect the resident");
         show.input = Some(json!({"task_id": task.id, "workspace": workspace.id}));
         // With the cycle routine disabled, `wake` cannot work: no cycle
-        // follows it. The next step that can work is enabling the routine.
+        // follows it. The next steps that can work are enabling the
+        // routine or stopping the mandate.
+        let mut stop = subject.tool_next("orbit.resident.control", "Stop the mandate");
+        stop.input = Some(json!({
+            "task_id": task.id,
+            "workspace": workspace.id,
+            "action": "stop",
+        }));
+        stop.needs = vec!["reason".into()];
+        stop.command = format!(
+            "orbit --workspace '{}' resident control {} stop --reason '<reason>'",
+            workspace.id, task.id
+        );
         let mut next = if let Some(routine_name) = &cycle_routine_disabled {
-            let mut enable =
-                subject.tool_next("orbit.routine.control", "Enable the resident cycle routine");
+            let mut enable = subject.tool_next(
+                "orbit.routine.control",
+                "Enable the resident cycle routine or stop the mandate",
+            );
             enable.input = Some(json!({
                 "workspace": workspace.id,
                 "action": "toggle",
@@ -294,7 +310,11 @@ pub(super) fn resident_stalled_items(
             );
             wake
         };
-        next.also = vec![show];
+        next.also = if cycle_routine_disabled.is_some() {
+            vec![stop, show]
+        } else {
+            vec![show]
+        };
         let detail = json!({
             "stall": stall.reason,
             "last_checkpoint_at": stall.last_checkpoint_at,
