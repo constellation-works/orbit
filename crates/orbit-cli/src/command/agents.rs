@@ -55,8 +55,9 @@ record yet are shown as unmeasured and leave the weights.
 
 The ranked window (--window, 30 days) ends --settle-lag (14 days) before \
 --until, so late escaped regressions have arrived; --live ends it at --until \
-instead and is provisional. A model needs 30 tasks across two \
-assessed tiers to be ranked, and the board needs three such models. Models \
+instead and is provisional. A model needs at least 30 implemented tasks \
+spanning at least two assessed tiers with at least 5 tasks each to be \
+ranked, and the board needs three such models. Models \
 whose scores are not distinguishable share a band, cheapest first.
 
 Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the \
