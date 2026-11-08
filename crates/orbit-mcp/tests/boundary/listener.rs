@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
@@ -15,6 +16,12 @@ use tokio::net::TcpStream;
 
 struct NoTools;
 
+/// Records whether a tool call was dispatched. The refusal test admits a uid
+/// other than this process, so the flag must stay clear.
+struct RecordingHost {
+    called: Arc<AtomicBool>,
+}
+
 impl McpHost for NoTools {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         Ok(Vec::new())
@@ -27,6 +34,22 @@ impl McpHost for NoTools {
         _context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         Err(OrbitError::InvalidInput(format!("no tool {name}")))
+    }
+}
+
+impl McpHost for RecordingHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    fn call_tool(
+        &self,
+        _name: &str,
+        _input: Value,
+        _context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.called.store(true, Ordering::SeqCst);
+        Ok(Value::Null)
     }
 }
 
@@ -259,6 +282,138 @@ async fn a_peer_that_streams_an_endless_message_is_disconnected() {
     assert!(
         closed.is_ok(),
         "the listener must close a session whose message exceeds the size ceiling"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_different_uid_is_refused_before_any_tool_call() {
+    let called = Arc::new(AtomicBool::new(false));
+    let listener = McpListener::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(RecordingHost {
+            called: Arc::clone(&called),
+        }),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_allowed_peer_uid(McpListener::current_euid().wrapping_add(1));
+    let addr = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = TcpStream::connect(addr).await.expect("connect");
+    // initialize is answered on an admitted session (see the same-user tests).
+    // A different uid must close the socket before that response, and before
+    // call_tool can run.
+    let _ = client
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"probe","arguments":{}}}
+"#,
+        )
+        .await;
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut buf)).await;
+    match read {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => {}
+        Err(_) => panic!("a different-uid peer must be closed before any MCP response"),
+    }
+    assert!(
+        buf.is_empty(),
+        "a different-uid peer is refused before any MCP response: {buf:?}"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "a different-uid peer must be refused before any tool call"
+    );
+    server.abort();
+}
+
+/// The kernel table has two established rows. Only the client row may admit.
+/// A lookup that reads the reversed server row would accept this peer, because
+/// that row carries this process's uid.
+#[tokio::test]
+async fn the_client_row_is_refused_when_the_server_row_matches() {
+    let called = Arc::new(AtomicBool::new(false));
+    let euid = McpListener::current_euid();
+    let listener = McpListener::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(RecordingHost {
+            called: Arc::clone(&called),
+        }),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_tcp_uid_rows(euid.wrapping_add(1), euid);
+    let addr = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = TcpStream::connect(addr).await.expect("connect");
+    let _ = client
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"probe","arguments":{}}}
+"#,
+        )
+        .await;
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut buf)).await;
+    match read {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => {}
+        Err(_) => {
+            panic!("a client row with a different uid must be closed before any MCP response")
+        }
+    }
+    assert!(
+        buf.is_empty(),
+        "the reversed server row must not admit the peer: {buf:?}"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "a client row with a different uid must be refused before any tool call"
+    );
+    server.abort();
+}
+
+/// The reversed row carries a different uid. Admission has to follow the
+/// client row, or this same-user peer would be refused.
+#[tokio::test]
+async fn the_client_row_is_admitted_when_the_server_row_differs() {
+    let euid = McpListener::current_euid();
+    let listener = McpListener::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_tcp_uid_rows(euid, euid.wrapping_add(1));
+    let addr = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = BufReader::new(TcpStream::connect(addr).await.expect("connect"));
+    client
+        .get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"ping\"}\n")
+        .await
+        .expect("send ping");
+    let mut reply = String::new();
+    tokio::time::timeout(Duration::from_secs(2), client.read_line(&mut reply))
+        .await
+        .expect("a client row owned by this user must be admitted")
+        .expect("read ping");
+    let response: Value = serde_json::from_str(&reply).expect("JSON-RPC ping response");
+    assert_eq!(response["id"], 0);
+    assert!(
+        response.get("result").is_some(),
+        "ping must succeed when only the client row matches: {reply}"
     );
     server.abort();
 }

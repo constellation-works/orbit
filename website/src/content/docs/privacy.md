@@ -113,7 +113,9 @@ under their own terms.
 - `orbit mcp serve`, the MCP server the plugins start, talks to your agent
   client over standard input and output. It opens no network port.
 - `orbit mcp listen` binds `127.0.0.1:7879` by default and refuses any other
-  interface unless you pass `--allow-non-loopback`.
+  interface unless you pass `--allow-non-loopback`. It accepts a connection
+  only when the peer's user id is the server's, and refuses a different user
+  or a remote TCP client before reading any message.
 - `orbit web serve` (the dashboard) binds `127.0.0.1:7878` and refuses
   addresses that are not loopback. Its content security policy lets pages load
   scripts, styles, and other resources only from the dashboard itself.

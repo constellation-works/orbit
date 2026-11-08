@@ -52,14 +52,15 @@ checkout, resolve a workspace, filter tools, make authorization decisions, or
 forward the call through another machine.
 
 `orbit mcp listen` is the socket form of the same server, for deployments that
-need one — typically reached through an SSH tunnel. It binds loopback unless a
-wider bind is asked for explicitly, because the socket authenticates no client.
-Local processes can still connect to loopback without authentication. A browser
-page can also send HTTP to loopback, so the listener closes connections whose
-first byte is not a JSON object start before rmcp sees any message. It is a
-transport adapter only: it adds no broker, checkout preflight, placement
-routing, or client-side capability filter. The listener's server context is
-agent-only, as described below.
+need one — typically reached through an SSH tunnel as this user. It binds
+loopback unless a wider bind is asked for explicitly. A connection is accepted
+only when the peer's user id is the server's; a different user is refused
+before any message is read, and a remote TCP peer has no local user id and is
+refused. A browser page can also send HTTP to loopback, so the listener closes
+connections whose first byte is not a JSON object start before rmcp sees any
+message. It is a transport adapter only: it adds no broker, checkout preflight,
+placement routing, or client-side capability filter. The listener's server
+context is agent-only, as described below.
 
 ## Runtime rule
 
@@ -138,9 +139,9 @@ SSH-originated session exactly as for a local one, because an SSH login to the
 destination is ownership of it [ORB-12564] — and Core enforces those effective
 capabilities at the tool boundary. The client is what decides: a proxy started
 with `--operator` composes an operator argv for its destination, and a client
-running as an agent never does. The TCP listener remains a transport only and
-authenticates no client, so it is hardcoded to agent authority and binds
-loopback unless a wider bind is explicitly requested.
+running as an agent never does. The TCP listener remains a transport only. It
+admits only a peer with the server's user id, stays hardcoded to agent
+authority, and binds loopback unless a wider bind is explicitly requested.
 
 Federated mode adds the configured-destination mux as an explicit namespace
 exception. It performs live discovery and host-qualified routing, and the

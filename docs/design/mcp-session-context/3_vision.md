@@ -26,7 +26,7 @@ Authorization is enforced behind Core dispatch. Session capability policy comes 
 
 ### Additional transports
 
-The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call [ORB-10690] [ORB-10806] [ORB-11009]. Any new transport must follow the same rules. Because the TCP listener authenticates no client, its safe default remains loopback-only; a non-loopback deployment must provide access control outside the listener.
+The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call [ORB-10690] [ORB-10806] [ORB-11009]. Any new transport must follow the same rules. The TCP listener admits only a peer whose user id is the server's and refuses a remote TCP client, which has no local user id. Its safe default remains loopback-only.
 
 ### Additional context fields
 

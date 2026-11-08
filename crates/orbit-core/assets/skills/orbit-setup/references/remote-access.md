@@ -253,9 +253,12 @@ orbit mcp listen
 orbit mcp listen 0.0.0.0:7879 --allow-non-loopback
 ```
 
-Default is loopback port 7879. The socket authenticates no client; use a protected
-network path such as an SSH tunnel. Local processes can connect to loopback, and
-a browser page can send HTTP requests there; the listener rejects HTTP framing
-before its body reaches MCP dispatch. Non-loopback exposure is an explicit choice,
-not a remedy for a missing capability. SSH caller-policy configuration does not
-turn a raw TCP socket or dashboard into an authenticated per-user service.
+Default is loopback port 7879. A connection is accepted only when the peer's
+user id is the server's. A different user is refused before any MCP message is
+read. A remote TCP peer has no local user id and is refused; reach the listener
+through an SSH tunnel as this user. Local same-user processes can connect to
+loopback, and a browser page can send HTTP requests there; the listener rejects
+HTTP framing before its body reaches MCP dispatch. Non-loopback exposure is an
+explicit choice, not a remedy for a missing capability, and it does not admit
+other users. SSH caller-policy configuration does not turn a raw TCP socket or
+dashboard into an authenticated per-user service.

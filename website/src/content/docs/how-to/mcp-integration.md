@@ -195,9 +195,12 @@ orbit mcp listen              # 127.0.0.1:7879
 ```
 
 The listener serves the same tools over TCP, one session per connection, for
-setups such as a server-side Orbit reached through an SSH tunnel. It does not
-authenticate clients, so it binds loopback unless you pass
-`--allow-non-loopback`.
+setups such as a server-side Orbit reached through an SSH tunnel. It accepts a
+connection only when the peer's user id is the server's. A different user is
+refused before any message is read. A remote TCP client has no local user id
+and is refused; reach the listener through an SSH tunnel as this user. It binds
+loopback unless you pass `--allow-non-loopback`, and that flag does not admit
+other users.
 
 The listener allows 64 concurrent sessions. Each accepted connection has five
 seconds to send a complete initialization request and receive its response;

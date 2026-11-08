@@ -260,21 +260,23 @@ pub(in super::super) fn serve_mcp_listener(
     // machine label to trust; each accepted connection contributes only the
     // peer address it was observed at.
     //
-    // For the same reason the socket serves agent authority only: it
-    // authenticates no client, so every accepted connection would otherwise
-    // inherit whatever authority the listening process was started with.
+    // The socket admits a peer only when that peer's user id is this process,
+    // checked before any byte is read. It still serves agent authority only:
+    // matching the user id is not a promotion to operator, and a listener must
+    // not hand the process's authority to every admitted session. Operator
+    // remains the explicit `orbit mcp serve --operator` path.
     //
     // It binds a workspace only when the operator names one (`orbit --workspace
     // <selector> mcp listen`). That is a default and never authority: it is
     // resolved against the registry per call, a client that announces a
-    // workspace or passes one per call takes precedence, and any peer could
-    // already name the same workspace itself. Without it a socket is shared by
-    // whoever can reach it, so each session names its own workspace, and the
-    // managed-child `ORBIT_WORKSPACE` envelope is not read here.
+    // workspace or passes one per call takes precedence, and an admitted peer
+    // could already name the same workspace itself. Without it each session
+    // names its own workspace, and the managed-child `ORBIT_WORKSPACE` envelope
+    // is not read here.
     //
-    // This reasoning is unchanged by argv-propagated remote authority: SSH
-    // authenticates the caller before Orbit runs, and a socket authenticates
-    // nobody at all [ORB-12564].
+    // SSH authenticates the caller before Orbit runs. A TCP peer is admitted
+    // only when its local user id matches this process; that check does not
+    // make the listener an operator session [ORB-12564].
     let (host, session_context) = compose_server(
         global_root,
         None,

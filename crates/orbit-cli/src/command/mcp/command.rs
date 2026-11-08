@@ -52,10 +52,12 @@ pub enum McpSubcommand {
     ///
     /// Each accepted connection is an independent MCP session against the same
     /// server-local tool surface, resolved and audited exactly as a stdio session
-    /// is. The socket authenticates no client, so it binds loopback unless a
-    /// wider bind is asked for explicitly. Local processes can still connect to
-    /// loopback. HTTP requests, including those sent by browser pages, are
-    /// closed before their bodies can be dispatched as MCP messages.
+    /// is. The socket accepts a connection only when the peer's user id is the
+    /// server's. A different user is refused before any MCP message is read. It
+    /// binds loopback unless a wider bind is asked for explicitly. A remote TCP
+    /// peer has no local user id and is refused; reach the listener through an
+    /// SSH tunnel as this user. HTTP requests, including those sent by browser
+    /// pages, are closed before their bodies can be dispatched as MCP messages.
     ///
     /// `--workspace <selector>` binds every accepted session to that workspace
     /// by default, as `orbit mcp serve --workspace` does; a client that

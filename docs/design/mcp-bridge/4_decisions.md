@@ -58,9 +58,10 @@ IP as audit metadata.
 **Consequences.** A transport is chosen by naming it. The listener adds no
 capability filter, placement rule, owner routing, or checkout authority; a socket
 call reaches the same host and the same single Core dispatch and audit boundary a
-stdio call does. Because the socket authenticates no client, restricting who can
-reach it stays a deployment responsibility, and the default bind is the one that
-cannot be reached off-box.
+stdio call does. The listener admits only a peer whose user id is the server's
+and refuses everyone else before reading, including a remote TCP client.
+Restricting the bind address stays a deployment responsibility, and the default
+bind is the one that cannot be reached off-box.
 
 ## Every tool call crosses Core once
 
@@ -106,8 +107,9 @@ started with, for an SSH-originated session exactly as for a local one, and Core
 enforces the effective capabilities and governed operations after server-side
 workspace resolution. An SSH login to the destination is ownership of it, so the
 client's `--operator` is the operator statement there; a client running as an
-agent never propagates it. The TCP listener authenticates no client and
-therefore serves agent authority only.
+agent never propagates it. The TCP listener admits only a same-user peer and
+still serves agent authority only; the user-id check does not promote the
+session to operator.
 
 **Consequences.** Direct local, SSH, and socket calls share Core's operation
 boundary. *(Amended by [ORB-12564]: the original decision intersected the

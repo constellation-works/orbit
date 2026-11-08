@@ -163,9 +163,10 @@ orbit mcp listen [ADDR] [--allow-non-loopback]
 
 The listener binds before it accepts, so the bind policy is applied and the
 assigned address is known before any client can arrive. A non-loopback address is
-refused unless the operator asked for it explicitly, because the socket
-authenticates no client: local processes can reach its agent tool surface even
-when it binds loopback. A browser page can send HTTP requests to loopback, so
+refused unless the operator asked for it explicitly. After accept, only a peer
+whose user id is the server's is admitted, and a different user is refused
+before any message is read. A remote TCP peer has no local user id and is
+refused. A browser page can send HTTP requests to loopback, so
 the listener closes a connection unless its first byte is `{`. This check runs
 before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body
 ([ORB-12929] closed that browser-originated request path).
@@ -173,7 +174,7 @@ rmcp's stream transport caps one incoming line at 16 MiB (`DEFAULT_MAX_LINE_LENG
 in rmcp 3.8) [ORB-21031]. A longer line is discarded and logged while the connection stays
 open. The listener adds a stricter guard beneath rmcp: it fails the read and
 closes the session once a single message exceeds 8 MiB
-(`DEFAULT_MAX_MCP_MESSAGE_BYTES`), so an unauthenticated peer cannot grow a message
+(`DEFAULT_MAX_MCP_MESSAGE_BYTES`), so a peer cannot grow a message
 past that bound, and rmcp's discard path is never reached on this listener. The
 pollable Unix stdio handover pump enforces the same 16 MiB line limit before
 buffering or tracking a complete line; an oversized line closes that stdio
@@ -194,7 +195,8 @@ Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
 audit boundary. The listener adds no broker, checkout preflight, or placement
 decision and makes no separate client-side capability or authorization check; it
-serves agent authority because it authenticates no client.
+serves agent authority only: a matching user id admits the session and does not
+promote it to operator.
 
 ## 5. Direct v1 workspace authority
 
@@ -294,8 +296,8 @@ Core enforces the resulting capabilities and governed operations after the
 accepting server has resolved the session. A proxy or UI may not grant authority,
 because either can be bypassed by reaching the server directly. The TCP listener
 is the one place that ignores its process's authority and serves `agent` only:
-it authenticates no client, so a socket peer has not demonstrated the SSH login
-the argv rule rests on. Federated destinations additionally enforce the mux's
+a matching local user id is not the SSH login the argv rule rests on, so a
+socket peer is not promoted to operator. Federated destinations additionally enforce the mux's
 destination and checkout-class checks.
 
 ## 9. Separate web transport
