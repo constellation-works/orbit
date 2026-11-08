@@ -51,6 +51,15 @@ died without a checkpoint. Its actions are in the ledger under
 - A call the dead cycle left `started` is refused as in doubt. Read the
   subject's current state and decide from that evidence; never blindly retry
   a mutating action.
+- A recovery cycle also refuses every call to a tool with a different input
+  when the dead cycle recorded a legacy-digest row for that tool (a row
+  written before input digests were canonicalised) in phase `ok`,
+  `already_done` or `started`. A legacy row cannot be matched to a reordered
+  call, so Core refuses rather than replay it. The refusal carries
+  `resident_action_in_doubt`, but it does not mean the refused call is in
+  doubt: that call was never started and has no ledger row. Read the
+  subject's current state before any further call to that tool, and decide
+  from that evidence.
 - Repeated completed actions must be zero. If state contradicts the ledger,
   escalate rather than improvising a repair.
 

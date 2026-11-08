@@ -90,6 +90,12 @@ spec:
       `brief.recovered_actions` first. A call identical to one it completed
       answers `already_done` with the original key; a call it left in doubt
       is refused: check its effect instead of repeating it.
+      A legacy-digest row (written before input digests were canonicalised)
+      that the dead cycle recorded `ok`, `already_done` or `started` for a
+      tool refuses every call to that tool with a different input, with
+      `resident_action_in_doubt`. That refusal does not mean the refused call
+      is in doubt: it was never started. Check the subject's state before
+      calling that tool again.
 
     Every write you make returns `resident_action_key`. Your checkpoint lists
     each write in `actions[]` with that key, its kind, its subject task and
