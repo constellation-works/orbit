@@ -575,7 +575,7 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
-- **`host-health`** (`hard`) — enabled-by-default daily review of host-local
+- **`host-health`** (`hard`) — enabled-by-default weekly review of host-local
   `orbit doctor --json` findings, Orbit service logs, and a read-only Orbit
   version and migrations check. That check records `orbit --version`, the
   executable path, SHA-256 and any recorded local-candidate source commit,

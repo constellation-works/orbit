@@ -63,8 +63,8 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 
 ## Host-health auto-task
 
-`host-health` reads `orbit doctor --json` and warning/error service logs daily
-(at 07:10 in the scheduler's local timezone). Unlike every other shipped
+`host-health` reads `orbit doctor --json` and warning/error service logs weekly
+(on Mondays at 07:10 in the scheduler's local timezone). Unlike every other shipped
 definition, it starts enabled in a new workspace. In an existing workspace,
 `orbit workspace sync` or `orbit workspace init` turns on a `host-health`
 definition no operator has configured (its file still holds the bytes Orbit
@@ -76,16 +76,16 @@ and tune its schedule, with:
 ```sh
 orbit auto-task toggle host-health off
 orbit auto-task toggle host-health on
-orbit auto-task update host-health --cron '10 7 * * *'
+orbit auto-task update host-health --cron '10 7 * * 1'
 # Or use an interval:
-orbit auto-task update host-health --every-minutes 1440
+orbit auto-task update host-health --every-minutes 10080
 ```
 
 Preparation pins the owner pass with `required_machine`. Collection never
 repairs doctor checks, restarts services, edits config or reads credentials.
 Doctor warnings/errors qualify on first sight; log signatures require three
 distinct events across two completed collection windows on the same host within
-seven days. Signatures remove volatile IDs, SHAs, home paths, ports and times.
+fourteen days. Signatures remove volatile IDs, SHAs, home paths, ports and times.
 An update, source-lag or drift signature keeps its target version or commit.
 The owner searches open tasks, tasks closed within 30 days and open frictions,
 comments new counts on a covering task, and retains rejected mappings without
@@ -125,13 +125,13 @@ not run it on that host. To monitor a follower, the operator creates a collector
 variant in the **owner's** `.orbit/auto_tasks/`, using the shipped collection and
 report instructions. Give it a unique name such as `host-health-collector-build`,
 tags `host-health-collector` and `no-diff-expected`, the explicit role
-`collector-only`, the target's stable machine ID, and an earlier daily schedule.
+`collector-only`, the target's stable machine ID, and an earlier weekly schedule.
 Preparation must pin its `required_machine` to that target, and that follower
 must already be pulling work from the owner. Do not enable an owner aggregator
 on a replica. A collector files nothing; it returns its two artifacts through
 `task_artifacts` in claimed mode. The owner reads completed collector-task
 artifacts, verifies their machine identity, and imports each host/window once.
-Reports over 36 hours old or absent are coverage gaps; the previous host cursor
+Reports over 8 days old or absent are coverage gaps; the previous host cursor
 is retained. Without configured collectors the shipped pass covers its owner
 only. Collector variants are operator-managed definitions; copy future collection
 contract changes deliberately.
