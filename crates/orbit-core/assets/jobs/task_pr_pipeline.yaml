@@ -51,6 +51,11 @@
 #   that advances again after a completion step's recovery is followed a
 #   bounded number of times per run before holding as base_chase_exhausted
 #   for the next authorized owner drain adoption pass.
+# - ORB-23322: a `completion.hold` rule that matches the PR's changed files
+#   or the task's complexity, type or tags stops `complete_pr` before it
+#   merges. The PR stays ready, the task stays in review with the rule and
+#   match recorded, and the step's output names the tasks as held; an
+#   auto-fix run still watches the PR as it would without `completion: done`.
 # - `auto_fix: true` (`orbit run auto --auto-fix`) runs `complete_pr` even
 #   without `completion: done`, as a watcher that never merges and ends once
 #   the PR is mergeable. With it, a required check that fails on the PR's

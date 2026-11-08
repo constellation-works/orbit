@@ -5,6 +5,7 @@ mod auto_concurrency;
 mod auto_task;
 pub use auto_concurrency::*;
 mod child_dispatch;
+mod completion_hold;
 mod crew_purpose;
 mod delivery_conventions;
 mod error;
@@ -56,6 +57,7 @@ pub use activity_job::{
 };
 pub use auto_task::*;
 pub use child_dispatch::*;
+pub use completion_hold::*;
 pub use crew_purpose::*;
 pub use executor_def::*;
 pub use final_recovery::*;

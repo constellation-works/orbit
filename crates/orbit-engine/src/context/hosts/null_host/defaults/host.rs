@@ -534,6 +534,10 @@ pub trait NullRuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        Vec::new()
+    }
+
     fn review_baseline_commands(&self) -> Vec<String> {
         Vec::new()
     }

@@ -362,6 +362,75 @@ them, delivery stops before commit in the `steering_unconsumed` hold. See the
 [mid-run steering operator procedure](../../orbit-orchestrate/SKILL.md#mid-run-steering)
 for posting and verifying steering comments.
 
+## Completion holds
+
+`--complete` (`orbit run ship --complete`, `orbit run auto --complete`, the
+dashboard and the desktop drain) merges each task's pull request and moves the
+task to `done` with nobody looking. `[[completion.hold]]` rules keep a task in
+`review` instead when the change is risky. A rule only lowers `done` to
+`review`; it never grants completion, and a run without `--complete` is
+unchanged.
+
+Each rule sets at least one of:
+
+- `paths` — globs matched against the files the pull request actually changes
+  (a `!` prefix excludes), never the task's declared context files;
+- `complexity_at_least` — `low`, `medium`, `hard` or `xhard`;
+- `types` — `feature`, `bug`, `refactor`, `chore`;
+- `tags` — task tags, compared case-insensitively;
+
+and an optional `name` that labels it. A rule holds when any of its fields
+matches; the first matching rule, in order, is recorded. Put the rules in the
+workspace config (`.orbit/config.toml`) of the owner that runs `--complete`.
+
+Example — CI, release and installer files, store migrations, sandbox and
+credential code, and the hardest tasks; replace the paths with your
+repository's:
+
+```toml
+[[completion.hold]]
+name = "ci-workflows"
+paths = [".github/workflows/**"]
+
+[[completion.hold]]
+name = "release-and-installers"
+paths = ["install.sh", "RELEASING.md", "scripts/release*", "packaging/**"]
+
+[[completion.hold]]
+name = "store-migrations"
+paths = ["**/migrations/**", "**/migration/**", "db/schema.sql"]
+
+[[completion.hold]]
+name = "sandbox-and-credentials"
+paths = ["src/sandbox/**", "src/auth/**", "**/secrets.rs", "!**/*.md"]
+
+[[completion.hold]]
+name = "xhard"
+complexity_at_least = "xhard"
+```
+
+A held run leaves the pull request open and ready and the task in `review`,
+as a run without `--complete` would (with `--auto-fix` it still watches and
+repairs the PR, but never merges it). The task gets a comment and a
+`completion_held` history entry such as
+`held for review: paths .github/workflows/** matched .github/workflows/ci.yml (rule ci-workflows)`;
+`orbit task show` prints it as `Completion Hold:` (JSON `completion_hold`),
+the dashboard shows it under **Held for review**, and the run's `complete_pr`
+step succeeds with the task in `held_task_ids`. Approve it as any task in
+review: merge the PR, then `orbit task update <id> --approve`.
+
+A pull request whose changed files cannot be read is held by any rule with
+`paths`. No-diff and already-landed completions have no diff of their own, so
+only complexity, type and tag rules apply to them. Local delivery and an
+owner's landing of a claimed leaf under `workflow.distributed_completion` are
+not held.
+
+Loading fails, naming the rule's position, on an unknown key, an empty rule,
+a blank name, glob or tag, a glob that is not a confined relative path, an
+exclude-only `paths`, an unknown type, or a complexity outside the four
+levels. Verify with `orbit config show completion.hold` and
+`orbit config keys`.
+
 ## Distributed-drain completion policy
 
 `workflow.distributed_completion` decides how far the owner takes an accepted

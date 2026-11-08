@@ -161,6 +161,9 @@ pub enum TaskDecision {
         /// The declared blocker.
         blocker: crate::workflow::AgentBlocker,
     },
+    /// The `completion.hold` rule that kept a completion-authorized run's
+    /// task in `review`, recorded on the `completion_held` event.
+    CompletionHeld(crate::workflow::CompletionHold),
 }
 
 /// Creation receipt of a task an auto-task job step minted.

@@ -2504,6 +2504,91 @@ Example: the [CodeQL runbook](runbooks/codeql-local.md#non-linux-hosts) rule (`k
 
 At claim admission the owner captures `review.timing` as the contract's `before_pr` and `before_landing` flags and, when either is on, a review contract: its version, the reviewer crew from `workflow.purpose_crews.pre_landing_review`, else `workflow.purpose_crews.review` (for a pool, one crew drawn when the owner answers the probe, which the pull that echoes it keeps), `review.minutes`, `[[review.host_evidence]]`, `workflow.required_validation_commands` and `review.baseline_commands`. The follower runs that contract, never its own settings: it needs a matching build and protocol, a before-PR gate and the captured reviewer crew (else `before_pr_reviewer_unavailable`; the implementer's crew is never substituted), and its own `before_pr` is declared for diagnostics only. The handoff's typed evidence (reviewed head and base, reviewer, certificate) must satisfy the contract, with a passing required record per captured command and the captured `review.baseline_commands` unchanged; if the owner's current lists no longer match the snapshot, acceptance fails closed with fresh-claim guidance. Protocol revision 8 carries the list: explicit `[]` means no required checks, and a contract without the field is refused. A claim on a machine listed in `review.before_landing_hosts` captures `before_landing` on while the owner's own `review.timing` is not `before_landing`; `before_pr` stays off for it. Under `before_landing` the leaf reviews its own PR after `pr_open`, merges nothing, and hands off evidence for the head it settled; evidence of the other timing or another head is refused. After-landing review stays owner-side and does not refuse a pull. Wire contract and refusal codes: [`orbit.task.pull` spec](design/distributed-drain/specs/task-pull.md).
 
+### `[[completion.hold]]` — keep risky completions in review
+
+`--complete` (`orbit run ship --complete`, `orbit run auto --complete`, the dashboard and the desktop drain) lets a run merge its pull request and move the task to `done` with nobody looking. `completion.hold` is an ordered list of rules that keep such a task in `review` instead, so a person approves it. A rule can only lower a granted `done` to `review`; it never grants completion, which stays an explicit per-invocation authorization. A run without `--complete` is unchanged.
+
+| Key | Default | Description |
+|---|---|---|
+| `completion.hold` | `[]` | Ordered `[[completion.hold]]` tables. Each sets at least one of `paths` (globs matched against the files the pull request changes; a `!`-prefixed glob excludes), `complexity_at_least` (`low`, `medium`, `hard` or `xhard`), `types` (`feature`, `bug`, `refactor`, `chore`) and `tags` (compared case-insensitively), plus an optional `name` that labels the rule in the hold record. |
+
+A rule holds when **any** of its fields matches; write one rule per reason so each hold names it. Rules are checked in order and the first match is recorded. `paths` reads the real pull request diff (`git diff <base>...<published head>` in the run's worktree, the files the forge shows), never the task's declared `context_files`; when that diff cannot be read, a rule with `paths` holds rather than let an unchecked change land.
+
+What a hold does:
+
+- `pr_complete` decides it before it merges anything, including after a conflict rebase or a final-recovery resume, which run `pr_complete` again on the new head. The pull request stays open and ready and the task stays in `review`, exactly as a run without `--complete` leaves them. With `--auto-fix` the run still watches and repairs the pull request as it would without `--complete`, and never merges it.
+- The task gets a comment and a `completion_held` history entry naming the rule and the match, for example `held for review: paths .github/workflows/** matched .github/workflows/ci.yml (rule ci-workflows)`. `orbit task show` prints it as `Completion Hold:`, the JSON record carries it as `completion_hold` (`rule`, `field`, `pattern`, `matched`, `run_id`, and `matched_task_id` when another task of a bundle matched) while the task is still in review, and the dashboard shows it under **Held for review** and in the task history.
+- The `complete_pr` step succeeds and its output names the tasks in `held_task_ids` with the `completion_hold`; nothing is completed or reported as failed.
+- A no-diff completion (`no-diff-expected`, already landed) and a final-recovery `complete_no_diff` carry no diff of their own, so only `complexity_at_least`, `types` and `tags` can hold them.
+- Local delivery (`--mode local`) and an owner's landing of a claimed leaf under `workflow.distributed_completion = "done"` are not covered: holds apply to `--complete` pull request completion.
+
+Approve a held task as any task in review: merge the pull request if it is still open, then `orbit task update <id> --approve` (`review -> done`), or approve it in the dashboard.
+
+Load fails, naming the rule by position, on an unknown key in a rule, a rule that sets nothing, a blank `name`, tag or glob, a glob that is not a confined relative path or a `paths` list that only excludes, an unknown type, and a complexity outside `low`, `medium`, `hard`, `xhard`. A typo never silently lets a risky change land.
+
+Worked example — the rules Orbit's own workspace uses:
+
+```toml
+# CI workflows (the Homebrew formula is generated by the release workflow's
+# bump-homebrew-tap job, so this rule covers it too).
+[[completion.hold]]
+name = "ci-workflows"
+paths = [".github/workflows/**"]
+
+# Release and installer files.
+[[completion.hold]]
+name = "release-and-installers"
+paths = [
+  "npm/**",
+  "install.sh",
+  "server.json",
+  "RELEASING.md",
+  "scripts/release*",
+  "scripts/check-installer-pubkey.sh",
+  "scripts/check_npm_package.py",
+  "scripts/smoke-npm-install.sh",
+]
+
+# Store migrations.
+[[completion.hold]]
+name = "store-migrations"
+paths = [
+  "crates/orbit-store/src/driver/sqlite/migration/**",
+  "crates/orbit-store/src/driver/file/task_bundle/migrations.rs",
+  "crates/orbit-common/src/migration/**",
+  "crates/orbit-core/src/bootstrap/task_migration.rs",
+  "crates/orbit-search/src/lexical/migration.rs",
+  "crates/orbit-auth/src/store/schema.rs",
+]
+
+# Sandbox and credential code.
+[[completion.hold]]
+name = "sandbox-and-credentials"
+paths = [
+  "crates/orbit-auth/**",
+  "crates/orbit-exec/src/sandbox.rs",
+  "crates/orbit-exec/src/linux_sandbox/**",
+  "crates/orbit-exec/src/linux_landlock/**",
+  "crates/orbit-exec/src/macos_sandbox/**",
+  "crates/orbit-exec/src/build_sandbox/**",
+  "crates/orbit-exec/src/credential_paths.rs",
+  "crates/orbit-common/src/security/**",
+  "crates/orbit-core/src/adapter/engine_host/actions/sandbox/**",
+  "crates/orbit-core/src/application/job/pipeline/claude_credential.rs",
+  "crates/orbit-core/src/application/plugin/secrets.rs",
+  "crates/orbit-runtime/src/git_sandbox.rs",
+  "crates/orbit-runtime/src/plugin/sandbox_mask.rs",
+  "crates/orbit-runtime/src/plugin/secrets.rs",
+]
+
+# The hardest tasks.
+[[completion.hold]]
+name = "xhard"
+complexity_at_least = "xhard"
+```
+
+Start strict and loosen with evidence: drop a rule once its held tasks are routinely approved unchanged. Design: [completion holds](design/review-gate/2_design.md#61-completion-holds-orb-23322).
+
 ### `[pr]` — pull requests
 
 | Key | Default | What it does |

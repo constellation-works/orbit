@@ -886,6 +886,12 @@ fn task_summary(task: &Value, holder: &HostEntry) -> String {
             super::task::final_recovery_text(record)
         ));
     }
+    if let Some(hold) = task.get("completion_hold") {
+        lines.push(format!(
+            "Completion Hold: {}",
+            super::task::completion_hold_text(hold)
+        ));
+    }
     if let Some(owed) = task.get("owed_criteria") {
         lines.push("Owed After Deploy:".into());
         lines.extend(

@@ -9,9 +9,9 @@ doc_role: design
 type: design
 summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) with captured policy, exact-head enforcement, lineage budgets and delivery coverage; the selective before-landing rules that shipped default off were removed.
 tags: [review-gate, review-policy, automation, delivery, operations]
-paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
+paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**", "crates/orbit-config/src/completion_hold.rs", "crates/orbit-engine/src/executor/automation/vcs/completion_hold.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099, ORB-22808]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099, ORB-22808, ORB-23322]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -1633,6 +1633,75 @@ completed merge (including one observed while polling) is recorded as uncovered
 with `external_landing_race`; the landing audit includes `managed_merge`, which
 requires a conditional mutation response matching the subsequently observed
 merge commit. A landing is never fabricated.
+
+### 6.1 Completion holds [ORB-23322]
+
+The before-landing review limited to certain paths (removed in ORB-22808 for
+disuse) was a *review* gate. Completion holds are a *completion* gate: they
+decide whether a run granted `--complete` may finish without a person, scaled
+by the risk of the change rather than by who wrote it. Some paths always need a
+person (CI workflows, release and installer files, store migrations, sandbox
+and credential code) and so do the hardest tasks. Start strict and loosen with
+evidence.
+
+**Authority.** `CompletionPolicy` (`crates/orbit-types/src/workflow/ship.rs`)
+stays the only grant of `done`, per invocation and never derived from
+configuration. `completion.hold` can only lower it: the rules are read only
+when the run's input carries `completion: done`, and a matching rule replaces
+the `done` outcome with the one a run without `--complete` reaches. A
+watch-only auto-fix run has no completion to hold.
+
+**Rules.** `[[completion.hold]]` is an ordered `array<table>` registered in the
+config key registry (Review section). Each rule sets at least one of `paths`,
+`complexity_at_least`, `types` and `tags`, plus an optional `name`; it matches
+when any of its fields matches, and the first matching rule, in order, is
+recorded. `types` are the task's `type` (`feature`, `bug`, `refactor`,
+`chore`), not the `workflow.task_types` classification. Admission
+(`crates/orbit-config/src/completion_hold.rs`) fails load on an unknown key
+(`deny_unknown_fields`), an unknown type or complexity (`unassessed` included),
+a glob `PathFilter` refuses, a blank name, glob or tag, an exclude-only `paths`
+list and an empty rule, so a typo cannot silently let a risky change land.
+Admitted rules reach the engine through the `completion_hold_rules`
+`RuntimeHost` accessor.
+
+**Where it is decided.** `pr_complete` evaluates the rules after it resolves
+the bundle and PR and *before* it drives the merge, against the files the pull
+request changes: `git diff --name-only <base>...<published head>` in the run's
+worktree, where `<base>` is `origin/<base>` (the local branch under
+`base_sync = local`) — the merge-base diff the forge shows. The task's declared
+`context_files` are never used. An unreadable diff holds under any rule with
+`paths`. Conflict recovery (`pr_conflict_recovery`, then `complete_pr` again on
+the rebased head), the re-review rounds (`complete_reviewed_pr`,
+`complete_reviewed_pr_2`) and a final-recovery `resume` all re-enter
+`pr_complete`, so the rules are evaluated again on the head they would merge.
+A no-diff completion and a final-recovery `complete_no_diff` carry no diff of
+their own; only `complexity_at_least`, `types` and `tags` apply there, the
+latter lowering the decision's completion to `review` before the host applies
+it. Local delivery and the owner's landing of a claimed leaf under
+`workflow.distributed_completion` are outside this gate.
+
+**Outcome.** A held pull request is left open and ready, and its tasks in
+`review`, exactly as a run without `--complete` leaves them; with auto-fix the
+step still watches and repairs the PR with merge authority withdrawn. Every
+task of the bundle gets a comment and a `completion_held` history entry whose
+typed decision (`TaskDecision::CompletionHeld`) names the rule, the field, the
+configured pattern, what it matched, the run, and the bundled task when
+another task matched. A repeat of the same hold by the same run is not
+recorded twice. The `complete_pr` step succeeds with `held_task_ids` and
+`completion_hold` in its output; nothing is reported as failed. The task show
+record projects the hold as `completion_hold` while the task is still in the
+review it was held in; `orbit task show` prints it as `Completion Hold:`, and
+the dashboard shows it under **Held for review** and in the task history.
+
+**Worked example.** Orbit's own workspace holds CI workflows, release and
+installer files, store migrations, sandbox and credential code, and `xhard`
+tasks; the rules are listed in
+[CONFIG.md](../../CONFIG.md#completionhold--keep-risky-completions-in-review).
+The on-call applies them to the owner's workspace config after this ships.
+
+**Out of scope.** Approval tiers, a model-based risk classifier, and automatic
+tightening on revert rate (a possible follow-up once escaped-regression data is
+per window).
 
 ## 7. Delivery coverage
 

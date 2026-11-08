@@ -94,6 +94,9 @@ pub struct OrbitRuntimeSettings {
     /// `workflow.light_delivery_paths`: the paths a `skip-review` or
     /// `skip-validation` candidate may change [ORB-16855].
     light_delivery_paths: Vec<String>,
+    /// `completion.hold`: the admitted rules that keep a completion-authorized
+    /// run's task in `review`.
+    completion_hold: Vec<orbit_types::workflow::CompletionHoldRule>,
     /// `workflow.test_paths` and `workflow.non_code_paths` as compiled
     /// filters: how a landed diff's paths split into tests, other and code.
     /// `workflow.non_reviewable_paths` drops paths from the reviewable-lines
@@ -153,6 +156,7 @@ impl OrbitRuntimeSettings {
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
         light_delivery_paths: Vec<String>,
+        completion_hold: Vec<orbit_types::workflow::CompletionHoldRule>,
         diff_path_filters: (
             orbit_common::fs::path_filter::PathFilter,
             orbit_common::fs::path_filter::PathFilter,
@@ -205,6 +209,7 @@ impl OrbitRuntimeSettings {
             unlocked_path_validation_commands,
             generated_paths,
             light_delivery_paths,
+            completion_hold,
             diff_test_paths: diff_path_filters.0,
             diff_non_code_paths: diff_path_filters.1,
             diff_non_reviewable_paths: diff_path_filters.2,
@@ -270,6 +275,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn light_delivery_paths(&self) -> &[String] {
         &self.light_delivery_paths
+    }
+
+    pub(crate) fn completion_hold(&self) -> &[orbit_types::workflow::CompletionHoldRule] {
+        &self.completion_hold
     }
 
     pub(crate) fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {

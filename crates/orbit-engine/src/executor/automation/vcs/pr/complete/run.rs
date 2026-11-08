@@ -7,6 +7,9 @@ use crate::context::{ReviewLandingRequest, RuntimeHost};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::super::task_update::{authorization_note, complete_tasks};
+use super::super::super::completion_hold::{
+    ChangedPaths, evaluate_completion_hold, pull_request_changed_paths, record_completion_hold,
+};
 use super::super::super::handoff::load_handoff_context;
 use super::super::auto_fix::AutoFix;
 use super::drive::{Delivery, drive_pr_to_merged};
@@ -38,6 +41,13 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .iter()
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
+    // [ORB-23322] `completion.hold` only ever lowers a granted `done`; a
+    // watch-only auto-fix run has no completion to hold.
+    let hold_rules = if input.get("completion").and_then(Value::as_str) == Some("done") {
+        host.completion_hold_rules()
+    } else {
+        Vec::new()
+    };
     let mut delivery_fragment = None;
     let merge_outcome = if no_diff_expected {
         if let Some(checkpoint) = super::super::super::commit::verified_clean_tree_checkpoint(input)
@@ -66,6 +76,30 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     } else {
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
+        // [ORB-23322] Decide a hold on the files the pull request changes
+        // before anything merges, so a held change waits for a person.
+        if !hold_rules.is_empty() {
+            let changed = pull_request_changed_paths(
+                &context.workspace_path,
+                input_string_field(input, "base").as_deref(),
+                input_string_field(input, "base_sync").as_deref() == Some("local"),
+                input_string_field(input, "published_head_sha").as_deref(),
+            );
+            if let Some(hold) =
+                evaluate_completion_hold(&hold_rules, &context.tasks, &changed, &context.batch_id)?
+            {
+                record_completion_hold(host, &task_ids, &hold)?;
+                return held_without_merge(
+                    host,
+                    input,
+                    &context.batch_id,
+                    &task_ids,
+                    &workspace_path,
+                    &pr_number,
+                    &hold,
+                );
+            }
+        }
         let auto_fix = AutoFix::from_input(host, input, &task_ids, &context.batch_id)?;
         let delivered = match drive_pr_to_merged(
             host,
@@ -128,6 +162,27 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         delivered.outcome
     };
 
+    // [ORB-23322] A no-diff completion has no pull request diff; its task's
+    // complexity, type and tags can still hold it.
+    if no_diff_expected
+        && let Some(hold) = evaluate_completion_hold(
+            &hold_rules,
+            &context.tasks,
+            &ChangedPaths::NoDiff,
+            &context.batch_id,
+        )?
+    {
+        record_completion_hold(host, &task_ids, &hold)?;
+        return Ok(held_output(
+            true,
+            merge_outcome,
+            &task_ids,
+            &hold,
+            false,
+            None,
+        ));
+    }
+
     // [ORB-11982] Name the evidence that permitted `done` in durable task
     // history, so a later reader can tell this transition apart from one an
     // unattributed writer applied.
@@ -149,6 +204,80 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         "skipped_task_ids": completion["skipped_task_ids"],
         "authorization": completion["authorization"],
     }))
+}
+
+/// A held pull request completion: the PR stays ready and unmerged, and the
+/// tasks stay in review, exactly as a run without completion authority leaves
+/// them. An auto-fix run still watches and repairs the PR, as it does without
+/// `--complete`.
+fn held_without_merge<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    batch_id: &str,
+    task_ids: &[String],
+    workspace_path: &str,
+    pr_number: &str,
+    hold: &orbit_types::workflow::CompletionHold,
+) -> Result<Value, OrbitError> {
+    let unmerged = json!({
+        "merged": false,
+        "reason": "completion_held",
+        "pr_number": pr_number,
+        "reviewed_head_sha": reviewed_head_sha(input),
+    });
+    let mut watch_input = input.clone();
+    watch_input["completion"] = json!("review");
+    let Some(auto_fix) = AutoFix::from_input(host, &watch_input, task_ids, batch_id)? else {
+        return Ok(held_output(false, unmerged, task_ids, hold, false, None));
+    };
+    Ok(
+        match drive_pr_to_merged(
+            host,
+            &watch_input,
+            workspace_path,
+            pr_number,
+            Some(&auto_fix),
+        )? {
+            Delivery::Watched(outcome) => held_output(false, outcome, task_ids, hold, false, None),
+            Delivery::RebasedForReview { rebased, reason } => {
+                let mut merge = unmerged;
+                merge["reason"] = json!(reason);
+                held_output(false, merge, task_ids, hold, true, Some(rebased))
+            }
+            // A watch never merges; a merge someone else made is reported
+            // as watched, so this arm is unreachable in practice. Keep the
+            // tasks in review either way.
+            Delivery::Merged(delivered) => {
+                held_output(false, delivered.outcome, task_ids, hold, false, None)
+            }
+        },
+    )
+}
+
+/// The `pr_complete` output of a held completion: nothing completed, every
+/// task named as held with the rule and match.
+fn held_output(
+    no_diff_expected: bool,
+    merge: Value,
+    task_ids: &[String],
+    hold: &orbit_types::workflow::CompletionHold,
+    re_review_required: bool,
+    rebased: Option<Value>,
+) -> Value {
+    let mut output = json!({
+        "phase": "complete",
+        "no_diff_expected": no_diff_expected,
+        "re_review_required": re_review_required,
+        "merge": merge,
+        "completed_task_ids": [],
+        "skipped_task_ids": [],
+        "held_task_ids": task_ids,
+        "completion_hold": hold,
+    });
+    if let Some(rebased) = rebased {
+        output["rebased"] = rebased;
+    }
+    output
 }
 
 /// The completion pins after a before-landing review settled

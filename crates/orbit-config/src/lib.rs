@@ -80,12 +80,14 @@
 //! - `tag_instructions` — trusted tag instructions and activity corpus mappings.
 //! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
 //! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
+//! - `completion_hold` — admission of the `[[completion.hold]]` rules.
 //! - `store` — comment-preserving [`ConfigStore`] edits, the per-file write lock
 //!   and an atomic save that refuses to replace a file changed since the store
 //!   read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod aliases;
+mod completion_hold;
 mod config_document;
 mod config_io;
 mod crew;

@@ -66,7 +66,7 @@ function diffText(row) {
 }
 export function topicOf(key) {
   if (key.startsWith('execution.')) return 'execution';
-  if (key.startsWith('review.') || key === 'workflow.purpose_crews.review' || key === 'workflow.purpose_crews.pre_landing_review') return 'review';
+  if (key.startsWith('review.') || key.startsWith('completion.') || key === 'workflow.purpose_crews.review' || key === 'workflow.purpose_crews.pre_landing_review') return 'review';
   if (key.startsWith('machine.') || key === 'tasks.id_start' || key.startsWith('workflow.resource_throttle.')) return 'machine';
   if (key.startsWith('workflow.') || key.startsWith('pr.')) return 'workflow';
   if (key.startsWith('crews.')) return 'crews';

@@ -75,6 +75,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "pilot_warnings",
     "open_decisions",
     "final_recovery",
+    "completion_hold",
     "orchestrator",
     "orchestrator_model",
     "orchestrator_model_source",

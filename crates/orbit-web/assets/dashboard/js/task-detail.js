@@ -242,6 +242,15 @@ export function buildTaskDetail(task, context, drain = null) {
   // operator records each with a `post-deploy: met|failed <N>` comment.
   // The folded sections read as one group of disclosure rows.
   const disclosures = el("div", { class: "detail-disclosures" });
+  // ORB-23322: the `completion.hold` rule that kept a `--complete` run's task
+  // in review, with what it matched and the run it held.
+  if (task.completion_hold && typeof task.completion_hold === "object") {
+    const hold = task.completion_hold;
+    addField(disclosures, "Held for review", el("div", { class: "completion-hold" }, [
+      el("p", { text: taskHistory.completionHoldSummary(hold) }),
+      el("p", { class: "muted", text: `Run ${hold.run_id || "?"} was authorized to complete this task; approve it to finish.` }),
+    ]), true, false);
+  }
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
     addField(disclosures, "Owed after deploy", taskEvidence.buildOwedCriteria(task.owed_criteria, task, detail, context), true, false, {
       count: task.owed_criteria.length,
