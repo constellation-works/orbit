@@ -246,7 +246,7 @@ function settingsCards() {
 function liveBaseline() {
   const readiness = view.payload.readiness;
   if (!readiness) return el("p", { class: "rf-setting-note", text: "Drain readiness is unavailable on this host." });
-  const section = autoDrainForecast(readiness);
+  const section = autoDrainForecast(readiness, { link: false });
   section.querySelector(":scope > .drain-backlog-forecast")?.remove();
   return section;
 }

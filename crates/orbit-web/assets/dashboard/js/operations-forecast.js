@@ -1,5 +1,5 @@
 import { backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
-import { getWorkspaceRevision, isAggregateView, el } from './common.js';
+import { getWindow, getWorkspaceRevision, isAggregateView, el, scopedHashHref } from './common.js';
 import { sparkline, svg } from './sparkline.js';
 import { $, autoDrainNumber, operationsState, registerOperationsReset, selectedWorkspace, taskLink, time } from './operations-shared.js';
 
@@ -248,23 +248,39 @@ function forecastHead(label, ...meta) {
   ]);
 }
 
-function forecastBlock(forecast, { retained, windowNote = null }) {
+// The header and peaks open Analytics › Forecast › Resource forecast in the
+// same host, workspace and window, as one link; the decisions list stays
+// outside it so its task links still open their tasks. `link: false` draws the
+// block without it, for that view's own live baseline.
+function forecastSummaryLink(children) {
+  const link = el("a", { class: "drain-forecast-link", title: "Open the Resource forecast" }, [
+    ...children,
+    el("span", { class: "visually-hidden", text: " Open the Resource forecast." }),
+  ]);
+  // The window rides in the hash query too, as the Analytics routes write it.
+  link.href = scopedHashHref(`#analytics/forecast/resources?window=${encodeURIComponent(getWindow())}`);
+  return link;
+}
+
+function forecastBlock(forecast, { retained, windowNote = null, link = true }) {
   const hypothetical = forecast.mode === "shadow";
   const at = forecastBuiltAt(forecast);
   const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
   block.dataset.forecastMode = forecast.mode || "";
-  block.append(
+  const summary = [
     forecastHead(
       retained ? "Last forecast" : "Forecast",
       at ? forecastTime(at) : null,
       at ? " · " : null,
       el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
+      link ? el("span", { class: "drain-forecast-go", text: " ›", "aria-hidden": "true" }) : null,
     ),
-    ...[
-      windowNote ? el("p", { class: "drain-forecast-ended", text: windowNote }) : null,
-      forecastPeaks(forecast),
-      retained ? null : forecastDecisions(forecast, hypothetical),
-    ].filter(Boolean),
+    windowNote ? el("p", { class: "drain-forecast-ended", text: windowNote }) : null,
+    forecastPeaks(forecast),
+  ].filter(Boolean);
+  block.append(
+    ...(link ? [forecastSummaryLink(summary)] : summary),
+    ...[retained ? null : forecastDecisions(forecast, hypothetical)].filter(Boolean),
   );
   return block;
 }
@@ -336,7 +352,7 @@ function retainedWindowNote(payload, forecast) {
 // on `capacity.last_admission_forecast`. A pass that built none says so, unless
 // a retained forecast stands in and this pass decided nothing of its own.
 // The backlog summary, when settled, is the last child of this section.
-export function autoDrainForecast(payload) {
+export function autoDrainForecast(payload, { link = true } = {}) {
   const capacity = payload?.capacity || {};
   const current = asForecast(capacity.admission_forecast);
   const last = asForecast(capacity.last_admission_forecast);
@@ -345,7 +361,7 @@ export function autoDrainForecast(payload) {
   const currentRetained = currentBuilt && current.drain_live === false;
   if (currentBuilt && !currentRetained) {
     section.dataset.forecastState = "built";
-    section.append(forecastBlock(current, { retained: false }));
+    section.append(forecastBlock(current, { retained: false, link }));
     placeBacklogForecast(section);
     return section;
   }
@@ -363,6 +379,7 @@ export function autoDrainForecast(payload) {
     section.append(forecastBlock(retainedForecast, {
       retained: true,
       windowNote: retainedWindowNote(payload, retainedForecast),
+      link,
     }));
   }
   placeBacklogForecast(section);
