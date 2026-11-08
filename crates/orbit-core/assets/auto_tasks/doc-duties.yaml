@@ -79,6 +79,24 @@ template:
     checked, leave it unchanged and record the limit. Give every selected
     document exactly one outcome:
 
+    Before assigning `clean` or `fixed`, perform both checks for every
+    applicable claim in the document:
+
+    - For each task ID cited with a status or timing claim (such as planned,
+      someday, in progress, or follow-up), call `orbit.task.show` for that ID
+      and compare the current task status or timing with the document. Correct
+      verified drift. If the task cannot be looked up or the claim cannot be
+      confirmed, leave it unchanged and assign `partial`.
+    - For each exclusive usage claim (such as only, never, or the sole loader
+      or caller), search the repository for the relevant identifier and its
+      other usages, loaders, or callers. Confirm the claim from the results. If
+      the search cannot be completed or its results are inconclusive, leave
+      the claim unchanged and assign `partial`.
+
+    Assign `clean` or `fixed` only when every applicable check above and every
+    other factual claim is fully verified. Record any unchecked claim and its
+    limit with a `partial` outcome.
+
     - `clean`: fully verified, no change needed.
     - `fixed`: fully verified, and drift was corrected.
     - `partial`: some claims verified, others left unchecked.
