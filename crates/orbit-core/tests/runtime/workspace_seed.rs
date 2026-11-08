@@ -806,6 +806,168 @@ fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_
     assert!(!catalog.join("blocked_task_triage.yaml").exists());
 }
 
+/// An unmanifested pilot-warning copy retires by content [ORB-22889]: the
+/// old shipped `pilot_warning_triage` template targets the still-shipped
+/// `escalation_triage_pipeline` job on the retired `pilot_warnings_held`
+/// trigger, so the untracked guard must accept the retired trigger, not only
+/// a retired job. Sync check reports the pending retirement, apply removes
+/// the file with a recovery copy, and a second check converges.
+#[test]
+fn unmanifested_pilot_warning_triage_is_retired_by_sync_with_recovery_copy() {
+    use orbit_automation::routines::loader::retired_routine_job_reason;
+
+    assert!(
+        retired_routine_job_reason("escalation_triage_pipeline").is_none(),
+        "manual triage still ships, so the retired pilot-warning template retires by trigger [ORB-22889]"
+    );
+
+    for enabled in [false, true] {
+        let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+            .expect("isolated roots");
+        let (global, workspace) = seeded_host(dir.path());
+        let catalog = workspace.join("routines");
+        assert!(
+            !catalog.join("pilot_warning_triage.yaml").exists(),
+            "a fresh workspace seeds no pilot-warning triage routine"
+        );
+
+        let template = include_str!("../../assets/routines/retired/pilot_warning_triage.yaml");
+        let mut body = template
+            .replace("__ORBIT_ROUTINE_NAME__", "pilot-warning-triage-repo")
+            .replace("__ORBIT_OWNER_MACHINE__", "hm_test")
+            .replace("__ORBIT_BASE_BRANCH__", "main");
+        if enabled {
+            body = body.replacen("enabled: false", "enabled: true", 1);
+        }
+        let definition = parse_routine_yaml(&body).expect("unmanifested pilot-warning parses");
+        assert!(
+            definition.enabled == enabled,
+            "fixture keeps enabled={enabled} [ORB-22889]"
+        );
+        // No manifest entry: an earlier release wrote the file without
+        // recording it.
+        std::fs::write(catalog.join("pilot_warning_triage.yaml"), &body)
+            .expect("write unmanifested retired default");
+
+        let check = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            true,
+        )
+        .expect("sync check");
+        assert!(
+            check.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "sync --check reports the pending retirement (enabled={enabled}): {check:?}"
+        );
+
+        let applied = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            false,
+        )
+        .expect("apply sync");
+        assert!(
+            applied.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "apply retires the unmanifested copy (enabled={enabled}): {applied:?}"
+        );
+        assert!(
+            !catalog.join("pilot_warning_triage.yaml").exists(),
+            "apply removes the retired definition from the active catalog (enabled={enabled})"
+        );
+        let preserved = workspace
+            .join(".retired-managed")
+            .join("routines")
+            .join("pilot_warning_triage.yaml");
+        assert!(
+            preserved.is_file(),
+            "apply preserves a recovery copy outside the active catalog (enabled={enabled})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&preserved).expect("read recovery copy"),
+            body,
+            "the recovery copy keeps the exact bytes (enabled={enabled})"
+        );
+
+        let converged = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            true,
+        )
+        .expect("second sync check");
+        assert!(
+            !converged.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "a second sync --check converges (enabled={enabled}): {converged:?}"
+        );
+    }
+
+    // A genuinely customized copy on the retired trigger stays in place with
+    // actionable advice instead of retiring.
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    let template = include_str!("../../assets/routines/retired/pilot_warning_triage.yaml");
+    let customized = template
+        .replace("__ORBIT_ROUTINE_NAME__", "pilot-warning-triage-repo")
+        .replace("__ORBIT_OWNER_MACHINE__", "hm_test")
+        .replace("__ORBIT_BASE_BRANCH__", "main")
+        .replacen(
+            "Triage proposed tasks",
+            "Operator-customized pilot-warning triage",
+            1,
+        );
+    assert_ne!(
+        customized, template,
+        "the customized copy differs in a template-owned field"
+    );
+    std::fs::write(catalog.join("pilot_warning_triage.yaml"), &customized)
+        .expect("write customized retired-trigger copy");
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&identity()),
+        "main",
+        false,
+    )
+    .expect("sync customized copy");
+    let preserved = report
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == "routine"
+                && action.name == "pilot_warning_triage"
+                && action.outcome == ManagedArtifactOutcome::Preserved
+        })
+        .expect("a customized copy is preserved, not retired: {report:?}");
+    let detail = preserved.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("delete") && detail.contains("retarget"),
+        "the preserved copy names the step that clears it: {report:?}"
+    );
+    assert!(
+        catalog.join("pilot_warning_triage.yaml").is_file(),
+        "the customized definition stays in the active catalog"
+    );
+}
+
 /// Re-run `orbit workspace init` over an existing workspace.
 fn reinit_workspace(global: &Path, workspace: &Path) {
     init_workspace_at_root(
