@@ -791,8 +791,14 @@ fi
 # above `task` [ORB-23018]: it reads tasks and replays their comments, so task
 # projects committed checkpoint comments only through `TaskEvolutionPort`,
 # implemented in `evolution/operations.rs`. Ingestion and source-keyed replay
-# stay in evolution, including post-commit error propagation.
-task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|notice|evolution'
+# stay in evolution, including post-commit error propagation. `agent_corpus`
+# sits outside the order but above `task` [ORB-23421]: it reads decision
+# rules, task history and tasks back, and reads blobs through
+# `task::base_revision`, so task's decision-answer append, precedent digest
+# and final-recovery appends go only through `TaskCorpusPort`, which
+# `agent_corpus` implements on `OrbitRuntime` in `agent_corpus.rs` by
+# forwarding to its inherent methods.
+task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|notice|evolution|agent_corpus'
 task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
@@ -806,7 +812,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment, notice and evolution through its task ports, must not route through tag_instructions or search, and names backlog_forecast only in its two task/mod.rs re-exports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment, notice, evolution and agent_corpus through its task ports, must not route through tag_instructions or search, and names backlog_forecast only in its two task/mod.rs re-exports"
   fail=1
 fi
 

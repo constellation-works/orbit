@@ -136,6 +136,7 @@ source scan, enforces the runtime direction.
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
 | Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |
+| Task-owned corpus appends and digest | `crates/orbit-core/src/application/task/corpus_port.rs` (`TaskCorpusPort`), implemented in `agent_corpus.rs` | [ORB-23421] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `task/mod.rs` keeps a two-line re-export shim | [ORB-22287] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
@@ -326,10 +327,21 @@ moved the backlog forecast out of `task` to its own place in the order:
   revision checks, owner fencing and closure timing stay in `notice`, and
   `close_notice`, `run_notice_closure_tick` and the other public notice
   APIs are unchanged [ORB-23017].
+- **Corpus appends and digest.** `agent_corpus` sits outside the order, above
+  `task`: it reads decision rules, task history and tasks back, and reads
+  blobs through `task::base_revision`. Task's decision-answer append,
+  precedent digest and final-recovery appends go only through
+  `task::TaskCorpusPort` (`task_corpus_append_for_decision`,
+  `task_corpus_digest_at_revision`, `task_corpus_appends_for_recovery`),
+  which `agent_corpus` implements on `OrbitRuntime` in `agent_corpus.rs` by
+  forwarding to its inherent methods. The decision append stays inside the
+  same task-history update and the recovery appends stay before the recovery
+  mutation. The guard's `task` upper-module list includes `agent_corpus`
+  [ORB-23421].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
-  `workspace_auto`, `experiment`, `search`, `notice` or `evolution` by path, grouped tree or `super::` chain,
+  `workspace_auto`, `experiment`, `search`, `notice`, `evolution` or `agent_corpus` by path, grouped tree or `super::` chain,
   when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
   `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
@@ -467,8 +479,9 @@ reads commit-pinned repository files through its own `task::base_revision`
 `list_blob_paths_at` and `read_blob_at`), and the guard's `task` upper-module
 list names `tag_instructions`; its single-file module's inherent names are
 derived like a directory module's. `tag_instructions` re-exports `commit_at`
-and `read_blob_at` as a compatibility shim for experiment overlays and the
-agent corpus; re-pointing them and retiring the shim is a follow-up.
+and `read_blob_at` as a compatibility shim for experiment overlays;
+re-pointing them and retiring the shim is a follow-up. The agent corpus
+reads blobs through `task::base_revision` directly [ORB-23421].
 `experiment` sits above this module: its overlays read `LazyRevision`,
 `TagInstructionFailure` and `read_blob_at`, and call `claim_base_revision`.
 Selection reaches live overlays only through
@@ -536,6 +549,17 @@ guard's `task` upper-module list names `evolution`, refusing task paths,
 grouped trees, `super::` chains and evolution-owned inherent calls. All public
 evolution APIs remain available.
 
+`agent_corpus` (the workspace agent corpus) sits outside the order but above
+`task` [ORB-23421]. It reads decision rules, task history and tasks back, and
+reads blobs through `task::base_revision` instead of the `tag_instructions`
+shim. Task's decision-answer append, precedent digest and final-recovery
+appends go only through `task::TaskCorpusPort`, which `agent_corpus`
+implements on `OrbitRuntime` in `agent_corpus.rs` by forwarding to its
+inherent methods, whose names stay for their other callers. The guard's
+`task` upper-module list names `agent_corpus`, so a path, grouped tree,
+`super::` chain or call to a corpus-defined inherent method from `task` is
+refused.
+
 The remaining back-edges among the unordered modules (`resident`,
 `experiment`, `codebase`) and the rest of the application still keep the
 core strongly connected component and await a later audit. [ORB-22708] cut
@@ -577,5 +601,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-23018] — cut task's post-commit checkpoint cost projection through `task::TaskEvolutionPort`, implemented by `evolution`, and added `evolution` to the guarded `task` upper modules without changing ingestion or replay.
 - [ORB-23019] — cut tag instructions' overlay query through `tag_instructions::TagInstructionExperimentPort`, implemented by `experiment`, and guarded the single-file module's paths and inherent calls into `experiment` while leaving the helper reads legal.
 - [ORB-23334] — cut automation's catalog, history, dedupe and mint reads into `auto_tasks` through `automation::AutomationAutoTaskPort`, implemented by `auto_tasks`, and guarded automation paths and inherent calls into `auto_tasks`.
+- [ORB-23421] — cut task's corpus back-edge through `task::TaskCorpusPort`, implemented by `agent_corpus`, re-pointed its blob reads at `task::base_revision`, and added `agent_corpus` to the guarded `task` upper modules.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

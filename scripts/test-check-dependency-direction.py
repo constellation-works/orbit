@@ -324,6 +324,41 @@ class RelativeImportTests(unittest.TestCase):
             "notice/authority.rs": "use crate::application::task::TaskRecords;\n",
         }, rejected=False)
 
+    def test_task_reaches_agent_corpus_only_through_its_port(self):
+        # [ORB-23421] Task called the corpus's decision-append, digest and
+        # recovery-append inherent methods directly, closing a task <->
+        # agent_corpus cycle: the corpus reads decision rules, task history
+        # and tasks back. One detector per call: the guard's chains stop at
+        # the first hit.
+        for rows in (
+            [("task/decision/answering.rs", "use crate::application::agent_corpus::Probe;\n")],
+            [("task/probe.rs", "use crate::application::{\n    agent_corpus::Probe,\n};\n")],
+            [("task/mod.rs", "use super::agent_corpus::Probe;\n"),
+             ("task/decision/probe.rs", "use super::super::super::{agent_corpus::Probe};\n")],
+        ):
+            self.check_rows(rows, rejected=True)
+        self.check_rows([
+            ("task/decision/answering.rs",
+             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+             "        self.fresh_corpus_method();\n    }\n}\n"),
+        ], rejected=True, shared={
+            "agent_corpus.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_corpus_method(&self) {}\n}\n"})
+        self.check_files({
+            "task/corpus_port.rs":
+                "pub(in crate::application) trait TaskCorpusPort {\n"
+                "    fn task_corpus_append_for_decision(&self);\n}\n",
+            "task/decision/answering.rs":
+                "use crate::application::task::TaskCorpusPort;\n"
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.task_corpus_append_for_decision();\n    }\n}\n",
+            "agent_corpus.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn decision_corpus_append(&self) {}\n}\n"
+                "impl TaskCorpusPort for OrbitRuntime {\n"
+                "    fn task_corpus_append_for_decision(&self) {\n"
+                "        self.decision_corpus_append();\n    }\n}\n",
+        }, rejected=False)
+
     def test_lower_modules_cannot_reach_the_forecast(self):
         lowers = ("job", "automation", "review", "distributed", "pull_drain",
                   "admission", "workspace_auto")
