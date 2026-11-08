@@ -11,12 +11,12 @@ summary: "Proposed design for crew memory: per-model spaces in the owner store, 
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
-related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23066, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23066, ORB-10736]
 ---
 
 # Crew Memory — Design
 
-This doc is the accepted design. Slices M1 and M2 (§10) are built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`, and the `memory` overlay surface (§5) with its capture, envelope field and readout strata (§7). Memory reaches a prompt only in a `live` memory arm. It covers:
+This doc is the accepted design. Slices M1, M2 and M3 (§10) are built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`; the `memory` overlay surface (§5) with its capture, envelope field and readout strata (§7); and dreaming (§6): the `crew_memory_dream` routine, the evidence pack, the key-scoped agent tools and the readout's dreaming overhead. Memory reaches a prompt only in a `live` memory arm. It covers:
 - the experimental gate (§1);
 - how memory is keyed (§2) and stored (§3);
 - what a space may hold (§4);
@@ -115,6 +115,8 @@ Auto-tasks can't fan out per model. A definition mints one task per fire, and `C
 - **Task.** One `chore` per key, titled `Crew memory: reflect on <model>'s week`, tagged `crew-memory-dream` and `no-diff-expected`. The crew is pinned to the model's base crew (the family member without `@effort`, or the lowest effort configured), so the model reflects on its own work. The task is minted directly to `backlog`. It carries `crew_memory_key` in its input and its frozen evidence pack as the task artifact `crew-memory-evidence.json`.
 - **Dedupe.** At most one open dreaming task per key. A key with an open one is skipped, and the skip is recorded.
 
+As built (M3): the routine is a shipped default (`crew_memory_dream.yaml`, cron `0 2 * * 1`, `missed_run: skip`, `overlap: forbid`) targeting `job:crew_memory_dream_pipeline`, whose one deterministic step runs the `crew_memory_dream` action. It is seeded **enabled** because the action is its own gate: it returns `skipped_reason: disabled` while `crew_memory.enabled` is false and `no_memory_experiment` while no running `shadow` or `live` experiment has a memory arm, minting nothing either way. Like other owner work, a replica checkout never schedules it. Tasks have no input map, so the key travels as the task's one external reference `crew-memory-key:<model>`, which is also the dedupe filter. The task is `low` priority and complexity, `system_created`, and lists the three memory tools in `granted_tools`; the grant adds no tool (the activity resolves them, §6.3) but keeps the run on the owner, whose store holds memory. A key whose model no enabled crew uses is skipped as `no_base_crew`, and one whose pack holds no problem task as `no_evidence`: a write must cite evidence from the pack, so such a run could only write nothing. Each mint, skip and settlement is a `crew_memory_events` row (`dream_minted`, `dream_skipped`, `no_revision`) on the key, so `orbit memory history <key>` shows the week; the `dream_minted` row carries the task id, ISO week, crew, the pack's evidence ids, its digest and size and the drop counts. The action's output lists `minted`, `skipped`, `below_support` and `no_revision`.
+
 ### 6.2 The evidence pack
 
 The routine builds the pack at mint time from the detail payloads (`orbit agents show`, [agent scorecards §6–7](../agent-scorecards/2_design.md#7-cli-and-mcp)), pooled over the key's crews:
@@ -126,6 +128,8 @@ The routine builds the pack at mint time from the detail payloads (`orbit agents
 | Pilot | trailing 7 days | Each misjudged complexity or footprint, with predicted vs actual |
 
 **Excluded:** score, raw score, rank, rates, weights, contribution, expected counts, fleet average, units and every other key's rows. The term label is replaced by a fixed plain description ("a regression was later traced to this change"), so the pack doesn't teach the scorecard's vocabulary. The pack is capped at 64 KiB. When it would exceed that, it keeps the most recent occurrences per term and states how many were dropped.
+
+As built (M3): the pack is JSON (`schema_version: 1`, `key`, `week`, `built_at`, one section per role with its window and problems, `evidence_ids`, and `dropped` with task and occurrence counts and the cap). Implementer problems are review rejects, reviewer repairs, crew rework and escaped regressions; reviewer problems are missed regressions, false rejects and rejected findings; pilot problems are missed scope blocks, costly misses and lock waits. Pilot complexity calibration is left out, because that term counts correct calls rather than misses. "Landed paths" are the task's `context_files` selectors. Free text (titles, details) passes through the score-blind filter, which replaces scorecard vocabulary and other crews' and models' names with `[…]`. Over the cap, the oldest task of the largest problem is dropped first, repeatedly.
 
 ### 6.3 The run
 
@@ -140,9 +144,13 @@ The run's system of record is the revision and proposal rows it leaves, not its 
 
 **Tool grant.** The dreaming task's activity gets `orbit.memory.show`, `orbit.memory.write` and `orbit.memory.propose`, with the key fixed to the task's `crew_memory_key`. A write to any other key, or to `global`, is refused. No other activity gets `write` or `propose`.
 
+As built (M3): activity tool resolution suppresses `write` and `propose` unless every task in the run is a dreaming task and the activity is `agent_implement`, and `show` unless that holds or a task is in a memory arm; a run whose tools include one stamps the `experiments` MCP toolset so the agent sees it. Core checks again at call time from the caller's trusted run binding, never from input: an agent outside a dreaming task's open run is refused, as is a claimed run (memory lives in the owner's store). The key must equal the task's key, and a refusal for scope is a `write_refused` event with rule `key_scope`. Provenance takes the pack's evidence ids from the `dream_minted` event, not the artifact the agent could overwrite, so a write citing any other id is refused. `propose` validates the text as a global write and stores a `crew_memory_proposals` row; a third proposal in a run is refused with rule `proposal_cap`. An operator's `orbit memory write` is unchanged, and `orbit.memory.propose` has no CLI. When a dreaming task reaches a terminal status without a revision event naming it, the next routine fire records `no_revision` for its key.
+
 ### 6.4 Cost
 
 Dreaming tokens are recorded like any invocation. The experiment readout adds the week's total dreaming cost to the memory arm's `cost_usd` (§7), so memory's overhead isn't hidden in the control.
+
+As built (M3): `cost_usd` is a per-task mean, so the readout spreads the cost of every dreaming task created during the experiment (start to conclusion, or now) evenly over the memory arm's tasks that have a measured cost, and reports it on the arm as `dreaming_overhead` (`dreaming_tasks`, `unpriced_tasks`, `cost_usd`, `spread_over`, `per_task_usd`). Dreaming cost with no priced memory-arm task to carry it, and dreaming tasks with no cost, raise the readout warnings `dreaming_cost_unattributed` and `dreaming_cost_unpriced`. Because the overhead raises the arm's cost per task, it also raises its cost per changed line.
 
 ## 7. The Experiment and Adoption
 
@@ -186,7 +194,7 @@ Each slice is one task, filed only after this design is accepted:
 
 - **M1. Store, write rules, CLI.** Tables, the §4 validation, `orbit memory show|history|export|reset|copy`, and the `[crew_memory] enabled` key. No delivery. Built by [ORB-23113], which adds `orbit memory write` as the operator seed path; every M1 verb is operator CLI only (no MCP scope), and the `orbit.memory.write` agent tool arrives with M3.
 - **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`. Built by [ORB-23114].
-- **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution.
+- **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution. Built by [ORB-23115]; proposals are stored, and listing, accepting and rejecting them is M4.
 - **M4. Global review.** Proposals and accept/reject.
 - **M5. Run the experiment.** A one-week shadow, then live until the sample or the 6-week cap, then conclude. Then either the promotion design change or the removal task.
 
@@ -207,6 +215,7 @@ Each slice is one task, filed only after this design is accepted:
 - [ORB-23105] — designs crew memory (this folder)
 - [ORB-23113] — builds slice M1: store, write rules, operator CLI
 - [ORB-23114] — builds slice M2: the `memory` overlay surface, capture, envelope field and readout strata
+- [ORB-23115] — builds slice M3: the `crew_memory_dream` routine, evidence pack, key-scoped agent tools and dreaming cost
 - [ORB-23066] — adds `--until` to the scorecards, used for the settled reviewer window
 - [ORB-10736] — retired the native project-learning subsystem
 

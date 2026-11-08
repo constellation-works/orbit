@@ -13,6 +13,8 @@ pub use definition::{
     experiment_metric_is_step_local,
 };
 mod lifecycle;
+mod memory_arms;
+pub(crate) use memory_arms::memory_arm_names;
 mod overlay;
 mod progress;
 mod promotion;

@@ -31,14 +31,44 @@ pub struct CrewMemoryRevisionRow {
     pub created_at: DateTime<Utc>,
 }
 
+/// One proposal for the global memory, opened by a dreaming run (slice M3)
+/// and decided by an operator (slice M4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrewMemoryProposalRow {
+    pub workspace_id: String,
+    pub id: String,
+    /// The model key whose dreaming run proposed it.
+    pub proposing_key: String,
+    pub proposing_run_id: Option<String>,
+    pub text: String,
+    /// The cited evidence task ids as a JSON array of strings.
+    pub evidence_json: String,
+    /// `open`, `accepted`, `rejected` or `withdrawn`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What [`CrewMemoryStoreBackend::open_crew_memory_proposal`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrewMemoryProposalOutcome {
+    Opened,
+    /// The proposing run already holds `existing` proposals, at or over the
+    /// cap; nothing was written.
+    CapReached {
+        existing: u32,
+    },
+}
+
 /// One row of the append-only crew memory audit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrewMemoryEventRow {
     pub workspace_id: String,
     pub memory_key: String,
     pub at: DateTime<Utc>,
-    /// `write_refused`, `revision_written`, `reset` or `copied`; M4 adds the
-    /// proposal actions.
+    /// `write_refused`, `revision_written`, `reset` or `copied`; dreaming
+    /// (M3) adds `dream_minted`, `dream_skipped`, `no_revision`,
+    /// `proposal_opened` and `propose_refused`, and M4 the proposal
+    /// decisions.
     pub action: String,
     pub actor: String,
     /// The revision the action wrote, when it wrote one.
@@ -59,6 +89,16 @@ pub trait CrewMemoryStoreBackend: Send + Sync {
 
     /// Append one audit event that writes no revision, such as a refusal.
     fn append_crew_memory_event(&self, event: &CrewMemoryEventRow) -> Result<(), OrbitError>;
+
+    /// Insert `proposal` and `event` in one immediate transaction, unless
+    /// the proposing run already holds `max_per_run` proposals in the
+    /// workspace, counted inside the same transaction.
+    fn open_crew_memory_proposal(
+        &self,
+        proposal: &CrewMemoryProposalRow,
+        event: &CrewMemoryEventRow,
+        max_per_run: u32,
+    ) -> Result<CrewMemoryProposalOutcome, OrbitError>;
 
     /// One revision of `memory_key`: `revision`, or the newest when `None`.
     fn crew_memory_revision(

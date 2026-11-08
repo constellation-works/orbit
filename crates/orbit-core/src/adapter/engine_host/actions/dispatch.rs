@@ -160,6 +160,11 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
+        // The weekly crew memory dreaming mint: a no-op that names its gate
+        // while crew memory is disabled or no memory experiment is running.
+        CoreDeterministicAction::CrewMemoryDream => runtime
+            .crew_memory_dream()
+            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // Publish only this workspace, with an explicit successful skip when unbound.
         CoreDeterministicAction::TaskPublication => runtime
             .run_workspace_task_publication()

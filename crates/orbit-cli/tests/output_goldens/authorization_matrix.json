@@ -1531,6 +1531,19 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.memory.propose",
+    "required_any": [
+      "agent"
+    ],
+    "verdicts": {
+      "operator_terminal": "deny",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.memory.reset",
     "required_any": [
       "operator"
@@ -1557,13 +1570,14 @@
     "surface": "tool",
     "operation": "orbit.memory.write",
     "required_any": [
+      "agent",
       "operator"
     ],
     "verdicts": {
       "operator_terminal": "allow",
-      "agent_session": "deny",
-      "remote_agent_session": "deny",
-      "replica": "deny"
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
     }
   },
   {

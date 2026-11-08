@@ -67,6 +67,13 @@ impl<'a> Tally<'a> {
         self.tasks.values().map(|tally| (tally.task, tally.count))
     }
 
+    /// Each task behind the count with its count and the records behind it.
+    pub(super) fn task_records(&self) -> impl Iterator<Item = (&TaskFacts, f64, &[Occurrence])> {
+        self.tasks
+            .values()
+            .map(|tally| (tally.task, tally.count, tally.occurrences.as_slice()))
+    }
+
     pub(super) fn add(&mut self, task: &'a TaskFacts, count: f64, occurrence: Option<Occurrence>) {
         self.count += count;
         let entry = self

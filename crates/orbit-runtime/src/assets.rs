@@ -299,6 +299,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/store_gc.yaml"),
     ),
     (
+        "crew_memory_dream",
+        include_str!("../../orbit-core/assets/activities/crew_memory_dream.yaml"),
+    ),
+    (
         "task_pilot",
         include_str!("../../orbit-core/assets/activities/task_pilot.yaml"),
     ),
@@ -416,6 +420,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "store_gc_pipeline",
         include_str!("../../orbit-core/assets/jobs/store_gc_pipeline.yaml"),
+    ),
+    (
+        "crew_memory_dream_pipeline",
+        include_str!("../../orbit-core/assets/jobs/crew_memory_dream_pipeline.yaml"),
     ),
     (
         "workspace_auto_pipeline",

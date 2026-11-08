@@ -156,10 +156,12 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
         OrbitBuiltinAction::Memory(verb) => match verb {
             MemoryVerb::Show | MemoryVerb::History => Read,
             // Every crew memory write, and export to host files, is the
-            // operator's.
-            MemoryVerb::Export | MemoryVerb::Write | MemoryVerb::Reset | MemoryVerb::Copy => {
-                Refused
-            }
+            // operator's or a dreaming run's, never a resident cycle's.
+            MemoryVerb::Export
+            | MemoryVerb::Write
+            | MemoryVerb::Reset
+            | MemoryVerb::Copy
+            | MemoryVerb::Propose => Refused,
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,
