@@ -190,7 +190,10 @@ fn update_ci_rerun_journal<H: RuntimeHost + ?Sized>(
 ) -> Result<(), OrbitError> {
     let path = format!("ci-rerun/{execution}/diagnostics.json");
     for task in tasks {
-        let prior = host.get_task_artifact(task, &path)?;
+        // Every CI poll reads the journal, and most polls write nothing. Only
+        // this run writes it, so the read need not queue behind admissions;
+        // a changed journal still writes through the ordinary sections.
+        let prior = host.observe_task_artifact(task, &path)?;
         let mut journal = match prior.as_ref() {
             Some(artifact) => {
                 serde_json::from_slice::<CiRerunJournal>(&artifact.content).map_err(|_| {
