@@ -7,7 +7,7 @@ use crate::application::crew_memory::memory_key;
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExperimentStoreBackend as _;
 use orbit_types::{
-    task::Task,
+    task::{CrewSource, Task},
     workflow::{CapturedExperiment, CapturedExperimentMemory, CapturedExperiments},
 };
 use serde_json::Value;
@@ -48,7 +48,7 @@ impl OrbitRuntime {
         rows: Vec<orbit_store::contracts::ExperimentAssignment>,
     ) -> Result<CapturedExperiments, OrbitError> {
         let task = self.get_task(task_id)?;
-        let explicit = self.task_crew_source(&task)?.as_deref() == Some("explicit");
+        let explicit = self.task_crew_source(&task)? == Some(CrewSource::Explicit);
         let explicit_at = if explicit {
             self.get_task_history(task_id)?
                 .into_iter()

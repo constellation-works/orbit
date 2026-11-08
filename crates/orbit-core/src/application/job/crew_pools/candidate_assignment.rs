@@ -1,13 +1,11 @@
 //! Task crew assignment and durable assignment provenance.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement};
+use orbit_types::task::{CrewSource, Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, PURPOSE_SOURCE_PREFIX, parse_type_crew_source,
-};
+use crate::application::contracts::{CreationCrewAssignment, CrewCandidate};
 use crate::runtime::run_input::non_empty;
 
 use super::draw::{permitted_candidates, random_crew_ticket, weighted_candidates, weighted_draw};
@@ -16,7 +14,7 @@ use super::purpose::task_crew_purpose;
 impl OrbitRuntime {
     /// Recover legacy assignment provenance only from the latest assignment
     /// that names the current crew. Missing evidence preserves an explicit pin.
-    pub(crate) fn task_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+    pub(crate) fn task_crew_source(&self, task: &Task) -> Result<Option<CrewSource>, OrbitError> {
         if task.crew_source.is_some() {
             return Ok(task.crew_source.clone());
         }
@@ -33,16 +31,16 @@ impl OrbitRuntime {
             return Ok(None);
         };
         if let Some(source) = note.strip_prefix(&format!("assigned crew `{crew}` from ")) {
-            return Ok(Some(source.to_string()));
+            return Ok(Some(CrewSource::parse(source)));
         }
         if let Some((_, source)) = note.split_once(&format!(" to `{crew}` via ")) {
             return Ok(if source == "explicit name" {
-                Some("explicit".to_string())
+                Some(CrewSource::Explicit)
             } else {
                 source
                     .strip_prefix("pool draw (")
                     .and_then(|source| source.strip_suffix(')'))
-                    .map(ToOwned::to_owned)
+                    .map(CrewSource::parse)
             });
         }
         Ok(None)
@@ -70,22 +68,21 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let assigned_tier = source
-            .strip_prefix("pool:")
-            .map(ToOwned::to_owned)
-            .or_else(|| parse_type_crew_source(&source).map(|(_, tier)| tier.to_string()));
-        if source != "default" && assigned_tier.is_none() {
+            .pool_tier()
+            .or_else(|| source.type_route().map(|(_, tier)| tier));
+        if source != CrewSource::Default && assigned_tier.is_none() {
             return Ok(None);
         }
         let complexity_changed = complexity != task.complexity;
         let route = self.task_type_pool_route(complexity, &task.tags, &task.context_files);
         let target = route.as_ref().map_or_else(
-            || complexity.map(|complexity| format!("pool:{complexity}")),
+            || complexity.map(CrewSource::Pool),
             |route| Some(route.crew_source()),
         );
-        let unchanged = if source == "default" {
+        let unchanged = if source == CrewSource::Default {
             !complexity_changed && route.is_none()
         } else {
-            target.as_deref() == Some(source.as_str())
+            target.as_ref() == Some(&source)
         };
         if unchanged {
             return Ok(None);
@@ -102,10 +99,7 @@ impl OrbitRuntime {
         // A type pool none of whose members can run here leaves the task on
         // its pool; a tag edit alone does not re-roll that draw.
         if !complexity_changed
-            && assignment
-                .as_ref()
-                .map(|assignment| assignment.source.as_str())
-                == Some(source.as_str())
+            && assignment.as_ref().map(|assignment| &assignment.source) == Some(&source)
         {
             return Ok(None);
         }
@@ -132,7 +126,9 @@ impl OrbitRuntime {
                 "crew redrawn from {} (`{}`) to {} (`{}`) after {reason}",
                 source,
                 before.as_deref().unwrap_or("(none)"),
-                task.crew_source.as_deref().unwrap_or("unassigned"),
+                task.crew_source
+                    .as_ref()
+                    .map_or("unassigned".to_string(), ToString::to_string),
                 task.crew.as_deref().unwrap_or("(none)"),
             )),
             from_status: None,
@@ -173,7 +169,7 @@ impl OrbitRuntime {
         if let Some(explicit) = explicit.and_then(non_empty) {
             return Ok(Some(CreationCrewAssignment {
                 crew: explicit.to_string(),
-                source: "explicit".to_string(),
+                source: CrewSource::Explicit,
             }));
         }
         // A `<crew>@auto` member resolves from the tier and footprint this
@@ -182,14 +178,15 @@ impl OrbitRuntime {
         if let Some(purpose) = task_crew_purpose(tags)
             && let Some((candidates, _)) = self.purpose_pool_candidates(purpose, false)?
         {
-            let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+            let source = CrewSource::Purpose(purpose.as_str().to_string());
+            let draw_source = source.to_string();
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
-            let candidates = permitted_candidates(candidates, &source, None)?;
-            let selected = weighted_draw(&candidates, &source, random)?;
+            let candidates = permitted_candidates(candidates, &draw_source, None)?;
+            let selected = weighted_draw(&candidates, &draw_source, random)?;
             return Ok(Some(CreationCrewAssignment {
                 crew: selected.crew.name.clone(),
                 source,
@@ -200,13 +197,14 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
         {
             let source = route.crew_source();
+            let draw_source = source.to_string();
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
-            let candidates = permitted_candidates(candidates, &source, None)?;
-            let selected = weighted_draw(&candidates, &source, random)?;
+            let candidates = permitted_candidates(candidates, &draw_source, None)?;
+            let selected = weighted_draw(&candidates, &draw_source, random)?;
             return Ok(Some(CreationCrewAssignment {
                 crew: selected.crew.name.clone(),
                 source,
@@ -217,14 +215,15 @@ impl OrbitRuntime {
             && let Some((candidates, _)) =
                 self.creation_complexity_pool_candidates(Some(complexity), &pools, &task_os)?
         {
-            let source = format!("pool:{complexity}");
+            let source = CrewSource::Pool(complexity);
+            let draw_source = source.to_string();
             let candidates = self.reresolve_auto_candidates(candidates, &subject)?;
             let Some(candidates) = self.creation_pool_filtered(candidates) else {
                 return Ok(None);
             };
             let candidates = self.creation_weighted(candidates);
-            let candidates = permitted_candidates(candidates, &source, None)?;
-            let selected = weighted_draw(&candidates, &source, random)?;
+            let candidates = permitted_candidates(candidates, &draw_source, None)?;
+            let selected = weighted_draw(&candidates, &draw_source, random)?;
             return Ok(Some(CreationCrewAssignment {
                 crew: selected.crew.name.clone(),
                 source,
@@ -251,7 +250,7 @@ impl OrbitRuntime {
         }
         Ok(Some(CreationCrewAssignment {
             crew: default.name,
-            source: "default".to_string(),
+            source: CrewSource::Default,
         }))
     }
 

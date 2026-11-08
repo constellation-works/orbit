@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComplexity, TaskRelation, TaskStatus};
+use orbit_types::task::{CrewSource, TaskComplexity, TaskRelation, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -117,7 +117,7 @@ impl ValidatedTask {
 pub(in super::super) struct AppliedTaskMaterial {
     pub(in super::super) tags: Vec<String>,
     pub(in super::super) crew: Option<String>,
-    pub(in super::super) crew_source: Option<String>,
+    pub(in super::super) crew_source: Option<CrewSource>,
     pub(in super::super) relations: Vec<TaskRelation>,
     pub(in super::super) material: Option<(String, String)>,
     pub(in super::super) status_neutral_fingerprint: Option<String>,

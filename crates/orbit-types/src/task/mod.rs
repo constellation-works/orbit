@@ -97,12 +97,12 @@ pub use artifacts::{
 };
 pub use model::{
     ADMISSION_AFFINITY, AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
-    CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT,
+    CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT, CrewSource,
     DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DERIVED_EXECUTION_SUMMARY_PREFIX,
     DependencyDeadEnd, DispatchAffinity, EXECUTION_SUMMARY_DERIVED_EVENT, ExecutionLocation,
     ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
     NEUTRAL_PRESSURE_MILLI, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, NO_DRAIN_TAG,
-    OrchestratorModelSource, ResolvedTaskDependency, ResolvedTaskRelation,
+    OrchestratorModelSource, RedrawReason, ResolvedTaskDependency, ResolvedTaskRelation,
     TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskArtifact, TaskComment, TaskComplexity,
     TaskCreateStatus, TaskHistoryEntry, TaskOrigin, TaskPriority, TaskReferenceIndex, TaskStatus,
     TaskType, UNSET_BUCKET, UnsatisfiableTaskDependency, archived_task_completed_before_archive,

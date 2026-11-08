@@ -4,7 +4,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CrewSource, FINAL_RECOVERY_DECIDED_EVENT,
     GRANTED_TOOLS_CHANGED_EVENT, RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry,
     TaskStatus, canonical_artifact_path, granted_tools_change_note,
 };
@@ -457,7 +457,9 @@ impl OrbitRuntime {
                     .is_some_and(|source| *source != task.crew_source))
         {
             let source = match &crew_assignment {
-                Some(assignment) if assignment.source == "explicit" => "explicit name".to_string(),
+                Some(assignment) if assignment.source == CrewSource::Explicit => {
+                    "explicit name".to_string()
+                }
                 Some(assignment) => format!("pool draw ({})", assignment.source),
                 None if replacement.is_none() => "pool draw (no crew available)".to_string(),
                 None => "explicit name".to_string(),

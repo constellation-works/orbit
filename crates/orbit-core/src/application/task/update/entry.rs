@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::identity::{all_agent_families, infer_agent_family_from_model};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{CrewSource, Task, TaskHistoryEntry, TaskStatus};
 
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::params::TaskUpdateParams;
@@ -65,7 +65,7 @@ pub(in crate::application::task) struct ValidatedTaskFieldEdits {
     /// Set when this write assigned a crew explicitly or drew a replacement;
     /// the caller includes the draw source in the change history [ORB-12717].
     pub(in crate::application::task) crew_assignment: Option<CreationCrewAssignment>,
-    pub(in crate::application::task) crew_source: Option<Option<String>>,
+    pub(in crate::application::task) crew_source: Option<Option<CrewSource>>,
     pub(in crate::application::task) crew_redraw_history: Option<TaskHistoryEntry>,
     /// Set when this write changes `granted_tools`: the stored grant it
     /// replaces and the run/claim state the change window admitted it in.

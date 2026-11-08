@@ -6,14 +6,14 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{CrewSource, Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::members::StateTriggerKind;
 use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose};
 use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
-use crate::application::contracts::{ESCALATION_TRIAGE_JOB, PURPOSE_SOURCE_PREFIX};
+use crate::application::contracts::ESCALATION_TRIAGE_JOB;
 use crate::application::task::batch_prepare::{
     BatchSpec, Qualification, held_by_run_detail, prepare_batch,
 };
@@ -259,7 +259,7 @@ fn triager(
         } else {
             preferred
         };
-        let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+        let source = CrewSource::Purpose(purpose.as_str().to_string()).to_string();
         let mut ticket = runtime
             .seeded_crew_draw_tickets(format!("{ESCALATION_TRIAGE_JOB}:{}:{purpose}", task.id));
         let draw = runtime.crew_pool_draw(candidates, &source, &mut *ticket)?;

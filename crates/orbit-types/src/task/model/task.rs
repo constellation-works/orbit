@@ -84,10 +84,10 @@ pub struct Task {
     pub job_run_machine: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
-    /// Absent on legacy records; assignment history can recover it.
+    /// Assignment provenance; see [`CrewSource`]. Absent on legacy records;
+    /// assignment history can recover it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Explicit named crew that owns orchestration of this task. This is
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

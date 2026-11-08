@@ -191,9 +191,11 @@ moved the backlog forecast out of `task` to its own place in the order:
   `SUPERSEDED_BY_SOURCE` reason, `PilotFingerprints` and the run
   `review_layer` projection; since [ORB-17936] also the crew-draw values
   (`CreationCrewAssignment`, `CrewCandidate`, `InspectionPool`, the
-  `PURPOSE_SOURCE_PREFIX` and `PROVIDER_LIMIT_REASSIGNMENT_PREFIX` markers
-  and the `auto_task_minted` and `automatic_crew_source` predicates over
-  them) and the pipeline submission `RetryKey`; since [ORB-17937] also a
+  `PROVIDER_LIMIT_REASSIGNMENT_PREFIX` marker and the `auto_task_minted`
+  predicate; a task's recorded crew provenance itself is the typed
+  `CrewSource` in `orbit-types`, whose classifier methods replace the
+  former prefix markers) and the pipeline submission `RetryKey`;
+  since [ORB-17937] also a
   pull drain's `DrainClaimedLeaf` (with its `ClaimedLeafStage`) and the
   `HostProviderHold` crew draws skip, with the `canonical_provider` name it
   compares; since [ORB-17938] also the `LOCAL_ROUTE_JOB` job name, the

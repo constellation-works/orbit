@@ -258,7 +258,14 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
             .unwrap();
         let pinned = owner.get_task(&claim.task_id).unwrap();
         assert_eq!(pinned.crew.as_deref(), Some("sol"));
-        assert_eq!(pinned.crew_source.as_deref(), Some("explicit"));
+        assert_eq!(
+            pinned
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
         let readout = owner.experiment_readout(&experiment.id, None).unwrap();
         let treatment = readout
             .arms

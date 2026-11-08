@@ -1,4 +1,4 @@
-use orbit_types::task::{TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{CrewSource, TaskComment, TaskHistoryEntry, TaskStatus};
 
 /// Desktop-only allowlisted mutation, committed with a payload-bound request receipt.
 #[derive(Debug, Clone)]
@@ -9,7 +9,7 @@ pub struct DesktopTaskMutationParams {
     pub expected_revision: String,
     pub fields: orbit_types::desktop::DesktopTaskFields,
     /// Trusted assignment provenance from application validation.
-    pub crew_source: Option<Option<String>>,
+    pub crew_source: Option<Option<CrewSource>>,
     pub comment: Option<String>,
     pub status: Option<TaskStatus>,
     /// History committed with the receipt, before it: work the application

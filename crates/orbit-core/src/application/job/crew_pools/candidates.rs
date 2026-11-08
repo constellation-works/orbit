@@ -4,15 +4,12 @@ use orbit_config::{
 };
 use orbit_types::identity::Crew;
 use orbit_types::task::{
-    Task, TaskComplexity, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
+    CrewSource, Task, TaskComplexity, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
 };
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{
-    CrewCandidate, INSPECTION_CREW_UNAVAILABLE, InspectionPool, PURPOSE_SOURCE_PREFIX,
-    TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source, type_crew_source,
-};
+use crate::application::contracts::{CrewCandidate, INSPECTION_CREW_UNAVAILABLE, InspectionPool};
 use crate::application::job::JobExperimentPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
@@ -109,7 +106,11 @@ impl OrbitRuntime {
             let key = orbit_config::type_complexity_crews_key(task_type, tier);
             if let Ok(pool) = canonical_crew_pool(names, settings.crews(), &key) {
                 pools.insert(
-                    type_crew_source(task_type, tier),
+                    CrewSource::Type {
+                        task_type: task_type.to_string(),
+                        tier,
+                    }
+                    .to_string(),
                     pool.entries.into_iter().map(|entry| entry.name).collect(),
                 );
             }
@@ -121,7 +122,7 @@ impl OrbitRuntime {
             }
             if let Ok(pool) = canonical_crew_pool(names, settings.crews(), purpose.config_key()) {
                 pools.insert(
-                    format!("purpose:{}", purpose.as_str()),
+                    CrewSource::Purpose(purpose.as_str().to_string()).to_string(),
                     pool.entries.into_iter().map(|entry| entry.name).collect(),
                 );
             }
@@ -211,22 +212,20 @@ impl OrbitRuntime {
         let Some(source) = self.task_crew_source(task)? else {
             return Ok(result);
         };
-        let pool = if source == orbit_config::REVIEW_CREW_KEY {
+        let pool = if source == CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()) {
             let policy = self.operation_policy();
+            let source_key = source.to_string();
             let pool = canonical_crew_pool(
                 &policy.review_crew.value,
                 self.context.settings().crews(),
-                &source,
+                &source_key,
             )?;
-            self.pool_member_candidates(&pool.entries, &source, None)?
-        } else if source.starts_with(PURPOSE_SOURCE_PREFIX) {
+            self.pool_member_candidates(&pool.entries, &source_key, None)?
+        } else if matches!(source, CrewSource::Purpose(_)) {
             self.purpose_assignment_candidates(task)?
-        } else if source.starts_with(TYPE_SOURCE_PREFIX) {
+        } else if matches!(source, CrewSource::Type { .. }) {
             self.type_assignment_candidates(task)?
-        } else if let Some(tier) = source
-            .strip_prefix("pool:")
-            .and_then(|tier| tier.parse().ok())
-        {
+        } else if let Some(tier) = source.pool_tier() {
             self.complexity_pool_candidates(Some(tier), pools)?
         } else {
             None
@@ -274,7 +273,7 @@ impl OrbitRuntime {
         }
         let Some(source) = self
             .task_crew_source(task)?
-            .filter(|source| automatic_crew_source(source))
+            .filter(|source| source.is_automatic())
         else {
             return Ok(None);
         };
@@ -306,16 +305,14 @@ impl OrbitRuntime {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String> {
         if !self.provider_limit_policy().usage_pressure.applies() {
             return None;
         }
         let original = crew.and_then(non_empty)?;
-        let source = crew_source
-            .and_then(non_empty)
-            .filter(|source| automatic_crew_source(source))?;
+        let source = crew_source.filter(|source| source.is_automatic())?;
         match self.claimed_leaf_redraw(input, task_id, original, source, complexity) {
             Ok(drawn) => drawn,
             Err(error) => {
@@ -334,12 +331,12 @@ impl OrbitRuntime {
         input: &Value,
         task_id: &str,
         original: &str,
-        source: &str,
+        source: &CrewSource,
         complexity: Option<TaskComplexity>,
     ) -> Result<Option<String>, OrbitError> {
         // The claimed snapshot carries no tags or context files to classify
         // the task by, so a type-pool crew keeps the owner's draw.
-        if source.starts_with(TYPE_SOURCE_PREFIX) {
+        if matches!(source, CrewSource::Type { .. }) {
             return Ok(None);
         }
         let pools = if input.get(POOLS_KEY).is_some() {
@@ -349,7 +346,7 @@ impl OrbitRuntime {
         };
         let now = chrono::Utc::now();
         let tags = source
-            .strip_prefix(PURPOSE_SOURCE_PREFIX)
+            .purpose()
             .map(|purpose| {
                 vec![format!(
                     "{}{purpose}",
@@ -382,7 +379,7 @@ impl OrbitRuntime {
             job_run_id: None,
             job_run_machine: None,
             crew: Some(original.to_string()),
-            crew_source: Some(source.to_string()),
+            crew_source: Some(source.clone()),
             orchestrator: None,
             orchestrator_model: None,
             orchestrator_model_source: None,
@@ -472,22 +469,20 @@ impl OrbitRuntime {
                 });
         }
         let source = self.task_crew_source(task)?;
-        let pool_tier = source
-            .as_deref()
-            .and_then(|source| source.strip_prefix("pool:"));
-        let purpose_source = source
-            .as_deref()
-            .and_then(|source| source.strip_prefix(PURPOSE_SOURCE_PREFIX));
+        let pool_tier = source.as_ref().and_then(|source| source.pool_tier());
+        let purpose_source = source.as_ref().and_then(|source| source.purpose());
         let type_source = source
-            .as_deref()
-            .filter(|source| source.starts_with(TYPE_SOURCE_PREFIX));
+            .as_ref()
+            .filter(|source| matches!(source, CrewSource::Type { .. }));
         // A crew admission wrote back for one delivery is not kept: the
         // task draws its pool again, as an automatic assignment.
         let automatic = pool_tier.is_some()
             || purpose_source.is_some()
             || type_source.is_some()
-            || source.as_deref() == Some("default")
-            || source.as_deref().is_some_and(admission_crew_source);
+            || source == Some(CrewSource::Default)
+            || source
+                .as_ref()
+                .is_some_and(|source| source.is_admission_writeback());
         let unassigned = self
             .crew_unless_retired(task.crew.as_deref())
             .and_then(non_empty)
@@ -511,7 +506,7 @@ impl OrbitRuntime {
                 // pool; collapsing here is what makes that retry necessary.
                 return Ok((
                     vec![sole_candidate(candidate.crew.clone())],
-                    source.unwrap_or_default(),
+                    source.as_ref().map(ToString::to_string).unwrap_or_default(),
                 ));
             }
             return Ok((candidates, pool_source));
@@ -525,7 +520,7 @@ impl OrbitRuntime {
             && let Some((candidates, pool_source)) =
                 resolved(self.type_pool_candidates(&route, None)?)?
         {
-            if type_source == Some(route.crew_source().as_str())
+            if type_source == Some(&route.crew_source())
                 && let Some(candidate) = candidates.iter().find(|candidate| {
                     candidate.weight > 0
                         && candidate_holds_assignment(candidate, task.crew.as_deref())
@@ -533,7 +528,7 @@ impl OrbitRuntime {
             {
                 return Ok((
                     vec![sole_candidate(candidate.crew.clone())],
-                    source.unwrap_or_default(),
+                    source.as_ref().map(ToString::to_string).unwrap_or_default(),
                 ));
             }
             return Ok((candidates, pool_source));
@@ -546,7 +541,7 @@ impl OrbitRuntime {
             {
                 if task
                     .complexity
-                    .is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
+                    .is_some_and(|complexity| Some(complexity) == pool_tier)
                     && let Some(candidate) = candidates.iter().find(|candidate| {
                         candidate.weight > 0
                             && candidate_holds_assignment(candidate, task.crew.as_deref())
@@ -554,7 +549,7 @@ impl OrbitRuntime {
                 {
                     return Ok((
                         vec![sole_candidate(candidate.crew.clone())],
-                        source.unwrap_or_default(),
+                        source.as_ref().map(ToString::to_string).unwrap_or_default(),
                     ));
                 }
                 return Ok((candidates, pool_source));

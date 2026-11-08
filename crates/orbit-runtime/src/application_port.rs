@@ -18,7 +18,8 @@ use orbit_engine::TaskAutomationUpdate;
 use orbit_store::AuditEventInsertParams;
 use orbit_store::contracts::{ClaimInspection, TaskCandidates, TaskListFilter};
 use orbit_types::task::{
-    ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority, TaskStatus,
+    CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
+    TaskStatus,
 };
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
@@ -163,7 +164,7 @@ pub trait ApplicationPort: Send + Sync {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String>;
 }
@@ -344,7 +345,7 @@ impl RuntimeKernel {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String> {
         self.application.claimed_leaf_redrawn_crew(

@@ -197,7 +197,13 @@ fn an_explicit_crew_beats_the_purpose_pool() {
     // A task filed for a purpose with its own crew keeps it.
     let task = fx.task(&["baseline-red-repair"], Some("pinned"));
     assert_eq!(task.crew.as_deref(), Some("pinned"));
-    assert_eq!(task.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
 
     // So does an auto-task that names a purpose and a crew.
     let minted = fx.mint(
@@ -206,7 +212,14 @@ fn an_explicit_crew_beats_the_purpose_pool() {
         Some("pinned"),
     );
     assert_eq!(minted.crew.as_deref(), Some("pinned"));
-    assert_eq!(minted.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        minted
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
 }
 
 fn a_purpose_pool_beats_the_complexity_pool() {
@@ -247,7 +260,10 @@ fn a_purpose_pool_beats_the_complexity_pool() {
     let task = fx.task(&["baseline-red-repair"], None);
     assert_eq!(task.crew.as_deref(), Some("purpose_claude"));
     assert_eq!(
-        task.crew_source.as_deref(),
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair")
     );
 
@@ -255,7 +271,11 @@ fn a_purpose_pool_beats_the_complexity_pool() {
     let minted = fx.mint("purpose-chore", &["crew-purpose:baseline_red_repair"], None);
     assert_eq!(minted.crew.as_deref(), Some("purpose_claude"));
     assert_eq!(
-        minted.crew_source.as_deref(),
+        minted
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair")
     );
 
@@ -296,7 +316,13 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
 
     let task = fx.task(&["baseline-red-repair"], None);
     assert_eq!(task.crew.as_deref(), Some("medium_lane"));
-    assert_eq!(task.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
 
     // The existing per-purpose keys are the final-recovery and review pools.
     let view = orbit_core::application::config::effective_view(&fx.runtime).unwrap();

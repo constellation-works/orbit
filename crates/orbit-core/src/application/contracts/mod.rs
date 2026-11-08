@@ -32,11 +32,9 @@ mod tool_invocation;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
 pub(crate) use crew_draw::{
-    AutoEffortSubject, BACKFILL_CREW_SOURCE, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
+    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
     INSPECTION_CREW_UNAVAILABLE, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
-    PURPOSE_SOURCE_PREFIX, REDRAW_SOURCE_PREFIX, TYPE_SOURCE_PREFIX, admission_crew_source,
-    auto_effort_note, auto_task_minted, automatic_crew_source, experiment_crew_source,
-    parse_type_crew_source, type_crew_source,
+    auto_effort_note, auto_task_minted,
 };
 pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;

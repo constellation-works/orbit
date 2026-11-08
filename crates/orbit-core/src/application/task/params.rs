@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
-    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
+    CrewSource, ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -38,7 +38,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) source_task_id: Option<Option<String>>,
     pub(crate) job_run_id: Option<Option<String>>,
     pub(crate) crew: Option<Option<String>>,
-    pub(crate) crew_source: Option<Option<String>>,
+    pub(crate) crew_source: Option<Option<CrewSource>>,
     pub(crate) orchestrator: Option<Option<String>>,
     pub(crate) origin: Option<TaskOrigin>,
     pub(crate) status_event: Option<String>,
@@ -154,7 +154,7 @@ pub struct TaskAddParams {
     pub crew: Option<String>,
     /// Provenance recorded for `crew` when the system chose it from a
     /// setting rather than the caller naming it; `None` records `explicit`.
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
     /// The orchestrator's model when the session runs one other than the

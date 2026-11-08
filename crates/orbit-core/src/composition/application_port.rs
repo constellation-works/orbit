@@ -10,7 +10,8 @@ use orbit_runtime::{ApplicationPort, RuntimeKernel};
 use orbit_store::AuditEventInsertParams;
 use orbit_store::contracts::{ClaimInspection, TaskCandidates, TaskListFilter};
 use orbit_types::task::{
-    ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority, TaskStatus,
+    CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
+    TaskStatus,
 };
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
@@ -267,7 +268,7 @@ impl ApplicationPort for CoreApplicationPort {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String> {
         OrbitRuntime::claimed_leaf_redrawn_crew(

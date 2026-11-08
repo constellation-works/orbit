@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::identity::{
     Crew, CrewAssignment, all_agent_families, infer_agent_family_from_model, resolve_crew,
 };
-use orbit_types::task::{Task, TaskComplexity, is_valid_orb_task_id};
+use orbit_types::task::{CrewSource, Task, TaskComplexity, is_valid_orb_task_id};
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody,
 };
@@ -181,7 +181,7 @@ impl RuntimeKernel {
                         input,
                         &snapshot.id,
                         snapshot.crew(),
-                        snapshot.crew_source.as_deref(),
+                        snapshot.crew_source.as_ref(),
                         snapshot.complexity,
                     )
                     .or_else(|| snapshot.crew().map(ToOwned::to_owned)),
@@ -285,7 +285,7 @@ struct ClaimedTaskSnapshot {
     /// How `crew` was assigned on the owner [ORB-17773]; absent on a leaf
     /// created before it was carried, which reads as not automatic.
     #[serde(default)]
-    crew_source: Option<String>,
+    crew_source: Option<CrewSource>,
     #[serde(default)]
     complexity: Option<TaskComplexity>,
 }

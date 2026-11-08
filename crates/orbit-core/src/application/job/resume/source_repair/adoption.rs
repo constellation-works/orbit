@@ -181,7 +181,9 @@ pub(super) fn task_matches_before_crew_redraws(
         let Some((source, from, to)) = source_keeping_crew_redraw(entry) else {
             return Ok(false);
         };
-        if earlier.crew.as_deref() != Some(to) || earlier.crew_source.as_deref() != Some(source) {
+        if earlier.crew.as_deref() != Some(to)
+            || earlier.crew_source != Some(orbit_types::task::CrewSource::parse(source))
+        {
             return Ok(false);
         }
         earlier.crew = Some(from.to_string());

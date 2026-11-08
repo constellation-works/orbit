@@ -36,15 +36,14 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_config::{ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitThreshold};
 use orbit_types::identity::Crew;
-use orbit_types::task::Task;
+use orbit_types::task::{CrewSource, Task};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_account_label};
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX,
-    auto_task_minted, automatic_crew_source,
+    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted,
 };
 use crate::application::task::{CrewPools, TaskExperimentPort, TaskJobPort};
 use crate::runtime::run_input::non_empty;
@@ -301,7 +300,7 @@ impl OrbitRuntime {
             return Ok(false);
         }
         let source = self.recorded_crew_source(task)?;
-        if source.as_deref().is_some_and(automatic_crew_source) {
+        if source.as_ref().is_some_and(|source| source.is_automatic()) {
             return Ok(false);
         }
         Ok(self
@@ -353,8 +352,10 @@ impl OrbitRuntime {
         // member. Retry that pool's other enabled members, weights included,
         // before the complexity pool. A draw that already lists the pool is
         // left alone. The run allowlist is applied by the caller.
-        if (source.starts_with(PURPOSE_SOURCE_PREFIX) || source.starts_with(TYPE_SOURCE_PREFIX))
-            && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
+        if matches!(
+            CrewSource::parse(source),
+            CrewSource::Purpose(_) | CrewSource::Type { .. }
+        ) && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
         {
             let permitted = pool
                 .into_iter()

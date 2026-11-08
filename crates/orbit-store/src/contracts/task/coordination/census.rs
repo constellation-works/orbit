@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    AdmissionAffinityReach, DispatchAffinity, ExecutorOsLimit, HostOs, NEUTRAL_PRESSURE_MILLI,
-    Task, TaskOsRequirement,
+    AdmissionAffinityReach, CrewSource, DispatchAffinity, ExecutorOsLimit, HostOs,
+    NEUTRAL_PRESSURE_MILLI, Task, TaskOsRequirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -255,11 +255,9 @@ impl ExecutorCensus {
         else {
             return NEUTRAL_PRESSURE_MILLI;
         };
-        let key = match task.crew_source.as_deref() {
-            Some(source) if source.starts_with("pool:") => {
-                source.strip_prefix("pool:").map(ToOwned::to_owned)
-            }
-            Some(source) if source.starts_with("purpose:") || source.starts_with("type:") => {
+        let key = match &task.crew_source {
+            Some(CrewSource::Pool(tier)) => Some(tier.as_str().to_string()),
+            Some(source @ (CrewSource::Purpose(_) | CrewSource::Type { .. })) => {
                 Some(source.to_string())
             }
             _ => task

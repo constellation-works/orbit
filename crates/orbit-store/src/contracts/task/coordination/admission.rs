@@ -622,7 +622,7 @@ pub struct AdmissionTaskSummary {
     /// from an older owner and on legacy tasks with no recorded source:
     /// both read as not automatic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<orbit_types::task::CrewSource>,
     pub context_files: Vec<String>,
     /// [ORB-14257] The candidate an earlier claim of the task preserved,
     /// for this claim's leaf to resume instead of implementing afresh. The

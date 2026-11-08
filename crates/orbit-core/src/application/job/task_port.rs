@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_types::identity::{AutoEffortChoice, Crew};
-use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{
+    CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
+};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
     ShipMode, SourceRepairBinding,
@@ -137,7 +139,7 @@ impl TaskJobPort for OrbitRuntime {
         self.unheld_task_crew_candidates(task, pools)
     }
 
-    fn recorded_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+    fn recorded_crew_source(&self, task: &Task) -> Result<Option<CrewSource>, OrbitError> {
         self.task_crew_source(task)
     }
 

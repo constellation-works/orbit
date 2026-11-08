@@ -14,7 +14,7 @@ use orbit_types::workflow::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CI_FAILURE_TAG, CODE_SCANNING_TAG, CrewCandidate, DEPENDABOT_TAG, PURPOSE_SOURCE_PREFIX,
+    CI_FAILURE_TAG, CODE_SCANNING_TAG, CrewCandidate, DEPENDABOT_TAG,
     RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
 };
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
@@ -139,8 +139,8 @@ impl OrbitRuntime {
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
         let Some(purpose) = self
             .task_crew_source(task)?
-            .as_deref()
-            .and_then(|source| source.strip_prefix(PURPOSE_SOURCE_PREFIX))
+            .as_ref()
+            .and_then(|source| source.purpose())
             .and_then(CrewPurpose::parse)
         else {
             return Ok(None);

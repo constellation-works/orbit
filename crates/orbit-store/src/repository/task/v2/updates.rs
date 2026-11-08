@@ -2,8 +2,8 @@ use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
-    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
-    TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
+    ACCEPTANCE_CRITERIA_DOCUMENT, CrewSource, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT,
+    PLAN_DOCUMENT, TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
     named_friction_targets, pending_resolves_entries, task_fields_updated_note,
 };
 
@@ -348,7 +348,7 @@ impl TaskV2Store {
             if let Some(value) = &fields.crew {
                 bundle.envelope.crew = value.clone();
                 // A crew replacement without provenance is an explicit pin.
-                bundle.envelope.crew_source = value.as_ref().map(|_| "explicit".to_string());
+                bundle.envelope.crew_source = value.as_ref().map(|_| CrewSource::Explicit);
                 envelope_changed = true;
             }
             if let Some(value) = &fields.crew_source {

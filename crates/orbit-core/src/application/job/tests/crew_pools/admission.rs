@@ -47,7 +47,13 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
             ..Default::default()
         })
         .expect("add task");
-    assert_eq!(task.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
     write("medium_complexity_crews = [\"sol:50\", \"sonnet:50\"]");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
 
