@@ -246,7 +246,8 @@ The fault comes with one line of evidence that cites a run, check or file.
 As built [ORB-23301]: the fault and evidence sit beside the decision on the run checkpoint
 and the task's typed history decision, and decisions recorded before R1 read `unknown`.
 An agent answer without both is malformed and escalates as `unknown`. Orbit records the
-judge's model as `fault_judged_by`. The packet strips model, provider and crew keys from its
+provider Orbit observed for the judging agent as `fault_judged_by`, never from the agent's
+answer; it is `null` when no provider was observed. The packet strips model, provider and crew keys from its
 evidence and masks the run's crew and model names. The audit is the disabled-by-default
 `recovery-fault-audit` auto-task. It samples through the blind `final_recovery` task field
 and skips decisions judged by its own family. Until R2 records seasons, every decision
