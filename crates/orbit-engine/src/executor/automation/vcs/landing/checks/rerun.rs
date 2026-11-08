@@ -683,10 +683,26 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
                 ))
             }
         }
-        CiRerunAdmission::Observe(previous) => Ok(CiRerunStep::Wait(format!(
-            "CI retry was reserved for run {} attempt {} on head {}; observing without resending, including after an unknown reply",
-            previous.run_id, previous.run_attempt, previous.head_sha
-        ))),
+        CiRerunAdmission::Observe(previous) => {
+            // The authenticated plan is built from the current completed
+            // failed jobs. Only a later attempt than the reserved rerun's
+            // original attempt is that rerun's result; the original attempt
+            // (or an ambiguous send with no later attempt yet) keeps
+            // observing without a second send.
+            if previous.run_id == plan.run_id && plan.run_attempt > previous.run_attempt {
+                Ok(CiRerunStep::BudgetSpent(format!(
+                    "the CI repair made no edit and wrote no scope record; its one rerun of the \
+                     failed checks on head {} failed again, so no further repair or rerun runs \
+                     for this head",
+                    plan.head_sha
+                )))
+            } else {
+                Ok(CiRerunStep::Wait(format!(
+                    "CI retry was reserved for run {} attempt {} on head {}; observing without resending, including after an unknown reply",
+                    previous.run_id, previous.run_attempt, previous.head_sha
+                )))
+            }
+        }
         CiRerunAdmission::Backoff { not_before_ms } => Ok(CiRerunStep::Backoff(format!(
             "infrastructure CI retry backs off until {not_before_ms} ms"
         ))),

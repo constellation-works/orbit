@@ -155,15 +155,11 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     let base = git_output(workspace, &["merge-base", head, &tip])?;
     // A repair that made no edit already spent its auto-fix attempt for this
     // head. Rerun its failed checks once on the unchanged head instead of
-    // admitting another repair; a head whose rerun already failed stops.
+    // admitting another repair. A recorded rerun send is not itself a rerun
+    // result: the planner below keeps observing the original attempt (and an
+    // ambiguous send reply) and stops only on a later authenticated failed
+    // attempt.
     if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
-        if ci_rerun_recorded(host, auto_fix, head) {
-            return Ok(CiRerunRecovery::Stopped(format!(
-                "the CI repair made no edit and wrote no scope record; its one rerun of the \
-                 failed checks on head {head} failed again, so no further repair or rerun runs \
-                 for this head"
-            )));
-        }
         match super::super::super::landing::checks::request_no_edit_repair_rerun(
             host,
             workspace,
@@ -253,24 +249,6 @@ fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
             pr_auto_fix_no_edit_reruns(&history, pr_number)
                 .iter()
                 .any(|record| record.head_sha == head)
-        })
-    })
-}
-
-/// Whether a CI rerun was already sent for `head` on a task this run
-/// watches. An unreadable history is no record.
-fn ci_rerun_recorded<H: RuntimeHost + ?Sized>(
-    host: &H,
-    auto_fix: &admission::AutoFix,
-    head: &str,
-) -> bool {
-    auto_fix.task_ids.iter().any(|task| {
-        host.get_task_history(task).is_ok_and(|history| {
-            history
-                .iter()
-                .filter(|entry| entry.event == "ci_check_rerun")
-                .filter_map(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok())
-                .any(|note| note["head"].as_str() == Some(head))
         })
     })
 }
