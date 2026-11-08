@@ -195,6 +195,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

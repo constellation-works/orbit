@@ -57,8 +57,30 @@ pub(super) struct FleetNoticeInstructions<'a> {
     pub(super) notice_posting_instruction: Option<&'a str>,
 }
 
+/// The built-in untrusted-data handling an activity with `fleet_notices: read` or
+/// `post` receives when it declares no `notice_instruction` of its own.
+const BUILT_IN_NOTICE_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/untrusted_data.txt");
+
+/// The built-in posting guidance an activity with `fleet_notices: post`
+/// receives when it declares no `notice_posting_instruction` of its own.
+const BUILT_IN_NOTICE_POSTING_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/posting.txt");
+
+/// The activity's own non-empty instruction, else the built-in text when the
+/// activity opts into the matching `fleet_notices` level.
+fn fleet_notice_text<'a>(
+    declared: Option<&'a str>,
+    opted_in: bool,
+    built_in: &'static str,
+) -> Option<&'a str> {
+    declared
+        .filter(|instruction| !instruction.trim().is_empty())
+        .or(opted_in.then_some(built_in))
+}
+
 /// Ask the host for the workspace's open fleet notices when `spec` declares
-/// a `notice_instruction`, put the brief into the task context and record
+/// a `notice_instruction` or opts into `fleet_notices`, put the brief into the task context and record
 /// what was delivered. Notices are workspace-scoped, so a prompt with no
 /// task snapshot (a multi-task pilot) gains a task object holding only the
 /// block. The untrusted-data instruction rides only when the prompt
@@ -82,20 +104,21 @@ fn attach_fleet_notices<'a>(
     effective_tools: &[String],
     audit: &V2AuditWriter,
 ) -> FleetNoticeInstructions<'a> {
-    let notice_posting_instruction = spec
-        .notice_posting_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())
-        .filter(|_| {
-            effective_tools
-                .iter()
-                .any(|tool| tool == "orbit.notice.post")
-        });
-    let Some(instruction) = spec
-        .notice_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())
-    else {
+    let notice_posting_instruction = fleet_notice_text(
+        spec.notice_posting_instruction.as_deref(),
+        spec.fleet_notices.posts(),
+        BUILT_IN_NOTICE_POSTING_INSTRUCTION,
+    )
+    .filter(|_| {
+        effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.notice.post")
+    });
+    let Some(instruction) = fleet_notice_text(
+        spec.notice_instruction.as_deref(),
+        spec.fleet_notices.reads(),
+        BUILT_IN_NOTICE_INSTRUCTION,
+    ) else {
         return FleetNoticeInstructions {
             notice_instruction: None,
             notice_posting_instruction,

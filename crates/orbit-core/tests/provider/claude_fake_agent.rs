@@ -178,6 +178,7 @@ fn spec() -> AgentLoopSpec {
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("claude-opus-4-8".to_string()),

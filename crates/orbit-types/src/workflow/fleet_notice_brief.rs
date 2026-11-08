@@ -4,8 +4,8 @@
 
 use serde_json::Value;
 
-/// A host's answer for one prompt build of an activity that declares a
-/// `notice_instruction`.
+/// A host's answer for one prompt build of an activity that opts into
+/// `fleet_notices` or declares a `notice_instruction`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FleetNoticeBrief {
     /// The task context's `fleet_notices` value.

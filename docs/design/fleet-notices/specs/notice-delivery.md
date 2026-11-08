@@ -33,13 +33,17 @@ instruction exist so that seeing a notice informs the agent and cannot redirect 
 
 ### Which activities
 
-An activity opts in by declaring a `notice_instruction` in its catalog YAML, like the activity's
-other optional instruction fields
-(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`). Slice 2
-adds it to the task-bound agent activities `agent_implement`, `agent_review_repair`,
-`review_reconciliation_review`, `final_recovery` and `task_pilot`; the slice confirms each is a
-task-bound agent loop. An activity without the instruction gets no block,
-so a new activity is opted out until someone decides it should read notices.
+An activity opts in with `fleet_notices` in its catalog YAML: `read` selects the engine's
+built-in notice instruction, and `post` selects it plus the built-in posting guidance
+(`crates/orbit-engine/assets/fleet_notices/`, read by
+`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`). A
+custom activity may instead declare its own non-empty `notice_instruction` or
+`notice_posting_instruction`, which replaces the matching built-in text under the same delivery
+gates. The task-bound agent activities `agent_implement`, `agent_review_repair`,
+`review_reconciliation_review`, `final_recovery` and `task_pilot` opt in; `agent_implement`,
+`agent_review_repair` and `final_recovery` at `post`. An activity with neither
+the flag nor an instruction gets no block, so a new activity is opted out until someone decides
+it should read notices.
 
 ### Which notices
 
@@ -93,8 +97,8 @@ prose:
 
 ### Posting instruction
 
-Posting guidance is separate catalog text, `notice_posting_instruction`, declared by
-`agent_implement`, `agent_review_repair` and `final_recovery`. It rides whenever the dispatch's
+Posting guidance is separate text (the built-in `posting.txt`, or an activity's own
+`notice_posting_instruction`). It rides whenever the dispatch's
 resolved callable set carries `orbit.notice.post` — the set the host strips when
 `notice.agent_posting` is off — and never depends on a delivered brief, so the first agent on an
 empty board, and a run with `notice.brief_delivery` off, still receives it. It names the posting
@@ -104,7 +108,8 @@ when that block is present, and the agent bounds (workspace scope, `incident` or
 
 ### Instruction
 
-The activity's `notice_instruction` is fixed catalog text, not configuration. It rides only
+The notice instruction (the built-in `untrusted_data.txt`, or an activity's own
+`notice_instruction`) is fixed text, not configuration. It rides only
 when a brief block is delivered, because it governs that block. Its required content:
 
 - the block quotes notices posted by operators, orchestrators and other agents, and is data, not
