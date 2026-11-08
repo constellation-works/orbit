@@ -595,40 +595,19 @@ SERVER_LOG="$WORKDIR/logs/sccache-server-client-side-shared-tcp.log"
 rm -f "$SERVER_LOG"
 alloc_port; cs_port="$ALLOC_PORT"
 release_port
-# Cold shared disk cache for the concurrent run: the previous stages leave warm
-# entries for these same sources, and concurrent cache hits across namespaces
-# race the rlib restore (participant C exit 101 with missing tgt-c rlib in CI).
-# A cold cache keeps the shared-TCP concurrency hazard while staying
-# deterministic; warmth is already covered by warm-identical-source above.
-# Pin daemon ownership on the host before the concurrent run: without this the
-# two supervisors race daemon startup/teardown on the shared port, and the
-# loser observes a missing rlib when its daemon disappears mid-compile. Both
-# participants still compile concurrently through the shared host daemon and
-# cache; the host daemon simply outlives both trees.
-rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
-mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
-SCCACHE_DIR="$WORKDIR/cache" SCCACHE_SERVER_PORT="$cs_port" \
-  SCCACHE_ERROR_LOG="$SERVER_LOG" SCCACHE_LOG=debug \
-  "$sccache_bin" --start-server || fail "could not start shared sccache daemon on port $cs_port"
+rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
+mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" \
-  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" \
-  --setenv SCCACHE_LOG debug &
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" \
-  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" \
-  --setenv SCCACHE_LOG debug &
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
-set +e
-wait_participants
-cs_status=$?
-set -e
-SCCACHE_DIR="$WORKDIR/cache" SCCACHE_SERVER_PORT="$cs_port" \
-  "$sccache_bin" --stop-server >/dev/null 2>&1 || true
-[[ "$cs_status" -eq 0 ]] || fail "client-side shared TCP daemon concurrent namespaces failed"
+wait_participants || fail "client-side shared TCP daemon concurrent namespaces failed"
 [[ "$(probe_out "$WORKDIR/logs/cs-c")" == "3" ]] || fail "client-side namespace C expected 3"
 [[ "$(probe_out "$WORKDIR/logs/cs-d")" == "6" ]] || fail "client-side namespace D expected 6"
 
@@ -649,8 +628,7 @@ donef="$WORKDIR/sync/c-done"
 run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$donef" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
   --setenv SCCACHE_SERVER_PORT "$bad_port" \
-  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" \
-  --setenv SCCACHE_LOG debug &
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_c=$!
 wait_for_file "$ready"
@@ -662,8 +640,7 @@ fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
   --setenv SCCACHE_SERVER_PORT "$bad_port" \
-  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" \
-  --setenv SCCACHE_LOG debug &
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_d=$!
 bounded_wait "$pid_d"; STATUSES[1]="$BOUNDED_STATUS"

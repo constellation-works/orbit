@@ -311,8 +311,11 @@ and stderr before removing its temporary files. Each stream is limited to
 an explicit omitted-byte count. The labels include original byte counts;
 successful peers retain their output and cache statistics too. The two
 shared-TCP stages also start their daemon with a per-stage
-`SCCACHE_ERROR_LOG` under the stage's `logs/` directory and
-`SCCACHE_LOG=debug`; on failure the same report appends that server log as a
+`SCCACHE_ERROR_LOG` under the stage's `logs/` directory, which captures the
+daemon's stderr (panics and fatal errors). Do not add `SCCACHE_LOG` to the
+participants: with any `SCCACHE_LOG` level set, sccache 0.17.0 restored cache
+hits through the shared daemon's own mount namespace, so the sibling's rlib went
+missing (exit 101) on every run (ORB-23034). On failure the same report appends that server log as a
 `sccache-server-log` stream under the same 4096-byte bound, so an empty-log
 participant exit still names what the daemon saw. Diagnostics
 add no compilation or waits to a successful live run. The companion
