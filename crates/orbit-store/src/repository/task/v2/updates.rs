@@ -596,6 +596,7 @@ impl TaskV2Store {
             && fields.status.is_none()
             && fields.status_event.is_none()
             && fields.status_note.is_none()
+            && fields.status_decision.is_none()
             && fields.append_history.is_empty()
             && fields.expected_status.is_none()
             && fields.planned_by.is_none()
@@ -737,7 +738,7 @@ impl TaskV2Store {
                     from_status: status_transition.map(|(from, _)| from),
                     to_status: status_transition.map(|(_, to)| to),
                     operation_id: None,
-                    decision: None,
+                    decision: fields.status_decision.clone(),
                 };
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);

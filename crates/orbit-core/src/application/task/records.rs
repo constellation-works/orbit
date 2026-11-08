@@ -172,6 +172,7 @@ impl TaskRecordService<'_> {
                     status: params.status,
                     status_event: params.status_event.clone(),
                     status_note: params.status_note.clone(),
+                    status_decision: params.status_decision.clone(),
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),

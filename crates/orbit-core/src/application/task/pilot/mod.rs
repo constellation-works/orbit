@@ -72,7 +72,7 @@ use assessment::{
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
-    ExplicitAssessmentReuse, approval_disqualification, approved_by_drain,
+    ExplicitAssessmentReuse, approval_disqualification, approval_note, approved_by_drain,
     classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
     promote_reusable_assessment,
 };

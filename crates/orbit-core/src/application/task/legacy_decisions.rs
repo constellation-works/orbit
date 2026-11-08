@@ -21,6 +21,10 @@
 //!   read only when the entry has no typed decision. Only `system` writes
 //!   that event, through the task store, so its note is not open to an
 //!   untrusted writer and keeps the presence rule without the boundary.
+//! - a `proposal_approved` event's `approved by auto drain <run>` note names
+//!   the approving drain only when the entry has no typed decision. Drains
+//!   record `DrainApproved` since; the note reader keeps the presence rule
+//!   it had, so attribution of an older approval does not change.
 //!
 //! The boundary is per store: the first writable open of a store by a binary
 //! that writes typed decisions records when that happened, beside the task
@@ -39,6 +43,8 @@
 //! receipt and no supported older binary can still write marker-only records.
 //! Retire the undecided-pilot note reader once no live proposed or backlog
 //! task holds a `task_pilot_unresolved` entry without a typed decision.
+//! Retire the drain-approval note reader once no drain run still reports on
+//! a task approved without a typed `DrainApproved` decision.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
@@ -313,6 +319,16 @@ pub(crate) fn drain_held_classification<'a>(
 pub(crate) fn unresolved_pilot_note_run_id(entry: &TaskHistoryEntry) -> Option<String> {
     let note: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
     note["pilot_run_id"].as_str().map(str::to_string)
+}
+
+/// Whether a `proposal_approved` entry written before drain approvals
+/// carried a typed decision names drain `run_id` in its note. Callers consult
+/// it only for an entry without a decision.
+pub(crate) fn drain_approval_note_names(entry: &TaskHistoryEntry, run_id: &str) -> bool {
+    entry
+        .note
+        .as_deref()
+        .is_some_and(|note| note.starts_with(&super::pilot::approval_note(run_id)))
 }
 
 /// The `key=value` token in a comment header.
