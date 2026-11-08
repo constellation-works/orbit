@@ -199,10 +199,37 @@ run_with_timeout() {
 
 echo "--- step 1: $NPM_SPEC --version (local binary: ${LOCAL_BINARY:-no}) ---"
 VERSION_OUT="$TMPDIR_ROOT/version.txt"
-if ! run_orbit --version >"$VERSION_OUT" 2>"$TMPDIR_ROOT/version.err"; then
-  echo "FAIL: $NPM_SPEC --version exited non-zero" >&2
+if run_orbit --version >"$VERSION_OUT" 2>"$TMPDIR_ROOT/version.err"; then
+  :
+else
+  version_rc=$?
+  echo "FAIL: $NPM_SPEC --version exited with code $version_rc" >&2
   echo "--- stderr ---" >&2
   cat "$TMPDIR_ROOT/version.err" >&2
+  if [[ ! -s "$TMPDIR_ROOT/version.err" && -z "$LOCAL_BINARY" ]]; then
+    echo "--- empty npx stderr; rerunning package postinstall for diagnostics ---" >&2
+    # npm rolls back the package directory when postinstall fails. Restore it
+    # without lifecycle scripts, then run postinstall directly so npm cannot
+    # swallow the underlying download/authentication error a second time.
+    if npm exec --yes --ignore-scripts --package="$NPM_SPEC" -- node -e '' >&2; then
+      :
+    else
+      echo "postinstall diagnostic package restore exited with code $?" >&2
+    fi
+    postinstall_found=false
+    while IFS= read -r package_dir; do
+      postinstall_found=true
+      echo "--- postinstall: $package_dir ---" >&2
+      if ( cd "$package_dir" && node scripts/install-binary.js ) >&2; then
+        echo "postinstall diagnostic exited with code 0" >&2
+      else
+        echo "postinstall diagnostic exited with code $?" >&2
+      fi
+    done < <(find "$npm_config_cache/_npx" -type d -path "*/node_modules/$NPM_PKG" -print 2>/dev/null || true)
+    if [[ "$postinstall_found" = false ]]; then
+      echo "postinstall diagnostics unavailable: package not found in $npm_config_cache/_npx" >&2
+    fi
+  fi
   exit 1
 fi
 binary_version="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^orbit[[:space:]]*//' "$VERSION_OUT")"

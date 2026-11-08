@@ -7,6 +7,11 @@ On install, downloads the matching prebuilt `orbit` binary from
 the signed `orbit-checksums.txt` with the package-pinned release trust set,
 verifies the archive SHA-256, and exposes it as the `orbit` command.
 
+Downloads retry network errors, HTTP 429 and 5xx responses up to four attempts,
+with 4, 8 and 16 seconds between attempts. If a GitHub release download still
+fails transiently, the installer tries the GitHub REST asset endpoint. Both
+paths require the same signed checksums and archive verification.
+
 ## Usage
 
 ```bash
@@ -35,6 +40,7 @@ Windows is not currently published. Use WSL or build from source.
 
 | Variable | Effect |
 |---|---|
+| `GITHUB_TOKEN` / `GH_TOKEN` | Optional token for the GitHub API download fallback (`GITHUB_TOKEN` takes precedence). Sent only to the API host. Public releases also support unauthenticated fallback. |
 | `ORBIT_BINARY` | Path to a local `orbit` binary; bypasses download and trusts that path as the binary source. |
 | `ORBIT_RELEASE_PUBLIC_KEY_FILE` | **Deprecated** in favor of `ORBIT_RELEASE_TRUSTED_KEYS_FILE`. Single-key override for the trusted checksum-signing public key; requires `ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE=1`, logs a deprecation notice when active. |
 | `ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE=1` | Required acknowledgement that `ORBIT_RELEASE_PUBLIC_KEY_FILE` replaces the release authenticity trust root. |
