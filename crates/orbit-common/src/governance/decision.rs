@@ -16,10 +16,7 @@
 //! the same way, raises the approval requests proposed and review tasks
 //! are missing, and returns them beside the requests nearing expiry.
 //! Registering, listing, revoking and rotating a channel are operator CLI
-//! verbs with no MCP scope, like answering. So are enabling, disabling and
-//! showing a precedent-decision category (`assist`): the enablement store is
-//! host-only, and enabling is refused from an agent envelope and from any
-//! plugin callback.
+//! verbs with no MCP scope, like answering.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
     ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
@@ -60,12 +57,6 @@ operation_registry! {
         ChannelRevoke => CHANNEL_REVOKE,
         /// Rotate a decision channel's token key (operator CLI only).
         ChannelRotateKey => CHANNEL_ROTATE_KEY,
-        /// Enable model answers in one precedent-decision category (operator CLI only).
-        AssistEnable => ASSIST_ENABLE,
-        /// Disable model answers in one precedent-decision category (operator CLI only).
-        AssistDisable => ASSIST_DISABLE,
-        /// Show this host's precedent-decision category enablements (operator CLI only).
-        AssistStatus => ASSIST_STATUS,
     }
 }
 
@@ -77,18 +68,11 @@ pub const DECISION: NounSpec<DecisionVerb> = NounSpec {
     cli_about: "List, show and answer human decision requests on held work",
     audit_target_type: "decision_request",
     audit_target_param: "id",
-    cli_groups: &[
-        CliGroup {
-            name: "channel",
-            cli_about: "Register, list, revoke and rotate this host's decision channels",
-            params: &[],
-        },
-        CliGroup {
-            name: "assist",
-            cli_about: "Enable, disable and show model answers in precedent-decision categories",
-            params: &[],
-        },
-    ],
+    cli_groups: &[CliGroup {
+        name: "channel",
+        cli_about: "Register, list, revoke and rotate this host's decision channels",
+        params: &[],
+    }],
     operations: DECISION_OPERATIONS,
 };
 
@@ -530,70 +514,6 @@ const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[CHANNEL_NAME],
-    at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
-    mcp_scope: None,
-    id_route: McpIdRouteDeclaration::Unspecified,
-};
-
-const ASSIST_CATEGORY: &[ParamSpec] = &[required(both(
-    "category",
-    ParamType::String,
-    "The decision category, `<workspace_id>/<gate>` or `<workspace_id>/agent_request/<topic file>`, as `orbit decision show` prints it.",
-    CliArgKind::Positional,
-    "The decision category",
-))];
-
-const ASSIST_READOUT: &[ParamSpec] = &[required(both(
-    "readout",
-    ParamType::String,
-    "The `precedent-decision-readout/1` artifact the enablement rests on, as `<task>/<artifact path>`. Its policy digest must equal the live host grant's, its labels must be recorded human decisions, and the category must meet every registered target.",
-    CliArgKind::flag("readout"),
-    "The readout artifact, as <task>/<artifact path>",
-))];
-
-const ASSIST_ENABLE: OperationSpec<DecisionVerb> = OperationSpec {
-    verb: DecisionVerb::AssistEnable,
-    cli_path: &["assist", "enable"],
-    tool_name: "orbit.decision.assist_enable",
-    tool_description: "Enable model answers in one precedent-decision category on this host, from a readout that met every registered target under the live host grant. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, and enabling is refused from an agent envelope and from any plugin callback. The enablement records the category, the grant's policy version, digest and model revision, the readout's threshold, the readout reference and the operator in a host-only store. A readout whose policy digest differs from the live grant is refused. Only routine and reversible requests are ever answered; a grant or model-revision change suspends the enablement, and the rolling window demotes it to shadow. Re-enabling needs the operator.",
-    cli_about: "Enable model answers in one precedent-decision category",
-    cli_help: CliHelp::NONE,
-    effect: Effect::Write,
-    params: &[ASSIST_CATEGORY, ASSIST_READOUT],
-    at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
-    mcp_scope: None,
-    id_route: McpIdRouteDeclaration::Unspecified,
-};
-
-const ASSIST_DISABLE: OperationSpec<DecisionVerb> = OperationSpec {
-    verb: DecisionVerb::AssistDisable,
-    cli_path: &["assist", "disable"],
-    tool_name: "orbit.decision.assist_disable",
-    tool_description: "Disable model answers in one precedent-decision category on this host, immediately: no further model answer is applied in it, and its open requests wait for the human. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, and disabling is refused from an agent envelope and from any plugin callback.",
-    cli_about: "Disable model answers in one precedent-decision category",
-    cli_help: CliHelp::NONE,
-    effect: Effect::Write,
-    params: &[ASSIST_CATEGORY],
-    at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
-    mcp_scope: None,
-    id_route: McpIdRouteDeclaration::Unspecified,
-};
-
-const ASSIST_STATUS: OperationSpec<DecisionVerb> = OperationSpec {
-    verb: DecisionVerb::AssistStatus,
-    cli_path: &["assist", "status"],
-    tool_name: "orbit.decision.assist_status",
-    tool_description: "Show this host's precedent-decision category enablements: the effective state (enabled, disabled, demoted, or suspended when the live grant's digest or model revision changed), the policy version and digest, threshold, readout, operator, the rolling window and, for a demotion, its evidence. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool.",
-    cli_about: "Show this host's precedent-decision category enablements",
-    cli_help: CliHelp::NONE,
-    effect: Effect::Read,
-    params: &[MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

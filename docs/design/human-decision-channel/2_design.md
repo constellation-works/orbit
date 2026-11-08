@@ -652,12 +652,15 @@ Ordered; each slice is independently deliverable and leaves the tree shippable.
 
 [ORB-21089] designs a decision-assistance consumer that predicts a request's
 answer from recorded human precedent and, only in enabled low-risk categories,
-answers on its own ([precedent-decisions](../decision-assistance/specs/precedent-decisions.md)).
-This section records what that consumer needs from the channel. §11.1 and
-§11.2–§11.4 are implemented. The model apply step's only caller is the
-self-answer step, which runs only in a category the operator enabled. With the
-consumer off, or no category enabled, every surface above behaves as it does
-today.
+answers on its own ([precedent-decisions](../_archived/decision-assistance/specs/precedent-decisions.md)).
+This section records what that consumer needs from the channel.
+
+Retired in [ORB-22808] (2026-11-08): decision assistance was removed, so §11.2–§11.5
+no longer describe running code. §11.1 (options, risk tier and category) stays. Nothing
+raises a `model_answer_review` request or applies a `model` answer any more; model-answer
+records already in task history still read, `orbit decision reverse` still re-opens one,
+and answering a recorded `model_answer_review` request is refused `answer_not_applicable`.
+The digest no longer returns `model_answered` or `assist_demoted`.
 
 ### 11.1 Request options, risk tier and category
 
@@ -683,6 +686,8 @@ today.
 
 ### 11.2 `answered_by: model` provenance
 
+Retired in [ORB-22808].
+
 The consumer answers through the same apply step as curated-rule auto-answer
 (binding, state, expiry and answer re-checked under the task write lock), as the
 `model` actor. Like `precedent`, `model` is an automation actor: no guard that
@@ -707,6 +712,8 @@ refused `answer_not_applicable` until a later slice applies their effects as the
 so restoring the status re-opens the request instead of superseding it.
 
 ### 11.3 Veto digest and path
+
+Retired in [ORB-22808].
 
 A model answer raises, in the same write, a `model_answer_review` request on the
 same task, with answers `confirm` (`routine`) and `veto` (`reversible`), bound to
@@ -739,6 +746,8 @@ answerer. A model answer and the review answer append none.
 
 ### 11.4 Consulting the consumer before notifying
 
+Retired in [ORB-22808].
+
 Agents raise requests as today. After raise (and after curated-rule auto-answer
 leaves the request open), the channel enqueues the consumer's assessment. In
 shadow mode it notifies the human immediately and never shows the prediction. In
@@ -756,6 +765,8 @@ routes the request to the human. A demoted category is listed in the digest's
 `assist_demoted`. The consumer spec's "As implemented" section has the rules.
 
 ### 11.5 Slices
+
+Retired in [ORB-22808].
 
 Filed as `ws_orbit` tasks; the consumer spec's Phasing lists all seven.
 The channel-side ones are:

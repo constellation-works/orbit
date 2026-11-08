@@ -3,7 +3,7 @@ title: "Proposal: delivery-quality grader"
 owner: codex
 last_updated: 2026-11-01
 last_validated: 2026-11-01
-status: Draft
+status: Deprecated
 feature: decision-assistance
 doc_role: spec
 type: design
@@ -170,7 +170,7 @@ assessment. Do not mix its scores with an earlier calibration cohort.
 
 The first useful output is a per-delivery **quality profile**, with each
 dimension's grade, assessed scope, coverage and uncertainty. Show it separately
-from the existing [agent scorecard](../../agent-scorecards/2_design.md).
+from the existing [agent scorecard](../../../agent-scorecards/2_design.md).
 There is **no overall average, 0–100 score, ranking term or routing multiplier**
 in the first iteration. Ordinal grades and missing dimensions cannot safely
 be combined by silently averaging the available values.

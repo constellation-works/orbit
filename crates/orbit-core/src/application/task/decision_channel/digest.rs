@@ -6,7 +6,7 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
-use crate::application::task::{TaskPrecedentDecisionPort, TaskRecordUpdateParams, TaskRecords};
+use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
 use super::model::{DecisionDigest, DecisionSubmitCaller};
 
@@ -15,8 +15,7 @@ impl OrbitRuntime {
     /// raise the approval request every `proposed` task is missing (and
     /// every `review` task's, bound to its candidate), then return those
     /// requests beside every still-open request expiring within
-    /// [`DECISION_DIGEST_EXPIRY_WINDOW_HOURS`], and, in `model_answered`,
-    /// every model answer whose review request is still open.
+    /// [`DECISION_DIGEST_EXPIRY_WINDOW_HOURS`].
     ///
     /// Raising is idempotent per (task, gate, binding): a task whose
     /// current binding already has an open request raises nothing and
@@ -46,8 +45,6 @@ impl OrbitRuntime {
                 requests: Vec::new(),
                 raised: Vec::new(),
                 expiring: Vec::new(),
-                model_answered: Vec::new(),
-                assist_demoted: Vec::new(),
                 warnings: Vec::new(),
             });
         }
@@ -92,7 +89,6 @@ impl OrbitRuntime {
                 warnings.push(warning);
             }
         }
-        let model_answered = self.model_answered_digest(&listing.requests)?;
         let expiring: Vec<DecisionRequest> = listing
             .requests
             .into_iter()
@@ -111,8 +107,6 @@ impl OrbitRuntime {
             requests,
             raised,
             expiring,
-            model_answered,
-            assist_demoted: self.demoted_precedent_categories(),
             warnings,
         })
     }
@@ -190,11 +184,6 @@ impl OrbitRuntime {
                 outcome = Some((stored, true));
                 Ok(())
             })?;
-        if let Some((request, true)) = &outcome
-            && request.state == DecisionRequestState::Open
-        {
-            self.enqueue_open_decision_for_precedent(request);
-        }
         Ok(outcome)
     }
 }

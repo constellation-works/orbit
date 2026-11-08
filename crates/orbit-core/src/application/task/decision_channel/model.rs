@@ -64,8 +64,7 @@ pub struct DecisionSubmitParams {
 /// What one decision digest returns: the approval requests a transport
 /// presents for every proposed and review task, which of them this call
 /// raised, and every still-open request expiring within the digest
-/// window ([`orbit_types::task::DECISION_DIGEST_EXPIRY_WINDOW_HOURS`]), plus
-/// the model answers still awaiting a human confirm or veto.
+/// window ([`orbit_types::task::DECISION_DIGEST_EXPIRY_WINDOW_HOURS`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionDigest {
     /// Every request the digest carries, oldest first: `raised`, the
@@ -73,16 +72,10 @@ pub struct DecisionDigest {
     pub requests: Vec<DecisionRequest>,
     /// Requests this call raised.
     pub raised: Vec<DecisionRequest>,
-    /// Still-open requests expiring within the digest window. Model-answer
-    /// reviews are listed in `model_answered` instead.
+    /// Still-open requests expiring within the digest window, besides a
+    /// `model_answer_review` request recorded before decision assistance
+    /// was removed [ORB-22808].
     pub expiring: Vec<DecisionRequest>,
-    /// Model answers awaiting human review: every open
-    /// `model_answer_review` request with the request it reviews.
-    pub model_answered: Vec<crate::application::task::ModelAnsweredDigestEntry>,
-    /// This workspace's precedent-decision categories the rolling window
-    /// demoted to shadow, with the evidence, until the operator re-enables
-    /// or disables them.
-    pub assist_demoted: Vec<crate::application::contracts::PrecedentAssistEnablement>,
     /// Corrupt task bundles omitted from the digest.
     pub warnings: Vec<String>,
 }

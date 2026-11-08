@@ -214,14 +214,13 @@ Slice 7 hardening is done in core ([ORB-18308]) and in the plugin ([ORB-18309]).
 Later extensions of the same record, also done: final-recovery `decide`
 ([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
 
-Implemented, default-off: precedent-answered decisions ([ORB-21089]). Requests gain a
-per-answer risk tier and a stored category, a model answer is recorded as
-`answered_by: model` with a veto digest, and the channel consults the
-decision-assistance consumer before notifying. Only `routine` and `reversible`
-requests in operator-enabled categories can be answered without the human.
-[2_design.md](./2_design.md) §11 holds the channel changes; the
-[consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
-rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are done.
+Retired: model-answered decisions ([ORB-21089]) were removed with decision assistance in
+[ORB-22808]. Requests keep the per-answer risk tier and stored category that work
+added; nothing records `answered_by: model` or consults a model before notifying any more,
+and model answers already in task history still read. [2_design.md](./2_design.md) §11
+holds the channel changes; the archived
+[consumer spec](../_archived/decision-assistance/specs/precedent-decisions.md) holds the
+rest.
 
 Designed, not implemented: plugin-raised decision requests ([ORB-22824]), with scribe's
 consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a

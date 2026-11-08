@@ -3,7 +3,7 @@ title: "Evaluation protocol: bounded decision assistance"
 owner: codex
 last_updated: 2026-11-01
 last_validated: 2026-11-03
-status: Draft
+status: Deprecated
 feature: decision-assistance
 doc_role: design
 type: design
@@ -16,10 +16,10 @@ tags: [decision-assistance]
 Status: the offline evaluator is implemented ([ORB-19720]); nothing here enables a
 runtime service, live calls, or advisory display. The precedent-decision
 contract below is the same kind of offline addition: selecting it does not
-enable that consumer. Implementation:
-`scripts/evaluate-decision-assistance.py` (contract + scoring),
-`scripts/precedent_decision_eval.py` (`/4` only),
-`scripts/test-evaluate-decision-assistance.py` (public CLI verification for `/1` and `/2`).
+enable that consumer. Implementation (removed with the feature in ORB-22808, constellation-works/orbit PR 8540):
+the scripts evaluate-decision-assistance.py (contract + scoring),
+precedent_decision_eval.py (`/4` only) and
+test-evaluate-decision-assistance.py (public CLI verification for `/1` and `/2`).
 
 ## Frozen contracts (versions `decision-assistance-eval/1` and `/2`)
 

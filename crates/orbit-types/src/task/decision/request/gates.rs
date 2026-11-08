@@ -21,7 +21,9 @@ pub enum DecisionGate {
     AgentRequest,
     /// Human review of an answer the decision model applied: `confirm`
     /// keeps it and makes it precedent, `veto` re-opens the original
-    /// request. The model never answers this gate.
+    /// request. The model never answers this gate. [ORB-22808] Decision
+    /// assistance was removed: nothing raises this gate any more, and it
+    /// stays so task history recorded before then still reads.
     ModelAnswerReview,
     /// A request to widen a resident mandate's authority, relayed by a
     /// caller without operator authority: `grant` applies exactly the
@@ -85,24 +87,6 @@ impl DecisionGate {
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),
             DecisionAnswer::plain("reject", "Reject", "Reject the task."),
-        ]
-    }
-
-    /// The two answers of a [`Self::ModelAnswerReview`] request, in
-    /// presentation order. [`DecisionRequest::new`](super::model::DecisionRequest::new) fixes their tiers:
-    /// `confirm` is routine and `veto` reversible.
-    pub fn model_answer_review_answers() -> Vec<DecisionAnswer> {
-        vec![
-            DecisionAnswer::plain(
-                MODEL_ANSWER_CONFIRM,
-                "Confirm",
-                "Keep the model's answer; it becomes precedent with you as the decider.",
-            ),
-            DecisionAnswer::plain(
-                MODEL_ANSWER_VETO,
-                "Veto",
-                "Re-open the original request and restore the task's previous status.",
-            ),
         ]
     }
 

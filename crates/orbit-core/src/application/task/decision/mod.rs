@@ -25,7 +25,6 @@
 
 mod answering;
 mod listing;
-pub(super) mod model;
 mod precedent;
 pub(super) mod raise;
 mod rendering;

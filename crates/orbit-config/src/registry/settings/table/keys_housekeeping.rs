@@ -75,14 +75,6 @@ macro_rules! with_housekeeping_keys {
         allowed: integers(1, 3650, "days"),
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, "resident.evolution.decline_suppress_days"),
     },
-    assistance_settings: crate::assistance::AssistanceSettings => crate::assistance::AssistanceSettings {
-        key: "assistance", value_type: "table",
-        description: "Host-only bounded decision assistance; off by default.",
-        section: ConfigSection::Machine, order: 90,
-        tier: ConfigKeyTier::Advanced,
-        detail: "Explicit workspace grants, modes, evidence and budgets.",
-        resolve: crate::assistance::resolve_assistance_settings,
-    },
     machine_web_terminal_enabled: bool => bool {
         key: "machine.web_terminal.enabled", value_type: "bool",
         description: "Enable private browser-session credentials for this dashboard host.",

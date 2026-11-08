@@ -365,99 +365,20 @@ fn review_timing_writes_remain_readable_by_previous_readers() {
 }
 
 #[test]
-fn partial_assistance_limits_and_budget_tables_use_defaults_and_validate() {
+fn removed_assistance_table_loads_as_a_deprecated_key() {
+    // [ORB-22808] Decision assistance was removed; a global `[assistance]`
+    // table with sub-tables still loads, warns and is ignored.
     let roots = Roots::new();
-    std::fs::write(
-        roots.global_config(),
-        "[assistance.limits]\nconcurrency = 4\n\
-         [assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\n",
-    )
-    .expect("write partial assistance tables");
+    let raw = "[assistance.limits]\nconcurrency = 4\n\
+         [assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\n";
+    std::fs::write(roots.global_config(), raw).expect("write assistance tables");
 
-    let config = roots.load();
-    let settings = &config.snapshot.assistance_settings;
-    let expected_limits = orbit_types::assistance::AssistanceLimits {
-        concurrency: 4,
-        ..Default::default()
-    };
-    assert_eq!(settings.limits, expected_limits);
-
-    let expected_budget = orbit_types::assistance::AssistanceBudget {
-        epoch: "allocation_1".into(),
-        token_ceiling: 500,
-        ..Default::default()
-    };
-    assert_eq!(settings.budget, expected_budget);
-    settings
-        .validate_assistance_settings()
-        .expect("partial settings with built-in defaults remain valid");
-}
-
-#[test]
-fn partial_assistance_tables_still_reject_unknown_fields() {
-    let roots = Roots::new();
-    for (unknown_key, table) in [
-        (
-            "future_limit",
-            "[assistance.limits]\nconcurrency = 4\nfuture_limit = 1\n",
-        ),
-        (
-            "future_budget",
-            "[assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\nfuture_budget = 1\n",
-        ),
-    ] {
-        std::fs::write(roots.global_config(), table).expect("write unknown assistance field");
-        let error = ResolvedConfig::load(&roots.config_roots())
-            .expect_err("unknown assistance fields must be refused");
-        assert!(
-            error.to_string().contains(unknown_key),
-            "the unknown field should cause the refusal: {error}"
-        );
-    }
-}
-
-#[test]
-fn malformed_contract_digest_names_field_and_expected_format() {
-    fn settings_with_digest(digest: &str) -> orbit_config::assistance::AssistanceSettings {
-        orbit_config::assistance::AssistanceSettings {
-            policies: vec![orbit_config::assistance::AssistancePolicy {
-                workspace_id: "workspace_1".into(),
-                use_case: "task_quality".into(),
-                mode: orbit_types::assistance::AssistanceMode::Off,
-                model: "gpt-6-luna".into(),
-                model_revision: "rev_1".into(),
-                policy_version: "v1".into(),
-                contract_digest: digest.into(),
-                evidence_fields: vec!["title".into()],
-                evidence_ref_prefixes: vec!["task:".into()],
-                credential_env: "ORBIT_ASSISTANCE_KEY".into(),
-            }],
-            ..Default::default()
-        }
-    }
-
-    // [ORB-19819]: the prefixed lowercase digest is the only accepted shape.
-    const VALID_DIGEST: &str =
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    settings_with_digest(VALID_DIGEST)
-        .validate_assistance_settings()
-        .expect("prefixed lowercase digest is valid");
-
-    for malformed in [
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        "sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-    ] {
-        let error = settings_with_digest(malformed)
-            .validate_assistance_settings()
-            .expect_err("malformed digest must be rejected");
-        let message = error.to_string();
-        assert!(
-            message.contains("contract_digest"),
-            "digest refusal names the field: {message}"
-        );
-        assert!(
-            message.contains("sha256:") && message.contains("64") && message.contains("lowercase"),
-            "digest refusal names the expected format: {message}"
-        );
-    }
+    roots.load();
+    let document: toml::Value = toml::from_str(raw).expect("parse assistance tables");
+    let compatibility = orbit_config::compatibility_config_keys_present(&document);
+    assert_eq!(
+        compatibility.iter().map(|key| key.key).collect::<Vec<_>>(),
+        ["assistance"]
+    );
+    assert!(orbit_config::unknown_config_keys_present(&document).is_empty());
 }
