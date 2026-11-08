@@ -328,6 +328,9 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/agents/attribution", get(agents::agent_attribution))
         // The implementer model ranking with tie bands [model-ranking §6].
         .route("/agents/rank", get(agents::agent_rank))
+        // Required-check failures on candidate heads by cause, read live
+        // (model ranking §5.1).
+        .route("/agents/ci-failures", get(agents::agent_ci_failures))
         .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
         .route("/agents/{role}/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and

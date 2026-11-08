@@ -1,0 +1,36 @@
+List required-check failures on candidate heads by cause
+
+Usage: orbit agents ci-failures [OPTIONS]
+
+Options:
+      --window <WINDOW>
+          Failures first recorded in this period (all, or a duration such as 14d)
+          
+          [default: 30d]
+
+      --until <UNTIL>
+          End the window at this instant or duration ago (for example 7d)
+
+      --task <TASK>
+          Only this task's failures
+
+      --class <CLASS>
+          Only failures of this class: code, flaky, infrastructure or unknown
+          
+          [possible values: code, flaky, infrastructure, unknown]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Classes: code (the failure cites a file the head changed, or the same head failed the
+same check again on a rerun), flaky (the same head later passed the same check),
+infrastructure (a declared infrastructure signature, the runner or network, or a base
+that fails the same check) and unknown. --json carries each record's evidence and
+its audited class changes.

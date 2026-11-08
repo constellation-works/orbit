@@ -2,7 +2,8 @@
 //! `/api/agents/attribution`, the implementer slices
 //! (`/api/agents/implementers/by-type` and `/size-curves`) and the model
 //! ranking (`/api/agents/rank`): the agent scorecards behind Analytics ›
-//! Agents.
+//! Agents. `/api/agents/ci-failures` reads the required-check failures
+//! recorded by cause live, without the cached scan.
 //!
 //! The scan, attribution and scores are the core agent scorecard service.
 //! One scan per workspace runtime is cached for [`AGENT_SCAN_TTL`]; the role,
@@ -14,11 +15,13 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::agents::{self, AgentFacts, AgentQuery, AgentRole, RankQuery};
+use orbit_core::application::agents::{
+    self, AgentFacts, AgentQuery, AgentRole, CiFailureQuery, RankQuery,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 
-use super::{bad_request, map_runtime_error};
+use super::{bad_request, blocking, map_runtime_error};
 use crate::runtime_memo::{AGENT_SCAN_STALE_LIMIT, AGENT_SCAN_TTL, Served};
 use crate::state::{DashboardState, Ws};
 
@@ -240,6 +243,48 @@ pub(super) async fn agent_rank(
         )
             .into_response(),
         Err(error) => error_response(error),
+    }
+}
+
+/// Query string for `/api/agents/ci-failures`.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct CiFailureSelection {
+    /// `all` or a duration such as `14d` (default `30d`).
+    #[serde(default)]
+    window: Option<String>,
+    /// Exclusive window end: an RFC 3339 instant or a duration ago.
+    #[serde(default)]
+    until: Option<String>,
+    /// Only this task's failures.
+    #[serde(default)]
+    task: Option<String>,
+    /// `code`, `flaky`, `infrastructure` or `unknown`.
+    #[serde(default)]
+    class: Option<String>,
+}
+
+/// The recorded required-check failures the selection names, newest first:
+/// the payload `orbit agents ci-failures --json` prints.
+pub(super) async fn agent_ci_failures(
+    Ws(runtime): Ws,
+    Query(query): Query<CiFailureSelection>,
+) -> Response {
+    let selection = match CiFailureQuery::parse(
+        query.window.as_deref(),
+        query.until.as_deref(),
+        query.task.as_deref(),
+        query.class.as_deref(),
+    ) {
+        Ok(selection) => selection,
+        Err(error) => return error_response(error),
+    };
+    match blocking("CI failure records", move || {
+        runtime.ci_failure_records(&selection)
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 

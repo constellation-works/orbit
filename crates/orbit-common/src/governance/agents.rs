@@ -1,6 +1,7 @@
 //! The read-only agent scorecard operations behind `orbit agents` and the
-//! `orbit.agents.*` tools: one role's ranking by crew and model, and one
-//! row's terms with the tasks behind each count.
+//! `orbit.agents.*` tools: one role's ranking by crew and model, one row's
+//! terms with the tasks behind each count, and the required-check failures
+//! recorded by cause that the model ranking reads.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry, required,
@@ -18,6 +19,8 @@ operation_registry! {
         Scorecard => SCORECARD,
         /// One row with the tasks behind each count.
         Show => SHOW,
+        /// Required-check failures on candidate heads, recorded by cause.
+        CiFailures => CI_FAILURES,
     }
 }
 
@@ -190,6 +193,71 @@ const SHOW: OperationSpec<AgentsVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[ROLE, ROW, SELECTION, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const CI_FAILURE_CLASSES: &[EnumValue] = &[
+    EnumValue::plain("code"),
+    EnumValue::plain("flaky"),
+    EnumValue::plain("infrastructure"),
+    EnumValue::plain("unknown"),
+];
+
+/// The selection over recorded CI failures.
+const CI_FAILURE_SELECTION: &[ParamSpec] = &[
+    defaulted(
+        both(
+            "window",
+            ParamType::String,
+            "Failures first recorded in this period ending at until: all, or a duration such as 14d (units m, h, d or w). Default: 30d.",
+            CliArgKind::flag("window"),
+            "Failures first recorded in this period (all, or a duration such as 14d)",
+        ),
+        "30d",
+    ),
+    both(
+        "until",
+        ParamType::String,
+        "End the window at this RFC 3339 instant, or this long ago (for example 7d). Omitted, the window ends now. A future instant is refused.",
+        CliArgKind::flag("until"),
+        "End the window at this instant or duration ago (for example 7d)",
+    ),
+    both(
+        "task",
+        ParamType::String,
+        "Only this task's failures.",
+        CliArgKind::flag("task"),
+        "Only this task's failures",
+    ),
+    both(
+        "class",
+        ParamType::Enum(CI_FAILURE_CLASSES),
+        "Only failures whose current class is this: code (the head's own change), flaky (the same head passed on a rerun), infrastructure (a declared infrastructure signature, the runner or network, or a base that fails the same check) or unknown (no cause established).",
+        CliArgKind::flag("class"),
+        "Only failures of this class: code, flaky, infrastructure or unknown",
+    ),
+];
+
+const CI_FAILURES: OperationSpec<AgentsVerb> = OperationSpec {
+    verb: AgentsVerb::CiFailures,
+    cli_path: &["ci-failures"],
+    tool_name: "orbit.agents.ci_failures",
+    tool_description: "Required-check failures on candidate heads, one record per head and check with the task, the run that produced the head, the check, its error signature and its cause class (code, flaky, infrastructure or unknown), newest first, with per-class counts. Each record lists the audited class changes later evidence made. Filter by window, task and class.",
+    cli_about: "List required-check failures on candidate heads by cause",
+    cli_help: CliHelp {
+        long_about: None,
+        after_help: Some(
+            "Classes: code (the failure cites a file the head changed, or the same head failed the\nsame check again on a rerun), flaky (the same head later passed the same check),\ninfrastructure (a declared infrastructure signature, the runner or network, or a base\nthat fails the same check) and unknown. --json carries each record's evidence and\nits audited class changes.",
+        ),
+        flag_order: &[],
+        constraints: &[],
+    },
+    effect: Effect::Read,
+    params: &[CI_FAILURE_SELECTION, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

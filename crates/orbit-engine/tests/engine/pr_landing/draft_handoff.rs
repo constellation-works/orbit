@@ -47,6 +47,7 @@ fn hand_off<'a>(fx: &Fixture, follower: &'a DeliveryHost, spent: bool) -> DraftL
             handoff_id: "draft-handoff".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-landing".into(),
+            producing_run_id: "run-1".into(),
             workspace_path: fx.repo.clone(),
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["test".into()],

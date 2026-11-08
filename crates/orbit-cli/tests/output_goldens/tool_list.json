@@ -186,6 +186,47 @@
     "mcp_toolset": "local"
   },
   {
+    "name": "orbit.agents.ci_failures",
+    "description": "Required-check failures on candidate heads, one record per head and check with the task, the run that produced the head, the check, its error signature and its cause class (code, flaky, infrastructure or unknown), newest first, with per-class counts. Each record lists the audited class changes later evidence made. Filter by window, task and class.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "window",
+        "description": "Failures first recorded in this period ending at until: all, or a duration such as 14d (units m, h, d or w). Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "until",
+        "description": "End the window at this RFC 3339 instant, or this long ago (for example 7d). Omitted, the window ends now. A future instant is refused.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "task",
+        "description": "Only this task's failures.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "class",
+        "description": "Only failures whose current class is this: code (the head's own change), flaky (the same head passed on a rerun), infrastructure (a declared infrastructure signature, the runner or network, or a base that fails the same check) or unknown (no cause established).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family or full model ID for provenance.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "analytics"
+  },
+  {
     "name": "orbit.agents.scorecard",
     "description": "Rank one agent role's crews and models over the window by weighted outcome rate per 100 units of work, to compare crews or models for that role. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     "enabled": true,

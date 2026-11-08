@@ -416,46 +416,140 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             )))
         }
         CiRerunAdmission::Reserved => {
-            // The exact set and budget are durable now. A lost/error reply is
-            // ambiguous; never retransmit. The next poll reads actual checks.
-            if !matches!(host.admit_ci_rerun(tasks,handoff,&plan,super::super::super::completion_deadline::now_ms()?)?,CiRerunAdmission::Observe(previous) if *previous==plan)
-            {
+            if !send_reserved_rerun(host, workspace, tasks, handoff, pr, &plan, deadline_ms)? {
                 return Ok(CiRerunStep::Wait(
                     "CI retry reservation or current owner authority changed before send".into(),
                 ));
             }
-            let reply=host.run_private_vcs_operation(operations::CI_RERUN_FAILED,json!({"workspace_path":workspace,"run_id":run_id.to_string(),"plan":plan,"deadline_ms":deadline_ms}));
-            if reply.is_ok() {
-                let jobs=plan.roots.iter().map(|root| {
-                    let original=plan.failed_jobs.iter().find(|job|job["id"].as_u64()==Some(root.job_id));
-                    json!({"job_id":root.job_id,"check":root.check,"classification":root.classification,"signature":root.signature,"run_attempt":plan.run_attempt,"started_at":original.map(|job|job["started_at"].clone()),"completed_at":original.map(|job|job["completed_at"].clone())})
-                }).collect::<Vec<_>>();
-                let note=json!({"head":plan.head_sha,"pr_number":pr,"run_id":plan.run_id,"event":"pull_request","jobs":jobs}).to_string();
-                if let Some(handoff) = handoff {
-                    host.record_handoff_landing_history(handoff, "ci_check_rerun", &note)?;
-                } else {
-                    for task in tasks {
-                        host.apply_task_automation_update(
-                            task,
-                            crate::context::TaskAutomationUpdate {
-                                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                                    at: chrono::Utc::now(),
-                                    by: "system".into(),
-                                    event: "ci_check_rerun".into(),
-                                    note: Some(note.clone()),
-                                    from_status: None,
-                                    to_status: None,
-                                    operation_id: None,
-                                    decision: None,
-                                }],
-                                ..Default::default()
-                            },
-                        )?;
-                    }
-                }
-            }
             Ok(CiRerunStep::Acted(Box::new(plan)))
         }
+    }
+}
+
+/// Send a just-reserved failed-jobs retry once and record it. `false` when
+/// the reservation or the owner's authority changed before the send.
+fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    tasks: &[String],
+    handoff: Option<&str>,
+    pr: u64,
+    plan: &CiRerunPlan,
+    deadline_ms: u64,
+) -> Result<bool, OrbitError> {
+    // The exact set and budget are durable now. A lost/error reply is
+    // ambiguous; never retransmit. The next poll reads actual checks.
+    if !matches!(host.admit_ci_rerun(tasks,handoff,plan,super::super::super::completion_deadline::now_ms()?)?,CiRerunAdmission::Observe(previous) if *previous==*plan)
+    {
+        return Ok(false);
+    }
+    let run_id = plan.run_id;
+    let reply=host.run_private_vcs_operation(operations::CI_RERUN_FAILED,json!({"workspace_path":workspace,"run_id":run_id.to_string(),"plan":plan,"deadline_ms":deadline_ms}));
+    if reply.is_ok() {
+        let jobs=plan.roots.iter().map(|root| {
+            let original=plan.failed_jobs.iter().find(|job|job["id"].as_u64()==Some(root.job_id));
+            json!({"job_id":root.job_id,"check":root.check,"classification":root.classification,"signature":root.signature,"run_attempt":plan.run_attempt,"started_at":original.map(|job|job["started_at"].clone()),"completed_at":original.map(|job|job["completed_at"].clone())})
+        }).collect::<Vec<_>>();
+        let note=json!({"head":plan.head_sha,"pr_number":pr,"run_id":plan.run_id,"event":"pull_request","jobs":jobs}).to_string();
+        if let Some(handoff) = handoff {
+            host.record_handoff_landing_history(handoff, "ci_check_rerun", &note)?;
+        } else {
+            for task in tasks {
+                host.apply_task_automation_update(
+                    task,
+                    crate::context::TaskAutomationUpdate {
+                        append_history: vec![orbit_types::task::TaskHistoryEntry {
+                            at: chrono::Utc::now(),
+                            by: "system".into(),
+                            event: "ci_check_rerun".into(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// [model ranking §5.1] Rerun a failed set once on its unchanged head when no
+/// evidence has established its cause yet, so the second result can tell a
+/// flaky failure from the head's own. Every failed job must be in one
+/// workflow run; the provider adapter authenticates the set exactly as for a
+/// flaky retry, and the shared one-rerun budget of the head is reserved
+/// before the send. `Ok(None)` when the set is not eligible or the budget
+/// is already spent; the caller then keeps its own route.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the classification rerun takes the same landing identity the flaky retry does"
+)]
+pub(super) fn request_classification_rerun<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    tasks: &[String],
+    handoff: Option<&str>,
+    status: &PullRequestStatus,
+    base: &str,
+    base_branch: &str,
+    deadline_ms: u64,
+    failed: &[super::recovery::FailedJob],
+) -> Result<Option<Box<CiRerunPlan>>, OrbitError> {
+    let (Some(head), Some(pr), Some(branch)) = (
+        status.head_sha.as_deref(),
+        status.number,
+        status.head_branch.as_deref(),
+    ) else {
+        return Ok(None);
+    };
+    let runs = failed.iter().map(|job| job.run_id).collect::<BTreeSet<_>>();
+    let [Some(run_id)] = runs.into_iter().collect::<Vec<_>>()[..] else {
+        return Ok(None);
+    };
+    if failed.iter().any(|job| job.signature.is_empty()) {
+        return Ok(None);
+    }
+    let roots = failed
+        .iter()
+        .map(|job| CiRerunRoot {
+            job_id: job.job_id,
+            check: job.label.clone(),
+            classification: "unattributed".into(),
+            signature: job.signature.clone(),
+        })
+        .collect::<Vec<_>>();
+    let request = json!({"workspace_path":workspace,"pr":pr.to_string(),"head_sha":head,"head_branch":branch,"base_branch":base_branch,"accepted_base":base,"run_id":run_id,"roots":roots,"deadline_ms":deadline_ms});
+    let response = host.run_private_vcs_operation(operations::CI_RERUN_PLAN, request)?;
+    let plan: CiRerunPlan = serde_json::from_value(response["plan"].clone()).map_err(|_| {
+        OrbitError::Execution("CI retry adapter returned no authenticated plan".into())
+    })?;
+    if plan.schema_version != 1
+        || plan.head_sha != head
+        || plan.pr_number != pr.to_string()
+        || plan.head_branch != branch
+        || plan.base_branch != base_branch
+        || plan.accepted_base != base
+        || plan.run_id != run_id
+        || plan.roots != roots
+    {
+        return Ok(None);
+    }
+    match host.admit_ci_rerun(
+        tasks,
+        handoff,
+        &plan,
+        super::super::super::completion_deadline::now_ms()?,
+    )? {
+        CiRerunAdmission::Reserved
+            if send_reserved_rerun(host, workspace, tasks, handoff, pr, &plan, deadline_ms)? =>
+        {
+            Ok(Some(Box::new(plan)))
+        }
+        _ => Ok(None),
     }
 }
 
