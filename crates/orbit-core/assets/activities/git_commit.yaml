@@ -35,8 +35,10 @@ spec:
           Allow a clean pinned HEAD to return verified_no_diff or
           verified_already_landed only after checking the task's structured
           no-diff.json or already-landed.json and validation artifacts.
-          When neither report is present, admitted already-resolved selectors
-          in implementation may instead return verified_already_resolved.
+          On a claimed run only, when neither report is present, admitted
+          already-resolved selectors in implementation may instead return
+          verified_already_resolved; claim_validate must replay them before
+          handoff. Owner runs require the report and validation artifacts.
           Callers must recheck that evidence at promotion and completion.
           A task's finding-invalid.json for this run, verified against the
           clean pinned HEAD, instead returns verified_finding_invalid after
@@ -53,7 +55,7 @@ spec:
           Allow HEAD to have moved past the pinned `base_sha`, as a stacked
           local merge does. A clean moved HEAD is `already_committed`
           rather than `skipped_no_diff_expected`, so delivery still runs.
-      # This attempt's implement-step output carries already-resolved evidence.
+      # A claimed attempt's implement-step output carries already-resolved evidence.
       # Under a claim's worker binding the delivery gate also judges its
       # summary instead of the owner's stored one.
       implementation:

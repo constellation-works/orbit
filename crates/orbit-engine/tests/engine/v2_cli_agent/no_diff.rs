@@ -8,6 +8,8 @@ use serde_json::json;
 use super::*;
 use crate::git_fixture;
 
+mod owner;
+
 struct NoDiffHost {
     cli: ScriptHost,
     task: Task,
@@ -227,12 +229,25 @@ fn missing_no_diff_fields_fail_at_implementation_and_preserve_raw_response() {
 
 struct SummaryDeliveryHost {
     cli: ScriptHost,
+    artifacts: Vec<TaskArtifact>,
     task: std::sync::Mutex<Task>,
     history: std::sync::Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
     state: std::sync::Mutex<orbit_types::workflow::PipelineState>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
+    fn get_task_artifact(&self, _: &str, path: &str) -> Result<Option<TaskArtifact>, OrbitError> {
+        Ok(self
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == path)
+            .cloned())
+    }
+
+    fn get_task_artifacts(&self, _: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        Ok(self.artifacts.clone())
+    }
+
     fn read_run_state(
         &self,
         _: &str,
@@ -440,6 +455,7 @@ fn returned_summary_delivers_no_diff_task_and_missing_summaries_still_refuse() {
                 }))
                 .unwrap();
                 let host = SummaryDeliveryHost {
+                    artifacts: Vec::new(),
                     cli: ScriptHost::new(fake.cli_path()),
                     task: std::sync::Mutex::new(task),
                     history: std::sync::Mutex::new(Vec::new()),

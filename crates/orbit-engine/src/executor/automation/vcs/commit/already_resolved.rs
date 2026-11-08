@@ -1,17 +1,18 @@
 //! An implementer that found its pinned base already resolves the task,
-//! without attaching a clean-tree report [ORB-22407, ORB-23169].
+//! without attaching a clean-tree report [ORB-22407].
 //!
 //! The artifact-backed routes (`no-diff.json`, `already-landed.json`) stay
-//! the authority when an implementer attaches one. An owner or claimed task whose
+//! the authority when an implementer attaches one. A claimed task whose
 //! implementer instead carried its evidence in its output — admitted
 //! `already_resolved` test selectors, with its summary beside them —
 //! settles through this checkpoint instead of failing the commit step with
 //! an empty stage, whose only triage answer requeued the same empty run.
 //! The checkpoint embeds that evidence — the admitted selectors, plus the
 //! implementer's summary when it gave one — so an operator can settle the
-//! task from the outcome alone, and the claimed NoDiff validation rechecks it on
+//! task from the outcome alone, and claimed NoDiff validation rechecks it on
 //! the clean base while running the required commands and replaying the
-//! named selectors there.
+//! named selectors there. Owner runs instead attach a verifier report and
+//! validation logs; they have no claim-host selector replay [ORB-23194].
 
 use std::path::Path;
 
@@ -63,8 +64,8 @@ pub(super) fn evidence_from_implementation(input: &Value) -> Result<Option<Value
 }
 
 /// The settled commit outcome for an already-resolved task. It reuses the
-/// NoDiff route (`skipped_no_diff_expected`), so owner and claimed pipelines
-/// hand off without publishing a branch or pull request.
+/// NoDiff route (`skipped_no_diff_expected`), so a claimed pipeline hands off
+/// without publishing a branch or pull request after claim-host validation.
 pub(super) fn checkpoint(task_id: &str, run_id: &str, base_sha: &str, evidence: Value) -> Value {
     json!({
         "phase": "commit",
