@@ -31,6 +31,9 @@ mod records;
 mod roles;
 mod score;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};
 pub(crate) use facts::review_gate_verdicts;
