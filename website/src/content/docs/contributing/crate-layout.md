@@ -9,7 +9,7 @@ sidebar:
 
 | Crate | Responsibility |
 |-------|----------------|
-| `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, Web, and Auth. |
+| `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, and Web; credential code reaches the binary through Web. |
 | `orbit-cmd` | CLI-facing command layer split out of `orbit-core`: doctor, migrate, diagnostics, agent rules, host commands, MCP client config, browser kit, and update. Exposes `*Commands` extension traits over `OrbitRuntime`. |
 | `orbit-core` | Runtime composition, default asset seeding, application use cases, and adapters. Provides the `OrbitRuntime` wrapper to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
 | `orbit-runtime` | Runtime kernel: stores, engine handles, policy and tool execution, audit, workspace binding, and host probes. Core wraps its `RuntimeKernel`; kernel callbacks reach application use cases through `ApplicationPort`, with no dependency back on Core. |
@@ -40,7 +40,6 @@ flowchart LR
   CLI --> Registry["orbit-registry"]
   CLI --> MCP["orbit-mcp"]
   CLI --> Web["orbit-web"]
-  CLI --> Auth["orbit-auth"]
   Cmd --> Core
   Cmd --> Config
   Cmd --> MCP
@@ -85,7 +84,7 @@ flowchart LR
   Web --> Core
   Web --> Cmd
   Web --> Registry
-  Web --> Auth
+  Web --> Auth["orbit-auth"]
   Cmd --> Common
   Core --> Common
   Config --> Common
