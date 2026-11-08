@@ -20,8 +20,8 @@ last_validated: 2026-10-19
 Use this runbook to set up Orbit on a Windows machine. Orbit has no native
 Windows build: the supported route is the Linux build running inside a WSL2
 Linux distribution, where the [Linux sandbox](linux-sandbox.md), clock and
-setup paths apply unchanged. Native Windows is compile-checked only and is not
-supported.
+setup paths apply unchanged. Native Windows is not built or checked in CI and is
+not supported.
 
 > **NOT VERIFIED ON WINDOWS.** Nobody has executed this procedure on a Windows
 > host. Orbit commands below are checked against the Linux CLI help and source
