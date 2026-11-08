@@ -51,6 +51,7 @@ mod list_result;
 mod listing;
 pub(crate) mod metadata;
 mod mutation_proposals;
+mod notice_port;
 mod os_readout;
 mod params;
 mod paths;
@@ -160,6 +161,7 @@ pub use listing::{
     TaskRow,
 };
 pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
+pub(in crate::application) use notice_port::TaskNoticePort;
 pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
