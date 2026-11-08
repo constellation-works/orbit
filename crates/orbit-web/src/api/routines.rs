@@ -536,7 +536,7 @@ pub(super) fn report_json(
         "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok() {
             "Session access: this dashboard server has operator authority. Actions also check workspace and machine selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
         } else {
-            "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
+            "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Neither the server's terminal nor `ORBIT_OPERATOR` grants operator access. Bounded-window submission has separate permissions."
         },
         "clock": clock,
         "cron_zone": host_cron_zone(),
@@ -712,7 +712,11 @@ pub(super) fn authorized_caller(
             .effective_capabilities
             .insert(McpCapability::Operator);
     }
-    let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(&session));
+    // Session state only: the server's own stdin/stderr, `ORBIT_OPERATOR` and
+    // agent envelope never grant here, so a `--no-operator` server on a pty
+    // (an SSH `-tt` tunnel, or a terminal-started `web serve`) stays
+    // read-only, and a granted write is audited as the session [ORB-23047].
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session));
     authorize(operation, &caller)?;
     Ok(caller)
 }

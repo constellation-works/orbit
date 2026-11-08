@@ -89,8 +89,8 @@ pub(super) struct StateInner {
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
-    /// stamp operator onto the dashboard session envelope regardless of TTY
-    /// or `ORBIT_OPERATOR`.
+    /// stamp operator onto the dashboard session envelope. The only operator
+    /// grant: the server's TTY and `ORBIT_OPERATOR` are ignored [ORB-23047].
     operator: AtomicBool,
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
@@ -694,7 +694,8 @@ impl DashboardState {
     }
 
     /// Whether this server was started with `--operator`, granting operator
-    /// capability through the session envelope (independent of TTY / env).
+    /// capability through the session envelope (the only operator grant; TTY
+    /// and env are ignored).
     pub(crate) fn operator_session(&self) -> bool {
         self.inner.operator.load(Ordering::Relaxed)
     }

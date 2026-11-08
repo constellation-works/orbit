@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-08
 last_validated: 2026-11-03
 status: Accepted
 feature: auto-tasks
@@ -789,9 +789,10 @@ its single locked edit, so a schedule combined with other fields is still one
 write and always validates and stamps.
 
 One session-access explanation appears above Operations. Dashboard authority
-comes from the **server process**, not from opening a browser or terminal.
-For deliberate operator access, restart the server with
-`ORBIT_OPERATOR=1 orbit web serve`, preserving its existing root, port, and
+comes from the **server's `--operator` flag**, not from opening a browser or
+terminal, and not from the server's own terminal or `ORBIT_OPERATOR`
+([ORB-23047]). For deliberate operator access, restart the server with
+`orbit web serve --operator`, preserving its existing root, port, and
 workspace options, then reload the page. No dashboard button grants authority.
 Unavailable actions retain a keyboard-focusable explanation, including host
 and workspace restrictions.

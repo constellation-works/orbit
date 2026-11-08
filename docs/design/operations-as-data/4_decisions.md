@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
@@ -320,7 +320,7 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 
 1. **Orbit is a single-user tool; the dashboard is not shared across users.** The person running `orbit web connect` over their own authenticated SSH session *is* the operator — the SSH login is the deliberate act.
 
-2. **`orbit web serve --operator` stamps operator onto the dashboard session envelope** regardless of TTY or `ORBIT_OPERATOR`. Session grants win, matching the existing capability-precedence entry. `ORBIT_OPERATOR=1` remains the escape hatch when the flag is absent.
+2. **`orbit web serve --operator` stamps operator onto the dashboard session envelope** regardless of TTY or `ORBIT_OPERATOR`. Session grants win, matching the existing capability-precedence entry. *Superseded in part by [The dashboard takes operator authority from its session only](#the-dashboard-takes-operator-authority-from-its-session-only): `ORBIT_OPERATOR=1` and the server's terminal no longer grant when the flag is absent.*
 
 3. **`orbit web connect` passes `--operator` by default.** `remote_serve_command` emits `orbit web serve --no-open --operator --port N [...]`. `--no-operator` restores the previous read-only Operations surface. Attaching to a pre-existing non-operator remote prints a notice; that process cannot be upgraded in place.
 
@@ -331,7 +331,29 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 - A remote dashboard opened with `orbit web connect` has Operations controls enabled without an on-box detour.
 - A caller that wants a read-only remote must say so (`--no-operator`).
 - A pre-existing `orbit web serve` without `--operator` stays read-only until it is restarted; connect says so instead of leaving the user to discover disabled buttons.
-- Local `orbit web serve` without a TTY still needs `--operator` or `ORBIT_OPERATOR=1`; the new default applies to `connect`, not to a headless local serve.
+- Local `orbit web serve` needs `--operator` for governed controls; the new default applies to `connect`, not to a local serve (see [The dashboard takes operator authority from its session only](#the-dashboard-takes-operator-authority-from-its-session-only)).
+
+## The dashboard takes operator authority from its session only
+
+**Recorded:** 2026-11-08 · [ORB-23047] · **Implemented** in [ORB-23047]
+**Paths:** `crates/orbit-web/src/api/routines.rs`, `crates/orbit-common/src/governance/authorization/caller.rs`, `crates/orbit-common/src/governance/authorization/decision.rs`
+
+### Context
+
+The dashboard chokepoint (`authorized_caller`) resolved its caller with `CallerEnvelope::from_process_env`, so when `--operator` was absent it fell through to the server process's own signals. `orbit web connect --no-operator` starts the remote `orbit web serve` behind `ssh -tt`, which gives it a pty on stdin and stderr, and a `web serve` left running in a terminal has the same. Either way the caller resolved as an operator with provenance `interactive-terminal`: the "read-only" session performed every governed write (config, script grants, plugins, host edits), and any process that reached the loopback port with a forged Host and Origin was audited as a person at a terminal. The terminal identifies who started the server, not who sends a request; the HTTP API has no way to see who that is.
+
+### Decision
+
+1. **`--operator` is the dashboard's only operator grant.** The chokepoint builds its envelope with `CallerEnvelope::dashboard_session`, which reads the session grants `--operator` stamps at startup and nothing else: the server's terminal, `ORBIT_OPERATOR` and the agent envelope are ignored, as on MCP ([MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission)). A server without the flag resolves every caller as `unknown` and refuses governed writes.
+2. **A granted dashboard write is attributed to the session.** Its `dashboard.operations` audit row records provenance `session`, never `interactive-terminal`, so the trail says the server's `--operator` grant authorized it rather than claiming a person was present.
+3. **The denial names the dashboard's own remedy.** `CapabilityResolution::DashboardSession` carries into the denial, which points at `orbit web serve --operator` (or `orbit web connect`) instead of the inert `ORBIT_OPERATOR` override.
+4. **No per-launch request credential.** The chosen fix for forged loopback requests is the distinct audit provenance above, not a request secret. The browser-session credential that could have carried one was removed in [ORB-22808], and the accident-guard framing of [Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) still applies: an `--operator` dashboard serves its authority to any local process that reaches the loopback port, as [Web remains loopback-only](../remote-access/4_decisions.md#web-remains-loopback-only) states.
+
+### Consequences
+
+- `orbit web connect --no-operator` and a terminal-started `orbit web serve` without the flag are read-only for governed controls.
+- `ORBIT_OPERATOR=1 orbit web serve` no longer enables governed controls; restart with `--operator`. `orbit web connect` (which passes `--operator` by default) and the desktop sidecar (`web serve --operator`) are unchanged.
+- The CLI keeps the process-envelope precedence: a person at a terminal running a governed CLI command is still the operator.
 
 ## A governed row may be an identification floor, not only an operator gate
 

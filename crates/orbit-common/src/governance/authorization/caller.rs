@@ -54,13 +54,21 @@ impl Display for CallerProvenance {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CapabilityResolution {
     /// The hosting process's environment counts, so [`OPERATOR_OVERRIDE_ENV`]
-    /// and the agent envelope contribute. This is every non-MCP surface.
+    /// and the agent envelope contribute. This is every surface except MCP
+    /// and the dashboard.
     #[default]
     ProcessEnvelope,
     /// Only grants asserted by the trusted session count. The MCP surface
     /// resolves this way so an agent session cannot inherit operator authority
     /// from whatever process happens to host its server.
     SessionOnly,
+    /// Only the dashboard server's own session state counts: the grant
+    /// `orbit web serve --operator` stamps at startup. The server's terminal,
+    /// [`OPERATOR_OVERRIDE_ENV`] and agent envelope are ignored, so a server
+    /// left running on a terminal (or behind an SSH `-tt` pty) cannot lend
+    /// that terminal's operator authority to whatever reaches its loopback
+    /// port.
+    DashboardSession,
 }
 
 /// The raw signals a chokepoint observed about its caller.
@@ -117,6 +125,20 @@ impl CallerEnvelope {
             session_capabilities: session.effective_capabilities.clone(),
             remote_caller_machine_id: session.remote_caller_machine_id().map(ToOwned::to_owned),
             ..Self::default()
+        }
+    }
+
+    /// Read the dashboard server's session grants and nothing else.
+    ///
+    /// The dashboard chokepoint builds its envelope here. Like
+    /// [`Self::mcp_session`], the live process environment and terminal are
+    /// discarded: `--operator` at startup is the dashboard's only operator
+    /// grant, and a granted call is attributed to the session, never to a
+    /// person at an interactive terminal.
+    pub fn dashboard_session(session: &ToolSessionContext) -> Self {
+        Self {
+            resolution: CapabilityResolution::DashboardSession,
+            ..Self::mcp_session(session)
         }
     }
 }
