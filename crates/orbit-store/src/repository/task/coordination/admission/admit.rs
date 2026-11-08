@@ -369,6 +369,7 @@ impl TaskCommitBoundary {
                     &serde_json::json!({"machine_id":receipt.machine_id,
                     "run_context":request.run_context,"claim_id":claim_id,"request_id":request.request_id}),
                 )?),
+                status_decision: None,
                 reservation: Some(TaskReservationReserveParams {
                     workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
                     workspace_id: Some(self.workspace_id.clone()),

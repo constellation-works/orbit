@@ -404,7 +404,7 @@ impl TaskCommitBoundary {
                 from_status: transition.map(|(from, _)| from),
                 to_status: transition.map(|(_, to)| to),
                 operation_id: None,
-                decision: None,
+                decision: params.status_decision.clone(),
             });
         }
         for event in &events {

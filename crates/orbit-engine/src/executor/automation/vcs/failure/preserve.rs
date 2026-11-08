@@ -624,6 +624,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
             status: Some(TaskStatus::Backlog),
             status_event: Some(orbit_types::workflow::BASELINE_RED_HOLD_EVENT.to_string()),
             status_note: Some(note),
+            status_decision: Some(TaskDecision::BaselineRedHold(hold.clone())),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
