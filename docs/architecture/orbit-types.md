@@ -17,7 +17,7 @@ Shared serde contracts, pure constructors and narrow domain errors. No I/O.
 ## Dependencies
 
 - Depends on (internal, production): —.
-- Depended on by: all other crates.
+- Depended on by (internal, production): `orbit-agent`, `orbit-auth`, `orbit-automation`, `orbit-cli`, `orbit-cmd`, `orbit-common`, `orbit-config`, `orbit-core`, `orbit-engine`, `orbit-exec`, `orbit-mcp`, `orbit-policy`, `orbit-registry`, `orbit-runtime`, `orbit-search`, `orbit-store`, `orbit-tools`, `orbit-web`.
 
 Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 
