@@ -85,6 +85,13 @@ impl AgentQuery {
         Ok(self)
     }
 
+    /// Set the exclusive window end to an instant already resolved, such as
+    /// the model ranking's settled cutoff.
+    pub(super) fn with_until_at(mut self, until: DateTime<Utc>) -> Self {
+        self.until = Some(until);
+        self
+    }
+
     /// The served bounds. A time window is `[until - span, until)` when
     /// `until` is set, and `[now - span, ...)` with no upper filter when it
     /// is not. A count window takes the newest `n` attempt starts before
@@ -197,25 +204,43 @@ fn parse_until(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitErro
         }
         return Ok(at);
     }
+    let out_of_range = || OrbitError::InvalidInput(format!("until is out of range: {raw}"));
+    let span = parse_span(raw).map_err(|error| match error {
+        SpanError::Malformed => until_rejected(raw),
+        SpanError::OutOfRange => out_of_range(),
+    })?;
+    now.checked_sub_signed(span).ok_or_else(out_of_range)
+}
+
+/// Why [`parse_span`] refused a duration.
+pub(super) enum SpanError {
+    /// Not an amount followed by a known unit.
+    Malformed,
+    /// Well formed, but too large for a duration.
+    OutOfRange,
+}
+
+/// A non-negative duration such as `14d`: `m`/`min`/`minute`, `h`/`hour`,
+/// `d`/`day` or `w`/`week`, with whitespace ignored and a trailing `s`
+/// trimmed.
+pub(super) fn parse_span(raw: &str) -> Result<chrono::Duration, SpanError> {
     let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     let compact = compact.trim_end_matches('s');
-    let Some(split) = compact.find(|c: char| c.is_ascii_alphabetic()) else {
-        return Err(until_rejected(raw));
-    };
+    let split = compact
+        .find(|c: char| c.is_ascii_alphabetic())
+        .ok_or(SpanError::Malformed)?;
     let (amount, unit) = compact.split_at(split);
-    let Ok(amount) = amount.parse::<i64>() else {
-        return Err(until_rejected(raw));
-    };
-    if amount < 0 {
-        return Err(until_rejected(raw));
-    }
+    let amount = amount
+        .parse::<i64>()
+        .ok()
+        .filter(|amount| *amount >= 0)
+        .ok_or(SpanError::Malformed)?;
     let span = match unit {
         "m" | "min" | "minute" => chrono::Duration::try_minutes(amount),
         "h" | "hour" => chrono::Duration::try_hours(amount),
         "d" | "day" => chrono::Duration::try_days(amount),
         "w" | "week" => chrono::Duration::try_weeks(amount),
-        _ => return Err(until_rejected(raw)),
+        _ => return Err(SpanError::Malformed),
     };
-    span.and_then(|span| now.checked_sub_signed(span))
-        .ok_or_else(|| OrbitError::InvalidInput(format!("until is out of range: {raw}")))
+    span.ok_or(SpanError::OutOfRange)
 }

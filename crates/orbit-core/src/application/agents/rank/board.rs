@@ -1,0 +1,367 @@
+//! The board (§4.3–§4.5): pool crews by model, take each model's composite,
+//! shrink it toward the other eligible models, bootstrap it within tiers
+//! for the interval and the paired probabilities, band it and order each
+//! band by cost.
+
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
+use super::measures::{MEASURE_COUNT, Totals, composite, observe, totals};
+use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, Rng, by_tier, draw, percentile};
+use crate::application::agents::MODEL_UNKNOWN;
+use crate::application::agents::roles::LedgerRow;
+
+/// Units of the other models' evidence a score is blended with.
+pub(super) const SHRINKAGE_K: f64 = 30.0;
+/// Implemented tasks a model needs before it is eligible.
+pub(super) const MIN_TASKS: usize = 30;
+/// Assessed tiers an eligible model spans, each with `MIN_TIER_TASKS`.
+pub(super) const MIN_TIERS: usize = 2;
+pub(super) const MIN_TIER_TASKS: usize = 5;
+/// Eligible models a qualified board needs.
+pub(super) const MIN_ELIGIBLE_MODELS: usize = 3;
+/// A model starts a new band when the one above beats it at least this
+/// often.
+pub(super) const BAND_PROBABILITY: f64 = 0.8;
+/// Cost coverage below which a model is ordered by score in its band.
+pub(super) const MIN_COST_COVERAGE: f64 = 0.8;
+pub(super) const INTERVAL: (f64, f64) = (10.0, 90.0);
+
+/// One model's pooled tasks, across every crew and effort level.
+pub(super) struct ModelRow {
+    pub(super) model: String,
+    pub(super) crews: BTreeMap<String, usize>,
+    pub(super) records: Vec<Record>,
+    /// Tier and recorded cost per task.
+    pub(super) costs: Vec<(&'static str, Option<f64>)>,
+    pub(super) landed: f64,
+}
+
+impl ModelRow {
+    pub(super) fn units(&self) -> usize {
+        self.records.len()
+    }
+
+    pub(super) fn tiers(&self) -> BTreeMap<&'static str, usize> {
+        let mut tiers = BTreeMap::new();
+        for record in &self.records {
+            *tiers.entry(record.tier).or_default() += 1;
+        }
+        tiers
+    }
+
+    /// Why the model is not eligible, or `None` when it is.
+    pub(super) fn ineligibility(&self) -> Option<String> {
+        if self.model == MODEL_UNKNOWN {
+            return Some("unattributed: the implementation runs recorded no model".into());
+        }
+        if self.units() < MIN_TASKS {
+            return Some(format!(
+                "{} implemented tasks; {MIN_TASKS} needed",
+                self.units()
+            ));
+        }
+        let tiers = self
+            .tiers()
+            .into_iter()
+            .filter(|(tier, count)| *tier != "unassessed" && *count >= MIN_TIER_TASKS)
+            .count();
+        (tiers < MIN_TIERS).then(|| {
+            format!(
+                "{tiers} assessed tiers with at least {MIN_TIER_TASKS} tasks; {MIN_TIERS} needed"
+            )
+        })
+    }
+
+    pub(super) fn totals(&self) -> [Totals; MEASURE_COUNT] {
+        totals(self.records.iter().map(|record| &record.observed))
+    }
+}
+
+/// Pool the scorecard's crew-and-model rows by model. A task two crews of
+/// one model both worked counts once per crew, as on the scorecard.
+pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
+    let mut models: BTreeMap<String, ModelRow> = BTreeMap::new();
+    for row in ledger {
+        let model = models.entry(row.model.clone()).or_insert_with(|| ModelRow {
+            model: row.model.clone(),
+            crews: BTreeMap::new(),
+            records: Vec::new(),
+            costs: Vec::new(),
+            landed: 0.0,
+        });
+        *model.crews.entry(row.crew).or_default() += row.tasks.len();
+        for task in row.tasks {
+            model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
+            model.costs.push((task.tier, task.cost));
+            model.records.push(Record {
+                tier: task.tier,
+                start: task.start,
+                observed: observe(&task),
+            });
+        }
+    }
+    models.into_values().collect()
+}
+
+/// One model's place on the board.
+pub(super) struct Placed {
+    pub(super) z: Option<f64>,
+    pub(super) z_loo: Option<f64>,
+    pub(super) z_shrunk: Option<f64>,
+    pub(super) eligible: bool,
+    pub(super) interval: Option<(f64, f64)>,
+    /// Shared rank of the model's band on a qualified board.
+    pub(super) band: Option<usize>,
+    pub(super) band_size: usize,
+    pub(super) cost: Cost,
+}
+
+impl Placed {
+    pub(super) fn score(&self) -> Option<f64> {
+        self.z_shrunk.map(|z| 100.0 + 10.0 * z)
+    }
+}
+
+/// A model's list-price cost per task against the fleet's on its tier mix.
+#[derive(Default)]
+pub(super) struct Cost {
+    pub(super) per_task: Option<f64>,
+    pub(super) expected_per_task: Option<f64>,
+    pub(super) ratio: Option<f64>,
+    pub(super) coverage: f64,
+    pub(super) unknown: bool,
+}
+
+/// The computed board: one placement per row, in row order, the display
+/// order, and the paired probabilities among eligible models.
+pub(super) struct Board {
+    pub(super) placed: Vec<Placed>,
+    pub(super) order: Vec<usize>,
+    pub(super) qualified: bool,
+    /// `P(a > b)` for eligible `a != b`, keyed by row index.
+    pub(super) paired: BTreeMap<(usize, usize), f64>,
+}
+
+/// Units-weighted mean `z` of every eligible row but `skip`; `None` when
+/// there is no other.
+fn leave_one_out(z: &[Option<f64>], units: &[f64], eligible: &[bool], skip: usize) -> Option<f64> {
+    let (sum, weight) = (0..z.len())
+        .filter(|&other| other != skip && eligible[other])
+        .filter_map(|other| z[other].map(|z| (z * units[other], units[other])))
+        .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+    (weight > 0.0).then(|| sum / weight)
+}
+
+fn shrink(z: f64, units: f64, z_loo: Option<f64>) -> f64 {
+    (units * z + SHRINKAGE_K * z_loo.unwrap_or(0.0)) / (units + SHRINKAGE_K)
+}
+
+pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) -> Board {
+    let units: Vec<f64> = rows.iter().map(|row| row.units() as f64).collect();
+    let z: Vec<Option<f64>> = rows
+        .iter()
+        .map(|row| composite(&row.totals(), scales))
+        .collect();
+    let eligible: Vec<bool> = rows
+        .iter()
+        .zip(&z)
+        .map(|(row, z)| row.ineligibility().is_none() && z.is_some())
+        .collect();
+    let eligible_rows: Vec<usize> = (0..rows.len()).filter(|&index| eligible[index]).collect();
+    let qualified = eligible_rows.len() >= MIN_ELIGIBLE_MODELS;
+
+    // Bootstrap: resample each eligible model's tasks within its tiers,
+    // expectations and scales fixed, and shrink every draw the same way.
+    let strata: Vec<_> = eligible_rows
+        .iter()
+        .map(|&index| {
+            let strata = by_tier(&rows[index].records);
+            let per_tier: Vec<_> = strata
+                .iter()
+                .map(|(&tier, records)| (tier, records.len()))
+                .collect();
+            (strata, per_tier)
+        })
+        .collect();
+    let mut rng = Rng::seeded(BOOTSTRAP_SEED);
+    let mut draws: Vec<Vec<f64>> = vec![Vec::with_capacity(DRAWS); eligible_rows.len()];
+    for _ in 0..DRAWS {
+        let mut drawn = z.clone();
+        for (position, &index) in eligible_rows.iter().enumerate() {
+            let (strata, per_tier) = &strata[position];
+            let sample = draw(&mut rng, strata, per_tier);
+            drawn[index] = composite(&totals(sample), scales).or(z[index]);
+        }
+        for (position, &index) in eligible_rows.iter().enumerate() {
+            let z_loo = leave_one_out(&drawn, &units, &eligible, index);
+            let shrunk = shrink(drawn[index].unwrap_or(0.0), units[index], z_loo);
+            draws[position].push(100.0 + 10.0 * shrunk);
+        }
+    }
+    let mut paired = BTreeMap::new();
+    for (a_position, &a) in eligible_rows.iter().enumerate() {
+        for (b_position, &b) in eligible_rows.iter().enumerate() {
+            if a == b {
+                continue;
+            }
+            let wins: f64 = draws[a_position]
+                .iter()
+                .zip(&draws[b_position])
+                .map(|(a, b)| match a.total_cmp(b) {
+                    Ordering::Greater => 1.0,
+                    Ordering::Equal => 0.5,
+                    Ordering::Less => 0.0,
+                })
+                .sum();
+            paired.insert((a, b), wins / DRAWS as f64);
+        }
+    }
+
+    let costs = costs(rows);
+    let mut placed: Vec<Placed> = rows
+        .iter()
+        .enumerate()
+        .zip(costs)
+        .map(|((index, _), cost)| {
+            let z_loo = leave_one_out(&z, &units, &eligible, index);
+            let interval =
+                eligible_rows
+                    .iter()
+                    .position(|&row| row == index)
+                    .and_then(|position| {
+                        let mut scores = draws[position].clone();
+                        Some((
+                            percentile(&mut scores, INTERVAL.0)?,
+                            percentile(&mut scores, INTERVAL.1)?,
+                        ))
+                    });
+            Placed {
+                z: z[index],
+                z_loo,
+                z_shrunk: z[index].map(|z| shrink(z, units[index], z_loo)),
+                eligible: eligible[index],
+                interval,
+                band: None,
+                band_size: 0,
+                cost,
+            }
+        })
+        .collect();
+
+    let scores: Vec<f64> = placed
+        .iter()
+        .map(|placed| placed.score().unwrap_or(f64::NEG_INFINITY))
+        .collect();
+    // Cheapest first; a model without cost coverage follows the priced
+    // ones in score order.
+    let cost_keys: Vec<(bool, Option<f64>)> = placed
+        .iter()
+        .map(|placed| {
+            let cost = &placed.cost;
+            (cost.unknown, if cost.unknown { None } else { cost.ratio })
+        })
+        .collect();
+    let by_score = |a: &usize, b: &usize| {
+        scores[*b]
+            .total_cmp(&scores[*a])
+            .then_with(|| rows[*a].model.cmp(&rows[*b].model))
+    };
+    let mut ranked = eligible_rows.clone();
+    ranked.sort_by(by_score);
+    let mut rest: Vec<usize> = (0..rows.len()).filter(|index| !eligible[*index]).collect();
+    rest.sort_by(by_score);
+    let mut order = Vec::with_capacity(rows.len());
+    if qualified {
+        let mut bands: Vec<Vec<usize>> = Vec::new();
+        for (position, &index) in ranked.iter().enumerate() {
+            let joins = position > 0
+                && paired
+                    .get(&(ranked[position - 1], index))
+                    .is_some_and(|p| *p < BAND_PROBABILITY);
+            match bands.last_mut() {
+                Some(band) if joins => band.push(index),
+                _ => bands.push(vec![index]),
+            }
+        }
+        let mut rank = 1;
+        for mut band in bands {
+            band.sort_by(|a, b| {
+                let (a_unknown, a_ratio) = cost_keys[*a];
+                let (b_unknown, b_ratio) = cost_keys[*b];
+                a_unknown
+                    .cmp(&b_unknown)
+                    .then_with(|| match (a_ratio, b_ratio) {
+                        (Some(a), Some(b)) => a.total_cmp(&b),
+                        _ => Ordering::Equal,
+                    })
+                    .then_with(|| by_score(a, b))
+            });
+            for &index in &band {
+                placed[index].band = Some(rank);
+                placed[index].band_size = band.len();
+            }
+            rank += band.len();
+            order.extend(band);
+        }
+    } else {
+        order.extend(ranked);
+    }
+    order.extend(rest);
+    Board {
+        placed,
+        order,
+        qualified,
+        paired,
+    }
+}
+
+/// Each row's cost per task against the fleet's per-tier cost per task on
+/// the row's own priced tier mix.
+fn costs(rows: &[ModelRow]) -> Vec<Cost> {
+    let mut fleet: BTreeMap<&str, (f64, usize)> = BTreeMap::new();
+    for (tier, cost) in rows.iter().flat_map(|row| &row.costs) {
+        if let Some(cost) = cost {
+            let entry = fleet.entry(tier).or_default();
+            entry.0 += cost;
+            entry.1 += 1;
+        }
+    }
+    rows.iter()
+        .map(|row| {
+            let priced: Vec<_> = row
+                .costs
+                .iter()
+                .filter_map(|(tier, cost)| cost.map(|cost| (*tier, cost)))
+                .collect();
+            let coverage = if row.costs.is_empty() {
+                0.0
+            } else {
+                priced.len() as f64 / row.costs.len() as f64
+            };
+            let per_task = (!priced.is_empty())
+                .then(|| priced.iter().map(|(_, cost)| cost).sum::<f64>() / priced.len() as f64);
+            let expected_per_task = (!priced.is_empty()).then(|| {
+                priced
+                    .iter()
+                    .map(|(tier, _)| {
+                        let (total, count) = fleet[tier];
+                        total / count as f64
+                    })
+                    .sum::<f64>()
+                    / priced.len() as f64
+            });
+            let ratio = per_task
+                .zip(expected_per_task)
+                .filter(|(_, expected)| *expected > 0.0)
+                .map(|(cost, expected)| cost / expected);
+            Cost {
+                per_task,
+                expected_per_task,
+                ratio,
+                coverage,
+                unknown: coverage < MIN_COST_COVERAGE || ratio.is_none(),
+            }
+        })
+        .collect()
+}

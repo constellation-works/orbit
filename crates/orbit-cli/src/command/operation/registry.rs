@@ -542,6 +542,27 @@ impl Commands {
                     AgentsSubcommand::Operation(invocation) => {
                         registry_operation(invocation, runtime_dispatch!(Agents))
                     }
+                    // The ranking reads the scan; calibration writes the
+                    // workspace's season file and audits as an admin action.
+                    AgentsSubcommand::Rank(args) => match &args.action {
+                        None => CommandOperation::new(
+                            RuntimeNeed::ReadOnly,
+                            None,
+                            None,
+                            runtime_dispatch!(Agents),
+                        ),
+                        Some(_) => CommandOperation::new(
+                            RuntimeNeed::Required,
+                            Some(admin_meta(
+                                "agents",
+                                Some("rank-calibrate"),
+                                Some("rank_season"),
+                                None,
+                            )),
+                            None,
+                            runtime_dispatch!(Agents),
+                        ),
+                    },
                     // The probe submits one canary run per crew, so it opens
                     // the full runtime and audits as an admin action.
                     AgentsSubcommand::VisionProbe(_) => CommandOperation::new(

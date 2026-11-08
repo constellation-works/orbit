@@ -22,14 +22,15 @@ fn median(values: &mut [f64]) -> Option<f64> {
 
 /// Append diff economy after all rows' tallies exist, so the fleet and the
 /// rows count the same row-task observations, and return each row's
-/// expected escaped regressions, in row order. Medians count unique landed
-/// tasks.
+/// expected escaped regressions per task, in row and then task order (the
+/// order of `work`). A row's expectation is the sum of its tasks'. Medians
+/// count unique landed tasks.
 pub(super) fn append_diff_context(
     facts: &AgentFacts,
     window: WindowBounds,
     work: &BTreeMap<Key, Vec<&TaskFacts>>,
     rows: &mut [RowInput<'_>],
-) -> Vec<f64> {
+) -> Vec<Vec<f64>> {
     let cell = |task: &TaskFacts| {
         (
             tier(task),
@@ -85,7 +86,7 @@ pub(super) fn append_diff_context(
     let mut expected_regressions = Vec::with_capacity(rows.len());
     for ((row, tasks), own) in rows.iter_mut().zip(work.values()).zip(&by_row) {
         let mut fallback = false;
-        let expected = tasks
+        let expected: Vec<f64> = tasks
             .iter()
             .map(|task| {
                 let key = bucket(task);
@@ -114,7 +115,7 @@ pub(super) fn append_diff_context(
                     count / units as f64
                 }
             })
-            .sum();
+            .collect();
         expected_regressions.push(expected);
         row.escaped_regressions_fallback = Some(fallback);
         let mut ratios = Vec::new();

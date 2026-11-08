@@ -1,7 +1,8 @@
 //! `GET /api/agents/{role}/scorecard`, `/api/agents/{role}/detail`,
-//! `/api/agents/attribution` and the implementer slices
-//! (`/api/agents/implementers/by-type` and `/size-curves`): the agent
-//! scorecards behind Analytics › Agents.
+//! `/api/agents/attribution`, the implementer slices
+//! (`/api/agents/implementers/by-type` and `/size-curves`) and the model
+//! ranking (`/api/agents/rank`): the agent scorecards behind Analytics ›
+//! Agents.
 //!
 //! The scan, attribution and scores are the core agent scorecard service.
 //! One scan per workspace runtime is cached for [`AGENT_SCAN_TTL`]; the role,
@@ -13,7 +14,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::agents::{self, AgentFacts, AgentQuery, AgentRole};
+use orbit_core::application::agents::{self, AgentFacts, AgentQuery, AgentRole, RankQuery};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 
@@ -176,6 +177,64 @@ pub(super) async fn agent_attribution(
             Json(agents::agent_attribution(
                 &served.body,
                 &selection,
+                AGENT_SCAN_TTL,
+            )),
+        )
+            .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+/// Query string for the model ranking.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct AgentRankQuery {
+    /// A time window: `1h`, `24h`, `7d`, `30d` (default), `90d` or `all`.
+    #[serde(default)]
+    window: Option<String>,
+    /// The end before the settle lag: an RFC 3339 instant or a duration ago
+    /// such as `7d`. Omitted, now.
+    #[serde(default)]
+    until: Option<String>,
+    /// How long before `until` the ranked window ends (default `14d`).
+    #[serde(default)]
+    settle_lag: Option<String>,
+    /// Which implementer tasks count by derived execution: `managed`
+    /// (default), `all` or `interactive`.
+    #[serde(default)]
+    execution: Option<String>,
+    /// `true` ranks the window ending at `until`, provisional.
+    #[serde(default)]
+    live: bool,
+}
+
+/// The implementer model ranking, sliced from the same cached scan with
+/// the workspace's current season of noise scales.
+pub(super) async fn agent_rank(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<AgentRankQuery>,
+) -> Response {
+    let selection = match RankQuery::parse(
+        query.window.as_deref(),
+        query.until.as_deref(),
+        query.settle_lag.as_deref(),
+        query.execution.as_deref(),
+        query.live,
+    ) {
+        Ok(selection) => selection,
+        Err(error) => return error_response(error),
+    };
+    let seasons = match runtime.agent_rank_seasons() {
+        Ok(seasons) => seasons,
+        Err(error) => return error_response(error),
+    };
+    match facts(&state, runtime).await {
+        Ok(served) => (
+            served.age_header(),
+            Json(agents::agent_rank(
+                &served.body,
+                &selection,
+                &seasons,
                 AGENT_SCAN_TTL,
             )),
         )
