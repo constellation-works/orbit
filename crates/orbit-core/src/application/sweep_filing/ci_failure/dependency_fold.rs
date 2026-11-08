@@ -193,7 +193,7 @@ pub(super) fn sibling_cluster_index(
             if run_id.is_empty() {
                 continue;
             }
-            let mut names: Vec<String> = cluster.jobs.iter().cloned().collect();
+            let mut names: Vec<String> = Vec::new();
             let mut ids: Vec<u64> = Vec::new();
             if let Some(job_id) = run.get("job_id").and_then(Value::as_u64) {
                 ids.push(job_id);
@@ -281,7 +281,6 @@ pub(super) fn sibling_cluster_for(
         return match (by_name, by_id) {
             (Some(name_target), Some(id_target)) if name_target == id_target => Some(name_target),
             (Some(_), Some(_)) => None,
-            (Some(name_target), None) => Some(name_target),
             _ => None,
         };
     }
