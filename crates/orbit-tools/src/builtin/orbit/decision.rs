@@ -5,8 +5,7 @@
 //! Submitting through a registered channel and the digest that raises
 //! approval requests pass to the host, where core binds the caller to
 //! the registration and verifies the token; the channel-administration
-//! verbs and the precedent-decision `assist` verbs are operator CLI only
-//! and refused here like answering.
+//! verbs are operator CLI only and refused here like answering.
 use super::operation::GuardedModes;
 use crate::ToolContext;
 use orbit_common::{
@@ -37,11 +36,6 @@ impl GuardedModes for DecisionVerb {
             | Self::ChannelRotateKey => Some(Err(OrbitError::PolicyDenied(
                 "decision channels are registered from the operator CLI: use `orbit decision channel register|list|revoke|rotate-key`".into(),
             ))),
-            Self::AssistEnable | Self::AssistDisable | Self::AssistStatus => {
-                Some(Err(OrbitError::PolicyDenied(
-                    "precedent-decision categories are enabled from the operator CLI: use `orbit decision assist enable|disable|status`".into(),
-                )))
-            }
         }
     }
 
@@ -63,10 +57,7 @@ impl GuardedModes for DecisionVerb {
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
-            | Self::ChannelRotateKey
-            | Self::AssistEnable
-            | Self::AssistDisable
-            | Self::AssistStatus => None,
+            | Self::ChannelRotateKey => None,
         }
     }
 
@@ -84,10 +75,7 @@ impl GuardedModes for DecisionVerb {
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
-            | Self::ChannelRotateKey
-            | Self::AssistEnable
-            | Self::AssistDisable
-            | Self::AssistStatus => Ok(()),
+            | Self::ChannelRotateKey => Ok(()),
         }
     }
 
@@ -105,10 +93,7 @@ impl GuardedModes for DecisionVerb {
             | Self::ChannelRegister
             | Self::ChannelList
             | Self::ChannelRevoke
-            | Self::ChannelRotateKey
-            | Self::AssistEnable
-            | Self::AssistDisable
-            | Self::AssistStatus => None,
+            | Self::ChannelRotateKey => None,
         }
     }
 }

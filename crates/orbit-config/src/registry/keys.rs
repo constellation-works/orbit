@@ -318,7 +318,15 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
     ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
     ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
+    // [ORB-22808] Decision assistance was removed on 2026-11-08. The
+    // `[assistance]` table loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when it becomes an ordinary
+    // unknown setting.
+    ("assistance", ASSISTANCE_REMOVED_NOTE),
 ];
+
+const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
+     [assistance] table. This key stops being recognised after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
      removed; resident.evolution.window_days and decline_suppress_days still apply to the \
@@ -454,9 +462,7 @@ pub const LEASE_LISTENER_KEY_PREFIX: &str = "lease.listener.";
 /// variables into that crew's agents, the lease intake peer user and the
 /// lease listener's settings.
 pub fn is_global_only_key(key: &str) -> bool {
-    key == "assistance"
-        || key.starts_with("assistance.")
-        || key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
+    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
         || key == LEASE_INTAKE_PEER_USER_KEY
         || key == LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.')

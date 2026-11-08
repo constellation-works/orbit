@@ -672,6 +672,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     // Independent optional ledger only. Older writers never touch these tables;
     // no task projection or trigger requires assistance-aware writers.
+    // [ORB-22808] Decision assistance was removed; the tables stay inert.
     Migration {
         version: 72,
         name: "decision_assistance",

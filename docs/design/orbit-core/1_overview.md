@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 last_validated: 2026-11-05
 status: Implemented
 stage: shipped
@@ -85,10 +85,7 @@ source scan, enforces the runtime direction.
   the seed definitions, and implements `contracts::TaskBundleMaintenancePort`
   so the adapter can publish tasks and count unindexed bundles [ORB-22005].
 - **Composition** — root resolution and the sole join of `orbit-config`,
-  bootstrap, runtime construction, and adapters. It implements
-  `assistance::AssistanceServicePort`, which gives the task-quality,
-  delivery-quality and precedent-decision consumers their assistance service
-  [ORB-22005].
+  bootstrap, runtime construction, and adapters [ORB-22005].
 - **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
   `shared_root`, and `local_root`. On the primary checkout `shared_root` and
   `local_root` are equal; in a linked worktree `shared_root` is the primary
@@ -126,7 +123,6 @@ source scan, enforces the runtime direction.
 | Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
-| Task-owned port to the precedent consumer | `crates/orbit-core/src/application/task/precedent_decision_port.rs`, implemented in `precedent_decision/task_port.rs`; its records are in `contracts/precedent_assist.rs` | [ORB-22313] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `task/mod.rs` keeps a two-line re-export shim | [ORB-22287] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
@@ -135,7 +131,7 @@ source scan, enforces the runtime direction.
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
-| Application-owned ports composition and bootstrap implement | `crates/orbit-core/src/application/assistance/mod.rs` (`AssistanceServicePort`) and `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `composition/services.rs` and `bootstrap/task_publication.rs` | [ORB-22005] |
+| Application-owned port bootstrap implements | `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `bootstrap/task_publication.rs` | [ORB-22005] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
@@ -229,9 +225,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   observation records),
   `task::TaskSweepFilingPort` (CI-sweep admission) and
   `task::TaskWorkspaceAutoPort` (the tasks live `run auto` leaves carry).
-  [ORB-22313] added `task::TaskPrecedentDecisionPort` (the open-request
-  enqueue, a model answer's review outcome and the digest's demoted
-  categories), which `precedent_decision` implements.
+  [ORB-22313] added `task::TaskPrecedentDecisionPort` for the precedent
+  consumer; [ORB-22808] removed both with decision assistance.
   [ORB-17937] added two job-owned ports in `job/drain_port.rs`:
   `job::JobDrainPort` (the explicit drain entry decision, the Git protection
   preflight, the admission resource throttle, host provider holds, a pull
@@ -295,8 +290,7 @@ moved the backlog forecast out of `task` to its own place in the order:
   module above it in the order below by path, grouped tree or `super::`
   chain, or calls the inherent methods and functions the [ORB-17939] ports
   and reused reads wrap, when `contracts` imports any of the ten modules,
-  `precedent_decision`, `assistance`, `routines` or `auto_tasks`, when `task`
-  names `precedent_decision` or calls its inherent methods [ORB-22313], when
+  `routines` or `auto_tasks`, when
   `distributed` names `experiment` or calls its inherent methods [ORB-22416],
   when `automation` or `auto_tasks` names `routines` or calls its inherent
   methods [ORB-22623],
@@ -366,11 +360,6 @@ references only, so it cannot see `automation -> resident -> routines`:
 `automation/members/member_host/resident.rs` reads `resident`, and
 `resident_cycle_routine_disabled` reads routine statuses. That path remains.
 
-`task < precedent_decision` is a pairwise direction beside that order
-[ORB-22313]. The consumer stays above `task` because it reads task requests and
-applies task answers. Its pure enablement records are in `contracts`, and its
-host-only store and grant-dependent helpers stay with it.
-
 `tag_instructions` sits outside the order but above `task` [ORB-22289]. Task
 reads commit-pinned repository files through its own `task::base_revision`
 (`run_base_revision`, which reads the recorded worktree base through
@@ -395,7 +384,7 @@ distributed` no longer climbs; it also keeps the persisted representation of
 `BlockCause`, and re-exports the moved names as a compatibility shim for
 `agents` and its own modules, whose retirement is a follow-up. The guard's
 `task` upper-module list names `codebase`. Their back-edges with other unordered
-modules (`precedent_decision`, `resident`, `experiment`, `codebase`) still keep
+modules (`resident`, `experiment`, `codebase`) still keep
 the core strongly connected component and await a later audit. [ORB-22708]
 cut the lower modules’ direct edges into `landing`.
 

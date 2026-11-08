@@ -59,125 +59,6 @@ If the workspace file does not exist yet, add `--fresh` to start it empty or
 For extra agent instructions selected by a task's tags, edit the
 [Tag instructions](#tag-instructions) tables directly.
 
-## Decision assistance
-
-The advanced `assistance` table is host-only. Workspace files and workspace
-writes refuse it; a global-to-workspace seed omits it. The default is off and
-unfunded:
-
-```toml
-[assistance]
-policies = []
-```
-
-No task/report consumer or worker is automatically activated. An explicitly
-integrated consumer uses `off` (no queue or requests), `shadow` (operator
-comparison only), or `advisory` (current annotations). Annotations never approve,
-dispatch or change workflow authority. Switching modes invalidates cached
-results. Configuration alone does not install a consumer.
-
-Each policy names `workspace_id`, `use_case`, `mode`, `model` (`gpt-6-luna`),
-`model_revision`, `policy_version`, `contract_digest`, `evidence_fields`,
-`evidence_ref_prefixes` and `credential_env`. The consumer integration supplies
-the immutable typed contract and digest. Only the host grant selects permitted
-evidence and the credential reference. `credential_env` must name an
-`ORBIT_ASSISTANCE_*` host variable, whose value is excluded from agent
-environments. Values and supplied secrets are redacted before persistence and
-transmission to the fixed `https://api.openai.com/v1/decisions` destination.
-Evidence references are not fetched. No agent crew makes these calls.
-
-`limits` defaults to concurrency `2`, queue capacity `128`, retained records
-`1024`, queue age `300` seconds, timeout `15` seconds, retry delay `5` seconds,
-at most `2` attempts, request/response bounds `16384`/`65536` bytes, `32768`
-reserved input tokens per attempt, and `604800` seconds of retention. Unknown
-calls retain their full token/spend reservations; retries reserve again under
-the same logical assessment. Late, stale, refused and unavailable results are
-explicit gaps rather than clean assessments.
-
-`budget` sets a named `epoch` and cumulative `token_ceiling` and
-`spend_ceiling_microusd`. `input_microusd_per_million_tokens` and
-`pricing_version` are optional; without verified pricing, calls are refused
-because their charge is unknown. Defaults are `unfunded`, zero ceilings and
-unknown pricing, which refuses calls. Reservation counters survive payload
-retention; the owner integration must keep maintenance running to expire
-retained payloads. A provider model change requires a new `model_revision`
-epoch. Live evaluation and advisory activation need a separate operator
-decision identifying the evaluated contract, evidence permissions and budget;
-they are not enabled by default.
-
-### Precedent retrieval grants
-
-`assistance.precedent_providers` is an optional host-only array (default `[]`).
-Each entry grants one exact `workspace_id`, plus `built_in` (default `false`)
-and an ordered `plugin_tools` list (default `[]`):
-
-```toml
-[[assistance.precedent_providers]]
-workspace_id = "ws_example"
-built_in = true
-plugin_tools = ["history.retrieve"]
-```
-
-This retrieves decision evidence only. It starts no model calls, notifications,
-or automatic answers. Only active, granted, read-only plugin tools are
-eligible. Each receives `orbit.precedent-provider/1` through ordinary audited
-plugin dispatch, with its existing callback session and sandbox. The built-in
-decision-history source runs first; plugin source order follows configuration.
-Removing the entry disables retrieval on the next call.
-
-There are at most `128` workspace entries and `8` plugin tools per entry;
-duplicate workspaces or tool names are refused. The provider boundary caps each
-query at `K = 32`, `65536` request bytes, and `262144` response bytes.
-
-### Precedent-decision shadow consumer
-
-`use_case = "precedent_decision"` is the shadow consumer for an open human
-decision. It stays off until a host policy sets `mode = "shadow"`:
-
-```toml
-[[assistance.policies]]
-workspace_id = "ws_example"
-use_case = "precedent_decision"
-mode = "shadow"
-model = "gpt-6-luna"
-model_revision = "r1"
-policy_version = "v1"
-contract_digest = "sha256:<64-lowercase-hex-of-precedent-decision/1-template>"
-evidence_fields = ["option_ids", "request", "task_context", "precedents", "provenance"]
-evidence_ref_prefixes = ["task:", "decision:"]
-credential_env = "ORBIT_ASSISTANCE_PRECEDENT"
-```
-
-`off` and `advisory` enqueue nothing and do not consult precedent providers.
-Shadow builds one packet after a request is raised and still open, enqueues it,
-and seals the settled prediction in a private ledger. The dashboard, mail,
-`orbit decision show`, the digest, and advisory reads do not show that
-prediction.
-
-The grant's `evidence_fields` must include `option_ids` (the packet-bound
-choice, at most `8` ids). Also grant `request`, `task_context`, `precedents`,
-and `provenance` when that evidence should leave the host, and allow
-`evidence_ref_prefixes` `task:` and `decision:`. A granted `precedents` value
-carries each retained record's question, option labels and consequences,
-bounded context, and citation (`source`, `ref`, digest); those option ids are
-local to the historical record. Omitting `precedents` keeps that text on the
-host. Credential-pattern redaction still applies to the values that are sent,
-and the serialized request stays within `limits.max_request_bytes`. The
-contract digest is the granted question template `precedent-decision/1`, not a
-per-request expansion. Retrieval uses at most eight precedents, each text bound
-to `2000` bytes. Fund `budget` with a named epoch, ceilings, and verified
-pricing, or calls are refused as above.
-
-This mode never answers a decision, never changes workflow authority, and does
-not wait before notifying the human. To disable it, set `mode = "off"` or
-remove the policy. Corpus auto rules that answer repeated decisions from stored
-rules are separate; see
-[Precedent for repeated decisions](../../how-to/decision-channels/#precedent-for-repeated-decisions).
-
-Read the whole table with `orbit config get assistance`; replace it with
-`orbit config set --global assistance '<table>'`. Its nested fields are not
-separate settable keys.
-
 ## Scheduled credentials: clock.env
 
 `~/.orbit/clock.env` holds the credentials for runs no login shell starts.
@@ -821,7 +702,6 @@ readouts remain readable.
 | `ci_failure.operator_suppression_hours` | **Advanced.** integer · **Default:** `6`<br>Hours an archived/rejected CI sweep finding without `covered_by` suppresses recurrences of its evidenced cause (0–720). A recurrence whose retained diagnostic differs files again; a cause that cannot be established is held as `candidate_owner` without attribution. Explicit task/PR covers hold while open or until a failing checkout contains the landed fix; operator holds report their owner and reason. |
 | `publication.routine_attachments` | string · **Default:** `omit`<br>Weekly task publication attachment policy: `omit`, `fail`, or `include`. See [Scheduled publication](../../how-to/task-publication/#scheduled-publication). |
 | `publication.routine_allow_unscanned_attachments` | **Advanced.** boolean · **Default:** `false`<br>Explicitly accept unscanned attachments when the routine policy is `include`; sensitive path and size limits still apply. |
-| `assistance` | **Advanced.** table · **Default:** off and unfunded (`policies = []`)<br>Host-only workspace/use-case grants, modes, evidence scope, credential references and bounded requests, reservations and retention. No consumers activate automatically. See [Decision assistance](#decision-assistance). |
 | `automation.stall_window_minutes` | **Advanced.** integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
 | `lease.enabled` | bool · **Default:** `false`<br>Accept path-lease operations in this workspace. While false, every lease operation is refused with an error naming this key. See [Hold paths with leases](../../how-to/path-leases/). |

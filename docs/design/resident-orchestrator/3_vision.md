@@ -38,10 +38,11 @@ may be distinctive about it. Nothing here is committed scope.
 5. **Owner failover.** A resident runs on its workspace's owner. When the owner moves
    ([owner-failover](../owner-failover/1_overview.md)), the mandate's lease and cadence need to move
    with it. The stateless cycle makes this mostly free; the lease handover is not designed.
-6. **Precedent-answered escalations.** Decision assistance can answer some decision requests from a
-   precedent corpus ([decision-assistance](../decision-assistance/1_scope.md)). Whether resident
-   escalations may join the categories it answers is a human call, made after the reversal metric
-   has data.
+6. **Precedent-answered escalations.** A current corpus rule the operator marked auto can answer
+   a decision request that names it ([workspace-agent-corpus](../workspace-agent-corpus/1_scope.md));
+   model-answered categories were removed with decision assistance in [ORB-22808]. Whether
+   resident escalations may be answered from precedent is a human call, made after the reversal
+   metric has data.
 7. **A dashboard view.** Residents appear through checkpoints, attention items and the digest. A
    dedicated view (timeline of cycles, open requests, costs) is likely worth it after the pilot.
 
@@ -92,7 +93,7 @@ escalation equation. It lives in a separate repository, cited here by name.
 - [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_scope.md),
   [activity-job](../activity-job/1_overview.md)
 - [human-decision-channel](../human-decision-channel/1_scope.md),
-  [decision-assistance](../decision-assistance/1_scope.md)
+  [decision-assistance](../_archived/decision-assistance/1_scope.md) (archived)
 - [operator-attention](../operator-attention/1_overview.md),
   [fleet-notices](../fleet-notices/1_overview.md)
 - [distributed-drain decisions](../distributed-drain/4_decisions.md#epic-is-a-tag-not-a-pipeline)

@@ -121,14 +121,6 @@ impl Host<'_> {
                     Err(error) => return Err(error.into()),
                 };
                 match request.state {
-                    // An enabled precedent-decision category holds the
-                    // notification for up to its wait, so a model answer
-                    // that lands in time is never also sent to the human.
-                    DecisionRequestState::Open
-                        if self.runtime.precedent_decision_notify_wait(&request) =>
-                    {
-                        return Ok(MemberAdmission::Withhold("precedent_decision_wait".into()));
-                    }
                     DecisionRequestState::Open => {}
                     DecisionRequestState::Answered => {
                         return Ok(MemberAdmission::Retire("request_answered".into()));

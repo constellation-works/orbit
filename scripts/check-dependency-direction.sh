@@ -293,11 +293,9 @@ fi
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
-# [ORB-22313] The precedent-assistance records keep contracts below their
-# consumer and the assistance grants that consumer reads.
-# [ORB-22623] So do the clock settings and schedule display state, below
-# `routines` and `auto_tasks`.
-contracts_higher="${app_modules}|precedent_decision|assistance|routines|auto_tasks"
+# [ORB-22623] The clock settings and schedule display state keep contracts
+# below `routines` and `auto_tasks`.
+contracts_higher="${app_modules}|routines|auto_tasks"
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application`, or past it to the crate root and back
@@ -702,7 +700,7 @@ fi
 # stays because bootstrap seeds through application-owned definitions, so
 # neither application nor the adapter may name bootstrap or composition or call
 # an inherent `OrbitRuntime` method either defines. They reach them only through
-# `assistance::AssistanceServicePort` and `contracts::TaskBundleMaintenancePort`.
+# `contracts::TaskBundleMaintenancePort`.
 # The names are derived from the `impl OrbitRuntime` blocks under `composition/`
 # and under `bootstrap/`. Exact lines allowed: the lexical index store's own
 # `reindex_tasks`, and the `#[cfg(test)]` fixture that opens a runtime.
@@ -811,22 +809,6 @@ if rg -n "crate::application::(${job_upper_modules})\\b" \
   ! inherent_calls_into "$app_src" job "$job_upper_modules" '' '' ||
   ! super_chains_into "$app_src" job "$job_upper_modules"; then
   echo "orbit-core job must reach review, automation, admission and workspace_auto through its job ports"
-  fail=1
-fi
-
-# [ORB-22313] `task < precedent_decision` is a pairwise direction beside the
-# order below: the consumer applies task answers and reads task requests, so
-# task reaches it only through `task::TaskPrecedentDecisionPort`, and the digest
-# names its records from contracts. A path, a grouped tree, a `super::` chain or
-# a call to an inherent method it defines (names derived, so port methods use
-# distinct names) is a reintroduced edge.
-if rg -n 'crate::application::precedent_decision\b' \
-  "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U 'crate::application::\{[^}]*\bprecedent_decision\b' \
-    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" task precedent_decision '' '' ||
-  ! super_chains_into "$app_src" task precedent_decision; then
-  echo "orbit-core task must reach precedent_decision through task::TaskPrecedentDecisionPort and name its records from contracts"
   fail=1
 fi
 

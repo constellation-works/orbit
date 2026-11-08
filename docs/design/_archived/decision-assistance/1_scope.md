@@ -1,11 +1,9 @@
 ---
 title: "Scope: bounded decision assistance"
 owner: codex
-last_updated: 2026-11-07
-last_validated: 2026-11-07
-status: Draft
-stage: building
-next: "Operator evidence review before enabling any precedent category; rollout parked"
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Deprecated
 feature: decision-assistance
 doc_role: scope
 type: design
@@ -14,6 +12,15 @@ tags: [decision-assistance]
 ---
 
 # Scope: bounded decision assistance
+
+Retired in [ORB-22808] (2026-11-08): Daniel removed decision assistance while simplifying
+Orbit's configuration. It was off by default and unset on every host, and its advisory
+rollout was parked after both preregistered evaluations. The generic service, the OpenAI
+Decisions adapter, the task-quality, delivery-quality and precedent-decision consumers,
+precedent retrieval, `orbit decision assist` and the offline evaluator scripts are gone. A
+global `[assistance]` table loads with a deprecation warning and is ignored. The human
+decision channel and corpus-rule precedent answers stay; model-answer records already in
+task history still read.
 
 Status: **advisory rollout is parked** after both preregistered development
 screens failed. The offline evaluation contract and optional generic service
@@ -37,10 +44,10 @@ may answer on its own only in categories the operator enables after a measured
 pass, and never for irreversible, authority, spending or unknown-tier requests.
 Nothing self-answers until the operator enables a category.
 
-Bearing: builds on [activities and jobs](../activity-job/2_design.md),
-[auto-tasks](../auto-tasks/2_design.md), the shipped
-[task-pilot](../../../crates/orbit-core/assets/activities/task_pilot.yaml),
-and the [human decision channel](../human-decision-channel/2_design.md).
+Bearing: builds on [activities and jobs](../../activity-job/2_design.md),
+[auto-tasks](../../auto-tasks/2_design.md), the shipped
+[task-pilot](../../../../crates/orbit-core/assets/activities/task_pilot.yaml),
+and the [human decision channel](../../human-decision-channel/2_design.md).
 Model assistance produces evidence annotations. The existing task, run, review,
 admission and human-decision contracts continue to own actions and authority.
 
@@ -90,13 +97,13 @@ There is no independently evaluated, reusable result for a bounded question.
 
 Two practical starting points are:
 
-- [Run failure patterns](../../../crates/orbit-core/assets/auto_tasks/run-failure-patterns.yaml)
+- [Run failure patterns](../../../../crates/orbit-core/assets/auto_tasks/run-failure-patterns.yaml)
   asks an agent to categorize evidence into product defects, misclassified holds,
   provider/capacity problems, upstream task quality, environment/flake, or true
   one-offs. This is a small classification inside a much larger investigation.
-- [Task authoring](../../../crates/orbit-core/assets/skills/orbit/references/task-authoring.md)
+- [Task authoring](../../../../crates/orbit-core/assets/skills/orbit/references/task-authoring.md)
   requires a concrete outcome, coherent scope and observable acceptance criteria.
-  The [pilot](../../../crates/orbit-core/assets/activities/task_pilot.yaml) later
+  The [pilot](../../../../crates/orbit-core/assets/activities/task_pilot.yaml) later
   inspects source contracts, footprints and validation feasibility. A lightweight
   quality assessment immediately after creation could catch unclear wording
   earlier, without pretending to establish that the implementation is feasible.
@@ -140,8 +147,8 @@ every action; current implementation and parked status are recorded above.
 | Later | Review severity suggestion | A confirmed finding and verified impact; choose one existing severity level or insufficient evidence. | Second opinion for the verifier; no defect confirmation, rejection or scorecard write by this service. |
 
 Existing instruction anchors for the later candidates are
-[friction curation](../../../crates/orbit-core/assets/auto_tasks/friction-curation.yaml),
-[escape-to-guard](../../../crates/orbit-core/assets/auto_tasks/escape-to-guard.yaml),
+[friction curation](../../../../crates/orbit-core/assets/auto_tasks/friction-curation.yaml),
+[escape-to-guard](../../../../crates/orbit-core/assets/auto_tasks/escape-to-guard.yaml),
 the task-pilot `finding_invalid` route (the `verify_finding` activity was removed in
 [ORB-22844]), and the task-pilot and authoring instructions above.
 
@@ -288,7 +295,7 @@ off stops new calls; late results cannot mutate workflow state.
 Proposed host-owned configuration selects enabled workspaces, per-use-case mode
 (`off`, `shadow`, `advisory`), adapter/model, credential reference, request/queue
 budgets and retention. Defaults are off. Exact key names and command syntax are
-documented in [the configuration reference](../../CONFIG.md); this scope
+documented in [the configuration reference](../../../CONFIG.md); this scope
 document describes the design boundary.
 Shadow mode persists results for comparison without inserting suggestions into
 the normal author or investigator view. Advisory mode displays evaluated results.

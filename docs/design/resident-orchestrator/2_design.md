@@ -506,7 +506,7 @@ and `spend` always escalate, and `routine` and `reversible` go through the rubri
 For a decision outside those classes the resident estimates, in its checkpoint:
 
 - **P(wrong)**, as a bucket (low, medium, high), raised one step when there is no precedent (no
-  matching decision in the decision-assistance corpus, [decision-assistance](../decision-assistance/1_scope.md))
+  matching decision in the workspace decision corpus, [workspace-agent-corpus](../workspace-agent-corpus/1_scope.md))
   and when this category has a recorded reversal in the window ([§9](#9-metrics-that-gate-widening)).
 - **Remaining rework**: how much work follows the choice before anyone would notice it was wrong,
   counted as the leaf tasks it would dispatch or block (from relations) times their complexity

@@ -334,10 +334,17 @@ impl OrbitRuntime {
                     )),
                 }
             }
-            DecisionGate::ModelAnswerReview => {
-                self.apply_model_answer_review(request, answer_id, note, actor_label, via)?;
-                Ok(None)
-            }
+            // [ORB-22808] Decision assistance was removed: a review request
+            // recorded before then can no longer be answered.
+            DecisionGate::ModelAnswerReview => Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!(
+                    "decision request `{}` reviews a model answer, and decision assistance was \
+                     removed; reverse the answered request with `orbit decision reverse` \
+                     instead. Nothing was applied",
+                    request.id
+                ),
+            )),
             DecisionGate::ResidentAuthority => {
                 self.apply_resident_grant_answer(request, answer_id, actor_label)?;
                 Ok(None)

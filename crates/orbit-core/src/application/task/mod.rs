@@ -22,7 +22,6 @@ mod context_repair;
 mod context_widening;
 mod decision;
 mod decision_channel;
-use decision::model as decision_model;
 use decision::raise as decision_raise;
 pub(crate) use decision::rules as decision_rules;
 mod desktop;
@@ -57,8 +56,6 @@ pub(in crate::application) use paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_select
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
-mod precedent_decision_port;
-pub mod precedent_provider;
 mod pull_request_links;
 mod query;
 mod record_json;
@@ -121,7 +118,6 @@ pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
     DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
-pub use decision_model::{ModelAnswerApplied, ModelAnsweredDigestEntry};
 #[cfg(feature = "test-support")]
 pub use decision_raise::raise_checkpoint::with_decision_raise_checkpoint;
 pub use decision_raise::{AgentDecisionRaise, AgentDecisionRaised};
@@ -173,7 +169,6 @@ pub(crate) use pilot::{
 };
 pub(crate) use post_deploy::owed_criteria_json;
 pub use post_deploy::{PostDeployOperatorRecord, PostDeployRecordRefusal};
-pub(in crate::application) use precedent_decision_port::TaskPrecedentDecisionPort;
 pub use provider_limit::{
     CrewProviderLimit, CrewUsagePressure, PressureWindow, ProviderLimitReading,
     ProviderLimitThreshold, ProviderLimitsView, ProviderUsageStatus, UngatedLaneLimit,
