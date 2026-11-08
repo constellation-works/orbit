@@ -25,6 +25,7 @@ use orbit_common::text::floor_char_boundary;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixReadDeferral, PrAutoFixReadReset};
 
 use crate::context::RuntimeHost;
+use crate::executor::automation::read_throttle::read_not_before;
 
 use super::super::super::completion_deadline::now_ms;
 use super::super::super::landing::checks::DeferredLogRead;
@@ -32,12 +33,6 @@ use super::{admission, ledger, verdict};
 
 /// Waits one exact read may earn before completion stops holding.
 const MAX_THROTTLED_READ_WAITS: u64 = 3;
-/// The first wait when the provider named no reset, doubled per attempt.
-const UNKNOWN_RESET_BACKOFF_MS: u64 = 60_000;
-const MAX_UNKNOWN_RESET_BACKOFF_MS: u64 = 300_000;
-/// The least wait a provider-named reset earns, so a reset already past by
-/// this host's clock cannot make the next read immediate.
-const MIN_PROVIDER_WAIT_MS: u64 = 1_000;
 const MAX_DIAGNOSTIC_BYTES: usize = 2_048;
 
 /// Record the wait a throttled read earns and return it in milliseconds, or
@@ -80,25 +75,9 @@ pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeH
     }
     let now = now_ms()?;
     let throttle = &deferred.throttle;
-    let provider = [
-        throttle
-            .retry_after_seconds
-            .map(|seconds| now.saturating_add(seconds.saturating_mul(1000))),
-        throttle
-            .reset_epoch_seconds
-            .map(|seconds| seconds.saturating_mul(1000)),
-    ]
-    .into_iter()
-    .flatten()
-    .max();
-    let not_before = match provider {
-        Some(not_before) => not_before.max(now.saturating_add(MIN_PROVIDER_WAIT_MS)),
-        None => now.saturating_add(
-            UNKNOWN_RESET_BACKOFF_MS
-                .saturating_mul(1 << (attempt - 1))
-                .min(MAX_UNKNOWN_RESET_BACKOFF_MS),
-        ),
-    };
+    let not_before = read_not_before(throttle, now, attempt);
+    let provider_named = not_before.provider_named;
+    let not_before = not_before.at_ms;
     if not_before >= deadline_ms {
         return Err(held(&format!(
             "the provider's not-before ({not_before} ms) is not before the completion deadline \
@@ -121,7 +100,7 @@ pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeH
         observed_at_ms: now,
         not_before_ms: Some(not_before),
         deadline_ms,
-        reset: if provider.is_some() {
+        reset: if provider_named {
             PrAutoFixReadReset::Provider
         } else {
             PrAutoFixReadReset::Unknown

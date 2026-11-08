@@ -1987,6 +1987,27 @@ one. From then on:
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
+  A completed job's failed-step log read is kept in the host's
+  `<data root>/state/ci_job_log_cache/`, keyed by repository, run, job and
+  run attempt, so later polls, landing passes and PR watchers reuse it
+  instead of downloading it again. A rerun is a new attempt with new jobs,
+  so it is read fresh. Only a readable answer from a job GitHub reports
+  completed is kept; a failed, throttled or incomplete read is not. The
+  cache holds at most 128 answers of at most 256 KiB each (32 MiB), drops
+  the oldest beyond that, and ages entries out after 7 days; deleting the
+  directory only costs the next reads.
+  When GitHub rate-limits a job or log read for the host's account (an
+  HTTP 403 or 429 naming the account, or a secondary rate limit), the
+  landing classifies nothing around the gap: it records a
+  `read_deferred` landing wait with the not-before (the later of
+  `Retry-After` and `X-RateLimit-Reset`, or a 1–5 minute backoff when
+  GitHub names neither), sleeps until then and reads again, up to three
+  waits per landing pass. A not-before at or past the landing deadline, or
+  a read still throttled after those waits, holds the landing as
+  `delivery_forge_observation_unavailable` with the reset in the reason;
+  `orbit job resume` continues it once the forge answers. Nothing is rerun,
+  updated or repaired either way. The review-left PR watch records such a
+  failure as `deferred` with the reset instead of `inconclusive`.
   Owner PR refusals also retain a versioned JSON diagnostic in the existing
   landing-attempt evidence string (`kind: owner_landing_refusal`,
   `schema_version: 1`), alongside its safe human-readable `reason.value`.

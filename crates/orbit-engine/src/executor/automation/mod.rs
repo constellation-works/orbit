@@ -2,6 +2,7 @@ pub(crate) mod ci;
 mod dependabot;
 mod github_host;
 mod input;
+mod read_throttle;
 pub(crate) mod review;
 mod shell;
 mod task_update;

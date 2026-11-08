@@ -16,7 +16,10 @@ use super::super::pr::{
 };
 use super::super::pr::{ReviewedMergeOutcome, diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
-use super::checks::{CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks};
+use super::checks::{
+    CheckRecovery, CheckRecoveryStep, ReadWait, failed_checks, landing_read_wait,
+    recover_failed_checks,
+};
 use super::intent::{LandingView, reconcile_intent};
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
 use super::record::{behind_base, complete, describe, hold_pr, record, refuse_pr, stop_pr};
@@ -417,6 +420,37 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 }
                 CheckRecoveryStep::Stop(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, false, &evidence)?);
+                }
+                CheckRecoveryStep::ReadDeferred(read) => {
+                    let now = super::super::completion_deadline::now_ms()?;
+                    match landing_read_wait(
+                        &read,
+                        &mut recovery.throttled_read_waits,
+                        status.head_sha.as_deref(),
+                        now,
+                        deadline_ms,
+                    ) {
+                        ReadWait::Wait { delay_ms, note } => {
+                            diagnostic["read_deferral"] = note.clone();
+                            host.record_handoff_landing_wait(
+                                &context.handoff_id,
+                                &note.to_string(),
+                            )?;
+                            sleep(Duration::from_millis(delay_ms));
+                            waited_seconds = waited_seconds.saturating_add(delay_ms.div_ceil(1000));
+                            continue;
+                        }
+                        ReadWait::Hold(evidence) => {
+                            return Err(hold_pr(
+                                host,
+                                context,
+                                &diagnostic,
+                                false,
+                                DeliveryRefusal::ForgeObservationUnavailable,
+                                &evidence,
+                            )?);
+                        }
+                    }
                 }
             }
         }

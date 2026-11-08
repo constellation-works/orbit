@@ -68,6 +68,8 @@ pub(super) struct RunLog {
     /// Why the fallback recovered nothing. Present only when the read ends
     /// with no text at all, so the run's evidence gap can name its own cause.
     pub(super) fallback_error: Option<String>,
+    /// The provider rate-limited the read behind `fallback_error`.
+    pub(super) read_throttle: Option<orbit_common::ProviderReadThrottle>,
     pub(super) text: String,
     pub(super) diagnostic: Option<String>,
     pub(super) failure_regions: Option<Value>,
@@ -361,6 +363,7 @@ impl CiQueries for HostCiQueries {
             source: read.source.to_string(),
             source_jobs: read.source_jobs,
             fallback_error: read.fallback_error,
+            read_throttle: read.fallback_throttle,
             text: read.log.text,
             diagnostic: read.log.diagnostic,
             failure_regions: read.log.failure_regions,
@@ -439,6 +442,7 @@ pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
         source: github_cli::SOURCE_RUN_LOG.to_string(),
         source_jobs: Vec::new(),
         fallback_error: None,
+        read_throttle: None,
         text: bounded.text,
         diagnostic: bounded.diagnostic,
         failure_regions: bounded.failure_regions,

@@ -66,6 +66,9 @@ pub use crate::builtin::github::task_prs::{
     pull_request_blockers as pull_request_blockers_request,
     rerun_failed_jobs as rerun_failed_jobs_request, view_pull_request as view_pull_request_request,
 };
+/// A `gh` read's result check that keeps GitHub's authenticated rate limit
+/// typed, so a caller's policy can wait for its reset.
+pub use crate::builtin::github::throttle::check_read_result as check_gh_read_result;
 pub use crate::builtin::github::{
     CheckoutEvidence, LogSelection, StreamedLog, StreamedLogCollector, parse_gh_json,
     strip_ansi_sequences,

@@ -16,6 +16,7 @@ use super::base_update::contains;
 use super::head::{classify_logged_job, onto_passing_tip};
 use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
 use super::log::job_log;
+use super::read_wait::ThrottledRead;
 
 /// What a candidate-caused failure does once the automatic repair is spent.
 const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the owner ends the claim \
@@ -74,6 +75,8 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     /// Rollup entries those jobs answered, retained while replacement jobs
     /// have not registered yet. Separately failed checks still need evidence.
     handled_checks: BTreeSet<(Option<String>, String)>,
+    /// Waits this attempt took for rate-limited check reads.
+    pub(in crate::executor::automation::vcs) throttled_read_waits: u64,
     /// The classification each action was taken on, for the evidence.
     actions: Vec<String>,
     /// Latest required-check read during failure classification; diagnostics only.
@@ -119,6 +122,9 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Requeue(String),
     /// Stop in review, with this evidence.
     Stop(String),
+    /// The provider rate-limited a job or log read: wait for its reset and
+    /// read again, without classifying around the missing evidence.
+    ReadDeferred(super::read_wait::ThrottledRead),
 }
 
 /// The names of the checks the rollup reports failed, with their workflow.
@@ -180,7 +186,13 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     };
     let head_jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
-        Err(error) => return Ok(unclassified(format!("its jobs could not be read: {error}"))),
+        Err(error) => {
+            let reason = format!("its jobs could not be read: {error}");
+            return Ok(match ThrottledRead::of(&error, || reason.clone()) {
+                Some(read) => CheckRecoveryStep::ReadDeferred(read),
+                None => unclassified(reason),
+            });
+        }
     };
     let failed_jobs: Vec<&CiCommitJobEvidence> = head_jobs
         .iter()
@@ -269,6 +281,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             // One unreadable log is unknown evidence. Readable jobs still
             // decide when they are enough; the outcome names this job.
             Err(error) => {
+                // A rate limit is the account's, not this job's: every
+                // further read would be refused too, so the landing waits
+                // for the reset instead.
+                if let Some(read) = ThrottledRead::of(&error, || {
+                    format!("the log of '{label}' could not be read: {error}")
+                }) {
+                    return Ok(CheckRecoveryStep::ReadDeferred(read));
+                }
                 jobs.push(FailedJob {
                     run_id: Some(run_id),
                     job_id,
@@ -282,7 +302,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 continue;
             }
         };
-        let (mut class, mut why, tip_passes, signature) = classify_logged_job(
+        let (mut class, mut why, tip_passes, signature) = match classify_logged_job(
             host,
             workspace,
             job,
@@ -294,8 +314,15 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &mut base_jobs,
             &mut tip_jobs,
             Some(recovery.deadline_ms),
-        )
-        .map_err(|deferred| deferred.error())?;
+        ) {
+            Ok(classified) => classified,
+            Err(deferred) => {
+                return Ok(CheckRecoveryStep::ReadDeferred(ThrottledRead {
+                    reason: deferred.reason,
+                    throttle: deferred.throttle,
+                }));
+            }
+        };
         if class == CheckFailureClass::Flaky
             && super::suspect::has_matching_candidate_rerun(
                 host,

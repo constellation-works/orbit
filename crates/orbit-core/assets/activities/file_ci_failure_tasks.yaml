@@ -89,8 +89,10 @@ spec:
     prose; completed coverage adds idempotent observation artifacts. Skips name
     the covering task and bounded match evidence. The four
     endings stay distinct
-    and none of them is a CI pass: a snapshot with `collected: false` reports
-    `capability_unavailable` and files nothing, a snapshot with no current
+    and none of them is a CI pass: a snapshot GitHub rate-limited
+    (`outcome_hint: rate_limited`) reports `deferred` with the snapshot's
+    `rate_limit` and files nothing, any other snapshot with `collected: false`
+    reports `capability_unavailable` and files nothing, a snapshot with no current
     failure reports `no_current_failure` and files nothing, a snapshot whose
     every current failure is deferred for a run-scoped collection gap
     reports `deferred` and files nothing, and anything else
