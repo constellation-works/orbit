@@ -104,6 +104,7 @@ implementation with the old candidate discarded. See
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
+| See admission's CPU/memory forecast, its accuracy and decisions | [Resource forecast view](references/orchestration.md#resource-forecast-view) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
 | Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
 | Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |

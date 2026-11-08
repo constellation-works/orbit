@@ -691,9 +691,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       }
       ctx.setExperimentId(id, segments[3]);
     }
-    // `#analytics/forecast[/accuracy|/data-gaps]`: the segment names the tab; a
-    // bare `#analytics` keeps the remembered one.
-    if (sub === "forecast" && segments[1] && ctx.setForecastTab) ctx.setForecastTab(segments[2]);
+    // `#analytics/forecast[/accuracy|/data-gaps]` names the backlog forecast's
+    // tab, `#analytics/forecast/resources[/accuracy|/decisions]` the resource
+    // forecast's; a bare `#analytics` keeps the remembered one.
+    if (sub === "forecast" && segments[1] && ctx.setForecastTab) ctx.setForecastTab(segments[2], segments[3]);
     setAnalyticsSubtabImpl(ctx, sub, view);
     setCostTabView(sub === "cost" ? query.get("tab") : null);
     if (sub === "agents") {

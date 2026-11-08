@@ -121,8 +121,11 @@ no work: dispatch authority stays with the ship and drain commands named in
 [Entry points](#entry-points), and admission stays with the drain's
 ceiling and readiness above.
 
-The Forecast view has three tabs, each with its own address. Switching tabs
-only shows another tab: it never refetches and changes nothing.
+A switch above the panel picks **Backlog forecast** (this section) or
+**Resource forecast** ([below](#resource-forecast-view)). Each view reads only
+when first shown and on its own refresh, so switching never refetches the
+other. The Backlog forecast has three tabs, each with its own address.
+Switching tabs only shows another tab: it never refetches and changes nothing.
 
 - **Forecast** (`#analytics/forecast`): the totals, the scenario switch, the
   task table in dispatch order, scheduled and excluded work with its reasons,
@@ -189,6 +192,46 @@ at `GET /api/diagnostics/backlog_forecast`; `lookback_days`, `concurrency`, and
 `arrivals=on` can change its assumptions, so omit them to compare with the
 card. The aggregate dashboard has no
 workspace-specific forecast.
+
+### Resource forecast view
+
+**Analytics › Forecast › Resource forecast**
+(`#analytics/forecast/resources`) shows the `machine.auto_concurrency`
+admission forecast that the CLI prints with `orbit run profiles`. It reads the
+same profiles and accuracy report and builds no forecast of its own. Its
+header cards show:
+
+- the mode the drain admits with (off, shadow or enforce) and its source: the
+  host's `machine.auto_concurrency.mode`, or a mode set explicitly when the
+  drain started;
+- the host's cores and memory;
+- the admit thresholds as percentages and as absolute limits;
+- the live baseline, which is the drain's newest recorded admission pass as
+  the Tasks drain card draws it, with its peaks and admit or hold decisions.
+
+It has three tabs, each with its own address:
+
+- **Profiles** (`#analytics/forecast/resources`): one row per delivery
+  profile, with its delivery count, horizon, peak CPU and memory and the
+  minute each lands, per-delivery p50/p90 peaks, spread and build-like
+  deliveries. Sparse profiles, which fall back to their base class, are
+  badged, and a filter narrows the rows to change, no-diff, auto-task or
+  sparse profiles. The per-minute curves are in **Analytics › Resources**.
+- **Accuracy** (`#analytics/forecast/resources/accuracy`): forecast error per
+  offset over the newest 5,000 host forecasts (`orbit run profiles
+  --accuracy`). It shows paired and unmeasured minutes, mean and absolute CPU
+  and memory error, the share forecast under the measured load (marked above
+  60%), and the worst CPU and memory misses with their runs.
+- **Decisions** (`#analytics/forecast/resources/decisions`): per drain run,
+  newest first, its mode, passes and admissions, the tasks enforce held, and
+  the tasks shadow would have held or added. When a drain sent pull requests,
+  their sent and held counts are shown too. Hovering a count lists its task
+  ids, and a run link opens that drain's recorded admission pass (`orbit run
+  show <run-id>`).
+
+The view is read-only. To change the mode or thresholds, use the
+`machine.auto_concurrency.*` settings in
+[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;

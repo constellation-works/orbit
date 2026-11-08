@@ -317,6 +317,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/forecast-gaps.js"),
     ),
     (
+        "/static/js/resource-forecast.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/resource-forecast.js"),
+    ),
+    (
         "/static/js/experiments.js",
         JS,
         include_bytes!("../assets/dashboard/js/experiments.js"),
