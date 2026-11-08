@@ -3,7 +3,8 @@
 /// Keep the visible wording and Markdown intact by separating `@` from a
 /// mention name with a zero-width joiner. The same representation works in
 /// plain-text titles/commit subjects and prose, and repeated rendering is safe.
-/// Emails with a dotted domain, co-author trailers and Markdown code are kept.
+/// Emails with a dotted domain, `scheme://` URLs, Markdown link destinations,
+/// co-author trailers and Markdown code are kept.
 pub(super) fn neutralize_mentions(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut fence = None;
@@ -39,8 +40,12 @@ pub(super) fn neutralize_mentions(text: &str) -> String {
 /// Backtick runs pair only with a run of the same length. Backslashes escape
 /// openers in prose, but are literal within code spans. Unmatched runs remain
 /// prose so an agent's stray backtick cannot suppress mention protection.
+/// An `@` inside a bare `scheme://` URL or a Markdown link destination `](...)`
+/// is part of an address rather than a mention, so it is left unchanged.
 fn append_neutralized_prose(prose: &str, output: &mut String) {
     let mut rest = prose;
+    let mut in_url = false;
+    let mut destination_depth = 0_usize;
     while !rest.is_empty() {
         if rest.starts_with('`') {
             let run = rest.bytes().take_while(|byte| *byte == b'`').count();
@@ -64,9 +69,29 @@ fn append_neutralized_prose(prose: &str, output: &mut String) {
             rest = &rest[run..];
             continue;
         }
+        if destination_depth == 0 && rest.starts_with("](") {
+            output.push_str("](");
+            destination_depth = 1;
+            rest = &rest[2..];
+            continue;
+        }
         let Some(character) = rest.chars().next() else {
             break;
         };
+        if rest.starts_with("://") {
+            in_url = true;
+        }
+        if character.is_whitespace() || matches!(character, '<' | '>') {
+            in_url = false;
+        }
+        if destination_depth > 0 {
+            match character {
+                '(' => destination_depth += 1,
+                ')' => destination_depth -= 1,
+                _ if character.is_whitespace() => destination_depth = 0,
+                _ => {}
+            }
+        }
         output.push(character);
         if character == '\\' {
             // An escaped backtick is not a code-span opener. Still handle an
@@ -77,6 +102,8 @@ fn append_neutralized_prose(prose: &str, output: &mut String) {
                 continue;
             }
         } else if character == '@'
+            && !in_url
+            && destination_depth == 0
             && rest
                 .as_bytes()
                 .get(1)
