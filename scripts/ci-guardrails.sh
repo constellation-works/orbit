@@ -274,7 +274,8 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
     while IFS= read -r -d '' path; do
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
-          install.sh | RELEASING.md | plugin/* | npm/* | .agents/* | .claude-plugin/*)
+          install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
+          plugin/* | npm/* | .agents/* | .claude-plugin/*)
           run_self_tests=true
           break
           ;;

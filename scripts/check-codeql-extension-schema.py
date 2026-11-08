@@ -166,11 +166,17 @@ def _parse_quoted(text: str, start: int, line: int) -> tuple[str, int]:
     while index < len(text):
         char = text[index]
         if quote == '"' and char == "\\":
+            physical = line + text.count("\n", 0, index)
             if index + 1 >= len(text):
-                raise YamlError("unterminated escape in string", line)
+                raise YamlError("unterminated escape in string", physical)
             escaped = text[index + 1]
             mapping = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
-            chars.append(mapping.get(escaped, escaped))
+            if escaped not in mapping:
+                raise YamlError(
+                    f"unsupported escape '\\{escaped}' in double-quoted string",
+                    physical,
+                )
+            chars.append(mapping[escaped])
             index += 2
             continue
         if quote == "'" and char == "'" and index + 1 < len(text) and text[index + 1] == "'":

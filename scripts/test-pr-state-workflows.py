@@ -1004,10 +1004,13 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("scripts/ux-rules/ui/cramped-wrap.mjs"), always_run)
         self.assertEqual(self.pull_request("scripts/ux-rules/run.mjs"), "full")
         # Markdown that a scripts/test-* self-test reads is code too: test-release-promotion.py
-        # executes RELEASING.md's procedures, and test-qa-full-sweep.py digests npm/README.md.
+        # executes RELEASING.md's procedures, test-qa-full-sweep.py digests npm/README.md,
+        # and test-path-leases-listener-sudo.py executes the listener-sudo recipe.
         self.assertEqual(self.pull_request("RELEASING.md"), "full")
         self.assertEqual(self.pull_request("RELEASING.md", "README.md"), "full")
         self.assertEqual(self.pull_request("npm/README.md"), "full")
+        self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md", "README.md"), "full")
         self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"),
                          "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A listing that disagrees with the reported count is not trusted.
@@ -1061,6 +1064,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("RELEASING.md"), "full")
         self.assertEqual(self.push("README.md", "RELEASING.md"), "full")
         self.assertEqual(self.push("npm/README.md"), "full")
+        self.assertEqual(self.push("docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        self.assertEqual(self.push("README.md", "docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
     def test_docs_push_after_untested_before_runs_full_gate(self):

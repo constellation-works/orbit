@@ -327,7 +327,8 @@ exec {shlex.quote(sys.executable)} "$@"
         self.prepare_ci()
         self.init_ci_git()
         for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
-                     "install.sh", "RELEASING.md", "plugin/new.json", ".cargo/config.toml"):
+                     "install.sh", "RELEASING.md", "docs/dev/qa/path-leases-listener-sudo.md",
+                     "plugin/new.json", ".cargo/config.toml"):
             with self.subTest(path=path):
                 target = self.root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -381,6 +382,32 @@ exec {shlex.quote(sys.executable)} "$@"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_self_tests(True)
         self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
+
+    def test_listener_sudo_recipe_selects_self_tests_and_ordinary_docs_do_not(self):
+        """A recipe-only edit runs the executable fixture. Ordinary Markdown does not."""
+        self.prepare_ci()
+        self.init_ci_git()
+        # The crate commit is the base, so the only candidate input is the file below.
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        ordinary = self.root / "docs/guide.md"
+        ordinary.parent.mkdir(parents=True, exist_ok=True)
+        ordinary.write_text("# guide\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/guide.md", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(False)
+                self.assertFalse((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
+        ordinary.unlink()
+        recipe = self.root / "docs/dev/qa/path-leases-listener-sudo.md"
+        recipe.parent.mkdir(parents=True, exist_ok=True)
+        recipe.write_text("# recipe\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path=recipe.name, flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(True)
+                self.assertTrue((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
 
     def test_unresolvable_base_runs_every_self_test(self):
         self.prepare_ci()

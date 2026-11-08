@@ -3,7 +3,7 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-11-01
+last_validated: 2026-11-08
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
@@ -349,8 +349,11 @@ evidence in that scratch tree. It never executes the deliberately unsafe Rust
 program or adds its models to production scanning.
 
 The extension schema gate refuses the known ineffective Result-field barrier
-form in repository path models. This guard supplements the opt-in flow test;
-schema validation alone cannot prove barrier behavior.
+form in repository path models. It also rejects double-quoted scalars with
+escapes PyYAML's safe loader rejects, including an unknown `\:`, and reports
+the file and line. Supported double-quoted escapes remain `\n`, `\t`, `\r`,
+`\"` and `\\`. This guard supplements the opt-in flow test; schema validation
+alone cannot prove barrier behavior.
 
 ## Reusing a verified implementer database
 

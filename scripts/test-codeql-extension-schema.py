@@ -408,6 +408,81 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
     def test_current_extension_files_pass(self):
         self.assertEqual(CHECK.validate_root(REPO_ROOT), [])
 
+    def _public_guard(self):
+        return subprocess.run(
+            [sys.executable, str(CHECKER_PATH), "--root", str(self.root)],
+            capture_output=True, text=True, timeout=120)
+
+    def _assert_escape_refused(self, result, path, line):
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("malformed YAML", result.stderr)
+        self.assertIn("unsupported escape", result.stderr)
+        self.assertIn(path.relative_to(self.root).as_posix(), result.stderr)
+        self.assertIn(f"line {line}", result.stderr)
+
+    def test_release_transport_unknown_escape_fails_closed(self):
+        """The copied release-transport model with `\\:` must not certify.
+
+        PyYAML's safe loader rejects that escape. The public guard used to
+        decode it as a colon and exit 0.
+        """
+        extension = REPO_ROOT / ".github/codeql/extensions/orbit-rust-release-transport"
+        source = (extension / "release-transport.yaml").read_text(encoding="utf-8")
+        mutated = source.replace("::", "\\:\\:")
+        self.assertNotEqual(source, mutated)
+        pack_dir = self.root / ".github/codeql/extensions/orbit-rust-release-transport"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "codeql-pack.yml").write_text(
+            (extension / "codeql-pack.yml").read_text(encoding="utf-8"), encoding="utf-8")
+        data = pack_dir / "release-transport.yaml"
+        data.write_text(mutated, encoding="utf-8")
+        line = next(number for number, text in enumerate(mutated.splitlines(), start=1) if "\\:" in text)
+        self._assert_escape_refused(self._public_guard(), data, line)
+
+    def test_block_scalar_unknown_escape_fails_with_line(self):
+        source = TWO_VALID_ROWS.replace("pack: codeql/rust-all", 'pack: "codeql/ru\\:st-all"', 1)
+        data = self.write_pack(source)
+        line = next(number for number, text in enumerate(source.splitlines(), start=1) if "\\:" in text)
+        self._assert_escape_refused(self._public_guard(), data, line)
+
+    def test_pack_declaration_unknown_escape_fails_with_line(self):
+        pack = PACK_YML.replace("  - path-validation.yaml", '  - "path-validation.\\:yaml"')
+        data = self.write_pack(TWO_VALID_ROWS, pack)
+        pack_file = data.parent / "codeql-pack.yml"
+        line = next(number for number, text in enumerate(pack.splitlines(), start=1) if "\\:" in text)
+        self._assert_escape_refused(self._public_guard(), pack_file, line)
+
+    def test_quoted_key_unknown_escape_fails_with_line(self):
+        pack = '"na\\:me": example\n' + PACK_YML
+        data = self.write_pack(TWO_VALID_ROWS, pack)
+        pack_file = data.parent / "codeql-pack.yml"
+        self._assert_escape_refused(self._public_guard(), pack_file, 1)
+
+    def test_supported_double_quoted_escapes_round_trip(self):
+        # YAML source uses the five supported double-quoted escapes. The pack
+        # name is not a schema field, so a successful public run shows the
+        # decoder accepted them; load_yaml checks the characters.
+        encoded = "\"ok\\n\\t\\r\\\"\\\\\""
+        pack = PACK_YML.replace(
+            "name: constellation-works/orbit-rust-path-validation",
+            f"name: {encoded}",
+            1,
+        )
+        loaded = CHECK.load_yaml(pack)
+        self.assertEqual(loaded["name"], "ok\n\t\r\"\\")
+        for source, expected in (
+            ("key: \"a\\tb\"\n", "a\tb"),
+            ("key: \"a\\nb\"\n", "a\nb"),
+            ("key: \"a\\rb\"\n", "a\rb"),
+            ("key: \"a\\\"b\"\n", "a\"b"),
+            ("key: \"a\\\\b\"\n", "a\\b"),
+            ("key: 'it''s'\n", "it's"),
+        ):
+            self.assertEqual(CHECK.load_yaml(source)["key"], expected, source)
+        self.write_pack(TWO_VALID_ROWS, pack)
+        result = self._public_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

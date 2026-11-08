@@ -8,8 +8,9 @@
 #             Markdown under crates/ is compiled in (include_str! assets),
 #             plugin/ is the generated skill mirror, orbit-cli's tests read
 #             the configuration reference page, and scripts/test-*
-#             self-tests execute or digest RELEASING.md and npm/README.md, so
-#             each is not a docs-only run. A push also requires a successful
+#             self-tests execute or digest RELEASING.md, npm/README.md and
+#             docs/dev/qa/path-leases-listener-sudo.md, so each is not a
+#             docs-only run. A push also requires a successful
 #             completed full check on BEFORE; a previous push may have been
 #             replaced while pending.
 #   affected:<crate>,...
@@ -46,7 +47,8 @@ docs_only() {
       website/src/content/docs/reference/config.md) return 1 ;;
       # Executed by test-release-promotion.py; copied and digested by the
       # test-qa-full-sweep.py self-test (check_npm_package.py RUNTIME_FILES).
-      RELEASING.md | npm/README.md) return 1 ;;
+      # test-path-leases-listener-sudo.py executes the listener-sudo recipe.
+      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md) return 1 ;;
       *.md) ;;
       *) return 1 ;;
     esac
