@@ -113,6 +113,9 @@ impl OrbitRuntime {
             .seed
             .clone()
             .and_then(|seed| seeded_crew_ticket(seed)().ok());
+        #[cfg(feature = "test-support")]
+        let ticket =
+            ticket.filter(|_| !super::auto_effort_exploration::auto_effort_exploration_off());
         policy.resolve(crew, &subject.signal, ticket)
     }
 

@@ -23,6 +23,8 @@
 mod activity;
 mod admission;
 mod auto_effort;
+#[cfg(feature = "test-support")]
+mod auto_effort_exploration;
 mod candidate_assignment;
 mod candidates;
 mod claims;
@@ -40,6 +42,8 @@ mod write_back;
 pub(crate) use admission::{
     AdmissionTaskWrites, crew_admission_task_id, strip_auto_crew_admission,
 };
+#[cfg(feature = "test-support")]
+pub use auto_effort_exploration::without_auto_effort_exploration;
 pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
