@@ -8,8 +8,10 @@
 # denials mean success does not establish production confinement equivalence or
 # prove kernel behavior beyond this `sandbox-exec` invocation.
 #
-# Pass criterion: a new successful run-mcp audit row for orbit.task.list
-# after this invocation's baseline. CLI or unrelated tool rows do not qualify.
+# Pass criterion: this invocation exits 0, and a new successful run-mcp audit
+# row for orbit.task.list names an orbit process observed under it. A matching
+# row from another client, an older row, a failed call, or a non-zero claude
+# exit does not qualify. Success still does not establish production confinement.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -28,7 +30,9 @@ DB="$HOME/.orbit/orbit.db"
 # --- write this diagnostic sandbox profile ---
 mkdir -p "$REPO_ROOT/.orbit/tmp"
 PROFILE=$(mktemp "$REPO_ROOT/.orbit/tmp/orbit-smoke-XXXXXX")
-trap 'python3 -c "from pathlib import Path; import sys; Path(sys.argv[1]).unlink()" "$PROFILE"' EXIT
+observed=$(mktemp "$REPO_ROOT/.orbit/tmp/orbit-smoke-observed-XXXXXX")
+export ORBIT_SMOKE_OBSERVED="$observed"
+trap 'python3 -c "from pathlib import Path; import sys; [Path(name).unlink(missing_ok=True) for name in sys.argv[1:]]" "$PROFILE" "$observed"' EXIT
 
 esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
 HOME_ESC="$(esc "$HOME")"
@@ -68,33 +72,49 @@ echo "----------------------------------------"
 
 # --- baseline ---
 before_id=$(sqlite3 "$DB" "SELECT COALESCE(MAX(id), 0) FROM audit_events;")
-echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it)"
+echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it, bound to this invocation)"
 
 prompt='Use the Orbit MCP server to call orbit.task.list with input {"limit": 3}. Use its MCP tool, not Bash or the orbit CLI. After it returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result.'
 
 # --- run claude under sandbox-exec ---
+helper="$(cd "$(dirname "$0")" && pwd)/smoke-claude-mcp-invoke.py"
 echo "--- invoking claude under sandbox-exec ---"
 set +e
-out=$(sandbox-exec -f "$PROFILE" claude -p \
+out=$(python3 "$helper" --merge-stderr -- sandbox-exec -f "$PROFILE" claude -p \
   --permission-mode bypassPermissions \
   --output-format json \
   --tools default \
   --model claude-sonnet-4-6 \
-  "$prompt" 2>&1)
+  "$prompt")
 rc=$?
 set -e
 
 echo "--- claude exit=$rc ---"
 echo "$out"
 
+if [[ "$rc" -eq 2 ]]; then
+  echo "FAIL: cannot attribute this sandboxed claude invocation to an orbit process." >&2
+  exit 2
+fi
+if [[ "$rc" -ne 0 ]]; then
+  echo "FAIL: claude exited $rc; a later audit row is not evidence for this invocation." >&2
+  exit 1
+fi
+
 # --- verdict ---
-delta=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0;")
-echo "--- audit delta: $delta new orbit.task.list rows after id $before_id ---"
+# An empty observation is a real answer. Do not emit SQL `IN ()`.
+pids="$(grep -E '^[0-9]+$' "$observed" | sort -u | paste -sd, - || true)"
+if [[ -z "$pids" ]]; then
+  delta=0
+else
+  delta=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0 AND pid IN ($pids);")
+fi
+echo "--- audit delta: $delta new invocation-bound orbit.task.list rows after id $before_id ---"
 
 if [[ "$delta" -gt 0 ]]; then
   sqlite3 -header -column "$DB" \
-    "SELECT timestamp, subcommand, tool_name, status, exit_code FROM audit_events
-     WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0
+    "SELECT timestamp, subcommand, tool_name, status, exit_code, pid FROM audit_events
+     WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0 AND pid IN ($pids)
      ORDER BY id DESC LIMIT $delta;"
   echo "PASS: claude reached orbit MCP under sandbox"
   exit 0

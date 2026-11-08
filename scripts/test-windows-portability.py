@@ -77,6 +77,23 @@ class PortabilityTests(unittest.TestCase):
             with self.subTest(tree=tree):
                 self.check_tree(tree, 0)
 
+    def test_inline_and_raw_path_attributes_follow_the_module_gate(self):
+        """Unix-gated external, inline #[path], and raw #[path] trees are the
+        same edge. The same trees without the gate stay rejected."""
+        helper = "src/platform/helper.rs"
+        declarations = (
+            '#[path = "platform/helper.rs"] mod helper;',
+            '#[path = r"platform/helper.rs"] mod helper;',
+            '#[path = r#"platform/helper.rs"#] mod helper;',
+            '#[path = "platform\\u{2f}helper.rs"] mod helper;',
+            '#[path = "platform"] mod renamed { mod helper; }',
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                gated = {"src/lib.rs": "#[cfg(unix)] " + declaration, helper: IMPORT}
+                self.check_tree(gated, 0)
+                self.check_tree({"src/lib.rs": declaration, helper: IMPORT}, 1)
+
     def test_cargo_test_and_custom_library_roots_resolve_sibling_modules(self):
         for root in ("tests/suite.rs", "src/custom.rs"):
             with self.subTest(root=root):

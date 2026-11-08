@@ -93,6 +93,73 @@ def tokens(source):
             yield Token(value, start, raw_literal)
 
 
+def rust_string_value(literal):
+    """Decode an ordinary Rust string body. None when an escape is unsupported."""
+    text = literal.replace("\r\n", "\n")
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
+    value = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char != "\\":
+            value.append(char)
+            index += 1
+            continue
+        if index + 1 >= length:
+            return None
+        escaped = text[index + 1]
+        if escaped in escapes:
+            value.append(escapes[escaped])
+            index += 2
+            continue
+        if escaped == "x" and index + 3 < length:
+            digits = text[index + 2:index + 4]
+            if re.fullmatch(r"[0-7][0-9a-fA-F]", digits):
+                value.append(chr(int(digits, 16)))
+                index += 4
+                continue
+            return None
+        if escaped == "u" and index + 2 < length and text[index + 2] == "{":
+            end = text.find("}", index + 3)
+            if end < 0:
+                return None
+            digits = text[index + 3:end].replace("_", "")
+            if not digits or len(digits) > 6 or re.fullmatch(r"[0-9a-fA-F]+", digits) is None:
+                return None
+            scalar = int(digits, 16)
+            if scalar > 0x10FFFF or 0xD800 <= scalar <= 0xDFFF:
+                return None
+            value.append(chr(scalar))
+            index = end + 1
+            continue
+        if escaped == "\n":
+            index += 2
+            while index < length and text[index] in " \t\r\n":
+                index += 1
+            continue
+        return None
+    return "".join(value)
+
+
+def rust_path_literal(token):
+    """Filesystem text of a `#[path]` string, or None when it is not one.
+
+    Ordinary quotes are unescaped. Raw strings (`r"..."`, `r#"..."#`, and the
+    byte/cstr raw forms) are literal aside from newline normalization. An
+    identifier or an undecodable escape is not a path.
+    """
+    if token.raw_literal is not None:
+        match = re.fullmatch(r'(?:br|cr|r)(#*)"(.*)"\1', token.raw_literal, re.DOTALL)
+        if match is None:
+            return None
+        return match.group(2).replace("\r\n", "\n") or None
+    value = token.value
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return rust_string_value(value[1:-1]) or None
+    return None
+
+
 def pairs(items):
     stack = []
     result = {}
@@ -260,7 +327,7 @@ class Source:
                 else:
                     active = active and allowed
                 if len(attr) == 3 and attr[:2] == ["path", "="]:
-                    path_override = attr[2].strip('"')
+                    path_override = rust_path_literal(self.items[opening + 3])
                 index = closing + 1
                 header = index
                 continue
@@ -293,10 +360,17 @@ class Source:
                                                tuple(attrs)))
                 if value == "{":
                     closing = self.ends[index]
-                    child_directory = directory / module if module else directory
-                    # #[path] on children of an inline module is relative to
-                    # that module's directory (normal foo.rs children differ).
-                    child_path_directory = child_directory if module else path_directory
+                    # An inline #[path] replaces that module's directory for
+                    # its children, relative to the enclosing file. Ordinary
+                    # children of a file module still use its stem, and a
+                    # nested #[path] stays relative to the directory this
+                    # module established.
+                    if module and path_override:
+                        child_directory = path_directory / path_override
+                        child_path_directory = child_directory
+                    else:
+                        child_directory = directory / module if module else directory
+                        child_path_directory = child_directory if module else path_directory
                     inner = block
                     if is_item:
                         self.blocks.append(Block(index, closing, block, tuple(attrs), tuple(head)))
