@@ -11,8 +11,9 @@ export function configureOperationsDrainControls(callbacks) {
 }
 
 // The Tasks dock's Start card.
-const AUTO_DRAIN_DURATION_SECONDS = { "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200, "24h": 86400 };
-const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
+const AUTO_DRAIN_DURATION_MIN_HOURS = 1;
+const AUTO_DRAIN_DURATION_MAX_HOURS = 24;
+const AUTO_DRAIN_DURATION_PROBLEM = "Window length must be a whole number of hours, 1 to 24 (for example, 3h).";
 const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 // Window length, parallel tasks and the four toggles belong to the selected
@@ -87,23 +88,94 @@ function drainSwitchField({ id, label, help, warn = false, checked, disabled = f
   ]);
 }
 
-function autoDrainDurationControl(payload) {
-  const segment = el("div", { class: "drain-durations" });
-  segment.setAttribute("role", "group");
-  segment.setAttribute("aria-label", "Window duration");
-  for (const value of AUTO_DRAIN_DURATIONS) {
-    const selected = value === autoDrainHostForm().duration;
-    const option = el("button", { class: `drain-duration mono${selected ? " selected" : ""}`, text: value });
-    option.type = "button";
-    option.dataset.drainFocus = `duration-${value}`;
-    option.setAttribute("aria-pressed", selected ? "true" : "false");
-    option.addEventListener("click", () => {
-      autoDrainHostForm().duration = value;
-      drainControlCallbacks.render(payload);
+// Window length is the same − value + stepper as Parallel tasks: whole
+// hours, 1 through 24, shown as "<n>h". Typing never rebuilds the card (that
+// would drop the caret), so the field, its message, the step buttons and
+// Start are brought in line by hand.
+function autoDrainDurationHours(value = autoDrainHostForm().duration) {
+  const match = /^\s*(\d+)\s*[hH]?\s*$/.exec(value ?? "");
+  if (!match) return null;
+  const hours = Number(match[1]);
+  return hours >= AUTO_DRAIN_DURATION_MIN_HOURS && hours <= AUTO_DRAIN_DURATION_MAX_HOURS ? hours : null;
+}
+
+function autoDrainDurationValid() {
+  return autoDrainDurationHours() !== null;
+}
+
+function autoDrainDurationControl(payload, form) {
+  const label = el("label", { class: "drain-field-label", text: "Window length" });
+  label.htmlFor = "auto-drain-duration";
+  const input = el("input", { class: "drain-stepper-value mono", title: "Window length in whole hours, 1 to 24 (for example, 3h)" });
+  input.id = "auto-drain-duration";
+  input.type = "text";
+  input.inputMode = "numeric";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.value = autoDrainHostForm().duration;
+  input.dataset.drainFocus = "duration";
+  // The message sits under the whole settings row, not in this narrow column.
+  const problem = el("div", { class: "operation-control-note drain-stop-note disabled-reason" });
+  problem.id = "auto-drain-duration-problem";
+  problem.setAttribute("role", "alert");
+  problem.hidden = true;
+  form.durationProblem = problem;
+  input.setAttribute("aria-describedby", problem.id);
+  // Typing does not rebuild the card (that would drop the caret), so the
+  // field, its message, the step buttons and the Start button are brought in
+  // line by hand.
+  form.syncDuration = () => {
+    const hours = autoDrainDurationHours();
+    const valid = hours !== null;
+    input.setAttribute("aria-invalid", valid ? "false" : "true");
+    problem.textContent = valid ? "" : AUTO_DRAIN_DURATION_PROBLEM;
+    problem.hidden = valid;
+    minus.disabled = valid && hours <= AUTO_DRAIN_DURATION_MIN_HOURS;
+    plus.disabled = valid && hours >= AUTO_DRAIN_DURATION_MAX_HOURS;
+    if (form.start && !pendingOperations.has("auto-drain:start")) {
+      form.start.textContent = `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainHostForm().duration} window`;
+    }
+    if (form.start) form.start.disabled = autoDrainStartBlocked(payload);
+  };
+  input.addEventListener("input", () => {
+    autoDrainHostForm().duration = input.value.trim();
+    const hours = autoDrainDurationHours();
+    if (hours !== null) autoDrainHostForm().duration = `${hours}h`;
+    form.syncDuration();
+  });
+  // Leaving the field rewrites a bare but valid number to its "<n>h" form.
+  input.addEventListener("change", () => {
+    const hours = autoDrainDurationHours();
+    if (hours !== null) {
+      autoDrainHostForm().duration = `${hours}h`;
+      input.value = `${hours}h`;
+      form.syncDuration();
+    }
+  });
+  const step = (delta, name, key) => {
+    const button = el("button", { class: "drain-step", text: delta < 0 ? "−" : "+" });
+    button.type = "button";
+    button.dataset.drainFocus = key;
+    button.setAttribute("aria-label", `${name} window length`);
+    button.addEventListener("click", () => {
+      const current = autoDrainDurationHours() ?? AUTO_DRAIN_DURATION_MIN_HOURS;
+      const next = Math.min(AUTO_DRAIN_DURATION_MAX_HOURS, Math.max(AUTO_DRAIN_DURATION_MIN_HOURS, current + delta));
+      autoDrainHostForm().duration = `${next}h`;
+      input.value = `${next}h`;
+      form.syncDuration();
     });
-    segment.appendChild(option);
-  }
-  return segment;
+    return button;
+  };
+  const minus = step(-1, "Decrease", "duration-1");
+  const plus = step(1, "Increase", "duration1");
+  form.syncDuration();
+  input.setAttribute("aria-describedby", `${problem.id} auto-drain-duration-hint`);
+  return el("div", { class: "drain-field drain-field-row" }, [
+    el("div", { class: "drain-field-text" }, [
+      drainFieldHead(label, "Admissions stop when the window closes; tasks already started run to the end.", { id: "auto-drain-duration-hint" }),
+    ]),
+    el("div", { class: "drain-stepper" }, [minus, input, plus]),
+  ]);
 }
 
 // Concurrency is the same blank-means-runtime-default number input as before,
@@ -282,6 +354,7 @@ function autoDrainStartBlocked(payload) {
   const reasons = autoDrainReasons(payload);
   return Boolean(reasons.submit || autoDrainStartRefusal(payload))
     || pendingOperations.has("auto-drain:start")
+    || !autoDrainDurationValid()
     || !autoDrainConcurrencyValid()
     || (autoDrainHostForm().complete && Boolean(reasons.complete))
     || (autoDrainHostForm().approveProposed && Boolean(reasons.approve))
@@ -302,6 +375,7 @@ function autoDrainStartButton(payload, form) {
   button.dataset.drainFocus = "start";
   button.disabled = autoDrainStartBlocked(payload);
   form.start = button;
+  form.syncDuration?.();
   form.syncConcurrency?.();
   button.addEventListener("click", async () => {
     const visit = captureWorkspaceVisit();
@@ -543,16 +617,12 @@ export function renderAutoDrainStart(payload, reasons) {
   const counts = autoDrainCounts(payload);
   const sub = $("auto-drain-quick-start-sub");
   if (sub) sub.textContent = `${counts.eligible} eligible now · ${counts.waiting} waiting`;
-  // The concurrency field and the Start button are built apart but depend on
-  // each other; they meet here.
+  // The duration field, the concurrency field and the Start button are built
+  // apart but depend on each other; they meet here.
   const form = {};
-  const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
-  durationLabel.id = "auto-drain-duration-label";
   body.append(
-    el("div", { class: "drain-field drain-field-duration" }, [
-      drainFieldHead(durationLabel, "Admissions stop when the window closes; tasks already started run to the end."),
-      autoDrainDurationControl(payload),
-    ]),
+    autoDrainDurationControl(payload, form),
+    form.durationProblem,
     autoDrainConcurrencyControl(payload, form),
     form.problem,
     autoDrainCompletionControl(payload, reasons),
