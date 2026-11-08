@@ -1,8 +1,9 @@
-"""Deterministic identity-lifetime checks for the two embedded process owners.
+"""Deterministic identity-lifetime checks for embedded and shell process owners.
 
-Run the actual embedded programs with intercepted process APIs. No process is
-created or signaled; a reap immediately makes the numeric group a foreign owner.
-The public compiler-cache test entrypoint invokes these regression fixtures.
+Run the actual embedded programs, and the port allocator's shell release and
+cleanup, with intercepted signals. A reap makes the numeric PID a foreign
+owner. No foreign process is signaled. The public compiler-cache test
+entrypoint invokes these regression fixtures.
 """
 
 from contextlib import redirect_stderr
@@ -12,10 +13,12 @@ from unittest.mock import patch
 import errno
 import io
 import os
+import shlex
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def group_lifetime_regression(root, namespace_source=None, watchdog_source=None,
@@ -180,3 +183,245 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None,
                 assert state["signals"] > 0 and state["reaped"] == len(processes)
                 assert not state["reserved"] and not state["child"] and state["child_reaped"], state
                 print(f"group-lifetime: {name} delayed={delayed} anchor_failure={anchor_failure} passed")
+
+
+def _extract_shell_function(source, name):
+    header = f"{name}() {{"
+    start = source.index(header)
+    end = source.index("\n}\n", start)
+    return source[start:end + 2]
+
+
+def _allocator_shell_functions(source):
+    """Release and cleanup, plus the shared reaper once the fix adds one."""
+    chunks = []
+    if "\nreap_port_allocator() {" in source or source.startswith("reap_port_allocator() {"):
+        chunks.append(_extract_shell_function(source, "reap_port_allocator"))
+    chunks.append(_extract_shell_function(source, "release_port"))
+    chunks.append(_extract_shell_function(source, "cleanup"))
+    return "\n".join(chunks)
+
+
+def _signal_lines(trace):
+    return [line for line in trace.splitlines() if line.startswith("SIGNAL ")]
+
+
+def _line_mentions_pid(line, pid):
+    return pid in line.replace("=", " ").split()
+
+
+def _run_allocator_shell(root, functions, body, timeout):
+    """Run extracted allocator functions. Every kill is intercepted."""
+    with tempfile.TemporaryDirectory(prefix="allocator-identity-", dir=root / ".orbit/tmp") as tmp:
+        directory = Path(tmp)
+        guard = directory / "bin"
+        guard.mkdir()
+        kill = guard / "kill"
+        kill.write_text("#!/bin/sh\nprintf 'KILLCALL %s\\n' \"$*\" >>\"${TRACE:?}\"\nexit 0\n")
+        kill.chmod(0o755)
+        trace = directory / "trace"
+        script = directory / "run.sh"
+        # Shell braces must not go through an f-string. Only the exported paths
+        # are interpolated, then concatenated with the extracted functions.
+        header = (
+            "set -euo pipefail\n"
+            + f"export TRACE={shlex.quote(str(trace))}\n"
+            + f"export CASE_DIR={shlex.quote(str(directory))}\n"
+            + f"export PATH={shlex.quote(str(guard))}:$PATH\n"
+            + "cd \"$CASE_DIR\"\n"
+            + "enable -n kill\n"
+            + "wait() {\n"
+            + "  printf 'wait %s\\n' \"$*\" >>\"$TRACE\"\n"
+            + "  builtin wait \"$@\"\n"
+            + "}\n"
+            + "kill() {\n"
+            + "  printf 'KILLCALL %s\\n' \"$*\" >>\"$TRACE\"\n"
+            + "  if [[ \"${1:-}\" == \"-0\" ]]; then\n"
+            + "    return 1\n"
+            + "  fi\n"
+            + "  printf 'SIGNAL %s\\n' \"$*\" >>\"$TRACE\"\n"
+            + "  return 0\n"
+            + "}\n"
+        )
+        script.write_text(header + functions + "\n" + body)
+        completed = subprocess.run(
+            ["bash", str(script)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        logged = trace.read_text() if trace.exists() else ""
+        if completed.returncode != 0:
+            raise AssertionError(
+                f"allocator shell exited {completed.returncode}\n"
+                f"{completed.stdout}\n{completed.stderr}\n{logged}"
+            )
+        return completed.stdout, logged
+
+
+def _assert_no_delivered_signal(trace, message):
+    delivered = _signal_lines(trace)
+    assert not delivered, f"{message}\n" + "\n".join(delivered)
+
+
+def allocator_identity_regression(root):
+    """Exited or reused allocator PIDs are never signaled.
+
+    The intercepted kill admits numeric reuse. Release still publishes the
+    marker and reaps the owned child. Cleanup still signals participants.
+    A live allocator must close its socket and exit within a finite bound.
+    """
+    source_path = root / "scripts/test-compiler-cache-namespaces.sh"
+    source = source_path.read_text()
+    functions = _allocator_shell_functions(source)
+    foreign = "424242"
+    participant = "424243"
+
+    # The liveness probe observes the owned allocator has exited and admits
+    # reuse of its number. A later delivered signal would hit that foreign owner.
+    exited = f"""
+owner=exited
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then
+    printf 'probe pid=%s owner=%s -> ESRCH; reuse admitted\\n' "$2" "$owner" >>"$TRACE"
+    owner=foreign
+    return 1
+  fi
+  printf 'SIGNAL args=%s owner=%s\\n' "$*" "$owner" >>"$TRACE"
+  return 0
+}}
+HOLD_RELEASE="$CASE_DIR/release-marker"
+HOLD_PID={foreign}
+release_port
+if [[ -f "$CASE_DIR/release-marker" ]]; then
+  printf 'marker=present\\n'
+else
+  printf 'marker=missing\\n'
+fi
+printf 'cleared_pid=%s cleared_release=%s\\n' "$HOLD_PID" "$HOLD_RELEASE"
+"""
+    stdout, trace = _run_allocator_shell(root, functions, exited, timeout=10)
+    assert "marker=present" in stdout, stdout
+    assert "cleared_pid= cleared_release=" in stdout, stdout
+    assert any(line == f"wait {foreign}" for line in trace.splitlines()), trace
+    _assert_no_delivered_signal(trace, "release_port signaled a PID after reuse was admitted")
+    print("allocator-identity: release exited-reused passed")
+
+    # A successful liveness probe does not reserve the PID. Replacing the
+    # unconditional kill with check-then-signal still delivers to a foreign owner.
+    probed = f"""
+owner=owned
+sleep() {{ :; }}
+kill() {{
+  if [[ "${{1:-}}" == "-0" ]]; then
+    printf 'probe pid=%s owner=%s\\n' "$2" "$owner" >>"$TRACE"
+    owner=foreign
+    return 0
+  fi
+  printf 'SIGNAL args=%s owner=%s\\n' "$*" "$owner" >>"$TRACE"
+  return 0
+}}
+HOLD_RELEASE="$CASE_DIR/release-marker"
+HOLD_PID={foreign}
+release_port
+if [[ -f "$CASE_DIR/release-marker" ]]; then
+  printf 'marker=present\\n'
+else
+  printf 'marker=missing\\n'
+fi
+printf 'cleared_pid=%s cleared_release=%s\\n' "$HOLD_PID" "$HOLD_RELEASE"
+"""
+    stdout, trace = _run_allocator_shell(root, functions, probed, timeout=10)
+    assert "marker=present" in stdout, stdout
+    assert "cleared_pid= cleared_release=" in stdout, stdout
+    _assert_no_delivered_signal(
+        trace, "release_port signaled a PID after a liveness probe relinquished it")
+    print("allocator-identity: release check-then-signal passed")
+
+    # EXIT cleanup of an already reaped allocator must not signal its number.
+    # Participant teardown and failure diagnostics stay in place.
+    cleanup_model = f"""
+report_participants() {{ printf 'report-participants\\n' >>"$TRACE"; }}
+rm() {{ printf 'rm %s\\n' "$*" >>"$TRACE"; }}
+kill() {{
+  printf 'SIGNAL args=%s owner=foreign-after-reap\\n' "$*" >>"$TRACE"
+  return 0
+}}
+HOLD_RELEASE="$CASE_DIR/release-marker"
+HOLD_PID={foreign}
+PIDS=({participant})
+STATUSES=()
+WORKDIR="$CASE_DIR/owned-scratch"
+mkdir -p "$WORKDIR"
+set +e
+false
+cleanup
+if [[ -f "$CASE_DIR/release-marker" ]]; then
+  printf 'marker=present\\n'
+else
+  printf 'marker=missing\\n'
+fi
+"""
+    stdout, trace = _run_allocator_shell(root, functions, cleanup_model, timeout=10)
+    assert "marker=present" in stdout, stdout + trace
+    assert any(line.startswith("SIGNAL ") and _line_mentions_pid(line, participant) for line in trace.splitlines()), trace
+    assert not any(line.startswith("SIGNAL ") and _line_mentions_pid(line, foreign) for line in trace.splitlines()), trace
+    assert "report-participants" in trace, trace
+    assert any(line.startswith("rm ") and "owned-scratch" in line for line in trace.splitlines()), trace
+    print("allocator-identity: cleanup foreign-allocator passed")
+
+    live_functions = "\n".join((
+        _extract_shell_function(source, "alloc_port"),
+        functions,
+    ))
+    live = r"""
+fail() { printf 'fail %s\n' "$*" >&2; exit 1; }
+release_one() {
+  local label="$1"
+  alloc_port
+  local port="$ALLOC_PORT" marker="$HOLD_RELEASE"
+  release_port
+  python3 -c 'import socket,sys
+s=socket.socket()
+s.bind(("127.0.0.1", int(sys.argv[1])))
+print(s.getsockname()[1])' "$port" >/dev/null
+  printf 'released %s port=%s marker=%s\n' "$label" "$port" "$marker"
+}
+WORKDIR="$CASE_DIR/work"
+mkdir -p "$WORKDIR"
+release_one client-side-shared-tcp
+release_one server-side-shared-tcp
+alloc_port
+saved="$HOLD_PID"
+port="$ALLOC_PORT"
+PIDS=(424243)
+STATUSES=()
+cleanup
+python3 -c 'import socket,sys
+s=socket.socket()
+s.bind(("127.0.0.1", int(sys.argv[1])))
+print(s.getsockname()[1])' "$port" >/dev/null
+if [[ -d "$WORKDIR" ]]; then
+  printf 'workdir-survived\n' >&2
+  exit 1
+fi
+printf 'cleanup-reaped pid=%s port=%s\n' "$saved" "$port"
+"""
+    started = time.monotonic()
+    stdout, trace = _run_allocator_shell(root, live_functions, live, timeout=15)
+    elapsed = time.monotonic() - started
+    assert elapsed < 8, f"allocator release exceeded the finite bound: {elapsed:.3f}s"
+    assert "released client-side-shared-tcp " in stdout, stdout
+    assert "released server-side-shared-tcp " in stdout, stdout
+    assert "cleanup-reaped " in stdout, stdout
+    assert "workdir-survived" not in stdout
+    allocator_pids = []
+    for line in stdout.splitlines():
+        if line.startswith("cleanup-reaped "):
+            allocator_pids.append(line.split("pid=", 1)[1].split()[0])
+    assert allocator_pids and allocator_pids[0].isdigit(), stdout
+    owned = allocator_pids[0]
+    assert not any(line.startswith("SIGNAL ") and _line_mentions_pid(line, owned) for line in trace.splitlines()), trace
+    assert any(line.startswith("SIGNAL ") and _line_mentions_pid(line, participant) for line in trace.splitlines()), trace
+    print(f"allocator-identity: shared-tcp release and cleanup passed elapsed={elapsed:.3f}s")
