@@ -227,6 +227,11 @@ only renamed or moved are translated on load and rewritten by
 | UX rules | `[ux_rules]` table | None. No routine or installed command runs the rules. | 2026-12-07 |
 | Finding verification | `review.verify_findings` | None. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | 2026-12-07 |
 | Agent scoreboard | `[scoring]` table (`scoring.enabled`) | None; nothing records scoreboard metrics. | 2026-11-12 |
+| Dashboard browser sessions | `[machine.web_terminal]` and `[machine.web_session]` tables; `machine.web_terminal.enabled`, `machine.web_session.ttl`. `orbit web open` is gone. | None for browser sessions. Open the dashboard URL directly; `orbit web serve --operator` still provides operator capability. | 2026-12-08 |
+| Routine publication attachments | `publication.routine_attachments`, `publication.routine_allow_unscanned_attachments` | None for the scheduled routine, which always omits attachments. Publish attachments by hand with `orbit task publication publish --attachments`. | 2026-12-08 |
+| Selective before-landing review | `[review.selective_before_landing]` table; `review.selective_before_landing.mode`, `risk_threshold`, `paths`, `unknown_risk` | Review before landing with `review.timing = "before_landing"` or `review.before_landing_hosts`. | 2026-12-08 |
+| Decision assistance | Global `[assistance]` table. `orbit decision assist` is gone. | None. | 2026-12-08 |
+| Path leases | `[lease]` table / `lease.*` keys. `orbit lease` and the `orbit.lease.*` tools are gone. | None. The lease machinery stays disabled. | No date set; warns until a later release makes it an error |
 
 The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
 while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
