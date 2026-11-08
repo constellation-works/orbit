@@ -200,16 +200,20 @@ still fail the operation.
 A workspace scan reads a task's whole bundle only when the task may hold a
 request. Requests come only from `decision_requested` history events, so once a
 clean read finds none, the process remembers the task with a stamp of its
-bundle: the stamps of the bundle and artifact directories plus its event and
-comment logs, taken without reading them. Later scans skip the task while that
-stamp holds. Any store write to the bundle (a raised, answered or reopened
-request, a status move, a comment, an artifact) moves the stamp, so the next
-scan reads it again. A bundle the store cannot stamp is read every time.
+bundle: the stamps of the bundle directory, its `task.yaml` envelope, its
+`artifacts` and `artifacts/files` directories, and its `events.jsonl` and
+`comments.jsonl` logs, taken without reading them. Later scans skip the task
+while that stamp holds. Any store write to the bundle (a raised, answered or
+reopened request, a status move, a comment, an artifact) moves the stamp, so the
+next scan reads it again. A bundle the store cannot stamp is read every time.
 Corruption the store writes, such as a removed artifact blob, also moves the
-stamp and still warns. An out-of-band in-place edit to a file published by
-rename stays unseen until the bundle's next write. The first scan after a
-process starts reads every bundle. [ORB-21835] bounds this decision-list scanning
-for the Tasks waiting count.
+stamp and still warns. An out-of-band in-place edit to the `task.yaml` envelope
+changes its size, modification time, device or inode, so the next scan reads
+the bundle. An out-of-band in-place edit to a document, the manifest or a blob,
+or a change inside a legacy nested artifact directory, stays unseen until the
+bundle's next store write. The first scan after a process starts reads every
+bundle. [ORB-21835] bounds this decision-list scanning for the Tasks waiting
+count.
 
 ## 3. Delegated-human authority
 
