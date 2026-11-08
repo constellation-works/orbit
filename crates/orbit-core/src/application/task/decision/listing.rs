@@ -95,6 +95,18 @@ pub struct DecisionRequestListing {
     pub warnings: Vec<String>,
 }
 
+/// Which existing decision-list envelope a surface serves.
+///
+/// The records, count and warnings are identical; only the envelope
+/// field names differ, because both are established consumer contracts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionListProfile {
+    /// CLI / MCP tool envelope: `requests` / `count`.
+    Tool,
+    /// Dashboard HTTP envelope: `items` / `total`.
+    Dashboard,
+}
+
 /// JSON for one request as the decision surfaces serve it: the stored
 /// record with its effective (derived) state.
 pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
@@ -180,6 +192,60 @@ impl OrbitRuntime {
         include_closed: bool,
     ) -> Result<DecisionRequestListing, OrbitError> {
         self.scan_decision_requests(gate, task_id, include_closed, task_id.is_none())
+    }
+
+    /// The shared `decision.list` operation every surface serves.
+    ///
+    /// Owns gate validation, the optional exact `topic` filter (tool
+    /// profile only; dashboard callers pass `None`), the warning-tolerant
+    /// listing, request projection, counts and warnings. Surfaces keep
+    /// only their input parser and renderer: they pass the raw gate
+    /// name, task id, topic and closed flag they parsed, plus the
+    /// [`DecisionListProfile`] whose envelope they serve, and render
+    /// the returned JSON unchanged.
+    ///
+    /// An unknown `gate_name` is refused even when no requests exist.
+    /// The Tool envelope is `{requests, count}` and the Dashboard
+    /// envelope is `{items, total}`; a non-empty `warnings` list is
+    /// added to either.
+    pub fn list_decision_requests_projected(
+        &self,
+        gate_name: Option<&str>,
+        task_id: Option<&str>,
+        topic: Option<&str>,
+        include_closed: bool,
+        profile: DecisionListProfile,
+    ) -> Result<Value, OrbitError> {
+        let gate = gate_name
+            .map(|name| {
+                DecisionGate::from_name(name).ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
+                    ))
+                })
+            })
+            .transpose()?;
+        let mut listing =
+            self.list_decision_requests_with_warnings(gate, task_id, include_closed)?;
+        if let Some(topic) = topic {
+            listing
+                .requests
+                .retain(|request| request.topic.as_deref() == Some(topic));
+        }
+        let requests = listing
+            .requests
+            .iter()
+            .map(decision_request_json)
+            .collect::<Vec<_>>();
+        let count = requests.len();
+        let mut value = match profile {
+            DecisionListProfile::Tool => json!({ "requests": requests, "count": count }),
+            DecisionListProfile::Dashboard => json!({ "items": requests, "total": count }),
+        };
+        if !listing.warnings.is_empty() {
+            value["warnings"] = json!(listing.warnings);
+        }
+        Ok(value)
     }
 
     fn scan_decision_requests(
