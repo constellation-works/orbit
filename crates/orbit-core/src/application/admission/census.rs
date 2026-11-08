@@ -14,14 +14,9 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::{
     ExecutorCapability, ExecutorCensus, ExecutorCensusEntry, census_dispatch_order,
 };
-use orbit_types::task::{AdmissionAffinityReach, ExecutorOsLimit, Task};
+use orbit_types::task::{ADMISSION_AFFINITY, ExecutorOsLimit, Task};
 
 use crate::OrbitRuntime;
-
-/// The former `workflow.admission_affinity` default, fixed when the key was
-/// removed [ORB-22808]: work only the requesting executor can run leads its
-/// band, ahead of higher-priority work other executors can run.
-pub(crate) const ADMISSION_AFFINITY: AdmissionAffinityReach = AdmissionAffinityReach::Band;
 
 /// How one requester orders its candidates: the live census, the
 /// [`ADMISSION_AFFINITY`] reach, and the crew `host_os` limits the

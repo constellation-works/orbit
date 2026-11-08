@@ -96,7 +96,7 @@ pub use artifacts::{
     validate_task_relations_for_source,
 };
 pub use model::{
-    AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
+    ADMISSION_AFFINITY, AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
     CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT,
     DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DERIVED_EXECUTION_SUMMARY_PREFIX,
     DependencyDeadEnd, DispatchAffinity, EXECUTION_SUMMARY_DERIVED_EVENT, ExecutionLocation,

@@ -822,7 +822,7 @@ fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfi
     let mut fixture = Fixture::new_with_config(
         &[],
         &format!(
-            "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+            "[workflow.validation_env]\npath = [\"{}\"]\n",
             bin.path().display()
         ),
     );

@@ -520,14 +520,6 @@ fn declared_integer_bounds(key: &str) -> Result<(u64, Option<u64>), OrbitError> 
     }
 }
 
-/// The declared number bounds of registry key `key`.
-fn declared_number_bounds(key: &str) -> Result<(f64, Option<f64>), OrbitError> {
-    match describe(key).map(|descriptor| descriptor.allowed) {
-        Some(ConfigAllowedValues::Number { min, max, .. }) => Ok((min, max)),
-        _ => Err(undeclared(key, "a number range")),
-    }
-}
-
 /// The declared choices of registry key `key`.
 fn declared_choices(key: &str) -> Result<&'static [&'static str], OrbitError> {
     describe(key)
@@ -547,25 +539,6 @@ fn expected_range<T: std::fmt::Display>(min: T, max: Option<T>) -> String {
     match max {
         Some(max) => format!("{min}..={max}"),
         None => format!("at least {min}"),
-    }
-}
-
-/// A bounded finite number: `default` when unset, else a value within the
-/// key's declared [`ConfigAllowedValues::Number`] bounds.
-pub(super) fn resolve_bounded_number(
-    raw: Option<f64>,
-    default: f64,
-    key: &str,
-) -> Result<f64, OrbitError> {
-    let (min, max) = declared_number_bounds(key)?;
-    let value = raw.unwrap_or(default);
-    if value.is_finite() && value >= min && max.is_none_or(|max| value <= max) {
-        Ok(value)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected {}",
-            expected_range(min, max)
-        )))
     }
 }
 
