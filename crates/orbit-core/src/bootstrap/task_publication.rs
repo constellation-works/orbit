@@ -27,6 +27,15 @@ pub use orbit_store::workflow::task::{
     PublicationRestoreOutcome, PublicationRestoreRequest, ScannerFailureBehavior,
 };
 
+/// The former `publication.routine_attachments` default, fixed when the key
+/// was removed [ORB-22808]: scheduled publication never carries attachments.
+/// Manual `orbit task publication publish --attachments` still chooses.
+pub const ROUTINE_ATTACHMENT_POLICY: AttachmentPolicyKind = AttachmentPolicyKind::Omit;
+
+/// The former `publication.routine_allow_unscanned_attachments` default,
+/// fixed when the key was removed [ORB-22808].
+pub const ROUTINE_SCANNER_FAILURE_BEHAVIOR: ScannerFailureBehavior = ScannerFailureBehavior::Reject;
+
 impl OrbitRuntime {
     /// Publish this runtime's selected workspace, or return `None` if unbound.
     /// Both manual and scheduled publication use the same authority and
@@ -76,19 +85,8 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn run_task_publication(&self) -> Result<Value, OrbitError> {
-        let settings = self.context.settings();
-        let kind = match settings.publication_routine_attachments() {
-            "omit" => AttachmentPolicyKind::Omit,
-            "fail" => AttachmentPolicyKind::Fail,
-            "include" => AttachmentPolicyKind::Include,
-            _ => {
-                return Err(OrbitError::InvalidInput(
-                    "invalid routine attachment policy".into(),
-                ));
-            }
-        };
         let policy = AttachmentPolicy {
-            kind,
+            kind: ROUTINE_ATTACHMENT_POLICY,
             max_file_bytes: 10 * 1024 * 1024,
             max_total_bytes: 100 * 1024 * 1024,
             deny_patterns: [
@@ -102,12 +100,7 @@ impl OrbitRuntime {
             .into_iter()
             .map(str::to_string)
             .collect(),
-            scanner_failure_behavior: if settings.publication_routine_allow_unscanned_attachments()
-            {
-                ScannerFailureBehavior::AllowUnchecked
-            } else {
-                ScannerFailureBehavior::Reject
-            },
+            scanner_failure_behavior: ROUTINE_SCANNER_FAILURE_BEHAVIOR,
         };
         let Some((_, outcome)) = self.publish_bound_task_publication(&policy)? else {
             return Ok(json!({ "skipped": "publication_unbound" }));

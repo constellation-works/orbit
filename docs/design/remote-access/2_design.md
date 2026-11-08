@@ -85,11 +85,9 @@ In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the re
 
 connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is a deprecated no-op for current remote dashboards; when supplied, it is forwarded only in spawn mode for compatibility with older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
 
-[ORB-18488] added optional browser-session tickets. When the remote advertises
-sessions and a browser or interactive terminal will consume the URL, connect
-requests a one-time ticket through a separate `ssh <host> orbit web open --no-open`
-command and rewrites its authority to the local forward. This is not an HTTP
-credential-fetch endpoint; existing API routes retain their authorization.
+[ORB-18488] added optional browser-session tickets, which connect fetched over
+a separate `ssh <host> orbit web open --no-open`. [ORB-22808] removed browser
+sessions and `orbit web open`; connect always opens the plain local URL.
 
 ## 3a. Host forward
 
@@ -113,9 +111,7 @@ The dashboard is an unauthenticated read/write HTTP application. check_bindable_
 
 Remote confidentiality, server identity, and user authentication are delegated to SSH.
 The local forward is explicitly loopback-bound, but access to that port still
-carries the remote dashboard's existing API authority. The optional browser
-ticket from [ORB-18488] authenticates routes that explicitly require a browser
-session; it adds no operator capability and does not gate existing API routes.
+carries the remote dashboard's existing API authority.
 
 The host forward extends the serving dashboard's reach to every registered host its SSH identity can reach. An operator session there can act as operator on each of them; without it, only reads are forwarded. Each remote dashboard still applies its own gates.
 
@@ -133,5 +129,6 @@ Operational limitations:
 - [ORB-14679] — delivered identity-checked, operator-gated host forwarding.
 - [ORB-16130] — bounded initial bind-collision reallocation without replaying remote commands.
 - [ORB-18488] — added optional browser-session tickets while preserving existing API authority.
+- [ORB-22808] — removed browser sessions and `orbit web open`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

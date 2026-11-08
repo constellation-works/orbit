@@ -64,7 +64,7 @@ See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for
 |---------|----------------|----------|
 | Attach-first foreground connection | [connect.rs](../../../crates/orbit-web/src/connect.rs), [ssh_tunnel.rs](../../../crates/orbit-web/src/ssh_tunnel.rs) | [ORB-10708] delivered attach before spawn |
 | Registered-host forwarding and identity checks | [api/forward.rs](../../../crates/orbit-web/src/api/forward.rs), [host_tunnels.rs](../../../crates/orbit-web/src/host_tunnels.rs) | [ORB-14679] delivered the host forward; [ORB-16130] repaired initial bind collisions |
-| Optional browser-session ticket acquisition over SSH | [connect.rs](../../../crates/orbit-web/src/connect.rs), [browser_session.rs](../../../crates/orbit-web/src/browser_session.rs) | [ORB-18488] delivered browser credentials without changing existing API authorization |
+| Optional browser-session ticket acquisition over SSH | Removed | [ORB-18488] delivered browser credentials; [ORB-22808] removed them with `orbit web open` |
 
 ## Task References
 
@@ -72,5 +72,6 @@ See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for
 - [ORB-14679] — delivered on-demand forwarding to registered hosts with identity and authority checks.
 - [ORB-16130] — repaired initial host-forward port-bind races while preserving child ownership.
 - [ORB-18488] — added optional browser-session credentials and ticket acquisition through SSH.
+- [ORB-22808] — removed browser sessions and `orbit web open`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

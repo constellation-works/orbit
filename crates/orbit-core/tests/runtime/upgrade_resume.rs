@@ -41,8 +41,6 @@ use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::risk_history;
-
 struct SingleWorkspace(OrbitRuntime);
 
 impl RoutineWorkspaceProvider for SingleWorkspace {
@@ -835,105 +833,6 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
     let other_layer = interrupted_drain("workspace");
     tick();
     assert_skipped(&ctx, &other_layer, "review_admission_changed");
-}
-
-/// [ORB-20235] An admission that froze a risk-threshold selective policy
-/// carries the owner's risk-model identity, which embeds the fit window's
-/// timestamps and the history it was fitted on. Resolving today's policy
-/// builds a different identity, so only the operator's predicates may decide
-/// whether the policy changed.
-#[test]
-fn clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes() {
-    let test_name = "upgrade_resume::clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes";
-    if run_isolated_test(test_name) {
-        return;
-    }
-    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
-    let mut ctx = setup_context();
-    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    for (kind, name) in [
-        ("jobs", "workspace_pull_pipeline"),
-        ("activities", "drain_window"),
-        ("activities", "pull_refill"),
-        ("activities", "sleep"),
-    ] {
-        let dir = ctx.global.join("resources").join(kind);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::copy(
-            assets.join(kind).join(format!("{name}.yaml")),
-            dir.join(format!("{name}.yaml")),
-        )
-        .unwrap();
-    }
-    let configure = |ctx: &mut TestContext, selective: &str| {
-        std::fs::write(
-            ctx.workspace.join("config.toml"),
-            format!("[review]\n{selective}"),
-        )
-        .unwrap();
-        ctx.runtime = OrbitRuntime::from_roots(&ctx.global, &ctx.workspace).unwrap();
-    };
-    const CAPTURED: &str = "selective_before_landing.mode = \"observe\"\n\
-                            selective_before_landing.risk_threshold = 0.4\n";
-    configure(&mut ctx, CAPTURED);
-    risk_history::seed_fitted_history(&ctx.runtime);
-    let mut admission = review_admission(&ctx.runtime);
-    admission.selective_before_landing = Some(risk_history::frozen_selective_policy(&ctx.runtime));
-    // Later landed history refits the model, as time passing would.
-    risk_history::land_one_more_clean_task(&ctx.runtime);
-
-    let now = Utc::now();
-    let deadline = (now + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    let interrupted_drain = |ctx: &TestContext| {
-        upgrade_interrupted_run_admitted(
-            ctx,
-            "workspace_pull_pipeline",
-            now,
-            Some(admission.clone()),
-            |state| state.record_pipeline_output("open_window", json!({"deadline": deadline})),
-        )
-    };
-    let tick = |ctx: &TestContext| {
-        let sweep = run_sweep_at_with_providers(
-            &ctx.global,
-            SweepOptions::default(),
-            RoutineMachineIdentity {
-                machine_id: "test-mach".into(),
-                machine_name: "test-host".into(),
-            },
-            &SingleWorkspace(ctx.runtime.clone()),
-        )
-        .expect("sweep runs");
-        assert!(!sweep.lock_busy);
-    };
-
-    let unchanged = interrupted_drain(&ctx);
-    tick(&ctx);
-    let resumed = decisions(&ctx, &unchanged);
-    assert_eq!(resumed.len(), 1, "{resumed:?}");
-    assert_eq!(resumed[0]["decision"], "resumed", "{resumed:?}");
-
-    // Each change to a predicate after capture is still a policy change.
-    for selective in [
-        // risk_threshold
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.6\n",
-        // mode
-        "selective_before_landing.mode = \"off\"\n",
-        // paths
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.4\n\
-             selective_before_landing.paths = [\"src/**\"]\n",
-        // unknown_risk
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.4\n\
-             selective_before_landing.unknown_risk = \"skip\"\n",
-    ] {
-        configure(&mut ctx, selective);
-        let changed = interrupted_drain(&ctx);
-        tick(&ctx);
-        assert_skipped(&ctx, &changed, "review_admission_changed");
-    }
 }
 
 /// The real interruption path leaves a run the failure rate does not count, and

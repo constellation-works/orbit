@@ -5,7 +5,6 @@ Usage: orbit web [OPTIONS] <COMMAND>
 Commands:
   serve    Run the Orbit dashboard
   connect  Open a remote workspace's dashboard over an SSH tunnel
-  open     Open a running dashboard with a fresh browser-session URL
 
 Options:
   -h, --help

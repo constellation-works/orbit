@@ -136,7 +136,7 @@ after it closes becomes Orbit state and a resident cycle.
 ### Context
 
 One way to keep orchestrator sessions alive without the human's chat is to host them in tmux or a
-PTY on the server, through the [web terminal](../web-terminal/1_scope.md) or ssh, so the human can
+PTY on the server, through the [web terminal](../_archived/web-terminal/1_scope.md) or ssh, so the human can
 attach and the session keeps running. That keeps the familiar chat shape and needs no new records.
 
 ### Decision

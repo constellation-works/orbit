@@ -17,16 +17,6 @@ pub const LEGACY_REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
 pub const REVIEW_BEFORE_LANDING_HOSTS_KEY: &str = "review.before_landing_hosts";
 /// The before-PR review's time limit.
 pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
-/// Whether selective before-landing review observes or enforces.
-pub const SELECTIVE_MODE_KEY: &str = "review.selective_before_landing.mode";
-/// Probability a candidate's estimated risk must strictly exceed to be
-/// selected; unset disables the risk predicate.
-pub const SELECTIVE_RISK_THRESHOLD_KEY: &str = "review.selective_before_landing.risk_threshold";
-/// Repository-relative path globs that select a candidate; empty disables
-/// the path predicate.
-pub const SELECTIVE_PATHS_KEY: &str = "review.selective_before_landing.paths";
-/// What a configured risk predicate does without a usable estimate.
-pub const SELECTIVE_UNKNOWN_RISK_KEY: &str = "review.selective_before_landing.unknown_risk";
 /// The retired review timing enum, translated on load.
 pub const LEGACY_REVIEW_POLICY_KEY: &str = "operation.review_policy";
 /// The retired lineage minutes, translated to [`REVIEW_MINUTES_KEY`].

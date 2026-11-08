@@ -764,7 +764,6 @@ impl Commands {
                 let subcommand = match &command.command {
                     WebSubcommand::Serve(_) => "serve",
                     WebSubcommand::Connect(_) => "connect",
-                    WebSubcommand::Open(_) => "open",
                 };
                 CommandOperation::new(
                     RuntimeNeed::Forbidden,

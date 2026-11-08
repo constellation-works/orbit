@@ -7,11 +7,11 @@ status: Implemented
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) and shipped selective before-landing rules (default off) using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
+summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) with captured policy, exact-head enforcement, lineage budgets and delivery coverage; the selective before-landing rules that shipped default off were removed.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099, ORB-22808]
 ---
 
 # Review Gate — Design [ORB-11333]
@@ -19,8 +19,8 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-1
 This file describes what shipped. A preference edit grants
 no authority and changes no schedule; a verdict grants no merge permission.
 §1.1 records the shipped staged deprecation of before-PR review [ORB-20099];
-§3.3 records the shipped selective before-landing rules [ORB-20087], default
-off, which that deprecation does not itself enable.
+§3.3 records the selective before-landing rules [ORB-20087], which shipped
+default off and were removed on 2026-11-08 [ORB-22808].
 
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
@@ -122,7 +122,7 @@ For new use, recommend `review.timing = "before_landing"` or an explicit
 `--review before-landing`. The PR opens first and review overlaps hosted CI;
 the existing exact-reviewed-head merge rule and budgets still apply. Keep
 `off` as the default and after-landing review independent. Do not enable
-selective review in this stage; selective rules are the separate shipped contract in §3.3 ([ORB-20087]), default off.
+selective review in this stage; selective rules were the separate contract in §3.3 ([ORB-20087]), since removed [ORB-22808].
 
 #### Configuration, requests and diagnostics
 
@@ -525,6 +525,18 @@ non-approving leaf reviews fail with the PR open and unmerged; their failure
 settlement blocks the task on the owner.
 
 ### 3.3 Selective before-landing review [ORB-20087]
+
+> **Removed [ORB-22808].** Selective before-landing review shipped default
+> off, was never enabled, and was removed on 2026-11-08. No candidate is
+> selected by risk or path; review before landing with `review.timing =
+> "before_landing"` or `review.before_landing_hosts`. The four
+> `review.selective_before_landing.*` keys load with a deprecation warning and
+> are ignored until 2026-12-08. The wire and persisted fields stay as ignored
+> legacy fields that are never produced: `ReviewAdmission.selective_before_landing`,
+> `HandoffReview.selective_receipt`, the gate certificates' `selective_receipt`,
+> and the executor's `selective_review` capability (always `false`). The
+> policy types stay in the admission schema, so the distributed protocol
+> fingerprint is unchanged. The text below is the history of what shipped.
 
 **Shipped (default off).** [ORB-20087] implements this section behind `review.selective_before_landing` (`off` by default); shipping enables no live policy — observe/enforce adoption is a later explicit operator decision. The text below is the shipped contract. Daniel's 2026-10-29 direction was to restore
 before-landing review selectively using configurable regression-risk and path
@@ -1786,6 +1798,10 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ### Selective contract compatibility and model capture
 
+> **Removed [ORB-22808].** History only: no binary captures a selective
+> policy or model any more, and a captured one is ignored. Layout migration 4
+> stays as frozen history.
+
 Selective delivery authority is protected by breaking workspace layout migration
 4, `selective-review-contracts`. It rewrites no task, run or certificate. New
 binaries continue to honor legacy admissions with no selective policy; older
@@ -1866,6 +1882,7 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-18351] — publishes UI screenshots to a permanent evidence ref and renders them in the pull request body.
 - [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-21765] — `handoff_land` retries its synchronous merge on the same "Base branch was modified" (HTTP 405) refusal under the same three-request ceiling as completion, instead of failing the landing.
+- [ORB-22808] — removed selective before-landing review (§3.3), deprecating its four keys until 2026-12-08 and keeping its wire and persisted fields as ignored legacy fields.
 - [ORB-14151] — supplied the workspace run whose engine-fixture failures the task never touched, cited for the `diagnostic` role's unrelated-failure case.
 - [ORB-14191] — supplied the replacement report that silently dropped a failed required CodeQL run, cited for `validation_incomplete`.
 - [ORB-14260] — supplied the claimed-worker case that replaced a `<workspace>` placeholder with the absolute path, cited for validation-record identity matching.

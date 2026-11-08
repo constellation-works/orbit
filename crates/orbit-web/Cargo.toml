@@ -19,14 +19,12 @@ chrono.workspace = true
 clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
-getrandom.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util = { workspace = true, features = ["service"] }
 # Lease intake socket: the token scope the lease listener sends.
 orbit-auth = { path = "../orbit-auth" }
 orbit-cmd = { path = "../orbit-cmd" }
 orbit-common = { path = "../orbit-common" }
-orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-core = { path = "../orbit-core" }
 orbit-registry = { path = "../orbit-registry" }
@@ -48,6 +46,7 @@ libc.workspace = true
 [dev-dependencies]
 # Exercise production lock-denial writes through the runner action in HTTP fixtures.
 orbit-engine = { path = "../orbit-engine" }
+orbit-config = { path = "../orbit-config" }
 orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
 rcgen.workspace = true

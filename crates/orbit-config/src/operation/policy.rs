@@ -1,15 +1,11 @@
 use orbit_common::OrbitError;
-use orbit_types::workflow::{
-    DEFAULT_REVIEW_MINUTES, HostEvidenceRule, ReviewBudget, SelectiveBeforeLandingMode,
-    SelectiveBeforeLandingPolicy, SelectiveUnknownRisk,
-};
+use orbit_types::workflow::{DEFAULT_REVIEW_MINUTES, HostEvidenceRule, ReviewBudget};
 use serde::{Deserialize, Serialize};
 
 use super::crew::ReviewCrewPool;
 use super::keys::{
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_BEFORE_LANDING_HOSTS_KEY, REVIEW_CREW_KEY,
-    REVIEW_TIMING_KEY, SELECTIVE_MODE_KEY, SELECTIVE_PATHS_KEY, SELECTIVE_RISK_THRESHOLD_KEY,
-    SELECTIVE_UNKNOWN_RISK_KEY,
+    REVIEW_TIMING_KEY,
 };
 use super::layer::{OperationField, OperationLayer, OperationLayerSource};
 use super::timing::ReviewTimingSetting;
@@ -31,66 +27,10 @@ use super::timing::ReviewTimingSetting;
 /// keeps the review's hold. Nor did
 /// `workflow.purpose_crews.pre_landing_review`: an admission captures the
 /// pool it resolved in the fields it always had. Nor did
-/// `review.selective_before_landing`: an admission captured before it
-/// carries no selective policy, which reads as off exactly as it behaved,
-/// and a captured active policy travels in its own field an older
-/// snapshot never carries.
+/// `review.selective_before_landing`, nor its removal [ORB-22808]: a
+/// snapshot that still carries its resolved fields loads, and they are
+/// ignored.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
-
-/// The resolved `[review.selective_before_landing]` fields, each with its
-/// winning layer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SelectiveResolved {
-    /// Resolved `mode` (default `off`).
-    #[serde(default = "selective_mode_off")]
-    pub mode: OperationField<SelectiveBeforeLandingMode>,
-    /// Resolved `risk_threshold` spelling; unset disables the predicate.
-    #[serde(default = "no_selective_threshold")]
-    pub risk_threshold: OperationField<Option<String>>,
-    /// Resolved `paths` replacement list.
-    #[serde(default = "no_selective_paths")]
-    pub paths: OperationField<Vec<String>>,
-    /// Resolved `unknown_risk` (default `review`).
-    #[serde(default = "selective_unknown_review")]
-    pub unknown_risk: OperationField<SelectiveUnknownRisk>,
-}
-
-impl Default for SelectiveResolved {
-    fn default() -> Self {
-        Self::built_in()
-    }
-}
-
-impl SelectiveResolved {
-    fn built_in() -> Self {
-        Self {
-            mode: selective_mode_off(),
-            risk_threshold: no_selective_threshold(),
-            paths: no_selective_paths(),
-            unknown_risk: selective_unknown_review(),
-        }
-    }
-
-    fn is_built_in(&self) -> bool {
-        *self == Self::built_in()
-    }
-}
-
-fn selective_mode_off() -> OperationField<SelectiveBeforeLandingMode> {
-    OperationField::built_in(SelectiveBeforeLandingMode::Off)
-}
-
-fn no_selective_threshold() -> OperationField<Option<String>> {
-    OperationField::built_in(None)
-}
-
-fn no_selective_paths() -> OperationField<Vec<String>> {
-    OperationField::built_in(Vec::new())
-}
-
-fn selective_unknown_review() -> OperationField<SelectiveUnknownRisk> {
-    OperationField::built_in(SelectiveUnknownRisk::Review)
-}
 
 /// The fully resolved review preferences with per-field provenance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,11 +74,6 @@ pub struct OperationPolicy {
     /// legacy statement asks for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_after_landing: Option<OperationLayerSource>,
-    /// Resolved selective before-landing policy. An all-built-in value is
-    /// not serialized, so a resolution that never states the keys reads
-    /// exactly as it did before they existed.
-    #[serde(default, skip_serializing_if = "SelectiveResolved::is_built_in")]
-    pub selective_before_landing: SelectiveResolved,
 }
 
 impl Default for OperationPolicy {
@@ -160,7 +95,6 @@ impl OperationPolicy {
             pre_landing_review_crew: no_pre_landing_review_crew(),
             review_host_evidence: no_host_evidence(),
             legacy_after_landing: None,
-            selective_before_landing: SelectiveResolved::built_in(),
         }
     }
 
@@ -211,42 +145,6 @@ impl OperationPolicy {
                 self.review_before_landing.source.label(),
             )));
         }
-        let selective = &self.selective_before_landing;
-        if selective.mode.value.is_active() {
-            if selective.risk_threshold.value.is_none() && selective.paths.value.is_empty() {
-                return Err(OrbitError::InvalidInput(format!(
-                    "{SELECTIVE_MODE_KEY} is {} ({}) but neither {SELECTIVE_RISK_THRESHOLD_KEY} \
-                     nor {SELECTIVE_PATHS_KEY} configures a predicate; set at least one, or set \
-                     the mode to off",
-                    selective.mode.value.as_str(),
-                    selective.mode.source.label(),
-                )));
-            }
-            if self.review_before_pr.value {
-                return Err(OrbitError::InvalidInput(format!(
-                    "{SELECTIVE_MODE_KEY} is {} ({}) and {REVIEW_TIMING_KEY} is before_pr ({}): \
-                     selective review extends only before-landing review and never converts a \
-                     deprecated before-PR policy; migrate explicitly with `orbit config set \
-                     review.timing off` (then keep or enable selective review) or `orbit config \
-                     set review.timing before_landing` for unconditional review, or set \
-                     {SELECTIVE_MODE_KEY} to off",
-                    selective.mode.value.as_str(),
-                    selective.mode.source.label(),
-                    self.review_before_pr.source.label(),
-                )));
-            }
-            if self.review_before_landing.value {
-                return Err(OrbitError::InvalidInput(format!(
-                    "{SELECTIVE_MODE_KEY} is {} ({}) and {REVIEW_TIMING_KEY} is before_landing \
-                     ({}): unconditional before-landing review and selective review are one \
-                     layer, not two; set {REVIEW_TIMING_KEY} to off to use selective review, \
-                     or set {SELECTIVE_MODE_KEY} to off",
-                    selective.mode.value.as_str(),
-                    selective.mode.source.label(),
-                    self.review_before_landing.source.label(),
-                )));
-            }
-        }
         if self.review_before_pr.value && !self.review_before_landing_hosts.value.is_empty() {
             return Err(OrbitError::InvalidInput(format!(
                 "{REVIEW_TIMING_KEY} is before_pr ({}) and {REVIEW_BEFORE_LANDING_HOSTS_KEY} ({}) \
@@ -291,49 +189,6 @@ impl OperationPolicy {
         if let Some(after_landing) = layer.legacy_after_landing {
             self.legacy_after_landing = after_landing.then_some(source);
         }
-        let selective = &layer.selective_before_landing;
-        self.selective_before_landing
-            .mode
-            .set(selective.mode.as_ref(), source);
-        if selective.risk_threshold.is_some() {
-            self.selective_before_landing
-                .risk_threshold
-                .set(Some(&selective.risk_threshold), source);
-        }
-        self.selective_before_landing
-            .paths
-            .set(selective.paths.as_ref(), source);
-        self.selective_before_landing
-            .unknown_risk
-            .set(selective.unknown_risk.as_ref(), source);
-    }
-
-    /// The selective policy an admission captures, or `None` while the
-    /// mode is `off` (the default: no selective scan, today's behavior).
-    pub fn selective_before_landing_policy(&self) -> Option<SelectiveBeforeLandingPolicy> {
-        let selective = &self.selective_before_landing;
-        if !selective.mode.value.is_active() {
-            return None;
-        }
-        let sources = [
-            (SELECTIVE_MODE_KEY, selective.mode.source),
-            (
-                SELECTIVE_RISK_THRESHOLD_KEY,
-                selective.risk_threshold.source,
-            ),
-            (SELECTIVE_PATHS_KEY, selective.paths.source),
-            (SELECTIVE_UNKNOWN_RISK_KEY, selective.unknown_risk.source),
-        ]
-        .into_iter()
-        .map(|(key, source)| (key.to_string(), source.label().to_string()))
-        .collect();
-        Some(SelectiveBeforeLandingPolicy::new(
-            selective.mode.value,
-            selective.risk_threshold.value.clone(),
-            selective.paths.value.clone(),
-            selective.unknown_risk.value,
-            sources,
-        ))
     }
 
     /// The pool before-PR and before-landing review draw from:

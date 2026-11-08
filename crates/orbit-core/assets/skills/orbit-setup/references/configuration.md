@@ -767,11 +767,9 @@ not task snapshot publication.
 
 ## Scheduled task publication
 
-| Key | Behavior |
-|---|---|
-| `publication.routine_attachments` | `omit` (default), `fail`, or `include`. The disabled weekly `task-publication-<workspace>` routine publishes only its owned workspace; manual publication keeps its CLI policy. |
-| `publication.routine_allow_unscanned_attachments` | `false` (default). Explicitly accepts unscanned attachments with routine policy `include`; sensitive path and size limits still apply. Without this opt-in and a scanner, included attachments fail closed. |
-
+The disabled weekly `task-publication-<workspace>` routine publishes only its
+owned workspace and always omits attachments; it has no settings. Manual
+publication keeps its CLI attachment policy.
 See [publication.md](publication.md#weekly-publication-routine) for the schedule,
 owner-only behavior, credentials and enablement.
 

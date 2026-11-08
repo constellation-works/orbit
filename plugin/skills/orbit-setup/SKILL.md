@@ -46,7 +46,6 @@ shared workspace. Preserve the user's installation method and existing config.
 | Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
 | Choose which shipped routines and auto-tasks an existing workspace carries, reconcile a policy change, or diagnose excluded defaults | [Configuration — Seeding policy](references/configuration.md#seeding-policy) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
-| Dashboard browser sessions: enabling `machine.web_terminal.enabled` or setting `machine.web_session.ttl`, one-time URLs from `orbit web open`, or checking whether the running dashboard serves `/api/session` (not the headless browser kit) | [Remote access — Browser sessions](references/remote-access.md#browser-sessions) |
 | Installing plugins, their `orbit <ns>` commands and dashboard panels, the `.orbit/plugins.yaml` pin file, and decision channels for plugin answer submission | [Plugins](references/plugins.md#decision-channels) |
 | Register Grok's MCP server, understand its shared Claude config and compatibility cases, or verify which source Grok loaded | [First run — Grok MCP registration](references/first-run.md#grok-mcp-registration) |
 | Set up a host-local application that acts on an operator's consent for exact workspace-bound tool calls, including credentials, callbacks, rotation and revocation | [Scoped application authority](references/applications.md) |

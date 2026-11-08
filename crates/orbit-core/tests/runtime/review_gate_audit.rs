@@ -107,26 +107,6 @@ impl Fixture {
         Self::build(&[], "", timing, 10, None, granted, Default::default())
     }
 
-    /// A stronger landing layer with an independent selective policy and
-    /// a genuinely light candidate, exercising the public skip-tag boundary.
-    pub(super) fn selective_landing(mode: &str, paths: &[&str]) -> Self {
-        let review = format!(
-            "selective_before_landing.mode = {mode:?}\nselective_before_landing.paths = {paths:?}\n"
-        );
-        Self::build(
-            &[],
-            &review,
-            ReviewTiming::BeforeLanding,
-            10,
-            None,
-            &[],
-            FixtureSettings {
-                workflow: "light_delivery_paths = [\"candidate.txt\"]",
-                review_setting: Some("timing = \"off\""),
-            },
-        )
-    }
-
     fn build(
         required: &[&str],
         review: &str,
@@ -257,7 +237,7 @@ impl Fixture {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             baseline_commands: runtime.review_baseline_commands().to_vec(),
-            selective_before_landing: policy.selective_before_landing_policy(),
+            selective_before_landing: None,
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };

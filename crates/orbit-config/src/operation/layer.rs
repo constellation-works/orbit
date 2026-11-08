@@ -8,15 +8,10 @@ use super::crew::{pre_landing_review_crew, review_crew};
 use super::hosts::{before_landing_hosts, host_evidence_rules};
 use super::keys::{
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_BEFORE_LANDING_HOSTS_KEY, REVIEW_CREW_KEY,
-    REVIEW_HOST_EVIDENCE_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY, SELECTIVE_MODE_KEY,
-    SELECTIVE_PATHS_KEY, SELECTIVE_UNKNOWN_RISK_KEY,
+    REVIEW_HOST_EVIDENCE_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
 };
 use super::legacy::LegacyReviewPolicy;
 use super::minutes::review_minutes;
-use super::selective::{
-    SelectiveLayer, selective_mode_parse, selective_paths, selective_threshold,
-    selective_unknown_risk_parse,
-};
 use super::timing::ReviewTimingSetting;
 use crate::config_document;
 
@@ -95,8 +90,6 @@ pub struct OperationLayer {
     /// review: `Some(true)` for `after-landing`, `Some(false)` for any other
     /// value, `None` when the layer does not state the legacy key.
     pub legacy_after_landing: Option<bool>,
-    /// Explicit `[review.selective_before_landing]` statements.
-    pub selective_before_landing: SelectiveLayer,
 }
 
 impl OperationLayer {
@@ -159,28 +152,6 @@ impl OperationLayer {
                 .transpose()?,
             legacy_after_landing: LegacyReviewPolicy::read(document, config_path)?
                 .map(|policy| policy == LegacyReviewPolicy::AfterLanding),
-            selective_before_landing: SelectiveLayer {
-                mode: config_document::read_typed_config_value::<String>(
-                    document,
-                    SELECTIVE_MODE_KEY,
-                    config_path,
-                )?
-                .map(|raw| selective_mode_parse(&raw))
-                .transpose()?,
-                risk_threshold: selective_threshold(document, config_path)?,
-                paths: selective_paths(config_document::read_typed_config_value(
-                    document,
-                    SELECTIVE_PATHS_KEY,
-                    config_path,
-                )?)?,
-                unknown_risk: config_document::read_typed_config_value::<String>(
-                    document,
-                    SELECTIVE_UNKNOWN_RISK_KEY,
-                    config_path,
-                )?
-                .map(|raw| selective_unknown_risk_parse(&raw))
-                .transpose()?,
-            },
         })
     }
 

@@ -485,7 +485,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, when `before_pr` or `before_landing` is on or an active selective before-landing policy is captured, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, `baseline_commands` when the owner lists any, and the selective policy when one is captured) |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, when `before_pr` or `before_landing` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, `baseline_commands` when the owner lists any; its legacy `selective_before_landing` field is never produced since selective review was removed [ORB-22808]) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -519,7 +519,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `version_mismatch` | Caller binary version differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
 | `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.timing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
-| `selective_review_unsupported` | The ship contract captures an active selective before-landing policy and the executor does not declare selective-review capability (`selective_review` with `review_gate`) on the PR route |
+| `selective_review_unsupported` | Legacy: selective before-landing review was removed [ORB-22808], so no owner returns it; followers still parse it. Executors always declare `selective_review: false`. |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |

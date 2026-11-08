@@ -206,20 +206,6 @@ impl GateContext {
         )
     }
 
-    pub(super) fn contains_run_in_lineage(
-        &self,
-        runtime: &OrbitRuntime,
-        run_id: &str,
-    ) -> Result<bool, OrbitError> {
-        if run_id == self.run_id {
-            return Ok(true);
-        }
-        if self.claimed {
-            return Ok(false);
-        }
-        Ok(lineage_root(runtime, run_id)? == self.lineage_root)
-    }
-
     pub(super) fn refresh_task_digests(&mut self) -> Result<(), OrbitError> {
         self.task_digests = compute_task_digests(&self.tasks)?;
         Ok(())

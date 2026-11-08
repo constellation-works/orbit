@@ -318,6 +318,42 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
     ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
     ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
+    // [ORB-22808] Web terminal browser sessions were removed on 2026-11-08.
+    // Each key loads, warns and is ignored; code-health-sweep deletes these
+    // entries after 2026-12-08, when they become ordinary unknown settings.
+    ("machine.web_terminal.enabled", WEB_TERMINAL_REMOVED_NOTE),
+    ("machine.web_session.ttl", WEB_TERMINAL_REMOVED_NOTE),
+    // [ORB-22808] Attachments in scheduled task publication were removed on
+    // 2026-11-08. Each key loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when they become ordinary
+    // unknown settings.
+    (
+        "publication.routine_attachments",
+        ROUTINE_ATTACHMENTS_REMOVED_NOTE,
+    ),
+    (
+        "publication.routine_allow_unscanned_attachments",
+        ROUTINE_ATTACHMENTS_REMOVED_NOTE,
+    ),
+    // [ORB-22808] Selective before-landing review was removed on 2026-11-08.
+    // Each key loads, warns and is ignored; code-health-sweep deletes these
+    // entries after 2026-12-08, when they become ordinary unknown settings.
+    (
+        "review.selective_before_landing.mode",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.paths",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.risk_threshold",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.unknown_risk",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
     // [ORB-22808] Path leases: the lease.* keys were withdrawn on 2026-11-08;
     // the machinery stays, disabled. Each key loads, warns and is ignored;
     // code-health-sweep deletes these entries after 2026-12-08, when they
@@ -382,6 +418,22 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     // unknown setting.
     ("assistance", ASSISTANCE_REMOVED_NOTE),
 ];
+
+const SELECTIVE_REVIEW_REMOVED_NOTE: &str = "ignored: selective before-landing review was \
+     removed, so no candidate is selected by path or risk (the former `off` mode); review \
+     before landing with review.timing = \"before_landing\" or review.before_landing_hosts. \
+     Delete the [review.selective_before_landing] table. This key stops being recognised \
+     after 2026-12-08";
+
+const ROUTINE_ATTACHMENTS_REMOVED_NOTE: &str = "ignored: the task-publication routine always \
+     omits attachments (the former `omit` default); publish them by hand with `orbit task \
+     publication publish --attachments`. Delete the key. This key stops being recognised after \
+     2026-12-08";
+
+const WEB_TERMINAL_REMOVED_NOTE: &str = "ignored: dashboard browser sessions and `orbit web \
+     open` were removed; the dashboard opens its plain URL and operator capability still comes \
+     from `orbit web serve --operator`. Delete the [machine.web_terminal] and \
+     [machine.web_session] tables. This key stops being recognised after 2026-12-08";
 
 const LEASE_REMOVED_NOTE: &str = "ignored: path leases are not configurable and stay \
      disabled; delete the [lease] table. This key stops being recognised after 2026-12-08";
