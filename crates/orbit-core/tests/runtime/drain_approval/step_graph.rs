@@ -166,7 +166,8 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
     }
     let workspace = Workspace::with_shipped_jobs();
     let release = workspace._root.path().join("release-workers");
-    crate::worker_fixture::install(&release, "created");
+    let mut owned_workers =
+        crate::worker_fixture::install_owned_workers(&release, workspace.repo.clone());
     let proposed = workspace.task("proposed", &[], &["file:README.md"], TaskComplexity::Low);
     let eligible = workspace.backlog_task("eligible");
 
@@ -282,7 +283,20 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
     assert_eq!(applied["drain_approval"][0]["approved"], true, "{applied}");
     workspace.finish(&second_pilot, JobRunState::Success);
     executor.join().unwrap().unwrap();
-    std::fs::write(&release, "").unwrap();
+    // Reap every substitute (the drain itself and each dispatched child)
+    // before the release marker and temporary root are removed.
+    let mut expected_workers = vec![drain.clone()];
+    expected_workers.extend(
+        workspace
+            .runtime
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .child_dispatches
+            .iter()
+            .map(|child| child.child_run_id.clone()),
+    );
+    owned_workers.release_and_wait(&expected_workers);
 
     // Pin actual graph execution, including the short active-pilot branch
     // and the final authority join; checking the job text would prove neither.
