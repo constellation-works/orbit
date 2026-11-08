@@ -8,9 +8,12 @@
 //! run's telemetry records them. A selection is read from a replay's admitted
 //! run input, the same admission every delivery submission runs.
 //!
-//! Draws are random. Where a test needs one outcome, its config drives the
-//! losing member to one ticket against about a billion, so the outcome is
-//! fixed in practice without a seed hook.
+//! Draws are random, and pressure only makes an outcome likely: at the fixed
+//! cap the losing member of a decisive draw still holds about one ticket in
+//! 65. Where a test needs one outcome it pins the ticket at the middle of the
+//! pool ([`decisively`]), where pressure decides it: with equal configured
+//! weights the midpoint falls on the second member, under pressure on the
+//! first.
 
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
@@ -89,7 +92,16 @@ fn config(pool: &str, purpose: &str, extra: &str) -> String {
 
 /// Pressure decides: at the fixed cap of 8 a Claude crew at ×8 against a
 /// Codex crew at the ⅛ floor holds 64 tickets to the Codex member's one.
+/// Drawn under [`decisively`], the Claude crew wins.
 const DECISIVE: &str = "crew_selection = \"usage_pressure\"";
+
+/// Run `scenario` with every crew draw taking the ticket at the middle of its
+/// pool. For `["opus", "sol"]` that is `sol`'s first ticket at equal weights
+/// and deep inside `opus`'s 8000 of 8125 under [`DECISIVE`] pressure, so the
+/// asserted outcome is the one pressure decides, on every run.
+fn decisively(scenario: impl FnOnce()) {
+    orbit_core::test_support::with_crew_draw_quantile(0.5, scenario);
+}
 
 struct Fixture {
     root: TempDir,
@@ -367,124 +379,128 @@ fn usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment() {
 /// source. An explicit task crew and an explicit run crew are never re-drawn,
 /// and the run allowlist bounds the re-draw.
 fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
-    substitute_worker();
-    let fx = Fixture::new(&config(r#"["sol"]"#, r#"["sol"]"#, ""));
-    let pooled = fx.task("pooled.txt", TaskComplexity::Hard, None, &[]);
-    let purpose = fx.task(
-        "purpose.txt",
-        TaskComplexity::Hard,
-        None,
-        &["baseline-red-repair"],
-    );
-    assert_eq!(
-        purpose.crew_source.as_deref(),
-        Some("purpose:baseline_red_repair")
-    );
-    let explicit = fx.task("explicit.txt", TaskComplexity::Hard, Some("sol"), &[]);
-    assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
-    fx.configure(&config(
-        r#"["opus", "sol"]"#,
-        r#"["opus", "sol"]"#,
-        DECISIVE,
-    ));
-    fx.week("claude", 0.0, Duration::hours(6));
-    fx.week("codex", 89.0, Duration::days(7));
-
-    // The allowlist leaves only the assigned crew: nothing changes.
-    let admitted = fx.admit(json!({ "task_ids": [pooled.id], "allowed_crews": ["sol"] }));
-    assert_eq!(admitted["crew"], "sol", "{admitted}");
-    assert!(fx.redraws(&pooled.id).is_empty());
-
-    for (task, source) in [
-        (&pooled, "pool:hard"),
-        (&purpose, "purpose:baseline_red_repair"),
-    ] {
-        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
-        assert_eq!(admitted["crew"], "opus", "{admitted}");
-        let current = fx.runtime().get_task(&task.id).unwrap();
-        assert_eq!(current.crew.as_deref(), Some("opus"));
-        assert_eq!(
-            current.crew_source.as_deref(),
-            Some(source),
-            "the automatic source is kept"
+    decisively(|| {
+        substitute_worker();
+        let fx = Fixture::new(&config(r#"["sol"]"#, r#"["sol"]"#, ""));
+        let pooled = fx.task("pooled.txt", TaskComplexity::Hard, None, &[]);
+        let purpose = fx.task(
+            "purpose.txt",
+            TaskComplexity::Hard,
+            None,
+            &["baseline-red-repair"],
         );
-        let redraws = fx.redraws(&task.id);
-        let [note] = redraws.as_slice() else {
-            panic!("one crew_redrawn entry: {redraws:?}");
-        };
-        assert!(
+        assert_eq!(
+            purpose.crew_source.as_deref(),
+            Some("purpose:baseline_red_repair")
+        );
+        let explicit = fx.task("explicit.txt", TaskComplexity::Hard, Some("sol"), &[]);
+        assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+        fx.configure(&config(
+            r#"["opus", "sol"]"#,
+            r#"["opus", "sol"]"#,
+            DECISIVE,
+        ));
+        fx.week("claude", 0.0, Duration::hours(6));
+        fx.week("codex", 89.0, Duration::days(7));
+
+        // The allowlist leaves only the assigned crew: nothing changes.
+        let admitted = fx.admit(json!({ "task_ids": [pooled.id], "allowed_crews": ["sol"] }));
+        assert_eq!(admitted["crew"], "sol", "{admitted}");
+        assert!(fx.redraws(&pooled.id).is_empty());
+
+        for (task, source) in [
+            (&pooled, "pool:hard"),
+            (&purpose, "purpose:baseline_red_repair"),
+        ] {
+            let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+            assert_eq!(admitted["crew"], "opus", "{admitted}");
+            let current = fx.runtime().get_task(&task.id).unwrap();
+            assert_eq!(current.crew.as_deref(), Some("opus"));
+            assert_eq!(
+                current.crew_source.as_deref(),
+                Some(source),
+                "the automatic source is kept"
+            );
+            let redraws = fx.redraws(&task.id);
+            let [note] = redraws.as_slice() else {
+                panic!("one crew_redrawn entry: {redraws:?}");
+            };
+            assert!(
             note.starts_with(&format!(
                 "crew redrawn from {source} (`sol`) to {source} (`opus`) at admission under usage pressure:"
             )),
             "{note}"
         );
-    }
+        }
 
-    for _ in 0..3 {
-        let admitted = fx.admit(json!({ "task_ids": [explicit.id] }));
-        assert_eq!(
-            admitted["crew"], "sol",
-            "an explicit task crew stays: {admitted}"
-        );
-        assert_eq!(admitted["crew_selection"]["source"], "task.crew");
-        let admitted = fx.admit(json!({
-            "task_ids": [pooled.id], "crew": "sol",
-            "crew_selection": {"task_id": pooled.id, "crew": "sol", "source": "explicit"},
-        }));
-        assert_eq!(
-            admitted["crew"], "sol",
-            "an explicit run crew stays: {admitted}"
-        );
-        assert_eq!(admitted["crew_selection"]["source"], "explicit");
-    }
-    let current = fx.runtime().get_task(&explicit.id).unwrap();
-    assert_eq!(current.crew.as_deref(), Some("sol"));
-    assert_eq!(current.crew_source.as_deref(), Some("explicit"));
-    assert!(fx.redraws(&explicit.id).is_empty());
-    // The task records the run crew it ran [ORB-19416] under an automatic
-    // source, so a later admission draws the pool again.
-    let current = fx.runtime().get_task(&pooled.id).unwrap();
-    assert_eq!(current.crew.as_deref(), Some("sol"));
-    assert_eq!(current.crew_source.as_deref(), Some("redraw:run_crew"));
+        for _ in 0..3 {
+            let admitted = fx.admit(json!({ "task_ids": [explicit.id] }));
+            assert_eq!(
+                admitted["crew"], "sol",
+                "an explicit task crew stays: {admitted}"
+            );
+            assert_eq!(admitted["crew_selection"]["source"], "task.crew");
+            let admitted = fx.admit(json!({
+                "task_ids": [pooled.id], "crew": "sol",
+                "crew_selection": {"task_id": pooled.id, "crew": "sol", "source": "explicit"},
+            }));
+            assert_eq!(
+                admitted["crew"], "sol",
+                "an explicit run crew stays: {admitted}"
+            );
+            assert_eq!(admitted["crew_selection"]["source"], "explicit");
+        }
+        let current = fx.runtime().get_task(&explicit.id).unwrap();
+        assert_eq!(current.crew.as_deref(), Some("sol"));
+        assert_eq!(current.crew_source.as_deref(), Some("explicit"));
+        assert!(fx.redraws(&explicit.id).is_empty());
+        // The task records the run crew it ran [ORB-19416] under an automatic
+        // source, so a later admission draws the pool again.
+        let current = fx.runtime().get_task(&pooled.id).unwrap();
+        assert_eq!(current.crew.as_deref(), Some("sol"));
+        assert_eq!(current.crew_source.as_deref(), Some("redraw:run_crew"));
+    });
 }
 
 /// Criterion 4: creation and a complexity re-rate of a pool task draw with
 /// usage pressure (`creation_crew_assignment` serves both).
 fn a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure() {
-    let extra = format!("medium_complexity_crews = [\"sol\"]\n{DECISIVE}");
-    let fx = Fixture::new(&config(r#"["opus", "sol"]"#, "[]", &extra));
-    fx.week("claude", 0.0, Duration::hours(6));
-    fx.week("codex", 89.0, Duration::days(7));
+    decisively(|| {
+        let extra = format!("medium_complexity_crews = [\"sol\"]\n{DECISIVE}");
+        let fx = Fixture::new(&config(r#"["opus", "sol"]"#, "[]", &extra));
+        fx.week("claude", 0.0, Duration::hours(6));
+        fx.week("codex", 89.0, Duration::days(7));
 
-    let created = fx.task("created.txt", TaskComplexity::Hard, None, &[]);
-    assert_eq!(
-        created.crew.as_deref(),
-        Some("opus"),
-        "creation weighs pressure"
-    );
-    assert_eq!(created.crew_source.as_deref(), Some("pool:hard"));
+        let created = fx.task("created.txt", TaskComplexity::Hard, None, &[]);
+        assert_eq!(
+            created.crew.as_deref(),
+            Some("opus"),
+            "creation weighs pressure"
+        );
+        assert_eq!(created.crew_source.as_deref(), Some("pool:hard"));
 
-    let task = fx.task("rerated.txt", TaskComplexity::Medium, None, &[]);
-    assert_eq!(task.crew.as_deref(), Some("sol"));
-    fx.runtime()
-        .run_tool(
-            "orbit.task.update",
-            json!({"id": task.id, "complexity": "hard", "model": "codex"}),
-        )
-        .expect("complexity re-rate");
-    let rerated = fx.runtime().get_task(&task.id).unwrap();
-    assert_eq!(
-        rerated.crew.as_deref(),
-        Some("opus"),
-        "the re-rate draw weighs pressure"
-    );
-    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
-    assert_eq!(
-        fx.redraws(&task.id),
-        [
-            "crew redrawn from pool:medium (`sol`) to pool:hard (`opus`) after complexity changed to hard"
-        ],
-    );
+        let task = fx.task("rerated.txt", TaskComplexity::Medium, None, &[]);
+        assert_eq!(task.crew.as_deref(), Some("sol"));
+        fx.runtime()
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task.id, "complexity": "hard", "model": "codex"}),
+            )
+            .expect("complexity re-rate");
+        let rerated = fx.runtime().get_task(&task.id).unwrap();
+        assert_eq!(
+            rerated.crew.as_deref(),
+            Some("opus"),
+            "the re-rate draw weighs pressure"
+        );
+        assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+        assert_eq!(
+            fx.redraws(&task.id),
+            [
+                "crew redrawn from pool:medium (`sol`) to pool:hard (`opus`) after complexity changed to hard"
+            ],
+        );
+    });
 }
 
 /// Criterion 5: a parked member stays undrawable at any pressure, and a crew

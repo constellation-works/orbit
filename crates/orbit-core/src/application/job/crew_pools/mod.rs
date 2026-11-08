@@ -23,10 +23,14 @@
 mod activity;
 mod admission;
 mod auto_effort;
+#[cfg(feature = "test-support")]
+mod auto_effort_exploration;
 mod candidate_assignment;
 mod candidates;
 mod claims;
 mod draw;
+#[cfg(feature = "test-support")]
+mod draw_quantile;
 mod host_os_wait;
 mod purpose;
 #[cfg(feature = "test-support")]
@@ -38,9 +42,13 @@ mod write_back;
 pub(crate) use admission::{
     AdmissionTaskWrites, crew_admission_task_id, strip_auto_crew_admission,
 };
+#[cfg(feature = "test-support")]
+pub use auto_effort_exploration::without_auto_effort_exploration;
 pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
+#[cfg(feature = "test-support")]
+pub use draw_quantile::with_crew_draw_quantile;
 #[cfg(feature = "test-support")]
 pub use selection_checkpoint::with_crew_selection_checkpoint;
 pub(crate) use types::CapturedCrewPools;

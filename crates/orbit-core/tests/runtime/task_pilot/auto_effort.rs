@@ -2,6 +2,10 @@
 //! effort its filed tier's band chooses. A pilot that raises the task to a
 //! tier mapped to a higher effort, or reports confidence below `high`, is
 //! re-piloted once at that effort, and that assessment is the one applied.
+//!
+//! Each scenario asserts its bands' efforts, so it runs with effort
+//! exploration off: a fixed share of seeded draws would otherwise run another
+//! effort the bands name, on a seed that changes from run to run.
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -169,85 +173,91 @@ fn partition_crew(workspace: &Workspace, run_id: &str, round: &str) -> Option<St
 }
 
 fn a_raised_tier_is_repiloted_once_at_its_higher_effort() {
-    let workspace = Workspace::with_config(CONFIG);
-    let calls = install_provider(&workspace, "hard", "high");
-    let task = filed_low_task(&workspace);
+    orbit_core::test_support::without_auto_effort_exploration(|| {
+        let workspace = Workspace::with_config(CONFIG);
+        let calls = install_provider(&workspace, "hard", "high");
+        let task = filed_low_task(&workspace);
 
-    let run_id = pilot(&workspace, &task);
+        let run_id = pilot(&workspace, &task);
 
-    let run = workspace.runtime.show_job_run(&run_id).unwrap();
-    assert_eq!(run.state, JobRunState::Success, "{run:?}");
-    assert_eq!(
-        efforts(&calls),
-        ["low", "high"],
-        "the filed tier pilots at low, the raised tier re-pilots once at high"
-    );
-    assert_eq!(
-        partition_crew(&workspace, &run_id, "pilots").as_deref(),
-        Some("fixture@low")
-    );
-    assert_eq!(
-        partition_crew(&workspace, &run_id, "repair_pilots").as_deref(),
-        Some("fixture@high")
-    );
-    let pipeline = workspace
-        .runtime
-        .read_run_state(&run_id)
-        .unwrap()
-        .unwrap()
-        .pipeline;
-    assert_eq!(
-        pipeline["apply"]["task_outcomes"][0]["outcome"], "escalated",
-        "{pipeline}"
-    );
-    assert_eq!(pipeline["apply"]["applied_count"], 0, "{pipeline}");
-    assert_eq!(pipeline["apply_repairs"]["applied_count"], 1, "{pipeline}");
-    assert_eq!(
-        pipeline["apply_repairs"]["tasks"][0]["pilot_crew"], "fixture@high",
-        "the applied assessment records the effort it ran at: {pipeline}"
-    );
-    let assessed = workspace.runtime.get_task(&task.id).unwrap();
-    assert_eq!(assessed.complexity, Some(TaskComplexity::Hard));
-    assert_eq!(assessed.context_files, ["file:README.md"]);
+        let run = workspace.runtime.show_job_run(&run_id).unwrap();
+        assert_eq!(run.state, JobRunState::Success, "{run:?}");
+        assert_eq!(
+            efforts(&calls),
+            ["low", "high"],
+            "the filed tier pilots at low, the raised tier re-pilots once at high"
+        );
+        assert_eq!(
+            partition_crew(&workspace, &run_id, "pilots").as_deref(),
+            Some("fixture@low")
+        );
+        assert_eq!(
+            partition_crew(&workspace, &run_id, "repair_pilots").as_deref(),
+            Some("fixture@high")
+        );
+        let pipeline = workspace
+            .runtime
+            .read_run_state(&run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline;
+        assert_eq!(
+            pipeline["apply"]["task_outcomes"][0]["outcome"], "escalated",
+            "{pipeline}"
+        );
+        assert_eq!(pipeline["apply"]["applied_count"], 0, "{pipeline}");
+        assert_eq!(pipeline["apply_repairs"]["applied_count"], 1, "{pipeline}");
+        assert_eq!(
+            pipeline["apply_repairs"]["tasks"][0]["pilot_crew"], "fixture@high",
+            "the applied assessment records the effort it ran at: {pipeline}"
+        );
+        let assessed = workspace.runtime.get_task(&task.id).unwrap();
+        assert_eq!(assessed.complexity, Some(TaskComplexity::Hard));
+        assert_eq!(assessed.context_files, ["file:README.md"]);
+    });
 }
 
 fn a_doubtful_pilot_is_repiloted_at_the_highest_band_effort() {
-    let workspace = Workspace::with_config(CONFIG);
-    let calls = install_provider(&workspace, "low", "medium");
-    let task = filed_low_task(&workspace);
+    orbit_core::test_support::without_auto_effort_exploration(|| {
+        let workspace = Workspace::with_config(CONFIG);
+        let calls = install_provider(&workspace, "low", "medium");
+        let task = filed_low_task(&workspace);
 
-    let run_id = pilot(&workspace, &task);
+        let run_id = pilot(&workspace, &task);
 
-    let run = workspace.runtime.show_job_run(&run_id).unwrap();
-    assert_eq!(run.state, JobRunState::Success, "{run:?}");
-    assert_eq!(
-        efforts(&calls),
-        ["low", "high"],
-        "a medium-confidence pilot re-pilots once; the repair never escalates again"
-    );
+        let run = workspace.runtime.show_job_run(&run_id).unwrap();
+        assert_eq!(run.state, JobRunState::Success, "{run:?}");
+        assert_eq!(
+            efforts(&calls),
+            ["low", "high"],
+            "a medium-confidence pilot re-pilots once; the repair never escalates again"
+        );
+    });
 }
 
 fn a_confident_pilot_at_its_filed_tier_applies_without_escalation() {
-    let workspace = Workspace::with_config(CONFIG);
-    let calls = install_provider(&workspace, "low", "high");
-    let task = filed_low_task(&workspace);
+    orbit_core::test_support::without_auto_effort_exploration(|| {
+        let workspace = Workspace::with_config(CONFIG);
+        let calls = install_provider(&workspace, "low", "high");
+        let task = filed_low_task(&workspace);
 
-    let run_id = pilot(&workspace, &task);
+        let run_id = pilot(&workspace, &task);
 
-    let run = workspace.runtime.show_job_run(&run_id).unwrap();
-    assert_eq!(run.state, JobRunState::Success, "{run:?}");
-    assert_eq!(efforts(&calls), ["low"]);
-    let pipeline = workspace
-        .runtime
-        .read_run_state(&run_id)
-        .unwrap()
-        .unwrap()
-        .pipeline;
-    assert_eq!(pipeline["apply"]["applied_count"], 1, "{pipeline}");
-    assert_eq!(
-        pipeline["apply"]["tasks"][0]["pilot_crew"], "fixture@low",
-        "{pipeline}"
-    );
+        let run = workspace.runtime.show_job_run(&run_id).unwrap();
+        assert_eq!(run.state, JobRunState::Success, "{run:?}");
+        assert_eq!(efforts(&calls), ["low"]);
+        let pipeline = workspace
+            .runtime
+            .read_run_state(&run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline;
+        assert_eq!(pipeline["apply"]["applied_count"], 1, "{pipeline}");
+        assert_eq!(
+            pipeline["apply"]["tasks"][0]["pilot_crew"], "fixture@low",
+            "{pipeline}"
+        );
+    });
 }
 
 crate::scenario_table!(

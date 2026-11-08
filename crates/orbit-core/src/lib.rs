@@ -88,7 +88,8 @@ pub mod test_support {
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
     pub use crate::application::job::crew_pools::{
-        with_crew_backfill_checkpoint, with_crew_selection_checkpoint,
+        with_crew_backfill_checkpoint, with_crew_draw_quantile, with_crew_selection_checkpoint,
+        without_auto_effort_exploration,
     };
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]

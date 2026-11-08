@@ -308,6 +308,10 @@ fn random_ticket(
             "crew pool from {source} has no member with a weight above 0"
         )));
     }
+    #[cfg(feature = "test-support")]
+    if let Some(ticket) = super::draw_quantile::pinned_crew_ticket(bound) {
+        return Ok(ticket);
+    }
     // Rejection sampling avoids modulo bias for totals that are not a power of
     // two. No random draw occurs for explicit or singleton choices.
     let threshold = bound.wrapping_neg() % bound;
