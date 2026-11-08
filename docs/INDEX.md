@@ -128,11 +128,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 
-### Designing (4)
+### Designing (5)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
+| [Model Ranking](./design/model-ranking/1_overview.md) | Daniel reviews the design; then file the R1 data tasks (CI attribution, recovery fault) | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
@@ -221,6 +222,7 @@ a conservative title/status fallback.
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Implemented | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
+| [Model Ranking](./design/model-ranking/1_overview.md) | Proposed single holistic ranking of implementer models: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with tie bands ordered by cost. | Draft | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
 | [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Implemented | codex |
