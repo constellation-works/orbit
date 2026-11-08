@@ -10,6 +10,10 @@
 //! `.orbit-managed-assets.json` is the shipped catalog's reconciliation record
 //! and rewriting it with a plugin's entries would retire every default in the
 //! directory.
+//!
+//! A seeded auto-task name that equals a shipped default auto-task name is
+//! refused, with or without `--force`: overwriting the default would inherit
+//! the operator's enable/crew/schedule settings for that name.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -21,6 +25,7 @@ use orbit_tools::plugin::LoadedPlugin;
 use orbit_types::workflow::{AUTO_TASK_SCHEMA_VERSION, ROUTINE_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 
+use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::runtime::plugin::definitions::{
     PluginDefinitionSet, provenance_header, seeded_definition_name,
 };
@@ -121,6 +126,15 @@ pub fn seed_plugin_definitions(
     let mut auto_tasks: Vec<(String, String)> = Vec::new();
     for auto_task in &definitions.auto_tasks {
         let name = seeded_definition_name(&namespace, &auto_task.name);
+        if is_shipped_default_auto_task(&name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "plugin '{namespace}' cannot seed auto-task '{name}': the seeded name collides \
+                 with a shipped default auto-task; rename the plugin auto-task '{}' so its \
+                 seeded name is unique (shipped defaults cannot be overwritten, even with \
+                 `--force`)",
+                auto_task.name
+            )));
+        }
         let mut rendered = auto_task.definition.clone();
         rendered.name = name.clone();
         rendered.enabled = false;
@@ -240,6 +254,15 @@ fn check_destination_components(
     Ok(())
 }
 
+/// Whether a seeded auto-task name equals a shipped default Orbit seeds on
+/// `init`/`sync`. Such a name would overwrite the default and inherit the
+/// operator's settings for it, so seeding refuses it even with `--force`.
+fn is_shipped_default_auto_task(seeded_name: &str) -> bool {
+    DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .any(|(shipped, _)| *shipped == seeded_name)
+}
+
 fn refuse_cross_plugin_ownership(
     kind: &'static str,
     dir: &Path,
@@ -307,12 +330,22 @@ fn write_seeded_files(
         };
 
         let warning = (action == PluginSeedAction::Customised).then(|| {
-            format!(
-                "seeded {kind} '{}' was edited after Orbit wrote it, so plugin '{namespace}' \
-                 v{version} did not overwrite it; review the difference and re-run \
-                 `orbit plugin enable {namespace} --force` to take the plugin's version",
-                path.display()
-            )
+            if kind == "auto_task" && is_shipped_default_auto_task(name) {
+                format!(
+                    "seeded {kind} '{}' was edited after Orbit wrote it, so plugin '{namespace}' \
+                     v{version} did not overwrite it; review the difference and rename the plugin \
+                     definition so its seeded name is unique (this name collides with a shipped \
+                     default auto-task, which `--force` must never replace)",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "seeded {kind} '{}' was edited after Orbit wrote it, so plugin '{namespace}' \
+                     v{version} did not overwrite it; review the difference and re-run \
+                     `orbit plugin enable {namespace} --force` to take the plugin's version",
+                    path.display()
+                )
+            }
         });
         if let Some(warning) = &warning {
             tracing::warn!(target: "orbit.core.plugins", warning, "seeded plugin definition preserved");
