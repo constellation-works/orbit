@@ -32,6 +32,12 @@ macro_rules! with_housekeeping_keys {
         section: ConfigSection::Housekeeping, order: 160,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
+    crew_memory_enabled: bool => bool {
+        key: "crew_memory.enabled", value_type: "bool",
+        description: "Whether crew memory may be written in this workspace (experimental).",
+        section: ConfigSection::Housekeeping, order: 165,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     seeding_routines: crate::SeedingPolicy => crate::seeding::RawSeedingPolicy {
         key: "seeding.routines", value_type: "string|array<string>",
         description: "Which shipped default routines this workspace seeds.",

@@ -3,7 +3,7 @@ title: Crew Memory — Design
 owner: claude
 last_updated: 2026-11-08
 last_validated: 2026-11-08
-status: Draft
+status: Accepted
 feature: crew-memory
 doc_role: design
 type: design
@@ -11,12 +11,12 @@ summary: "Proposed design for crew memory: per-model spaces in the owner store, 
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
-related_artifacts: [ORB-23105, ORB-23066, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23066, ORB-10736]
 ---
 
 # Crew Memory — Design
 
-This doc proposes the design. Nothing in it is built. It covers:
+This doc is the accepted design. Slice M1 (§10) is built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`. Nothing delivers memory to a prompt yet. It covers:
 - the experimental gate (§1);
 - how memory is keyed (§2) and stored (§3);
 - what a space may hold (§4);
@@ -173,7 +173,7 @@ Open proposals expire after 4 weeks. The global memory is subject to the 3 KiB c
 
 | Surface | Commands / tools | Who |
 |---|---|---|
-| CLI | `orbit memory show [<key>\|global] [--revision N]`, `orbit memory history <key>`, `orbit memory export [--dir]`, `orbit memory proposals`, `orbit memory proposal accept\|reject <id>`, `orbit memory reset <key>`, `orbit memory copy <from> <to>` (model upgrade) | Operator |
+| CLI | `orbit memory show [<key>\|global] [--revision N]`, `orbit memory history <key>`, `orbit memory export [--dir]`, `orbit memory write <key> --file PATH… [--evidence ID…]` (operator seed), `orbit memory proposals`, `orbit memory proposal accept\|reject <id>`, `orbit memory reset <key>`, `orbit memory copy <from> <to>` (model upgrade) | Operator |
 | MCP / `orbit tool run` | `orbit.memory.show` (read, any agent run in a memory arm), `orbit.memory.write`, `orbit.memory.propose` (dreaming tasks only, key-scoped) | Agents |
 | Experiment readout | memory-arm digest/revision per task, revision-week strata, dreaming overhead in cost | Operator |
 | Dashboard | none in this design; the experiments page shows the arm like any other | — |
@@ -182,7 +182,7 @@ Open proposals expire after 4 weeks. The global memory is subject to the 3 KiB c
 
 Each slice is one task, filed only after this design is accepted:
 
-- **M1. Store, write rules, CLI.** Tables, the §4 validation, `orbit memory show|history|export|reset|copy`, and the `[crew_memory] enabled` key. No delivery.
+- **M1. Store, write rules, CLI.** Tables, the §4 validation, `orbit memory show|history|export|reset|copy`, and the `[crew_memory] enabled` key. No delivery. Built by [ORB-23113], which adds `orbit memory write` as the operator seed path; every M1 verb is operator CLI only (no MCP scope), and the `orbit.memory.write` agent tool arrives with M3.
 - **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`.
 - **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution.
 - **M4. Global review.** Proposals and accept/reject.
@@ -203,6 +203,7 @@ Each slice is one task, filed only after this design is accepted:
 ## Task References
 
 - [ORB-23105] — designs crew memory (this folder)
+- [ORB-23113] — builds slice M1: store, write rules, operator CLI
 - [ORB-23066] — adds `--until` to the scorecards, used for the settled reviewer window
 - [ORB-10736] — retired the native project-learning subsystem
 

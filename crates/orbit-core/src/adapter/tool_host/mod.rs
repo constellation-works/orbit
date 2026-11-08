@@ -15,6 +15,7 @@ mod host;
 mod hub_registry;
 mod input;
 mod json;
+mod memory_tools;
 mod notice_tools;
 mod orchestrator_tools;
 mod pipeline_tools;

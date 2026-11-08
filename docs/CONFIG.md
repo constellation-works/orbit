@@ -2626,6 +2626,16 @@ Each dispatch a live arm changes records an `activity.experiment_overlay_applied
 
 After the horizon, if no treatment wins and any primary comparison lacks an interval, the verdict is `inconclusive`, with a reason naming the treatment and metric. This includes no settled primary outcomes, fewer than two outcomes in either arm of a used complexity cell, or no common measured complexity cell. `no difference` requires a measured comparison; a treatment with a complete winning comparison can still win.
 
+### `[crew_memory]` — per-model memory (experimental)
+
+Crew memory gives each model a small memory space of Markdown files, plus one `global` space every model shares ([design](design/crew-memory/2_design.md)). Spaces are append-only revisions in the host store. Nothing delivers memory to a prompt yet: this key gates the operator surface only.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `crew_memory.enabled` | `false` | Allow crew memory writes in this workspace. While false, `orbit memory write`, `reset` and `copy` are refused with an error naming this key; `show`, `history` and `export` still work. |
+
+Every write passes the same rules and is refused whole, naming the rule, when it breaks one: `caps` (a model space at most 8 files and 6 KiB, `global` 1 file and 3 KiB, file names `[a-z0-9-]{1,40}.md`), `provenance` (evidence must be task ids; a run's write must cite one), `score_blind` (scorecard vocabulary or another crew's or model's name, naming the token), `not_instructions` (a URL, an Orbit tool name, a shell command block or an injection phrase, naming the token) and `rewrite_whole` (each file once; a write replaces the whole space). A refusal is recorded as a `write_refused` event in `orbit memory history`.
+
 ### `[seeding]` — which shipped defaults a workspace carries
 
 Orbit ships default routines (`.orbit/routines/`) and auto-tasks (`.orbit/auto_tasks/`) and seeds every one into a workspace. Two keys narrow that, per workspace or globally ([design](design/distributions/1_scope.md)):

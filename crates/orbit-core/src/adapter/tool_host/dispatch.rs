@@ -225,6 +225,7 @@ fn execute_admitted(
             input,
             model.as_deref(),
         ),
+        OrbitBuiltinAction::Memory(verb) => super::memory_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Evolution(verb) => {
             super::evolution_tools::dispatch(runtime, verb, input)
         }

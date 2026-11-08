@@ -316,3 +316,9 @@ pub fn review_store(
 pub fn evolution_store(store: Store) -> Arc<dyn crate::contracts::EvolutionStoreBackend> {
     Arc::new(store)
 }
+
+/// Crew memory revisions and events over the owning host's SQLite handle;
+/// every operation names the runtime-bound workspace partition.
+pub fn crew_memory_store(store: Store) -> Arc<dyn crate::contracts::CrewMemoryStoreBackend> {
+    Arc::new(store)
+}

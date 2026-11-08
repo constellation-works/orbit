@@ -21,6 +21,7 @@ pub mod job;
 pub mod locks;
 pub mod log;
 pub mod mcp;
+pub mod memory;
 pub mod migrate;
 pub mod notice;
 pub mod operation;
@@ -134,6 +135,7 @@ Advanced:
   decision     List, show and answer human decision requests on held work
   evolution    Record and inspect capability gaps and their measured costs
   experiment   Define, run and conclude experiments over agent treatments
+  memory       Inspect, export and reset crew memory (experimental)
   resident     Grant, narrow and inspect resident orchestrator mandates
 
 Options:
@@ -209,6 +211,7 @@ pub enum Commands {
     Decision(decision::DecisionCommand),
     Evolution(evolution::EvolutionCommand),
     Experiment(experiment::ExperimentCommand),
+    Memory(memory::MemoryCommand),
     Resident(resident::ResidentCommand),
 
     // ── plugin-derived command groups ──

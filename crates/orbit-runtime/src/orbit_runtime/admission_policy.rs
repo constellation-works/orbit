@@ -19,6 +19,8 @@ pub(super) struct AdmissionPolicy {
     mid_run_steering: MidRunSteeringSettings,
     /// `experiments.enabled`.
     experiments_enabled: bool,
+    /// `crew_memory.enabled`.
+    crew_memory_enabled: bool,
 }
 
 impl AdmissionPolicy {
@@ -27,6 +29,7 @@ impl AdmissionPolicy {
             provider_limit: config.snapshot.provider_limit_policy(),
             mid_run_steering: config.snapshot.mid_run_steering(),
             experiments_enabled: config.snapshot.experiments().enabled,
+            crew_memory_enabled: config.snapshot.crew_memory_enabled(),
             auto_concurrency: config.auto_concurrency,
         }
     }
@@ -67,6 +70,9 @@ impl RuntimeKernel {
                 provider_limit: self.context.settings().provider_limit().clone(),
                 mid_run_steering: self.context.settings().mid_run_steering(),
                 experiments_enabled: self.context.settings().experiments().enabled,
+                // Fail closed: until a config load succeeds, crew memory
+                // writes stay refused, the feature's default.
+                crew_memory_enabled: false,
             })
         };
         let mut cache = self
@@ -115,6 +121,13 @@ impl RuntimeKernel {
     /// long-lived runtime picks up a later enable.
     pub fn current_experiments_enabled(&self) -> bool {
         self.refresh_workflow_policy().experiments_enabled
+    }
+
+    /// Whether crew memory writes are admitted, from the current config like
+    /// [`Self::current_experiments_enabled`], so an operator's disable stops
+    /// every write at once, including in a long-lived runtime.
+    pub fn current_crew_memory_enabled(&self) -> bool {
+        self.refresh_workflow_policy().crew_memory_enabled
     }
 
     /// Pin both policies for this pass so all decisions use one config version.
