@@ -60,3 +60,77 @@ fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
     };
     assert_eq!(store.count_v2_audit_events(&filter).unwrap(), 2);
 }
+
+#[test]
+fn audit_event_with_url_query_key_stays_valid_json_and_hides_the_key() {
+    let store = Store::open_in_memory().unwrap();
+    // Raw secret, and the already-redacted form a step produces before the
+    // event is serialized: both place the URL at the end of the message, so
+    // a whole-payload regex pass would consume the JSON terminators.
+    let cases = [
+        (
+            "raw",
+            "url-secret-123",
+            r#"{"event_id":"raw","body_kind":"step_failed","message":"request failed https://example.test/?key=url-secret-123"}"#,
+        ),
+        (
+            "pre-redacted",
+            "[REDACTED_AUTH]",
+            r#"{"event_id":"pre","body_kind":"step_failed","message":"request failed https://example.test/?key=[REDACTED_AUTH]"}"#,
+        ),
+    ];
+    for (index, (run, _secret, payload)) in cases.iter().enumerate() {
+        store
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: "ws".into(),
+                event_id: format!("url-row-{index}"),
+                source: "v2_envelope".into(),
+                schema_version: 1,
+                event_type: "step_failed".into(),
+                ts: chrono::Utc::now(),
+                run_id: (*run).into(),
+                agent_identity: "agent".into(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: (*payload).into(),
+            })
+            .unwrap();
+    }
+    for (run, secret, _payload) in &cases {
+        let rows = store
+            .list_v2_audit_events(&V2AuditEventFilter {
+                workspace_id: "ws".into(),
+                run_id: Some((*run).into()),
+                source: Some("v2_envelope".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 1, "one stored row for {run}");
+        let stored = &rows[0].payload_json;
+        assert!(
+            !stored.contains(secret) || *secret == "[REDACTED_AUTH]",
+            "secret leaked for {run}: {stored}"
+        );
+        assert!(
+            !stored.contains("url-secret-123"),
+            "raw secret leaked for {run}: {stored}"
+        );
+        // The snapshot path (`serde_json::from_str` per row) must succeed.
+        let parsed: serde_json::Value = serde_json::from_str(stored).unwrap_or_else(|err| {
+            panic!("stored payload is not valid JSON for {run}: {err}: {stored}")
+        });
+        assert_eq!(
+            parsed["body_kind"], "step_failed",
+            "structure kept for {run}"
+        );
+        let message = parsed["message"].as_str().unwrap();
+        assert!(
+            message.contains("?key=[REDACTED_AUTH]"),
+            "key hidden for {run}: {message}"
+        );
+        assert!(
+            message.starts_with("request failed https://example.test/"),
+            "message kept for {run}: {message}"
+        );
+    }
+}
