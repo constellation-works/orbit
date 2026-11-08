@@ -181,7 +181,9 @@ fn record_draft_recovery<H: RuntimeHost + ?Sized>(
     record: &PrDraftRecovery,
 ) -> Result<(), OrbitError> {
     let reason = match record.outcome {
-        PrDraftRecoveryOutcome::ConfiguredDraft => "kept draft: pr.draft is configured",
+        PrDraftRecoveryOutcome::ConfiguredDraft => {
+            "kept draft: the delivery conventions open every pull request as a draft"
+        }
         PrDraftRecoveryOutcome::UnrelatedDraft => "kept draft: no section-gap recovery evidence",
         PrDraftRecoveryOutcome::MissingSections => {
             "kept draft: required sections are still missing"

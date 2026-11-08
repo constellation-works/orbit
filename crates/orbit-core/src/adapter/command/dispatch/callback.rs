@@ -321,16 +321,16 @@ pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
 }
 
 /// The `proc.spawn` budget of the managed activity this process serves: the
-/// deadline its CLI runner stamped, under the operator's per-call ceiling.
+/// deadline its CLI runner stamped, under the fixed per-call ceiling.
 /// A missing or malformed deadline keeps the unscoped ceiling.
-pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<ProcSpawnBudget> {
+pub(super) fn read_proc_spawn_budget_from_env() -> Option<ProcSpawnBudget> {
     let mut deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
         .ok()?
         .trim()
         .parse::<u64>()
         .ok()?;
     // A fresh call gets the activity's admission credit accumulated so far;
-    // the operator's per-call ceiling remains independent and unchanged.
+    // the per-call ceiling remains independent and unchanged.
     if let (Ok(directory), Some(timeout_ms)) = (
         std::env::var(orbit_common::process::build_budget::WAIT_DIRECTORY_ENV),
         std::env::var(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV)
@@ -345,7 +345,7 @@ pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<Pro
     }
     Some(ProcSpawnBudget {
         deadline: std::time::UNIX_EPOCH + std::time::Duration::from_millis(deadline_ms),
-        max_timeout_ms,
+        max_timeout_ms: orbit_tools::PROC_SPAWN_MAX_TIMEOUT_MINUTES * 60_000,
     })
 }
 

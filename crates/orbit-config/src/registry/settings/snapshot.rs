@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 use orbit_types::workflow::{
-    ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
-    PrBodyTemplateSource, ScreenshotSection, TemplateSurface,
+    COMMIT_ORCHESTRATED_BY_TRAILER, COMMIT_REGRESSION_TRAILERS, ConventionTemplate, CrewPurpose,
+    DeliveryConventions, MissingSectionPolicy, PR_DRAFT, PR_FRESHNESS_SECTION,
+    PR_ORCHESTRATION_TRAILER, PR_SCREENSHOT_SECTION, PR_SIGNATURE, PrBodyTemplateSource,
+    TemplateSurface,
 };
 
 use super::machine::{
-    AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, MachineSettings,
+    ResourceThrottleSettings, WorkerContainmentSettings,
 };
 use super::resolve::{DEFAULT_FINAL_RECOVERY_CREWS, resolve_default_crew};
 use super::table::ConfigSnapshot;
@@ -32,103 +34,8 @@ pub struct MidRunSteeringSettings {
 pub struct ExperimentSettings {
     /// `experiments.enabled` (default `false`).
     pub enabled: bool,
-    /// `experiments.max_running` (default 3).
-    pub max_running: u32,
     /// `experiments.config_keys` (default empty).
     pub config_keys: Vec<String>,
-    /// `experiments.min_delivered_rate` (default 0.9): below this share of
-    /// a treatment arm's settled tasks receiving its treatment, a readout
-    /// withholds its verdict.
-    pub min_delivered_rate: f64,
-}
-
-/// Admitted `notice.*`: fleet-notice expiry defaults and caps, and the size,
-/// open-count and rate limits a post is held to. Who may post or close, and
-/// the kinds, are code, not configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoticeSettings {
-    /// `notice.default_expiry_hours.{incident,maintenance,info}` (72, 12, 168).
-    pub default_expiry_hours: NoticeKindHours,
-    /// `notice.max_expiry_hours.operator` (default 720).
-    pub max_expiry_hours_operator: u32,
-    /// `notice.max_expiry_hours.orchestrator.*` (168, 72, 168).
-    pub max_expiry_hours_orchestrator: NoticeKindHours,
-    /// `notice.max_expiry_hours.agent` (default 24): also the agent default.
-    pub max_expiry_hours_agent: u32,
-    /// `notice.max_title_chars` (default 120).
-    pub max_title_chars: u32,
-    /// `notice.max_body_bytes` (default 4096).
-    pub max_body_bytes: u32,
-    /// `notice.max_evidence` (default 8).
-    pub max_evidence: u32,
-    /// `notice.max_open_per_workspace` (default 20).
-    pub max_open_per_workspace: u32,
-    /// `notice.max_open_global_per_owner` (default 10).
-    pub max_open_global_per_owner: u32,
-    /// `notice.max_open_per_agent_task` (default 2).
-    pub max_open_per_agent_task: u32,
-    /// `notice.agent_posts_per_task_per_day` (default 5).
-    pub agent_posts_per_task_per_day: u32,
-    /// `notice.orchestrator_posts_per_hour` (default 30).
-    pub orchestrator_posts_per_hour: u32,
-    /// `notice.retention_days` (default 30).
-    pub retention_days: u32,
-    /// `notice.agent_posting` (default `true`): managed agents may post
-    /// and close their own notices through their bound task.
-    pub agent_posting: bool,
-    /// `notice.brief_delivery` (default `true`): quote open notices into
-    /// opted-in activities' prompts as untrusted data.
-    pub brief_delivery: bool,
-    /// `notice.brief_max_items` (default 5).
-    pub brief_max_items: u32,
-    /// `notice.brief_body_chars` (default 600).
-    pub brief_body_chars: u32,
-    /// `notice.brief_read_timeout_ms` (default 2000).
-    pub brief_read_timeout_ms: u32,
-}
-
-/// One hour value per notice kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoticeKindHours {
-    /// Hours for an `incident` notice.
-    pub incident: u32,
-    /// Hours for a `maintenance` notice.
-    pub maintenance: u32,
-    /// Hours for an `info` notice.
-    pub info: u32,
-}
-
-impl Default for NoticeSettings {
-    fn default() -> Self {
-        Self {
-            default_expiry_hours: NoticeKindHours {
-                incident: 72,
-                maintenance: 12,
-                info: 168,
-            },
-            max_expiry_hours_operator: 720,
-            max_expiry_hours_orchestrator: NoticeKindHours {
-                incident: 168,
-                maintenance: 72,
-                info: 168,
-            },
-            max_expiry_hours_agent: 24,
-            max_title_chars: 120,
-            max_body_bytes: 4096,
-            max_evidence: 8,
-            max_open_per_workspace: 20,
-            max_open_global_per_owner: 10,
-            max_open_per_agent_task: 2,
-            agent_posts_per_task_per_day: 5,
-            orchestrator_posts_per_hour: 30,
-            retention_days: 30,
-            agent_posting: true,
-            brief_delivery: true,
-            brief_max_items: 5,
-            brief_body_chars: 600,
-            brief_read_timeout_ms: 2000,
-        }
-    }
 }
 
 /// Which document an admission sees: a layered load (both files merged, or
@@ -151,11 +58,6 @@ impl ConfigSnapshot {
         require_default_crew: bool,
         scope: AdmissionScope,
     ) -> Result<(), OrbitError> {
-        LogRotationConfig::from_parts(
-            Some(self.runtime_log_retention_days),
-            Some(self.runtime_log_max_total_mb),
-            Some(self.runtime_log_max_file_mb),
-        )?;
         crate::crew_auto_effort::admit_auto_effort_bands(&self.workflow_auto_effort_bands, crews)?;
         // `<crew>@auto` needs bands for its crew. A single-file view may
         // take them from the other layer, so it checks only where the entry
@@ -247,11 +149,11 @@ impl ConfigSnapshot {
         )?;
         let resources = self.resource_throttle();
         let auto_concurrency = self.auto_concurrency();
-        if auto_concurrency.profile_window < auto_concurrency.min_profile_deliveries {
-            return Err(OrbitError::InvalidInput(
-                "machine.auto_concurrency.profile_window must be at least machine.auto_concurrency.min_profile_deliveries"
-                    .to_string(),
-            ));
+        if AUTO_CONCURRENCY_PROFILE_WINDOW < auto_concurrency.min_profile_deliveries {
+            return Err(OrbitError::InvalidInput(format!(
+                "machine.auto_concurrency.min_profile_deliveries must be at most the \
+                 {AUTO_CONCURRENCY_PROFILE_WINDOW}-delivery profile window"
+            )));
         }
         for (resource, high, resume) in [
             (
@@ -268,11 +170,6 @@ impl ConfigSnapshot {
                 "disk",
                 resources.disk_high_percent,
                 resources.disk_resume_percent,
-            ),
-            (
-                "io_full",
-                resources.io_full_high_percent,
-                resources.io_full_resume_percent,
             ),
         ] {
             if resume >= high {
@@ -298,18 +195,6 @@ impl ConfigSnapshot {
     pub fn review_timing(&self) -> crate::operation::ReviewTimingSetting {
         crate::operation::ReviewTimingSetting::parse(&self.review_timing)
             .unwrap_or(crate::operation::ReviewTimingSetting::Off)
-    }
-
-    /// The admitted `workflow.validation_env.shell_probe`.
-    pub fn shell_probe(&self) -> crate::aliases::ShellProbeMode {
-        crate::aliases::ShellProbeMode::parse(&self.workflow_validation_env_shell_probe)
-            .unwrap_or(crate::aliases::ShellProbeMode::Interactive)
-    }
-
-    /// The admitted `workflow.admission_affinity`.
-    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        orbit_types::task::AdmissionAffinityReach::parse(&self.workflow_admission_affinity)
-            .unwrap_or_default()
     }
 
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
@@ -342,12 +227,13 @@ impl ConfigSnapshot {
         ])
     }
 
-    /// The admitted `workflow.auto_effort.*` policy that resolves
-    /// `<crew>@auto` pool entries.
+    /// The admitted `workflow.auto_effort.bands` policy that resolves
+    /// `<crew>@auto` pool entries, at the fixed
+    /// [`crate::AUTO_EFFORT_EXPLORE_SHARE`].
     pub fn auto_effort(&self) -> crate::AutoEffortPolicy {
         crate::AutoEffortPolicy::new(
             self.workflow_auto_effort_bands.clone(),
-            self.workflow_auto_effort_explore_share,
+            crate::AUTO_EFFORT_EXPLORE_SHARE,
         )
     }
 
@@ -481,18 +367,8 @@ impl ConfigSnapshot {
         AutoConcurrencySettings {
             mode: self.machine_auto_concurrency_mode.clone(),
             admit_cpu_percent: self.machine_auto_concurrency_admit_cpu_percent,
-            admit_memory_percent: self.machine_auto_concurrency_admit_memory_percent,
-            profile_window: self.machine_auto_concurrency_profile_window,
             min_profile_deliveries: self.machine_auto_concurrency_min_profile_deliveries,
-            horizon_cap_minutes: self.machine_auto_concurrency_horizon_cap_minutes,
-            head_max_wait_minutes: self.machine_auto_concurrency_head_max_wait_minutes,
-            head_stuck_passes: self.machine_auto_concurrency_head_stuck_passes,
         }
-    }
-
-    /// Admitted `machine.host_shutdown_hold_minutes`.
-    pub fn host_shutdown_hold_minutes(&self) -> u32 {
-        self.machine_host_shutdown_hold_minutes
     }
 
     /// The admitted `workflow.lock_modes` entries, compiled. Admission has
@@ -518,41 +394,7 @@ impl ConfigSnapshot {
     pub fn experiments(&self) -> ExperimentSettings {
         ExperimentSettings {
             enabled: self.experiments_enabled,
-            max_running: self.experiments_max_running,
             config_keys: self.experiments_config_keys.clone(),
-            min_delivered_rate: self.experiments_min_delivered_rate,
-        }
-    }
-
-    /// The admitted `notice.*` settings.
-    pub fn notice(&self) -> NoticeSettings {
-        NoticeSettings {
-            default_expiry_hours: NoticeKindHours {
-                incident: self.notice_default_expiry_hours_incident,
-                maintenance: self.notice_default_expiry_hours_maintenance,
-                info: self.notice_default_expiry_hours_info,
-            },
-            max_expiry_hours_operator: self.notice_max_expiry_hours_operator,
-            max_expiry_hours_orchestrator: NoticeKindHours {
-                incident: self.notice_max_expiry_hours_orchestrator_incident,
-                maintenance: self.notice_max_expiry_hours_orchestrator_maintenance,
-                info: self.notice_max_expiry_hours_orchestrator_info,
-            },
-            max_expiry_hours_agent: self.notice_max_expiry_hours_agent,
-            max_title_chars: self.notice_max_title_chars,
-            max_body_bytes: self.notice_max_body_bytes,
-            max_evidence: self.notice_max_evidence,
-            max_open_per_workspace: self.notice_max_open_per_workspace,
-            max_open_global_per_owner: self.notice_max_open_global_per_owner,
-            max_open_per_agent_task: self.notice_max_open_per_agent_task,
-            agent_posts_per_task_per_day: self.notice_agent_posts_per_task_per_day,
-            orchestrator_posts_per_hour: self.notice_orchestrator_posts_per_hour,
-            retention_days: self.notice_retention_days,
-            agent_posting: self.notice_agent_posting,
-            brief_delivery: self.notice_brief_delivery,
-            brief_max_items: self.notice_brief_max_items,
-            brief_body_chars: self.notice_brief_body_chars,
-            brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
         }
     }
 
@@ -563,20 +405,18 @@ impl ConfigSnapshot {
             cpu_source: self.workflow_resource_throttle_cpu_source.clone(),
             cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
             cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
-            cpu_light_leaves: self.workflow_resource_throttle_cpu_light_leaves,
             memory_high_percent: self.workflow_resource_throttle_memory_high_percent,
             memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
-            io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
-            io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
         }
     }
 }
 
 impl ConfigSnapshot {
-    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions.
-    /// Admission already parsed every template, so each parses again here.
+    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions,
+    /// with the fixed section and trailer switches [ORB-22808]. Admission
+    /// already parsed every template, so each parses again here.
     pub fn delivery_conventions(&self) -> DeliveryConventions {
         let text = |key: &str, raw: &Option<String>| {
             raw.as_deref()
@@ -593,22 +433,21 @@ impl ConfigSnapshot {
             required_sections: self.pr_required_sections.clone(),
             missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
                 .unwrap_or_default(),
-            screenshot_section: ScreenshotSection::parse(&self.pr_screenshot_section)
-                .unwrap_or_default(),
-            freshness_section: self.pr_freshness_section,
-            signature: self.pr_signature,
-            pr_orchestration_trailer: self.pr_orchestration_trailer,
+            screenshot_section: PR_SCREENSHOT_SECTION,
+            freshness_section: PR_FRESHNESS_SECTION,
+            signature: PR_SIGNATURE,
+            pr_orchestration_trailer: PR_ORCHESTRATION_TRAILER,
             labels: self.pr_labels.clone(),
             task_tag_labels: self.pr_task_tag_labels.clone(),
             task_type_labels: self.pr_task_type_labels.clone(),
             reviewers: self.pr_reviewers.clone(),
-            draft: self.pr_draft,
+            draft: PR_DRAFT,
             commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
                 ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
             }),
             commit_body: text("commit.body_template", &self.commit_body_template),
-            orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
-            regression_trailers: self.commit_regression_trailers,
+            orchestrated_by_trailer: COMMIT_ORCHESTRATED_BY_TRAILER,
+            regression_trailers: COMMIT_REGRESSION_TRAILERS,
             branch_name: self
                 .branch_name_template
                 .as_deref()

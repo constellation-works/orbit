@@ -95,8 +95,8 @@ would have caught argues for that command.
 - **Watch the total.** The list runs on every candidate and again after every
   repair or rebase that changes code. Time it on the owner (`time make …`) and
   say what it adds per delivery when you propose it.
-- **Toolchain.** Validation resolves PATH from the owner's login shell
-  (`workflow.validation_env.shell_probe`). If the drain runs from a service
+- **Toolchain.** Validation resolves PATH from the owner's login shell.
+  If the drain runs from a service
   manager or SSH, add toolchain directories to `workflow.validation_env.path`
   and check `orbit doctor`'s `validation-env` row. For build tools that
   honour an output-directory variable, list it in
@@ -289,9 +289,9 @@ hard work, rather than splitting the pool into fixed `<crew>@<effort>`
 members per tier. Order bands from the strongest claim to the weakest: the
 first band whose conditions the draw's signal meets wins, and unmatched
 draws fall back to the crew's configured effort. Tune band cut-offs from the
-implementer scorecard's size curves once deliveries accumulate, and keep
-`workflow.auto_effort.explore_share` at its default while a cutover settles
-so both efforts keep getting data. Bands, signals, refusals and readback
+implementer scorecard's size curves once deliveries accumulate; a fixed 10%
+of draws explores another effort, so both sides of a cutover keep getting
+data. Bands, signals, refusals and readback
 verification: [Automatic effort selection](configuration.md#automatic-effort-selection-crewauto).
 
 ### Draw policy: `workflow.crew_selection`
@@ -301,8 +301,7 @@ verification: [Automatic effort selection](configuration.md#automatic-effort-sel
   so capacity about to reset is spent first. Use it when the pools span
   subscription providers that report weekly usage windows; leave `static` for
   pay-per-use accounts or a single provider.
-- **Provider limits.** Keep `workflow.provider_limit_max_used_pct` near its
-  default so a nearly exhausted window stops new draws. Use
+- **Provider limits.** A window used at 90% or more stops new draws. Use
   `provider_limit_overrides` (`provider:100` to wait for exhaustion,
   `provider:off` to only record readings) for providers whose readings
   mislead, and `provider_limit_budgets` for providers that report no usage.
@@ -340,7 +339,6 @@ Changes apply to deliveries recorded afterwards.
 |---|---|---|
 | `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [Mid-run steering configuration](configuration.md#mid-run-steering) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |
-| `notice.*`, `attention.*`, `resident.evolution.*`, `jobs.failure_streak_warn`, `commit.regression_trailers` | Fleet-notice limits or brief quoting, the attention feed, the evolution ledger, the failing-job badge or commit regression trailers need tuning | [Fleet notices, attention, evolution ledger and failing jobs](configuration.md#fleet-notices-attention-evolution-ledger-and-failing-jobs) |
 
 ## Roll it out
 

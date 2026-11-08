@@ -24,7 +24,7 @@ mod notice_aggregate;
 mod probe;
 mod task_route;
 
-pub use self::attention_aggregate::AttentionFanout;
+pub use self::attention_aggregate::{ATTENTION_FANOUT_BUDGET_SECONDS, AttentionFanout};
 pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };

@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 
 use super::git_config::enforce_no_persistent_git_config;
 use super::rustup_install::enforce_no_workspace_default_rustup_install;
-use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
+use crate::{
+    PROC_SPAWN_MAX_TIMEOUT_MINUTES, TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext,
+};
 
 pub struct ProcSpawnTool;
 
@@ -19,7 +21,7 @@ impl Tool for ProcSpawnTool {
         ToolSchema {
             name: "proc.spawn".to_string(),
             description: format!(
-                "Spawn a process with timeout and capture output. The timeout ceiling is {UNSCOPED_MAX_TIMEOUT_MS} ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most the operator's execution.proc_spawn_max_timeout_minutes (default 45 min)"
+                "Spawn a process with timeout and capture output. The timeout ceiling is {UNSCOPED_MAX_TIMEOUT_MS} ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most {PROC_SPAWN_MAX_TIMEOUT_MINUTES} min"
             ),
             parameters: vec![
                 ToolParam {
@@ -37,7 +39,7 @@ impl Tool for ProcSpawnTool {
                 ToolParam {
                     name: "timeout_ms".to_string(),
                     description: format!(
-                        "Execution timeout in milliseconds (default {TIMEOUT_DEFAULT_MS}). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: {UNSCOPED_MAX_TIMEOUT_MS} outside a managed activity, or the smaller of the activity's remaining budget and execution.proc_spawn_max_timeout_minutes inside one"
+                        "Execution timeout in milliseconds (default {TIMEOUT_DEFAULT_MS}). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: {UNSCOPED_MAX_TIMEOUT_MS} outside a managed activity, or the smaller of the activity's remaining budget and {PROC_SPAWN_MAX_TIMEOUT_MINUTES} min inside one"
                     ),
                     param_type: "u64".to_string(),
                     required: false,
@@ -186,7 +188,7 @@ enum CeilingSource {
     Unscoped,
     /// The activity's remaining wall-clock budget was the smaller bound.
     ActivityRemaining,
-    /// The operator's per-call ceiling was the smaller bound.
+    /// The fixed per-call ceiling was the smaller bound.
     Configured,
 }
 
@@ -207,9 +209,7 @@ impl CeilingSource {
             Self::ActivityRemaining => {
                 "that is all the wall-clock budget the enclosing activity has left"
             }
-            Self::Configured => {
-                "that is the operator's execution.proc_spawn_max_timeout_minutes ceiling"
-            }
+            Self::Configured => "that is proc.spawn's fixed per-call ceiling inside an activity",
         }
     }
 }
@@ -223,7 +223,7 @@ struct TimeoutCeiling {
 
 impl TimeoutCeiling {
     /// Inside an activity with a host-attested budget, the smaller of the
-    /// time it has left and the operator's ceiling; otherwise 60 s.
+    /// time it has left and the fixed per-call ceiling; otherwise 60 s.
     fn for_context(ctx: &ToolContext, now: SystemTime) -> Self {
         let Some(budget) = ctx.proc_spawn_budget else {
             return Self {

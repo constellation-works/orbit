@@ -45,7 +45,7 @@ older checkouts stay covered while waiting for the fix.
 
 A plain archive or rejection without `covered_by` suppresses an equivalent
 evidenced cause (and, for compiler errors, the same diagnostic set at later
-checkouts) for `ci_failure.operator_suppression_hours` (default 6) from the
+checkouts) for a fixed 6 hours from the
 recorded status decision. A historical job/step key alone does not establish
 equivalence: a different retained diagnostic can file a new repair. When the
 cause cannot be established, `archive_identity_unavailable` holds filing

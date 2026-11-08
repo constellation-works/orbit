@@ -115,7 +115,7 @@ spec:
           `lookup_failed` entry when the open pull requests could not be
           listed. Only pull requests on the task's `orbit/<task>-` branches
           whose body names the task and whose author is a configured delivery
-          author (else this pull request's author) qualify. Empty when
-          `pr.close_on_terminal` is off. A failed close is not a step failure.
+          author (else this pull request's author) qualify. A failed close is not
+          a step failure.
   action: pr_open
   config: {}

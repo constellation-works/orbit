@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_config::NoticeSettings;
 use orbit_store::contracts::{
     NoticeEventRow, NoticePostPlan, NoticePostQuery, NoticePostSnapshot, NoticeRow,
     NoticeStoreBackend as _,
@@ -18,6 +17,7 @@ use orbit_types::record::{
 };
 
 use super::authority::{NoticeCaller, NoticePoster};
+use super::limits;
 use super::{LinkedDone, NoticeAudit, notice_row, parse_notice_row};
 use crate::OrbitRuntime;
 
@@ -149,18 +149,11 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let poster = self.resolve_notice_poster(caller)?;
         audit.poster = Some(poster.class);
-        let settings = *self.notice_settings();
-        if poster.class == AuthorClass::Agent && !settings.agent_posting {
-            return Err(refuse(
-                NoticeRefusalCode::AgentPostingDisabled,
-                "notice.agent_posting is false in this workspace, so a managed agent may not post notices",
-            ));
-        }
         #[cfg(feature = "test-support")]
         let now = super::test_support::notice_post_time();
         #[cfg(not(feature = "test-support"))]
         let now = Utc::now();
-        let post = self.validate_notice_post(&poster, &settings, request)?;
+        let post = self.validate_notice_post(&poster, request)?;
         audit.detail["dedupe_key"] = serde_json::Value::String(post.dedupe_key.clone());
         let workspace_id = self.workspace_id()?;
         let workspace = NoticeWorkspace {
@@ -176,7 +169,7 @@ impl OrbitRuntime {
             AuthorClass::Orchestrator => now - Duration::hours(1),
             AuthorClass::Operator | AuthorClass::System => now,
         };
-        let purge_before = now - Duration::days(i64::from(settings.retention_days));
+        let purge_before = now - Duration::days(i64::from(limits::RETENTION_DAYS));
         let query = NoticePostQuery {
             workspace_id: &workspace.id,
             poster_task_id: match poster.class {
@@ -193,15 +186,8 @@ impl OrbitRuntime {
         let outcome = std::cell::Cell::new(PostOutcome::Created);
         let repeated = std::cell::Cell::new(false);
         let decide = |snapshot: &NoticePostSnapshot| -> Result<NoticePostPlan, OrbitError> {
-            let (plan, decided) = decide_post(
-                &poster,
-                &settings,
-                &workspace,
-                &post,
-                snapshot,
-                &linked_done,
-                now,
-            )?;
+            let (plan, decided) =
+                decide_post(&poster, &workspace, &post, snapshot, &linked_done, now)?;
             outcome.set(decided);
             repeated.set(matches!(plan, NoticePostPlan::Unchanged { .. }));
             Ok(plan)
@@ -219,7 +205,6 @@ impl OrbitRuntime {
     fn validate_notice_post(
         &self,
         poster: &NoticePoster,
-        settings: &NoticeSettings,
         request: NoticePostRequest,
     ) -> Result<ValidatedPost, OrbitError> {
         let mut fingerprint_request = request.clone();
@@ -257,8 +242,8 @@ impl OrbitRuntime {
                 "`title` must be non-empty single-line text",
             ));
         }
-        if title.chars().count() > settings.max_title_chars as usize {
-            return Err(limit("max_title_chars", settings.max_title_chars));
+        if title.chars().count() > limits::MAX_TITLE_CHARS as usize {
+            return Err(limit("max_title_chars", limits::MAX_TITLE_CHARS));
         }
         let body = body.unwrap_or_default();
         if has_control(&body, true) {
@@ -267,11 +252,11 @@ impl OrbitRuntime {
                 "`body` may not contain control characters other than newline and tab",
             ));
         }
-        if body.len() > settings.max_body_bytes as usize {
-            return Err(limit("max_body_bytes", settings.max_body_bytes));
+        if body.len() > limits::MAX_BODY_BYTES as usize {
+            return Err(limit("max_body_bytes", limits::MAX_BODY_BYTES));
         }
-        if evidence.len() > settings.max_evidence as usize {
-            return Err(limit("max_evidence", settings.max_evidence));
+        if evidence.len() > limits::MAX_EVIDENCE as usize {
+            return Err(limit("max_evidence", limits::MAX_EVIDENCE));
         }
         for item in &evidence {
             if !NoticeEvidence::TYPES.contains(&item.kind.as_str()) {
@@ -438,10 +423,9 @@ impl ValidatedPost {
     fn resolve_expiry(
         &self,
         poster: &NoticePoster,
-        settings: &NoticeSettings,
         now: DateTime<Utc>,
     ) -> Result<Option<DateTime<Utc>>, OrbitError> {
-        let cap = poster.expiry_cap_hours(settings, self.kind);
+        let cap = poster.expiry_cap_hours(self.kind);
         let earliest = now + Duration::minutes(MIN_EXPIRY_MINUTES);
         match (
             self.fingerprint_request.expires_in_hours,
@@ -507,7 +491,6 @@ fn new_notice_id() -> Result<String, OrbitError> {
 
 fn decide_post(
     poster: &NoticePoster,
-    settings: &NoticeSettings,
     workspace: &NoticeWorkspace,
     post: &ValidatedPost,
     snapshot: &NoticePostSnapshot,
@@ -559,22 +542,22 @@ fn decide_post(
             outcome,
         ));
     }
-    let expires_at = post.resolve_expiry(poster, settings, now)?;
+    let expires_at = post.resolve_expiry(poster, now)?;
     match poster.class {
         AuthorClass::Agent
-            if snapshot.poster_events.len() >= settings.agent_posts_per_task_per_day as usize =>
+            if snapshot.poster_events.len() >= limits::AGENT_POSTS_PER_TASK_PER_DAY as usize =>
         {
             return Err(limit(
                 "agent_posts_per_task_per_day",
-                settings.agent_posts_per_task_per_day,
+                limits::AGENT_POSTS_PER_TASK_PER_DAY,
             ));
         }
         AuthorClass::Orchestrator
-            if snapshot.poster_events.len() >= settings.orchestrator_posts_per_hour as usize =>
+            if snapshot.poster_events.len() >= limits::ORCHESTRATOR_POSTS_PER_HOUR as usize =>
         {
             return Err(limit(
                 "orchestrator_posts_per_hour",
-                settings.orchestrator_posts_per_hour,
+                limits::ORCHESTRATOR_POSTS_PER_HOUR,
             ));
         }
         _ => {}
@@ -598,18 +581,18 @@ fn decide_post(
             .iter()
             .filter(|row| row.workspace_id == workspace.id)
             .count();
-        if home_open >= settings.max_open_per_workspace as usize {
+        if home_open >= limits::MAX_OPEN_PER_WORKSPACE as usize {
             return Err(limit(
                 "max_open_per_workspace",
-                settings.max_open_per_workspace,
+                limits::MAX_OPEN_PER_WORKSPACE,
             ));
         }
         if scope == NoticeScope::Global
-            && open_globals >= settings.max_open_global_per_owner as usize
+            && open_globals >= limits::MAX_OPEN_GLOBAL_PER_OWNER as usize
         {
             return Err(limit(
                 "max_open_global_per_owner",
-                settings.max_open_global_per_owner,
+                limits::MAX_OPEN_GLOBAL_PER_OWNER,
             ));
         }
         if poster.class == AuthorClass::Agent {
@@ -617,10 +600,10 @@ fn decide_post(
                 .iter()
                 .filter(|row| row.author_task_id.is_some() && row.author_task_id == poster.task_id)
                 .count();
-            if task_open >= settings.max_open_per_agent_task as usize {
+            if task_open >= limits::MAX_OPEN_PER_AGENT_TASK as usize {
                 return Err(limit(
                     "max_open_per_agent_task",
-                    settings.max_open_per_agent_task,
+                    limits::MAX_OPEN_PER_AGENT_TASK,
                 ));
             }
         }
@@ -638,7 +621,7 @@ fn decide_post(
             evidence: post.evidence.clone(),
             hosts: post.hosts.clone(),
             expires_at: expires_at.unwrap_or_else(|| {
-                now + Duration::hours(i64::from(poster.default_expiry_hours(settings, post.kind)))
+                now + Duration::hours(i64::from(poster.default_expiry_hours(post.kind)))
             }),
             opened_at: now,
             updated_at: now,
@@ -678,10 +661,10 @@ fn decide_post(
                 "this poster may not widen a notice to global scope",
             ));
         }
-        if open_globals >= settings.max_open_global_per_owner as usize {
+        if open_globals >= limits::MAX_OPEN_GLOBAL_PER_OWNER as usize {
             return Err(limit(
                 "max_open_global_per_owner",
-                settings.max_open_global_per_owner,
+                limits::MAX_OPEN_GLOBAL_PER_OWNER,
             ));
         }
     }

@@ -499,7 +499,9 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        validation::agent_stall_window(self)
+        Some(std::time::Duration::from_secs(
+            orbit_engine::AGENT_STALL_MINUTES * 60,
+        ))
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {

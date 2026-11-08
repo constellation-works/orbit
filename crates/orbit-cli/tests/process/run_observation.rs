@@ -119,9 +119,9 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
         );
     }
 }
-fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
+fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
     let fixture = Fixture::init();
-    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", "min_severity=critical", "critical", "input"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", null, "high", "workspace"]]});
+    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["", "min_severity=critical", "critical", "input"]]});
     for case in case_table["cases"].as_array().unwrap() {
         let (config, input, floor, source) = (
             case[0].as_str().unwrap(),
@@ -598,6 +598,17 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         .failure();
     fixture.assert_snapshot(&before, "invalid readiness must also preserve state");
 }
+/// Make every login profile the fixture home's shell reads record a probe in
+/// `login-probes` and fail, so validation cannot resolve the login shell:
+/// each resolution then probes twice (interactive, then login-only).
+fn fail_login_profiles(home: &Path) {
+    let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexit 42\n";
+    for name in [".bash_profile", ".profile", ".zprofile"] {
+        fs::write(home.join(name), profile).unwrap();
+    }
+    fs::create_dir_all(home.join(".config/fish")).unwrap();
+    fs::write(home.join(".config/fish/config.fish"), profile).unwrap();
+}
 #[test]
 fn readiness_snapshot_reports_replica_and_validation_warning() {
     if !isolated_run_observation(
@@ -609,10 +620,11 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
     let idle = fixture.readiness();
     let expected_json = serde_json::json!({"replica": false, "validation_env_warning": null});
     assert_fields(&idle, expected_json);
-    let config_table = serde_json::json!({"rows": [["workflow.validation_env.shell_probe", "off"], ["workflow.required_validation_commands", "[\"make ci-fast\"]"]]});
-    for row in config_table["rows"].as_array().unwrap() {
-        fixture.config_set(row[0].as_str().unwrap(), row[1].as_str().unwrap());
-    }
+    fail_login_profiles(&fixture.home);
+    fixture.config_set(
+        "workflow.required_validation_commands",
+        "[\"make ci-fast\"]",
+    );
     let warned = fixture.readiness();
     let warning = warned["validation_env_warning"]
         .as_str()
@@ -631,31 +643,28 @@ fn readiness_reuses_validation_warning_across_processes() {
     let warning_of = || fixture.readiness()["validation_env_warning"].clone();
     let marker = fixture.home.join("login-probes");
     let probes = || fs::read_to_string(&marker).unwrap().lines().count();
-    let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
-    for name in [".bash_profile", ".profile", ".zprofile"] {
-        fs::write(fixture.home.join(name), profile).unwrap();
-    }
-    fs::create_dir_all(fixture.home.join(".config/fish")).unwrap();
-    fs::write(fixture.home.join(".config/fish/config.fish"), "printf 'probe\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n").unwrap();
+    fail_login_profiles(&fixture.home);
     let config = fixture.work.join(".orbit/config.toml");
-    let configure = |mode: &str| {
-        fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n")).unwrap()
+    // A different validation PATH is a different policy, so a new cache key.
+    let configure = |path: &str| {
+        fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = {path}\n")).unwrap()
     };
-    configure("replace");
+    let first_path = r#"["/usr/bin", "/bin"]"#;
+    configure(first_path);
     let first_warning = warning_of();
-    let warning = first_warning.as_str().expect("missing PATH warning");
-    contains(warning, fixture.home.join("login-tools").to_str().unwrap());
-    assert_eq!(probes(), 1);
+    let warning = first_warning.as_str().expect("login-shell warning");
+    contains(warning, "could not resolve the login-shell environment");
+    assert_eq!(probes(), 2);
     assert_eq!(warning_of(), first_warning);
     assert_eq!(
         probes(),
-        1,
+        2,
         "a fresh readiness process must not rerun the login shell within the diagnostic TTL"
     );
-    configure("prepend");
+    configure(r#"["/usr/bin"]"#);
     let kept = fixture.readiness();
-    assert!(kept["validation_env_warning"].is_null());
-    assert_eq!(probes(), 2);
+    assert!(kept["validation_env_warning"].is_string(), "{kept}");
+    assert_eq!(probes(), 4, "a changed policy probes again");
     let cache = fixture
         .work
         .join(".orbit/state/validation-env-warning.json");
@@ -669,14 +678,14 @@ fn readiness_reuses_validation_warning_across_processes() {
         .set_times(fs::FileTimes::new().set_modified(expired))
         .unwrap();
     assert_eq!(warning_of(), kept["validation_env_warning"]);
-    assert_eq!(probes(), 3);
-    configure("replace");
+    assert_eq!(probes(), 6);
+    configure(first_path);
     fs::write(&cache, "incomplete JSON").unwrap();
     assert_eq!(warning_of(), first_warning);
-    assert_eq!(probes(), 4);
+    assert_eq!(probes(), 8);
     fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
     fs::create_dir(&cache).unwrap();
-    for expected in [5, 6] {
+    for expected in [10, 12] {
         assert_eq!(warning_of(), first_warning);
         assert_eq!(probes(), expected);
     }
@@ -2116,7 +2125,7 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
 contract!(
     run_observation_contracts_0,
     successful_security_sweep_shows_filing_floor_source_and_excluded_alerts,
-    shipped_security_job_uses_config_unless_run_input_overrides_it,
+    shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it,
     readiness_bootstrap_preserves_stale_runs_and_held_reservations,
     readiness_reports_total_and_notifies_only_when_backlog_is_truncated
 );

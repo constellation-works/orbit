@@ -181,7 +181,7 @@ fn description_only_owner(runtime: &OrbitRuntime, owner: &str) -> String {
     legacy.id
 }
 
-/// Archived and rejected owners suppress until the configured clock boundary.
+/// Archived and rejected owners suppress until the fixed 6-hour clock boundary.
 /// `same_key` is false when the failure key embeds the checkout [compiler covers].
 fn assert_archive_suppresses(
     log: &str,
@@ -191,15 +191,9 @@ fn assert_archive_suppresses(
     status_label: bool,
     check_audit: bool,
 ) {
-    for (status, config, hours) in [
-        (TaskStatus::Archived, "", 6),
-        (
-            TaskStatus::Rejected,
-            "[ci_failure]\noperator_suppression_hours = 2\n",
-            2,
-        ),
-    ] {
-        let (_root, runtime, commits) = operator_fixture(config);
+    let hours = 6;
+    for status in [TaskStatus::Archived, TaskStatus::Rejected] {
+        let (_root, runtime, commits) = operator_fixture("");
         let first = file(&runtime, vec![failure(log, 0, &commits[0])]);
         let owner = first["filed"][0]["task_id"].as_str().unwrap();
         archive_owner(&runtime, owner, status, None);

@@ -54,7 +54,7 @@ owner-local alike, against its live
 executor machine, upserted with each pull receipt and on each pass of the owner's local drain,
 live for ten minutes or while its machine holds a claim. Within a band, work only the
 requesting executor can run leads, and among the rest work fewer live executors can run;
-`workflow.admission_affinity` narrows that to a priority (`priority`) or turns it off.
+The reach is fixed at the band; the former `workflow.admission_affinity` key, which could narrow it to a priority or turn it off, was removed [ORB-22808].
 [ORB-14938] first added owner-relative OS affinity; the census [ORB-17304]
 implemented supersedes that narrower preference.
 
@@ -1651,7 +1651,7 @@ file, and `/run` is a tmpfs, so the hold lifts on its own either way. A `dry-*` 
 scheduled". Other platforms have no probe and never hold. Tests inject a fixed probe
 (`with_host_signal_probe`; the sweep takes one explicitly), and orbit-core's unit-test build never
 reads the real host. Admission holds only while the schedule is within
-`machine.host_shutdown_hold_minutes` (default 180), including that instant. A later schedule is
+180 minutes (fixed since [ORB-22808]), including that instant. A later schedule is
 still reported — readiness, doctor, and the pass record name the mode and time — and unattended
 admission continues, so a reboot set for tomorrow does not idle the host all day. Work admitted
 on the near side of the horizon can finish before the reboot. A schedule already in the past
@@ -1680,7 +1680,7 @@ reboot.
   explicit drain started during a hold still holds its own waves.
 - **Surfaces.** `orbit run readiness` names the schedule either way. Inside the horizon every
   waiting backlog task has reason `host_shutdown_scheduled` and the text says admissions are held.
-  Beyond it, admissions continue and the text names `machine.host_shutdown_hold_minutes`.
+  Beyond it, admissions continue and the text names the 180-minute hold.
   `orbit doctor` warns only while the schedule holds; a further schedule is `ok` and names the time.
 
 ## 8. Required validation scenarios
@@ -1734,7 +1734,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
 | Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
 | Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
-| Host shutdown or reboot scheduled | Inside `machine.host_shutdown_hold_minutes` (default 180, the instant included): sweep fires and mints nothing, drain waves admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
+| Host shutdown or reboot scheduled | Inside 180 minutes (the instant included): sweep fires and mints nothing, drain waves admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
 | Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations
@@ -1768,8 +1768,8 @@ this table retains its requirements without claiming the entire matrix was execu
   `machine.auto_concurrency.mode = "enforce"`, the request also filters out task classes its host
   load forecast cannot support. The census puts work only that executor can run first, but it
   does not report remaining slots: a fungible task can wait while the only other executor that
-  could run it is saturated. `workflow.admission_affinity = "priority"` is the escape hatch,
-  bounding that wait to one priority.
+  could run it is saturated. The former `workflow.admission_affinity = "priority"` escape hatch
+  was removed with the key [ORB-22808]; the reach is fixed at the band.
 - **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References

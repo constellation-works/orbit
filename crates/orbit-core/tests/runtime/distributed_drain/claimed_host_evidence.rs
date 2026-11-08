@@ -100,7 +100,7 @@ fn leaf_with_probe_target_at(
     std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\" \"$6\"\n").unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
     let follower_config = format!(
-        "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+        "[workflow.validation_env]\npath = [\"{}\"]\n",
         bin.display()
     );
     let mut leaf = if before_landing {

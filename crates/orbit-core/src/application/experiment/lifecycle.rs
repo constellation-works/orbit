@@ -203,7 +203,7 @@ impl OrbitRuntime {
                 let overlays = validate_startable(&record, &settings.config_keys)?;
                 self.validate_experiment_overlays(&current.name, &overlays)?;
                 self.validate_experiment_crews(&current.name, &overlays)?;
-                running_limit = Some(settings.max_running);
+                running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);
                 experiment.status = RUNNING.into();
                 experiment.segment = 1;
                 (
@@ -218,7 +218,7 @@ impl OrbitRuntime {
             }
             ExperimentChange::Resume => {
                 require_status(current, &[PAUSED], "resume")?;
-                running_limit = Some(self.experiment_settings().max_running);
+                running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);
                 experiment.status = RUNNING.into();
                 ("resumed", json!({}))
             }
@@ -437,7 +437,7 @@ impl OrbitRuntime {
             ))),
             ExperimentWriteOutcome::RunningLimitReached { running } => {
                 Err(OrbitError::PolicyDenied(format!(
-                    "experiment `{}` cannot run: {running} experiment(s) already running and `experiments.max_running` is {}. Conclude, pause or abandon one first",
+                    "experiment `{}` cannot run: {running} experiment(s) already running and at most {} may run at once. Conclude, pause or abandon one first",
                     current.name,
                     running_limit.unwrap_or(running),
                 )))

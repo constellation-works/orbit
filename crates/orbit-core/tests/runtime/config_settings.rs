@@ -276,7 +276,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         global.join("config.toml"),
         "[review]\nminutes = 45\n\n\
          [decision_channel]\nenabled = true\n\n\
-         [ci_failure]\noperator_suppression_hours = 12\n\n\
+         [retention]\naudit_days = 12\n\n\
          [execution.codex]\nsandbox = \"read-only\"\n\n\
          [execution.env]\npass = [\"GLOBAL_TOKEN\"]\n",
     )
@@ -345,17 +345,17 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     let pass = row(&effective, "execution.env.pass");
     assert_eq!(pass["source"]["layer"], json!("built-in"));
     assert_eq!(pass["fallback"], Value::Null);
-    // A global-only key falls back to its built-in default.
-    let hours = row(&effective, "ci_failure.operator_suppression_hours");
-    assert_eq!(hours["source"]["layer"], json!("global"));
-    assert_eq!(hours["fallback"]["layer"], json!("built-in"));
-    assert_eq!(hours["fallback"]["state"], json!("default"));
+    // A key only the global file sets falls back to its built-in default.
+    let days = row(&effective, "retention.audit_days");
+    assert_eq!(days["source"]["layer"], json!("global"));
+    assert_eq!(days["fallback"]["layer"], json!("built-in"));
+    assert_eq!(days["fallback"]["state"], json!("default"));
     assert_ne!(
-        hours["fallback"]["value"],
+        days["fallback"]["value"],
         json!(12),
-        "the fallback is the built-in, not the global hours"
+        "the fallback is the built-in, not the global days"
     );
-    assert_eq!(hours["equals"], json!({"global": true, "built_in": false}));
+    assert_eq!(days["equals"], json!({"global": true, "built_in": false}));
     // A key with no built-in value says so rather than reporting a value.
     let approval = row(&effective, "execution.codex.approval_policy");
     assert_eq!(approval["state"], json!("unset"));
@@ -402,7 +402,7 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         json!({"state": "overridden", "workspace_value": true, "equals_global": true})
     );
     assert_eq!(
-        row(&global_view, "ci_failure.operator_suppression_hours")["reach"],
+        row(&global_view, "retention.audit_days")["reach"],
         json!({"state": "in-effect"})
     );
     assert_eq!(

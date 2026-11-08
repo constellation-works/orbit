@@ -456,9 +456,9 @@ pub(super) fn project_readiness_forecasts(
             "cpu_percent": forecast.cpu_peak.as_ref().and_then(|peak| peak.percent)
                 .map(|peak| f64::from(settings.admit_cpu_percent) - peak),
             "memory_percent": forecast.memory_peak.as_ref().and_then(|peak| peak.percent)
-                .map(|peak| f64::from(settings.admit_memory_percent) - peak),
+                .map(|peak| f64::from(orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT) - peak),
             "admit_cpu_percent": settings.admit_cpu_percent,
-            "admit_memory_percent": settings.admit_memory_percent,
+            "admit_memory_percent": orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
         });
         // Titles come from the admission population, which omits terminal
         // tasks. Statuses also come from the registry projection the snapshot

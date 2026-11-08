@@ -140,7 +140,7 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                     assert!(
                         error.contains("still a draft")
                             && error.contains(if case == "configured" {
-                                "pr.draft is configured"
+                                "open every pull request as a draft"
                             } else {
                                 "no section-gap recovery evidence"
                             })

@@ -493,7 +493,7 @@ pub fn rotate_global_jsonl_best_effort() {
     let Ok(path) = global_jsonl_log_path() else {
         return;
     };
-    let config = super::log_rotation::LogRotationConfig::load_global_best_effort();
+    let config = super::log_rotation::LogRotationConfig::default();
     super::log_rotation::rotate_and_prune(&path, &config);
     if let Some(agent_path) = agent_jsonl_log_path(&path) {
         super::log_rotation::rotate_and_prune(&agent_path, &config.agent_output());
@@ -845,7 +845,7 @@ impl Write for LazyJsonlWriter {
 }
 
 fn open_jsonl_file(path: &Path) -> io::Result<File> {
-    let config = super::log_rotation::LogRotationConfig::load_global_best_effort();
+    let config = super::log_rotation::LogRotationConfig::default();
     let config = if path
         .file_name()
         .is_some_and(|name| name == "orbit-agent.jsonl")

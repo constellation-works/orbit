@@ -217,14 +217,14 @@ impl RuntimeKernel {
         self
     }
 
-    /// Override `machine.host_shutdown_hold_minutes` for a fixture. Production
-    /// runtimes take the admitted setting from the global config.
+    /// Override [`crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`] for a
+    /// fixture. Production runtimes keep the fixed horizon.
     pub fn with_host_shutdown_hold_minutes(mut self, minutes: u32) -> Self {
         self.context.set_host_shutdown_hold_minutes(minutes);
         self
     }
 
-    /// The admitted shutdown-hold horizon, in minutes.
+    /// The shutdown-hold horizon, in minutes.
     pub fn host_shutdown_hold_minutes(&self) -> u32 {
         self.context.settings().host_shutdown_hold_minutes()
     }
@@ -234,6 +234,32 @@ impl RuntimeKernel {
     pub fn with_task_pr_forge(mut self, forge: Arc<dyn TaskPrForge>) -> Self {
         self.task_pr_forge = forge;
         self
+    }
+
+    /// Override [`orbit_engine::WORKTREE_PARKED_RECLAIM_AFTER_HOURS`] for a
+    /// fixture. Production runtimes keep the fixed window.
+    pub fn with_worktree_parked_reclaim_after_hours(mut self, hours: u64) -> Self {
+        self.context.set_worktree_parked_reclaim_after_hours(hours);
+        self
+    }
+
+    /// Override the auto-concurrency starvation guard's
+    /// [`orbit_config::AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES`] and
+    /// [`orbit_config::AUTO_CONCURRENCY_HEAD_STUCK_PASSES`] for a fixture.
+    /// Production runtimes keep the fixed guard.
+    pub fn with_auto_concurrency_head_guard(
+        mut self,
+        max_wait_minutes: u32,
+        stuck_passes: u32,
+    ) -> Self {
+        self.context
+            .set_auto_concurrency_head_guard((max_wait_minutes, stuck_passes));
+        self
+    }
+
+    /// The starvation guard's `(max wait minutes, stuck passes)`.
+    pub fn auto_concurrency_head_guard(&self) -> (u32, u32) {
+        self.context.settings().auto_concurrency_head_guard()
     }
 
     pub fn task_pr_forge(&self) -> &dyn TaskPrForge {
@@ -315,7 +341,7 @@ impl RuntimeKernel {
     }
 
     /// [`Self::resource_profiles`] over the last `window` deliveries of each
-    /// key instead of `profile_window`, built fresh and never cached, so a
+    /// key instead of the fixed 50-delivery window, built fresh and never cached, so a
     /// reader comparing windows leaves admission's profiles alone.
     pub fn resource_profiles_over(&self, window: usize) -> Result<Arc<ProfileSet>, OrbitError> {
         let store = self.sqlite_store()?;
@@ -332,7 +358,7 @@ impl RuntimeKernel {
     }
 
     /// The host's core count and memory, as admission's forecast reads them:
-    /// what `admit_cpu_percent` and `admit_memory_percent` are shares of.
+    /// what `admit_cpu_percent` and the 75% memory ceiling are shares of.
     /// `None` when the host cannot be read.
     pub fn host_capacity(&self) -> Option<HostCapacity> {
         self.host_load.capacity()
@@ -488,7 +514,7 @@ impl RuntimeKernel {
         decide: impl FnOnce(&HostLoadForecast) -> Result<ForecastDecision<T>, OrbitError>,
     ) -> Result<T, OrbitError> {
         let profiles = self.resource_profiles()?;
-        let horizon = self.auto_concurrency_settings().horizon_cap_minutes;
+        let horizon = orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES;
         let store = self.sqlite_store()?;
         // Any wait for a CPU window happens here, outside the lock.
         self.host_load.prepare();

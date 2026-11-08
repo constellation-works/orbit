@@ -113,8 +113,6 @@ pub struct ResourceThrottleSettings {
     pub cpu_high_percent: u8,
     /// CPU recovery percentage, strictly below the high-water mark.
     pub cpu_resume_percent: u8,
-    /// Leaves CPU-light work may hold while only CPU pressure throttles.
-    pub cpu_light_leaves: u8,
     /// Memory high-water percentage.
     pub memory_high_percent: u8,
     /// Memory recovery percentage.
@@ -123,10 +121,6 @@ pub struct ResourceThrottleSettings {
     pub disk_high_percent: u8,
     /// Disk recovery percentage.
     pub disk_resume_percent: u8,
-    /// Linux disk I/O high-water percentage, read from `/proc/pressure/io` `full avg60`.
-    pub io_full_high_percent: u8,
-    /// Linux disk I/O recovery percentage, strictly below the high-water mark.
-    pub io_full_resume_percent: u8,
 }
 
 /// Host-wide delivery admission thresholds and profile bounds.
@@ -136,28 +130,42 @@ pub struct AutoConcurrencySettings {
     pub mode: String,
     /// Maximum forecast CPU utilization as a share of host cores.
     pub admit_cpu_percent: u8,
-    /// Maximum forecast non-reclaimable memory as a share of host memory.
-    pub admit_memory_percent: u8,
-    /// Number of recent completed deliveries retained per profile key.
-    pub profile_window: u32,
     /// Minimum completed deliveries a profile key needs before use without fallback.
     pub min_profile_deliveries: u32,
-    /// Maximum forecast horizon for a candidate, in minutes.
-    pub horizon_cap_minutes: u32,
-    /// Maximum time the queue head may wait before it blocks backfilling, in minutes.
-    pub head_max_wait_minutes: u32,
-    /// Consecutive protected passes without a better miss before the queue head is reported stuck.
-    pub head_stuck_passes: u32,
 }
+
+/// Maximum forecast non-reclaimable memory as a share of host memory.
+///
+/// The former `machine.auto_concurrency.admit_memory_percent` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT: u8 = 75;
+
+/// Number of recent completed deliveries retained per profile key.
+///
+/// The former `machine.auto_concurrency.profile_window` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_PROFILE_WINDOW: u32 = 50;
+
+/// Maximum forecast horizon for a candidate, in minutes.
+///
+/// The former `machine.auto_concurrency.horizon_cap_minutes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HORIZON_CAP_MINUTES: u32 = 120;
+
+/// Maximum time the queue head may wait before it blocks backfilling, in minutes.
+///
+/// The former `machine.auto_concurrency.head_max_wait_minutes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES: u32 = 30;
+
+/// Consecutive protected passes without a better miss before the queue head is reported stuck.
+///
+/// The former `machine.auto_concurrency.head_stuck_passes` default, fixed when the key was removed [ORB-22808].
+pub const AUTO_CONCURRENCY_HEAD_STUCK_PASSES: u32 = 20;
 
 impl AutoConcurrencySettings {
     pub(crate) fn validate_memory_high_percent(
-        &self,
         resource_throttle_memory_high_percent: u8,
     ) -> Result<(), OrbitError> {
-        if self.admit_memory_percent >= resource_throttle_memory_high_percent {
+        if AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT >= resource_throttle_memory_high_percent {
             return Err(OrbitError::InvalidInput(format!(
-                "machine.auto_concurrency.admit_memory_percent must be less than global workflow.resource_throttle.memory_high_percent ({resource_throttle_memory_high_percent})"
+                "global workflow.resource_throttle.memory_high_percent ({resource_throttle_memory_high_percent}) must be greater than the {AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT}% auto-concurrency memory admission ceiling"
             )));
         }
         Ok(())

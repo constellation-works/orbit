@@ -240,7 +240,7 @@ Expiry depends on the record schema. Orbit writes a consent whose every scope is
 - A schema v1 request is limited to 4 KiB.
 - A schema v2 request is limited by the 8 KiB per-operation budget. It is not limited to 4 KiB as a whole.
 
-A schema v2 consent may expire no later than `machine.application_consent_max_days` days from the time you consent. That setting is global only. Its default is 30, and its range is 1 to 365. Consent with only exact scopes is not capped by it. See [Configuration](../config/).
+A schema v2 consent may expire no later than 30 days from the time you consent. The cap is fixed. Consent with only exact scopes is not capped by it.
 
 ## Rotate, revoke and audit
 
@@ -282,6 +282,5 @@ An invocation or refusal row carries an `application` object. It records the app
 ## Related pages
 
 - [CLI commands](../cli/) lists the global options that `--workspace` and `--format` accept.
-- [Configuration](../config/) lists `machine.application_consent_max_days`.
 - [Plugin manifest](../plugin-manifest/) describes `permissions.orbit_tools` and the manifest a plugin ships.
 - [Install and grant plugins](../../how-to/plugins/) covers installing a plugin and granting its permissions.

@@ -3,7 +3,6 @@ use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
-use orbit_config::AttentionSettings;
 use orbit_types::{
     record::{EffectiveStatus, Notice, NoticeKind},
     tool::{
@@ -140,7 +139,6 @@ pub(super) fn friction_attention_items(
     workspace: &AttentionWorkspace,
     host: &AttentionHost,
     now: DateTime<Utc>,
-    settings: &AttentionSettings,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
     use orbit_store::contracts::FrictionListFilter;
     use orbit_types::record::FrictionStatus;
@@ -173,8 +171,7 @@ pub(super) fn friction_attention_items(
             also: Vec::new(),
         };
         let age = (now - record.created_at).num_seconds().max(0) as u64;
-        let bumps = settings
-            .age_bump_hours
+        let bumps = super::ATTENTION_AGE_BUMP_HOURS
             .iter()
             .filter(|hours| age >= u64::from(**hours) * 3600)
             .count();
@@ -229,7 +226,6 @@ pub(super) fn resident_stalled_items(
     workspace: &AttentionWorkspace,
     host: &AttentionHost,
     now: DateTime<Utc>,
-    settings: &AttentionSettings,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
     let cycle_routine_disabled = runtime.resident_cycle_routine_disabled();
     let mut items = Vec::new();
@@ -312,9 +308,7 @@ pub(super) fn resident_stalled_items(
             detail.clone(),
             next,
         );
-        items.push(finalize_attention_item(
-            item, detail, None, &subject, settings, false,
-        ));
+        items.push(finalize_attention_item(item, detail, None, &subject, false));
     }
     Ok(items)
 }

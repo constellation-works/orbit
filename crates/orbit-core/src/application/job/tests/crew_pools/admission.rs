@@ -207,8 +207,7 @@ fn a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure() {
 
     // The owner's readings favour Codex just as decisively; they live in
     // the owner's store and are never the follower's to read.
-    let decisive = "crew_selection = \"usage_pressure\"\n\
-                    usage_pressure_cap = 1000000\nusage_pressure_strength = 10";
+    let decisive = "crew_selection = \"usage_pressure\"";
     let (_owner_root, owner) = host(
         decisive,
         &[

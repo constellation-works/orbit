@@ -34,9 +34,10 @@ pub(crate) struct ProfileBounds {
 impl From<&AutoConcurrencySettings> for ProfileBounds {
     fn from(settings: &AutoConcurrencySettings) -> Self {
         Self {
-            window: usize::try_from(settings.profile_window).unwrap_or(usize::MAX),
+            window: usize::try_from(orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW)
+                .unwrap_or(usize::MAX),
             min_deliveries: usize::try_from(settings.min_profile_deliveries).unwrap_or(usize::MAX),
-            horizon_cap_minutes: settings.horizon_cap_minutes,
+            horizon_cap_minutes: orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
         }
     }
 }

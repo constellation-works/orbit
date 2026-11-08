@@ -14,17 +14,16 @@ use chrono::{DateTime, Utc};
 use orbit_store::contracts::{
     ExecutorCapability, ExecutorCensus, ExecutorCensusEntry, census_dispatch_order,
 };
-use orbit_types::task::{AdmissionAffinityReach, ExecutorOsLimit, Task};
+use orbit_types::task::{ADMISSION_AFFINITY, ExecutorOsLimit, Task};
 
 use crate::OrbitRuntime;
 
 /// How one requester orders its candidates: the live census, the
-/// `workflow.admission_affinity` reach, and the crew `host_os` limits the
+/// [`ADMISSION_AFFINITY`] reach, and the crew `host_os` limits the
 /// eligibility predicates read.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DispatchOrder {
     census: Option<ExecutorCensus>,
-    reach: AdmissionAffinityReach,
     limits: BTreeMap<String, ExecutorOsLimit>,
     pools: BTreeMap<String, Vec<String>>,
 }
@@ -41,7 +40,7 @@ impl DispatchOrder {
             tasks,
             |id| expiring.contains_key(id),
             self.census.as_ref(),
-            self.reach,
+            ADMISSION_AFFINITY,
             &self.limits,
             &self.pools,
         );
@@ -50,24 +49,20 @@ impl DispatchOrder {
 
 impl OrbitRuntime {
     /// The live census `requester` orders against, with its own entry
-    /// replaced by `capability`, or `None` when ordering is off or the
-    /// census cannot be read.
+    /// replaced by `capability`, or `None` when the census cannot be read
+    /// and carries no usage pressure.
     pub(crate) fn executor_census(
         &self,
         requester: &str,
         capability: ExecutorCapability,
     ) -> Option<ExecutorCensus> {
-        // [ORB-17773] Usage pressure rides the requester's census input
-        // and is not governed by the affinity reach, so a requester that
-        // reported pressure still gets a census to carry it when affinity
-        // is off or the live rows cannot be read.
+        // [ORB-17773] Usage pressure rides the requester's census input, so
+        // a requester that reported pressure still gets a census to carry it
+        // when the live rows cannot be read.
         let pressure = capability
             .crews
             .as_ref()
             .is_some_and(|crews| crews.has_pressure());
-        if self.admission_affinity() == AdmissionAffinityReach::Off && !pressure {
-            return None;
-        }
         match self.live_census() {
             Some(live) => Some(ExecutorCensus::new(requester, capability, live)),
             None if pressure => Some(ExecutorCensus::new(requester, capability, Vec::new())),
@@ -82,22 +77,17 @@ impl OrbitRuntime {
         &self,
         limits: &BTreeMap<String, ExecutorOsLimit>,
     ) -> DispatchOrder {
-        let reach = self.admission_affinity();
-        let census = (reach != AdmissionAffinityReach::Off)
-            .then(|| self.automation_machine_identity())
-            .flatten()
-            .and_then(|owner| {
-                let live = self.live_census()?;
-                let own = live
-                    .iter()
-                    .find(|entry| entry.machine_id == owner)?
-                    .capability
-                    .clone();
-                Some(ExecutorCensus::new(owner, own, live))
-            });
+        let census = self.automation_machine_identity().and_then(|owner| {
+            let live = self.live_census()?;
+            let own = live
+                .iter()
+                .find(|entry| entry.machine_id == owner)?
+                .capability
+                .clone();
+            Some(ExecutorCensus::new(owner, own, live))
+        });
         DispatchOrder {
             census,
-            reach,
             limits: limits.clone(),
             pools: self.dispatch_crew_pools(),
         }
@@ -138,9 +128,6 @@ impl OrbitRuntime {
     /// can run (its preflight less provider-limit exclusions). Best effort:
     /// a row that cannot be written leaves the last one, which ages out.
     pub(crate) fn record_owner_census(&self, run_id: &str) {
-        if self.admission_affinity() == AdmissionAffinityReach::Off {
-            return;
-        }
         let Some(owner) = self.automation_machine_identity() else {
             return;
         };

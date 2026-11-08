@@ -9,7 +9,6 @@ use crate::{
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
-use orbit_config::AttentionSettings;
 use orbit_types::{
     task::{
         DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
@@ -156,7 +155,6 @@ pub(super) fn finalize_attention_item(
     mut state: Value,
     request: Option<&DecisionRequest>,
     subject: &Subject<'_>,
-    settings: &AttentionSettings,
     high: bool,
 ) -> AttentionItem {
     use AttentionSeverity as S;
@@ -165,8 +163,7 @@ pub(super) fn finalize_attention_item(
         AttentionKind::ReviewWaiting if item.detail["waiting_on"] == "approval" => S::Low,
         _ => S::Medium,
     };
-    let bumps = settings
-        .age_bump_hours
+    let bumps = super::ATTENTION_AGE_BUMP_HOURS
         .iter()
         .filter(|hours| {
             item.age_seconds
@@ -222,7 +219,6 @@ fn derive_subject_kind(
     comments: &[TaskComment],
     history: &[TaskHistoryEntry],
     request: Option<&DecisionRequest>,
-    settings: &AttentionSettings,
     tasks: &[Task],
 ) -> Result<Option<AttentionItem>, OrbitError> {
     let task = subject.task;
@@ -459,7 +455,7 @@ fn derive_subject_kind(
         _ => return Ok(None),
     };
     Ok(Some(finalize_attention_item(
-        item, state, request, subject, settings, high,
+        item, state, request, subject, high,
     )))
 }
 
@@ -484,7 +480,6 @@ pub(super) fn read_attention_sources(
     host: &AttentionHost,
     filter: &AttentionFilter,
     now: DateTime<Utc>,
-    settings: &AttentionSettings,
 ) -> Result<AttentionCandidates, OrbitError> {
     use AttentionKind as K;
     let mut result = AttentionCandidates {
@@ -531,7 +526,7 @@ pub(super) fn read_attention_sources(
         }
         if filter.selected(K::FrictionUntriaged) {
             let started = Instant::now();
-            match friction_attention_items(runtime, workspace, host, now, settings) {
+            match friction_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
                 Err(error) => result.degraded.push(AttentionDegraded {
                     scope: format!("workspace:{}", workspace.id),
@@ -577,8 +572,7 @@ pub(super) fn read_attention_sources(
     if filter.selected(K::ResidentStalled) {
         let started = Instant::now();
         let read = if runtime.coordination_task_reads_visible() {
-            resident_stalled_items(runtime, workspace, host, now, settings)
-                .map_err(|error| error.to_string())
+            resident_stalled_items(runtime, workspace, host, now).map_err(|error| error.to_string())
         } else {
             Err("Task records on a replica are not authoritative; read the workspace owner".into())
         };
@@ -602,7 +596,7 @@ pub(super) fn read_attention_sources(
     if filter.selected(K::FrictionUntriaged) {
         let started = Instant::now();
         if runtime.coordination_task_reads_visible() {
-            match friction_attention_items(runtime, workspace, host, now, settings) {
+            match friction_attention_items(runtime, workspace, host, now) {
                 Ok(items) => result.items.extend(items),
                 Err(error) => result.degraded.push(AttentionDegraded {
                     scope: format!("workspace:{}", workspace.id),
@@ -736,7 +730,7 @@ pub(super) fn read_attention_sources(
             };
             let request = requests.iter().find(|request| Some(request.gate) == gate);
             let spent = elapsed.entry(kind.as_str().into()).or_default();
-            if *spent >= Duration::from_secs(settings.source_timeout_seconds.into()) {
+            if *spent >= Duration::from_secs(super::ATTENTION_SOURCE_TIMEOUT_SECONDS) {
                 if !result
                     .degraded
                     .iter()
@@ -752,9 +746,7 @@ pub(super) fn read_attention_sources(
                 continue;
             }
             let started = Instant::now();
-            match derive_subject_kind(
-                &subject, kind, &comments, &history, request, settings, &tasks,
-            ) {
+            match derive_subject_kind(&subject, kind, &comments, &history, request, &tasks) {
                 Ok(Some(item)) => {
                     if let Some(request) = request {
                         folded.push(request.id.clone());
@@ -799,7 +791,6 @@ pub(super) fn read_attention_sources(
                     json!({"request_id": request.id}),
                     Some(request),
                     &subject,
-                    settings,
                     false,
                 ));
             }

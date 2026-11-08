@@ -41,8 +41,8 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `blocked` | task | `triage_candidacy` in `task/blocked_recovery/triage.rs`, over `current_block` and the final-recovery escalation | status is `blocked` and the block episode awaits a human: a claimed leaf needs an external prerequisite (`owner_route` or `environment`, surfaced immediately with its leaf error), final recovery escalated, or its backstop is silent. A block that final recovery is still resolving mechanically is not an item | the time the task moved to `blocked` (`blocked_at`) |
 | `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision.list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, no review run is active, and the task waits on an approval or on an exhausted review budget (`detail.waiting_on`: `approval` or `review_budget`) | the time the review settled |
-| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.workflow.run.list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside `run_window_hours`, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
-| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past `run_stuck_after_minutes` | `started_at` (or `scheduled_at` when pending) |
+| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.workflow.run.list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
+| `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
@@ -93,7 +93,7 @@ fallback. Unix uses `kill(pid, 0)` as a presence fallback. Missing or mismatched
 stopped; probe unavailability with a present PID is not death; foreign PID namespaces and
 non-Unix platforms are unknown. A pending run with no recorded pid waits for the age bound.
 The wall-clock bound applies even when identity is unknown, and active rows are not cut by
-`run_window_hours` (that setting bounds failure history). Host-local rows alone are probed;
+the 48-hour run window (it bounds failure history). Host-local rows alone are probed;
 a remote bound run missing locally is not a stale-claim diagnostic. See the design's
 [platform details](../2_design.md#7-concerns--honest-limitations).
 
@@ -178,8 +178,7 @@ Severity is derived, never stored, by one rule applied per kind:
 severity = min(ceiling(kind), raise(base(kind), age, conditions))
 ```
 
-`age` raises the base by one level at each threshold in `attention.age_bump_hours` (default
-`[24, 72]`), starting from the `since` time. `conditions` are the explicit raises in the table.
+`age` raises the base by one level at each age threshold (24 and 72 hours), starting from the `since` time. `conditions` are the explicit raises in the table.
 A kind never exceeds its ceiling. `critical` is reserved for conditions that stop other work
 and are not waiting on a single task.
 
@@ -199,9 +198,9 @@ and are not waiting on a single task.
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
 | `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
-The thresholds and `run_window_hours`, `run_stuck_after_minutes`, `ci_cache_seconds`, `source_timeout_seconds`
-and `per_workspace_item_cap` live in an `[attention]` config table with the defaults named
-here. Severity is part of the fingerprint, so an item that ages from medium to high re-surfaces
+The thresholds, the 48-hour run window, the 120-minute stuck bound, the 60-second CI cache, the
+10-second source timeout and the 200-item workspace cap are fixed; the `[attention]` table that
+set them was deprecated by [ORB-22808]. Severity is part of the fingerprint, so an item that ages from medium to high re-surfaces
 once in a delta feed ([attention-cursor](./attention-cursor.md)).
 
 Ordering of the list: `severity` descending, then `since` ascending (`null` last), then `id`.

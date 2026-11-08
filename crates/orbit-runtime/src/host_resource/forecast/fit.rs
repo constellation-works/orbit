@@ -87,7 +87,7 @@ impl IdleHostAdmission {
 
 impl HostLoadForecast {
     /// The room under `admit_cpu_percent` of the host's cores and
-    /// `admit_memory_percent` of its memory. `None` when the host could not
+    /// the 75% memory ceiling. `None` when the host could not
     /// be measured: without its size there is no threshold to fit under.
     pub fn gap(&self, admit_cpu_percent: u8, admit_memory_percent: u8) -> Option<ForecastGap> {
         let host = self.host?;

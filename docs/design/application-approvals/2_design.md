@@ -206,9 +206,9 @@ constrained, named or rate-limited scope is written as v2 and differs in two way
 
 - Each operation (entry or callback), serialized, is at most 8 KiB. The 4 KiB request
   budget does not apply.
-- Its `expires_at` must be at most `machine.application_consent_max_days` days after
-  consent. The key defaults to 30, accepts 1-365, and is global-only, so a workspace
-  `config.toml` cannot raise it. Consent validation reads the configured value.
+- Its `expires_at` must be at most 30 days after consent. The cap was the global-only
+  `machine.application_consent_max_days` key until [ORB-22808] fixed it at its default;
+  the key is now deprecated and ignored.
 
 ### 4.2 Scope and operation
 
@@ -605,7 +605,7 @@ restriction.
    types, scope names, the `fields` / `input` exclusivity, the ceiling table
    (`APPLICATION_OPERATION_CEILINGS`, which replaced `APPLICATION_BUILTIN_OPERATIONS`),
    the always-refused list, the 8 KiB per-operation
-   budget, the expiry cap (`machine.application_consent_max_days`, default 30) and the
+   budget, the expiry cap (30 days, fixed since [ORB-22808]) and the
    optional scope rate limit. Version selection by content (v1 when exact-only).
    Admission refuses constrained and rate-limited scopes (`not yet admitted`) until
    slice 2. Tests: consent refusals for each
@@ -658,9 +658,9 @@ restriction.
   than an exact call. `orbit application consent` now prints a plain summary of each
   constrained scope (slice 4), for example: "accept any task tagged proposal in status
   proposed whose proposal.json digest equals the call's sha256".
-- **The expiry cap adds operator work.** Monthly rotation at the 30-day default is a real
-  cost on a one-user host. The host may raise the cap with
-  `machine.application_consent_max_days` (resolved question 1).
+- **The expiry cap adds operator work.** Monthly rotation at the 30-day cap is a real
+  cost on a one-user host. The cap was configurable (resolved question 1) until
+  [ORB-22808] fixed it at 30 days.
 - **Office close walks change.** The approve and gateway paths must stop passing through
   `backlog` from `proposed`. Until slice 6 lands, those closes fail with the specific
   refusal. The send has happened or the promote stands, and the app already reports

@@ -93,7 +93,7 @@ spec:
 }
 
 /// A managed run's nested `orbit tool run proc.spawn` may run as long as the
-/// activity has left, under the operator's ceiling; the deadline is honored
+/// activity has left, under the fixed per-call ceiling; the deadline is honored
 /// only behind the managed-run envelope.
 #[test]
 fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
@@ -107,21 +107,6 @@ fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
         .readme("# fixture\n")
         .build();
     workspace_init(&workspace, &home);
-    let output = orbit_command(&workspace, &home)
-        .args([
-            "config",
-            "set",
-            "--global",
-            "execution.proc_spawn_max_timeout_minutes",
-            "3",
-        ])
-        .output()
-        .expect("run config set");
-    assert!(
-        output.status.success(),
-        "config set failed\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 
     let now_ms = u64::try_from(
         std::time::SystemTime::now()
@@ -130,7 +115,7 @@ fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
             .as_millis(),
     )
     .expect("epoch millis fit u64");
-    let input = json!({ "program": "/bin/cat", "args": ["/dev/null"], "timeout_ms": 600_000 });
+    let input = json!({ "program": "/bin/cat", "args": ["/dev/null"], "timeout_ms": 3_600_000 });
     let run = |managed: bool, deadline_ms: Option<u64>| -> Value {
         let mut command = orbit_command(&workspace, &home);
         if managed {
@@ -157,9 +142,13 @@ fn managed_proc_spawn_timeout_ceiling_follows_the_activity_deadline() {
         serde_json::from_slice(&output.stdout).expect("JSON output")
     };
 
-    // An hour left: the configured three minutes bound the call.
-    let value = run(true, Some(now_ms + 3_600_000));
-    assert_eq!(value["timeout_ms"], json!(180_000), "{value}");
+    // Two hours left: the fixed per-call ceiling bounds the call.
+    let value = run(true, Some(now_ms + 7_200_000));
+    assert_eq!(
+        value["timeout_ms"],
+        json!(orbit_tools::PROC_SPAWN_MAX_TIMEOUT_MINUTES * 60_000),
+        "{value}"
+    );
     assert_eq!(
         value["timeout_ceiling_source"],
         json!("configured"),

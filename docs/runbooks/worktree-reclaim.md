@@ -226,8 +226,7 @@ before deletion, without giving the checkout a host command execution path.
 
 A run's worktree normally stays until every task it serves is `done`,
 `rejected` or `archived`. A task parked in `someday` no longer holds it once
-it has stayed there for `worktree.parked_reclaim_after_hours` (default 336,
-two weeks; `0` reclaims at the next sweep). The age runs from the task's move
+it has stayed there for a fixed 336 hours (two weeks). The age runs from the task's move
 into `someday`, read from the task history (or its last update when the
 history cannot be read), not from when the run finished, so a long-finished
 run whose task was parked just now keeps its worktree as

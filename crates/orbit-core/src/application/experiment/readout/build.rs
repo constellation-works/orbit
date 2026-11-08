@@ -513,7 +513,7 @@ impl OrbitRuntime {
             interactive_excluded: observed.interactive_excluded,
             unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
         };
-        let min_delivered_rate = self.experiment_settings().min_delivered_rate;
+        let min_delivered_rate = super::super::EXPERIMENTS_MIN_DELIVERED_RATE;
         let mut readout = build_readout(
             &record,
             enrollment,

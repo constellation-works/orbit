@@ -1220,7 +1220,7 @@ impl Replay {
     /// The follower configuration that puts this `cargo` first.
     pub(crate) fn config(&self) -> String {
         format!(
-            "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+            "[workflow.validation_env]\npath = [\"{}\"]\n",
             self.bin.display()
         )
     }

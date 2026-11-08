@@ -56,7 +56,7 @@ beyond the folding rule inside one host.
 2. **All workspaces on one host.** `all: true` makes the accepting server's local aggregator
    iterate its registry's active workspaces, derive each, and merge. A workspace whose
    derivation fails contributes `degraded` entries and does not fail the call. Per workspace,
-   at most `attention.per_workspace_item_cap` items (default 200) are kept, highest severity
+   at most 200 items are kept, highest severity
    first, with `degraded` code `item_cap` when it cuts. The public response limit is applied
    once, after this merge, not once per workspace.
 3. **All hosts.** The caller-side aggregator described next.
@@ -118,7 +118,7 @@ in [Completeness](#completeness). A truncated public page becomes `response_trun
 It is not merged as the destination's full candidate set.
 
 The destination returns every post-filter item it derived, bounded only by
-`attention.per_workspace_item_cap` per workspace (default 200), highest severity first.
+the fixed cap of 200 per workspace, highest severity first.
 Items the cap drops are absent from `items`. Each such workspace contributes `degraded`
 code `item_cap`. On this read, `counts.matching` is the post-filter count before that cap,
 `counts.returned` is the length of `items`, and `counts.truncated` is true only when the
@@ -228,8 +228,7 @@ do not return the other 50. The degraded entry is the record of the cut.
 ### Budgets
 
 Each destination gets the federated probe budget for connect, handshake and discovery and the
-call budget for the routed read, both bounded by `attention.fanout_budget_seconds` (default
-20) as an outer deadline for the whole fan-out. A destination still running at the deadline is
+call budget for the routed read, both bounded by a fixed 20 seconds as an outer deadline for the whole fan-out. A destination still running at the deadline is
 treated as unreachable for this call. One slow host never delays the others past the deadline.
 
 ## Unreachable hosts are items

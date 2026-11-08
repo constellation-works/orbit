@@ -20,8 +20,6 @@
 //! - `machine.worker_containment_strict` → `machine.worker_containment =
 //!   "strict"`; a boolean `machine.worker_containment` is read by the row's
 //!   own resolver, so the file keeps its spelling and still warns;
-//! - `workflow.validation_env.login_shell` / `.interactive` →
-//!   `workflow.validation_env.shell_probe`;
 //! - `workflow.crew_performance_types` → `workflow.task_types`, the same
 //!   ordered entries under the name type-pool routing reads [ORB-22804].
 //!
@@ -65,12 +63,6 @@ pub(crate) const LEGACY_SWEEP_CREWS_KEYS: &[&str] = &[
 pub(crate) const WORKER_CONTAINMENT_KEY: &str = "machine.worker_containment";
 /// The deprecated strict switch, translated to `worker_containment = "strict"`.
 pub(crate) const LEGACY_WORKER_CONTAINMENT_STRICT_KEY: &str = "machine.worker_containment_strict";
-/// Validation-environment shell probe: `off`, `login` or `interactive`.
-pub(crate) const SHELL_PROBE_KEY: &str = "workflow.validation_env.shell_probe";
-/// The deprecated probe switch: `false` never probes.
-pub(crate) const LEGACY_LOGIN_SHELL_KEY: &str = "workflow.validation_env.login_shell";
-/// The deprecated interactive switch: `false` probes only `-l -c`.
-pub(crate) const LEGACY_INTERACTIVE_KEY: &str = "workflow.validation_env.interactive";
 
 /// Every replacement key a translation may write.
 const REPLACEMENT_KEYS: &[&str] = &[
@@ -80,7 +72,6 @@ const REPLACEMENT_KEYS: &[&str] = &[
     REVIEW_TIMING_KEY,
     crate::operation::REVIEW_MINUTES_KEY,
     WORKER_CONTAINMENT_KEY,
-    SHELL_PROBE_KEY,
     crate::TASK_TYPES_KEY,
 ];
 
@@ -121,7 +112,6 @@ fn translate(
     translate_sweep_pools(document, config_path)?;
     translate_review_timing(document, lower, config_path, purpose)?;
     translate_worker_containment(document, config_path)?;
-    translate_shell_probe(document, lower, config_path)?;
     rename(
         document,
         crate::LEGACY_TASK_TYPES_KEY,
@@ -333,118 +323,6 @@ fn translate_worker_containment(
         toml::Value::String(mode.to_string()),
     );
     Ok(())
-}
-
-/// The probe halves a document states: `shell_probe` decides both when
-/// present (`off` leaves the interactive half at its default); otherwise each
-/// deprecated switch decides its own.
-fn probe_halves(
-    document: &toml::Value,
-    config_path: &Path,
-) -> Result<(Option<bool>, Option<bool>), OrbitError> {
-    if let Some(raw) =
-        config_document::read_typed_config_value::<String>(document, SHELL_PROBE_KEY, config_path)?
-    {
-        return Ok(match ShellProbeMode::parse(&raw)? {
-            ShellProbeMode::Off => (Some(false), None),
-            ShellProbeMode::Login => (Some(true), Some(false)),
-            ShellProbeMode::Interactive => (Some(true), Some(true)),
-        });
-    }
-    Ok((
-        config_document::read_typed_config_value::<bool>(
-            document,
-            LEGACY_LOGIN_SHELL_KEY,
-            config_path,
-        )?,
-        config_document::read_typed_config_value::<bool>(
-            document,
-            LEGACY_INTERACTIVE_KEY,
-            config_path,
-        )?,
-    ))
-}
-
-fn translate_shell_probe(
-    document: &mut toml::Value,
-    lower: Option<&toml::Value>,
-    config_path: &Path,
-) -> Result<(), OrbitError> {
-    if config_document::config_value_at_path(document, SHELL_PROBE_KEY).is_some() {
-        return Ok(());
-    }
-    let (login_shell, interactive) = probe_halves(document, config_path)?;
-    if login_shell.is_none() && interactive.is_none() {
-        return Ok(());
-    }
-    let (lower_login_shell, lower_interactive) = match lower {
-        Some(lower) => probe_halves(lower, config_path)?,
-        None => (None, None),
-    };
-    let mode = match (
-        login_shell.or(lower_login_shell).unwrap_or(true),
-        interactive.or(lower_interactive).unwrap_or(true),
-    ) {
-        (false, _) => ShellProbeMode::Off,
-        (true, false) => ShellProbeMode::Login,
-        (true, true) => ShellProbeMode::Interactive,
-    };
-    config_document::set_config_value_at_path(
-        document,
-        SHELL_PROBE_KEY,
-        toml::Value::String(mode.as_str().to_string()),
-    );
-    Ok(())
-}
-
-/// `workflow.validation_env.shell_probe`: how required validation resolves
-/// PATH and toolchain locators from the owner's shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellProbeMode {
-    /// Never probe the shell.
-    Off,
-    /// Probe a login shell (`-l -c`) only.
-    Login,
-    /// Try an interactive login shell (`-i -l -c`), falling back to `-l -c`
-    /// (the default).
-    Interactive,
-}
-
-impl ShellProbeMode {
-    /// Every value `shell_probe` admits.
-    pub const CHOICES: &'static [&'static str] = &["off", "login", "interactive"];
-
-    /// The configured spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Login => "login",
-            Self::Interactive => "interactive",
-        }
-    }
-
-    /// The mode a configured spelling names.
-    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
-        match raw.trim() {
-            "off" => Ok(Self::Off),
-            "login" => Ok(Self::Login),
-            "interactive" => Ok(Self::Interactive),
-            other => Err(OrbitError::InvalidInput(format!(
-                "{SHELL_PROBE_KEY} has invalid value '{other}'; expected one of: {}",
-                Self::CHOICES.join(", ")
-            ))),
-        }
-    }
-
-    /// Whether the shell is probed at all.
-    pub fn probes(self) -> bool {
-        self != Self::Off
-    }
-
-    /// Whether the interactive login shell is tried first.
-    pub fn interactive(self) -> bool {
-        self == Self::Interactive
-    }
 }
 
 /// `machine.worker_containment`: how detached pipeline workers are bounded.

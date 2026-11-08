@@ -159,8 +159,14 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "translated: true sets machine.worker_containment = \"strict\"; false keeps the \
      boolean's mode. Set machine.worker_containment to off, warn or strict instead",
     ),
-    ("workflow.validation_env.login_shell", SHELL_PROBE_NOTE),
-    ("workflow.validation_env.interactive", SHELL_PROBE_NOTE),
+    (
+        "workflow.validation_env.login_shell",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.interactive",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
     // [ORB-15663] System work names no lane of its own: auto-task templates,
     // the task pilot and step-failure / PR conflict recovery draw from the
     // complexity pools. The key loads and warns, but no longer routes.
@@ -417,6 +423,165 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     // deletes these entries after 2026-12-08, when it becomes an ordinary
     // unknown setting.
     ("assistance", ASSISTANCE_REMOVED_NOTE),
+    // [ORB-22808] Fleet notice limits were fixed on 2026-11-08. Each key loads,
+    // warns and is ignored; code-health-sweep deletes these entries after
+    // 2026-12-08, when they become ordinary unknown settings.
+    ("notice.agent_posting", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.agent_posts_per_task_per_day",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.brief_body_chars", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_delivery", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_max_items", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_read_timeout_ms", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.default_expiry_hours.incident",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.default_expiry_hours.info", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.default_expiry_hours.maintenance",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.max_body_bytes", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_evidence", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_expiry_hours.agent", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_expiry_hours.operator", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.max_expiry_hours.orchestrator.incident",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    (
+        "notice.max_expiry_hours.orchestrator.info",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    (
+        "notice.max_expiry_hours.orchestrator.maintenance",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.max_open_global_per_owner", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_open_per_agent_task", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_open_per_workspace", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_title_chars", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.orchestrator_posts_per_hour",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.retention_days", NOTICE_LIMITS_FIXED_NOTE),
+    // [ORB-22808] Delivery switches, crew-draw constants, throttle internals
+    // and validation-env internals were fixed at their defaults on
+    // 2026-11-08. Each key loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when they become ordinary
+    // unknown settings.
+    ("pr.close_on_terminal", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.draft", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.freshness_section", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.orchestration_trailer", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.screenshot_section", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.signature", DELIVERY_SWITCH_FIXED_NOTE),
+    ("commit.orchestrated_by_trailer", DELIVERY_SWITCH_FIXED_NOTE),
+    ("commit.regression_trailers", DELIVERY_SWITCH_FIXED_NOTE),
+    ("workflow.admission_affinity", CREW_DRAW_FIXED_NOTE),
+    ("workflow.auto_effort.explore_share", CREW_DRAW_FIXED_NOTE),
+    ("workflow.provider_limit_max_used_pct", CREW_DRAW_FIXED_NOTE),
+    ("workflow.usage_pressure_cap", CREW_DRAW_FIXED_NOTE),
+    ("workflow.usage_pressure_strength", CREW_DRAW_FIXED_NOTE),
+    (
+        "workflow.resource_throttle.cpu_light_leaves",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.resource_throttle.io_full_high_percent",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.resource_throttle.io_full_resume_percent",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.shell_probe",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.path_mode",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.cargo_incremental",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    // [ORB-22808] Tuning keys whose defaults every host kept became fixed
+    // values on 2026-11-08. Each key loads, warns and is ignored;
+    // code-health-sweep deletes these entries after 2026-12-08, when they
+    // become ordinary unknown settings.
+    ("attention.age_bump_hours", ATTENTION_FIXED_NOTE),
+    ("attention.ci_cache_seconds", ATTENTION_FIXED_NOTE),
+    ("attention.cursor_ttl_hours", ATTENTION_FIXED_NOTE),
+    ("attention.fanout_budget_seconds", ATTENTION_FIXED_NOTE),
+    ("attention.per_workspace_item_cap", ATTENTION_FIXED_NOTE),
+    ("attention.run_stuck_after_minutes", ATTENTION_FIXED_NOTE),
+    ("attention.run_window_hours", ATTENTION_FIXED_NOTE),
+    ("attention.source_timeout_seconds", ATTENTION_FIXED_NOTE),
+    (
+        "automation.stall_window_minutes",
+        AUTOMATION_STALL_FIXED_NOTE,
+    ),
+    (
+        "ci_failure.operator_suppression_hours",
+        CI_FAILURE_SUPPRESSION_FIXED_NOTE,
+    ),
+    ("execution.agent_stall_minutes", EXECUTION_FIXED_NOTE),
+    (
+        "execution.proc_spawn_max_timeout_minutes",
+        EXECUTION_FIXED_NOTE,
+    ),
+    ("experiments.max_running", EXPERIMENTS_FIXED_NOTE),
+    ("experiments.min_delivered_rate", EXPERIMENTS_FIXED_NOTE),
+    ("jobs.failure_streak_warn", JOB_FAILURE_STREAK_FIXED_NOTE),
+    ("machine.application_consent_max_days", MACHINE_FIXED_NOTE),
+    ("machine.host_shutdown_hold_minutes", MACHINE_FIXED_NOTE),
+    (
+        "machine.auto_concurrency.admit_memory_percent",
+        AUTO_CONCURRENCY_FIXED_NOTE,
+    ),
+    (
+        "machine.auto_concurrency.head_max_wait_minutes",
+        AUTO_CONCURRENCY_FIXED_NOTE,
+    ),
+    (
+        "machine.auto_concurrency.head_stuck_passes",
+        AUTO_CONCURRENCY_FIXED_NOTE,
+    ),
+    (
+        "machine.auto_concurrency.horizon_cap_minutes",
+        AUTO_CONCURRENCY_FIXED_NOTE,
+    ),
+    (
+        "machine.auto_concurrency.profile_window",
+        AUTO_CONCURRENCY_FIXED_NOTE,
+    ),
+    (
+        "resident.evolution.decline_suppress_days",
+        EVOLUTION_LEDGER_FIXED_NOTE,
+    ),
+    (
+        "resident.evolution.window_days",
+        EVOLUTION_LEDGER_FIXED_NOTE,
+    ),
+    ("retention.journal_days", RETENTION_FIXED_NOTE),
+    ("retention.store_warn_bytes", RETENTION_FIXED_NOTE),
+    ("runtime.log_max_file_mb", LOG_ROTATION_FIXED_NOTE),
+    ("runtime.log_max_total_mb", LOG_ROTATION_FIXED_NOTE),
+    ("runtime.log_retention_days", LOG_ROTATION_FIXED_NOTE),
+    (
+        "security_alert_sweep.min_severity",
+        SECURITY_ALERT_SEVERITY_FIXED_NOTE,
+    ),
+    (
+        "worktree.parked_reclaim_after_hours",
+        PARKED_RECLAIM_FIXED_NOTE,
+    ),
 ];
 
 const SELECTIVE_REVIEW_REMOVED_NOTE: &str = "ignored: selective before-landing review was \
@@ -441,9 +606,99 @@ const LEASE_REMOVED_NOTE: &str = "ignored: path leases are not configurable and 
 const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
      [assistance] table. This key stops being recognised after 2026-12-08";
 
+const NOTICE_LIMITS_FIXED_NOTE: &str = "ignored: fleet notice limits are fixed at the former \
+     defaults (expiry 72/12/168 hours by kind, caps 720 operator, 168/72/168 orchestrator, 24 \
+     agent; 120-character titles, 4096-byte bodies, 8 evidence; 20 open per workspace, 10 \
+     global per owner, 2 per agent task; 5 agent posts per task per day, 30 orchestrator posts \
+     per hour; 30-day retention; agent posting and brief delivery on, 5 notices of 600 \
+     characters within 2000 ms). Delete the [notice] table. This key stops being recognised \
+     after 2026-12-08";
+
+const DELIVERY_SWITCH_FIXED_NOTE: &str = "ignored: delivery always closes a task's open Orbit \
+     pull requests when it ends, opens pull requests ready for review (a draft only for a \
+     required-section gap), adds the Screenshots table for ui-tagged tasks, the Branch Freshness \
+     section, the model signature and the Orchestrated-By line, and adds the Orchestrated-By and \
+     regression trailers to commits. Delete the key. This key stops being recognised after \
+     2026-12-08";
+
+const CREW_DRAW_FIXED_NOTE: &str = "ignored: admission affinity is fixed at \"band\", the \
+     <crew>@auto exploration share at 0.1, the provider-limit skip threshold at 90% (set \
+     workflow.provider_limit_overrides to change it per provider or crew), and the usage-pressure \
+     cap and strength at 8 and 1 (choose with workflow.crew_selection). Delete the key. This key \
+     stops being recognised after 2026-12-08";
+
+const RESOURCE_THROTTLE_FIXED_NOTE: &str = "ignored: the throttle keeps 2 CPU-light leaves \
+     under CPU-only pressure and throttles on Linux disk I/O stalls at 20% (resuming below 10%); \
+     tune the cpu, memory and disk thresholds instead. Delete the key. This key stops being \
+     recognised after 2026-12-08";
+
+const VALIDATION_ENV_FIXED_NOTE: &str = "ignored: required validation always probes the \
+     owner's interactive login shell (falling back to a login shell), prepends \
+     workflow.validation_env.path to the resolved PATH, and forces CARGO_INCREMENTAL=0 for bound \
+     host validation. Delete the key. This key stops being recognised after 2026-12-08";
+
+const ATTENTION_FIXED_NOTE: &str = "ignored: the attention queue's tuning is fixed: cursors \
+     last 24 hours, failed runs are read back 48 hours, a run counts as stuck after 120 \
+     minutes, CI reads are cached 60 seconds, each source has 10 seconds and a cross-host \
+     fan-out 20, one workspace contributes at most 200 candidates, and severity rises at 24 and \
+     72 hours. Delete the [attention] table. This key stops being recognised after 2026-12-08";
+
+const AUTOMATION_STALL_FIXED_NOTE: &str = "ignored: a deferred delivery-automation reason is \
+     logged and filed after a fixed 60 minutes; delete the key. This key stops being \
+     recognised after 2026-12-08";
+
+const CI_FAILURE_SUPPRESSION_FIXED_NOTE: &str = "ignored: an archived or rejected CI sweep \
+     task suppresses re-filing for a fixed 6 hours; delete the key. This key stops being \
+     recognised after 2026-12-08";
+
+const EXECUTION_FIXED_NOTE: &str = "ignored: a provider process idle for 30 minutes fails its \
+     step as stalled, and one proc.spawn call inside an activity may run at most 45 minutes; \
+     both are fixed. Delete the key. This key stops being recognised after 2026-12-08";
+
+const EXPERIMENTS_FIXED_NOTE: &str = "ignored: at most 3 experiments run at once in a \
+     workspace, and a readout gives a verdict only when at least 0.9 of a treatment arm's \
+     settled tasks received its treatment; both are fixed. Delete the key. This key stops \
+     being recognised after 2026-12-08";
+
+const JOB_FAILURE_STREAK_FIXED_NOTE: &str = "ignored: the dashboard warns that a job is \
+     failing after a fixed 5 consecutive failed runs; delete the key. This key stops being \
+     recognised after 2026-12-08";
+
+const MACHINE_FIXED_NOTE: &str = "ignored: a constrained application consent lasts at most 30 \
+     days, and unattended admissions hold 180 minutes before a scheduled shutdown; both are \
+     fixed. Delete the key from the global config.toml. This key stops being recognised after \
+     2026-12-08";
+
+const AUTO_CONCURRENCY_FIXED_NOTE: &str = "ignored: forecast admission keeps a fixed 75% \
+     memory ceiling, a 50-delivery profile window, a 120-minute horizon cap, and a starvation \
+     guard of 30 minutes and 20 passes; machine.auto_concurrency.admit_cpu_percent, \
+     min_profile_deliveries and mode stay settable. Delete the key from the global \
+     config.toml. This key stops being recognised after 2026-12-08";
+
+const EVOLUTION_LEDGER_FIXED_NOTE: &str = "ignored: the evolution ledger counts a fixed 14 \
+     days of cost, and a declined proposal stays declined 30 days unless the decline names \
+     its own days; delete the key. This key stops being recognised after 2026-12-08";
+
+const RETENTION_FIXED_NOTE: &str = "ignored: an applied task-commit journal row may be deleted \
+     after a fixed 14 days, and orbit doctor warns about a store file over 1 GiB; \
+     retention.audit_days and retention.runs_days stay settable. Delete the key. This key \
+     stops being recognised after 2026-12-08";
+
+const LOG_ROTATION_FIXED_NOTE: &str = "ignored: the operational log rolls at a fixed 100 MiB, \
+     keeps at most 500 MiB of archives, and deletes archives after 7 days; delete the key \
+     from the [runtime] table. This key stops being recognised after 2026-12-08";
+
+const SECURITY_ALERT_SEVERITY_FIXED_NOTE: &str = "ignored: the security sweep files alerts of \
+     moderate severity and above unless its job input sets min_severity; delete the key. \
+     This key stops being recognised after 2026-12-08";
+
+const PARKED_RECLAIM_FIXED_NOTE: &str = "ignored: worktree GC may remove a someday task's \
+     worktree after it has been parked a fixed 336 hours (14 days); delete the key. This key \
+     stops being recognised after 2026-12-08";
+
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
-     removed; resident.evolution.window_days and decline_suppress_days still apply to the \
-     evolution ledger. Delete the key. This key stops being recognised after 2026-12-07";
+     removed; the evolution ledger keeps its fixed 14-day window and 30-day decline. Delete \
+     the key. This key stops being recognised after 2026-12-07";
 
 const UX_RULES_REMOVED_NOTE: &str = "ignored: the ux-rules routine and its findings filer were \
      removed, so nothing runs UI rule checks on a schedule or files tasks from them; delete the \
@@ -480,10 +735,6 @@ const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks,
 const REVIEW_TIMING_NOTE: &str = "translated to review.timing: before_pr = true is \"before_pr\", \
      before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead. \
      review.timing = before_pr itself is deprecated (use off or before_landing) but still honoured";
-
-const SHELL_PROBE_NOTE: &str = "translated to workflow.validation_env.shell_probe: login_shell = \
-     false is \"off\", interactive = false is \"login\", otherwise \"interactive\"; set \
-     shell_probe instead";
 
 /// A registry key whose deprecated value form still loads: the row's own
 /// resolver reads it, load warns, and `orbit doctor --fix-retired-config-keys`

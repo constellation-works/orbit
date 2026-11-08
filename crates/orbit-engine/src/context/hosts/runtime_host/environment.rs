@@ -77,7 +77,7 @@ macro_rules! environment_methods {
         fn agent_provider_config(&self) -> HashMap<String, String>;
         /// How long a provider process may produce no output and use no CPU
         /// before its step fails as stalled. `None` disables the check and leaves
-        /// only the wall-clock deadline. The built-in window is 30 minutes.
+        /// only the wall-clock deadline. Hosts answer [`AGENT_STALL_MINUTES`](crate::AGENT_STALL_MINUTES).
         fn agent_stall_window(&self) -> Option<std::time::Duration>;
         /// The complete environment an agent subprocess is launched with.
         ///
@@ -159,9 +159,10 @@ macro_rules! environment_methods {
         fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError>;
         /// Admitted rebuildable paths, independent of checkout-authored commands.
         fn worktree_reclaim_patterns(&self) -> Vec<String>;
-        /// `worktree.parked_reclaim_after_hours`: how long a task must have been
-        /// parked in `someday` before the scheduled sweep may remove its run's
-        /// worktree. `None` keeps parked worktrees.
+        /// How long a task must have been parked in `someday` before the
+        /// scheduled sweep may remove its run's worktree, normally
+        /// [`WORKTREE_PARKED_RECLAIM_AFTER_HOURS`](crate::WORKTREE_PARKED_RECLAIM_AFTER_HOURS).
+        /// `None` keeps parked worktrees.
         fn worktree_parked_reclaim_after_hours(&self) -> Option<u64>;
         /// A task's settlement state for worktree GC, read from the store that
         /// owns the workspace's tasks. `run_id` is the run whose worktree is

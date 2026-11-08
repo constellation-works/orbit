@@ -15,8 +15,8 @@ last_updated: 2026-11-02
 # Spec: Notice delivery
 
 Open notices reach three readers: the prompt of every managed agent activity that opts in, the
-dashboard, and `orbit attention`. Delivery into prompts is a workspace switch,
-`notice.brief_delivery`, independent of the MCP toolset. In a prompt, notices are a bounded,
+dashboard, and `orbit attention`. Delivery into prompts is always on and independent of the MCP
+toolset. In a prompt, notices are a bounded,
 structured `fleet_notices` block that the activity instruction declares untrusted data; the host
 records which notice revisions it delivered. A delivered notice changes nothing about the run's
 task, scope, tools, authority or gates.
@@ -52,7 +52,7 @@ For a run of a task whose workspace is *W*, built on the owner of *W* (or read f
 - effective-open notices homed in *W*, any scope; and
 - effective-open `global` notices homed in any workspace the same owner host holds.
 
-At most `notice.brief_max_items` (default 5), ordered `incident`, `maintenance`, `info`, then
+At most 5, ordered `incident`, `maintenance`, `info`, then
 `reports.count` descending, then `updated_at` descending. When more are open the block says how
 many were omitted. A global notice homed on a *different* owner host does not reach this brief
 ([notice-federation](./notice-federation.md#scope)).
@@ -87,7 +87,7 @@ prose:
 }
 ```
 
-- Bodies are cut to `notice.brief_body_chars` (default 600) with `body_truncated`; the agent reads
+- Bodies are cut to 600 characters with `body_truncated`; the agent reads
   the rest with `orbit.notice.show` only if its activity grants that tool.
 - Strings are carried as JSON strings, so newlines and quote characters cannot break out of the
   block. Control characters were refused at post. Nothing in a notice is rendered as Markdown,
@@ -99,9 +99,8 @@ prose:
 
 Posting guidance is separate text (the built-in `posting.txt`, or an activity's own
 `notice_posting_instruction`). It rides whenever the dispatch's
-resolved callable set carries `orbit.notice.post` — the set the host strips when
-`notice.agent_posting` is off — and never depends on a delivered brief, so the first agent on an
-empty board, and a run with `notice.brief_delivery` off, still receives it. It names the posting
+resolved callable set carries `orbit.notice.post` and never depends on a delivered brief, so the
+first agent on an empty board still receives it. It names the posting
 purpose, the linked-task-or-evidence requirement, de-duplication against `task.fleet_notices`
 when that block is present, and the agent bounds (workspace scope, `incident` or `info`, at most
 24 hours, closing only its own notices).
@@ -139,7 +138,7 @@ gates on it in v1.
 ### Failure
 
 Notices are advisory, so delivery fails open with a marker: if the notice read fails or times out
-(`notice.brief_read_timeout_ms`, default 2000), the block is
+(2000 ms), the block is
 `{"trust": "untrusted_data", "unavailable": true, "reason": "…"}` and dispatch proceeds. It never
 refuses or delays a dispatch beyond the timeout.
 
@@ -150,11 +149,11 @@ notices from the owner over the worker binding's owner route, as a worker host c
 `orbit.notice.list` with the run's workspace, so the follower's toolset selection does not matter.
 An unreachable owner yields the `unavailable` block.
 
-### The switch
+### No switch
 
-`notice.brief_delivery` (workspace config, default `true`) turns the block off for every run in the
-workspace. It does not follow the MCP toolset: the toolset is a per-server choice about which tools
-a client sees, while delivery is the workspace's policy for the runs it dispatches, and coupling them
+The block was governed by a workspace switch, `notice.brief_delivery` (default `true`), until
+[ORB-22808] removed it; delivery is now always on. It never followed the MCP toolset: the toolset
+is a per-server choice about which tools a client sees, while delivery is the workspace's policy for the runs it dispatches, and coupling them
 would let one host's MCP config decide what agents on every host are told
 ([4_decisions.md](../4_decisions.md#brief-delivery-is-a-workspace-switch-not-the-toolset)). With no
 open notice in scope the block is omitted entirely.

@@ -1086,7 +1086,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     // workspace does not inherit. set/get continue admitting advanced keys.
     for (key, value, expected, global) in [
         (
-            "workflow.validation_env.cargo_incremental",
+            "workflow.resource_throttle.enabled",
             "false",
             json!(false),
             true,
@@ -1114,7 +1114,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     let configured = fixture.run(&["config", "show"], &[]);
     let configured = String::from_utf8(configured.stdout).expect("configured text");
     for label in [
-        "validation_env.cargo_incremental",
+        "resource_throttle.enabled",
         "provider_limit_budgets",
         "codex.approval_policy",
     ] {
@@ -1128,7 +1128,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
         "configured show",
     );
     assert_eq!(
-        loaded["settings"]["workflow.validation_env.cargo_incremental"],
+        loaded["settings"]["workflow.resource_throttle.enabled"],
         false
     );
     assert_eq!(
@@ -1147,13 +1147,13 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     for scope in ["global", "workspace"] {
         let scoped = fixture.run(&["config", "show", "--scope", scope], &[]);
         let scoped = String::from_utf8(scoped.stdout).expect("scoped text");
-        assert!(!has_row(&scoped, "proc_spawn_max_timeout_minutes"));
+        assert!(!has_row(&scoped, "worktree.reclaim_below_free_mib"));
         assert_eq!(has_row(&scoped, "codex.approval_policy"), scope == "global");
         assert_default_show_omits_repeated_blocks(&scoped);
         assert_identity_rows(&scoped);
         let all = fixture.run(&["config", "show", "--scope", scope, "--advanced"], &[]);
         let all = String::from_utf8(all.stdout).expect("scoped all text");
-        assert!(has_row(&all, "proc_spawn_max_timeout_minutes"));
+        assert!(has_row(&all, "worktree.reclaim_below_free_mib"));
         assert!(
             all.lines().any(|line| line == "Paths"),
             "scoped --all keeps Paths"

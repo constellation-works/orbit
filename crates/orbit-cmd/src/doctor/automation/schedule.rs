@@ -135,7 +135,7 @@ pub(in crate::doctor) fn doctor_check_host_shutdown(
                 shutdown.source
             ),
             "Nothing to repair: admissions resume on their own after the restart, or once the \
-             schedule is further away than machine.host_shutdown_hold_minutes. To resume them \
+             schedule is further away than 180 minutes. To resume them \
              now, cancel the schedule as root with `shutdown -c`."
                 .to_string(),
         );
@@ -144,8 +144,8 @@ pub(in crate::doctor) fn doctor_check_host_shutdown(
         "host-shutdown",
         WorkspaceDoctorStatus::Ok,
         format!(
-            "{} (read from {}); admissions continue until machine.host_shutdown_hold_minutes \
-             of that time, and in-flight runs are not touched",
+            "{} (read from {}); admissions continue until 180 minutes \
+             before that time, and in-flight runs are not touched",
             shutdown.describe(),
             shutdown.source
         ),

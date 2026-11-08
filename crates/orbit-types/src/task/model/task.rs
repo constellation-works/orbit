@@ -800,7 +800,7 @@ pub fn automatic_dispatch_cmp_with_expiry(
 }
 
 /// How far work only the requesting executor can run reaches in automatic
-/// dispatch order [ORB-17304]: the `workflow.admission_affinity` setting.
+/// dispatch order [ORB-17304]; owner admission fixes it at `band` [ORB-22808].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionAffinityReach {
@@ -813,6 +813,11 @@ pub enum AdmissionAffinityReach {
     /// No affinity: the canonical band, priority, expiry, age and ID order.
     Off,
 }
+
+/// The former `workflow.admission_affinity` default, fixed when the key was
+/// removed [ORB-22808]: work only the requesting executor can run leads its
+/// band, ahead of higher-priority work other executors can run.
+pub const ADMISSION_AFFINITY: AdmissionAffinityReach = AdmissionAffinityReach::Band;
 
 impl AdmissionAffinityReach {
     /// Every accepted spelling, in declaration order.

@@ -29,8 +29,8 @@ const RANK = { critical: 3, elevated: 2, ok: 1, unknown: 0 };
 // What the host's pressure means, from the admission contract: a higher value
 // means the weekly allowance expires sooner unused. The number is always shown;
 // it changes scheduling only under the opt-in `usage_pressure` crew selection
-// with a positive strength, and even then it never holds work back.
-const PRESSURE_EXPLAINED = 'Above ×1 this provider\'s weekly allowance would expire unused sooner; below ×1 later; at ×1 or with no weekly reading it is neutral. The value is shown for information. It affects scheduling only when workflow.crew_selection is "usage_pressure" with a positive usage_pressure_strength: then crew pool draws weight higher-pressure crews more, and pull offers tied on priority favor tasks whose pool holds the highest-pressure crew. Under the default static policy, or with strength 0, scheduling ignores it. It never holds any work back.';
+// and even then it never holds work back.
+const PRESSURE_EXPLAINED = 'Above ×1 this provider\'s weekly allowance would expire unused sooner; below ×1 later; at ×1 or with no weekly reading it is neutral. The value is shown for information. It affects scheduling only when workflow.crew_selection is "usage_pressure": then crew pool draws weight higher-pressure crews more, and pull offers tied on priority favor tasks whose pool holds the highest-pressure crew. Under the default static policy, scheduling ignores it. It never holds any work back.';
 
 /// A window id as words: `five_hour` reads `5-hour`, `seven_day_opus` under
 /// scope `opus` reads `7-day`, `gemini-argon-wtu-weekly` under scope `argon`

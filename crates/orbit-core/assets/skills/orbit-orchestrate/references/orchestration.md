@@ -356,8 +356,8 @@ names the `execution.env.pass` variables its start did not hold, and the
 snapshot names any Claude crew in its window left with no worker credential.
 JSON records these queued drains in `capacity.queued_drains`.
 
-It also names a scheduled host shutdown or reboot and its mode. Within
-`machine.host_shutdown_hold_minutes` (default 180), tasks report
+It also names a scheduled host shutdown or reboot and its mode. Within the
+fixed 180-minute hold, tasks report
 `host_shutdown_scheduled` and new unattended admissions hold; running workers
 are left alone. A later schedule is reported while admissions continue. Pull
 drains report the same hold as `Pull drain requests held:`. Report the time and
@@ -377,7 +377,7 @@ example `circuit_open` once three of its claims in a row settled as failures,
 until its breaker half-opens to admit one probe claim.
 
 When CPU is the only held resource, `no-diff-expected` auto-tasks (marked
-`cpu-light`) still start within the `cpu_light_leaves` reserved slots. Once
+`cpu-light`) still start within two reserved slots. Once
 those are taken they report `cpu_light_budget_full`; memory, disk or I/O
 pressure holds them too. On Linux, sustained disk I/O stall (`io full`, from
 `/proc/pressure/io`) is one of the held resources; hosts without it are not gated.

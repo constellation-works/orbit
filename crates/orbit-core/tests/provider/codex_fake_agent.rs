@@ -198,9 +198,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
 /// configured interpreter even though a login profile would put another first.
 #[test]
 fn codex_tool_commands_resolve_python3_through_the_validation_env_prefix() {
-    let harness = Harness::new(
-        "[workflow.validation_env]\nlogin_shell = false\npath = [\"{DIR}/validation-bin\"]\n",
-    );
+    let harness = Harness::new("[workflow.validation_env]\npath = [\"{DIR}/validation-bin\"]\n");
     dispatch(&harness);
 
     assert!(
@@ -222,7 +220,7 @@ fn codex_tool_commands_resolve_python3_through_the_validation_env_prefix() {
 /// toolchains that only a login profile adds stay available to the agent.
 #[test]
 fn codex_keeps_its_login_shell_when_no_validation_path_is_configured() {
-    let harness = Harness::new("[workflow.validation_env]\nlogin_shell = false\n");
+    let harness = Harness::new("");
     dispatch(&harness);
 
     assert!(

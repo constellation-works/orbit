@@ -296,11 +296,7 @@ fn readiness_snapshot_with_detail(
     // [ORB-14624] The classifier's own gate: under a CPU-only throttle,
     // CPU-light leaves fill the reserved light slots and nothing else starts.
     let light_budget = LightBudget::new(
-        runtime
-            .context
-            .settings()
-            .resource_throttle()
-            .cpu_light_leaves,
+        crate::application::admission::cpu_light::CPU_LIGHT_LEAVES,
         claimed_by_task.keys(),
         &snapshot.task_lookup,
     );
@@ -555,7 +551,7 @@ fn readiness_snapshot_with_detail(
                 .and_then(|drain| drain.refusal.clone()),
             // [ORB-12968] A pending host shutdown or reboot. `host_shutdown`
             // names it however far away it is. `host_shutdown_holding` is
-            // true only inside `machine.host_shutdown_hold_minutes`, which is
+            // true only inside the 180-minute hold, which is
             // when drains, the sweep and routines start no new work. A missing
             // flag on an older payload means holding.
             "host_shutdown": host_shutdown,

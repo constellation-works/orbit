@@ -37,7 +37,7 @@ pub enum GcTarget {
     Audit(AuditGcArgs),
     /// Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
     Runs(RunGcArgs),
-    /// Delete applied task commit journal rows older than `retention.journal_days`, keeping each task's newest
+    /// Delete applied task commit journal rows older than 14 days, keeping each task's newest
     Journal(JournalGcArgs),
 }
 
@@ -233,7 +233,7 @@ impl Execute for AuditGcArgs {
                   host's per-minute run and host resource history, and the admission \
                   forecasts recorded against it, older than 30 days go in the same pass, \
                   whatever the window, except rows kept at any age by count: the newest \
-                  max(200, machine.auto_concurrency.profile_window) deliveries per workspace, \
+                  200 deliveries per workspace, \
                   work class and complexity, the newest 10,000 forecasts, and host minutes \
                   from the oldest kept forecast onward.\n\n\
                   Examples:\n  orbit gc runs\n  orbit gc runs --apply"
@@ -287,7 +287,7 @@ pub struct JournalGcArgs {
     #[arg(long)]
     pub apply: bool,
 
-    /// Retention window in days, overriding `retention.journal_days` (default 14)
+    /// Retention window in days (default 14)
     #[arg(long, value_name = "DAYS")]
     pub older_than_days: Option<u32>,
 }

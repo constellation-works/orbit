@@ -294,9 +294,7 @@ kit serves. Among the rest, work fewer live executors can run comes first
 within a priority. A Mac that alone runs the `opus` crew therefore takes an
 opus task before a higher-priority task the Linux hosts can take. Critical and
 corrective work still leads, and the owner's local drain orders the same way.
-Set `workflow.admission_affinity = "priority"` when an exclusive task should
-not pass higher-priority work, for example while the other hosts are
-saturated, or `"off"` for the plain order. A pull receipt's `affinity` names
+This reach is fixed at the band. A pull receipt's `affinity` names
 the admitted task's class and the census it was ordered against.
 
 The latest applied task-pilot disposition `host_operational` identifies work
@@ -1764,8 +1762,7 @@ one. From then on:
   fill them or attach their evidence, then resume `pr_open`, which refreshes
   the body and marks the PR ready. If the automatic repair is already spent,
   the preserved candidate returns to the backlog under the same bounded
-  requeue policy. A configured draft (`pr.draft = true`) or a draft without
-  section-gap evidence still stops in review; its reason asks the operator
+  requeue policy. A draft without section-gap evidence still stops in review; its reason asks the operator
   to mark the PR ready on the forge and retry landing.
 - When a pull request's hosted check fails, the landing classifies each
   failed job from its failed-step log (the CI sweep's log read and error
@@ -2538,8 +2535,8 @@ and is listed `owner-only`.
 When the host has a shutdown or reboot pending (for example
 `unattended-upgrades` running `shutdown -r 04:00`), Orbit holds new
 unattended work only while that schedule is within
-`machine.host_shutdown_hold_minutes` (default 180; see
-[CONFIG.md](../CONFIG.md#machine--who-this-machine-is)). A reboot set
+a fixed 180 minutes (see
+[CONFIG.md](../CONFIG.md#workflowresource_throttle--host-pressure)). A reboot set
 further ahead is still reported, and routines, auto-tasks, and drain waves
 admit as usual, so the host is not idle for the whole lead time. Inside the
 horizon, routines and auto-tasks do not fire, drain waves admit no leaves, a
@@ -2550,7 +2547,7 @@ signalled.
 ```bash
 orbit doctor                 # warning while the schedule is inside the horizon; ok, naming the time, when it is further away
 orbit run readiness          # inside: "Admissions held: host reboot scheduled for …"
-                             # beyond: "Host reboot scheduled for …. Admissions continue until machine.host_shutdown_hold_minutes …"
+                             # beyond: "Host reboot scheduled for …. Admissions continue until 180 minutes …"
 cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
 ```
 
@@ -2595,8 +2592,7 @@ orbit run show <drain-run>   # Throttled: line from the drain's last pass
 ```
 
 Disk I/O is read from `/proc/pressure/io` `full avg60`
-(`io_full_high_percent`, default 20; resume below `io_full_resume_percent`,
-default 10) and appears as `io full` in readiness and the drain's last pass,
+(throttled at 20%, resuming below 10%; both fixed) and appears as `io full` in readiness and the drain's last pass,
 for example `io full 47% (throttled at ≥ 20% since …; resumes below 10%)`. A
 host without pressure stall information, such as macOS, has no I/O reading and
 admits as before.
@@ -2629,7 +2625,7 @@ on hosts that report it.
 - CPU-light work keeps moving under CPU pressure. When CPU is the only held
   resource, a local drain still starts `no-diff-expected` auto-task leaves
   (after-landing review, friction curation, full review) until
-  `workflow.resource_throttle.cpu_light_leaves` (default 2) of them are live
+  two of them are live
   leaves; every other leaf waits. Memory, disk or I/O pressure holds them too, and
   pull drains do not use the budget. Readiness marks these tasks `cpu-light`,
   prints `CPU-light budget: <active> of <reserved> reserved slots in use`,
@@ -2680,8 +2676,8 @@ its window was open: the `Requests held:` line, from `admission_refusal` under
 `settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
 (a claimed leaf was released because the owner's store stayed locked; requests resume by
 themselves at the time it names),
-`host_shutdown_scheduled` (a shutdown or reboot inside
-`machine.host_shutdown_hold_minutes`), or the owner probe's refusal.
+`host_shutdown_scheduled` (a shutdown or reboot inside the 180-minute
+hold), or the owner probe's refusal.
 
 The dashboard run detail shows the same refusal in its **Requests held** panel beside
 crew and waiting information. It includes the breaker failure classes, the time until

@@ -47,8 +47,6 @@ pub struct AttentionPageCursor<'a> {
     pub since: Option<&'a str>,
     /// Public response limit.
     pub limit: usize,
-    /// `attention.cursor_ttl_hours`.
-    pub ttl_hours: u32,
 }
 
 /// Order the candidates, select the delta against `since`, cut the public
@@ -70,8 +68,7 @@ pub fn attention_public_page(
     } = input;
     attention_order(&mut items);
     let issued = now.timestamp().max(0) as u64;
-    let (status, seen) =
-        cursor::decode_attention_cursor(cursor_input.since, issued, cursor_input.ttl_hours);
+    let (status, seen) = cursor::decode_attention_cursor(cursor_input.since, issued);
     let unchanged = items
         .iter()
         .filter(|item| seen.contains(&cursor::attention_seen_hash(item)))

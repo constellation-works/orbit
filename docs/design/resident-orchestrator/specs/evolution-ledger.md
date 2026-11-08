@@ -70,7 +70,7 @@ A new record kind, stored by the workspace owner beside friction but not as fric
 - **Derived on read.** Occurrence count, distinct cycles, distinct mandates, summed minutes and slot
   minutes over a window.
 - **States.** `open` → `proposed` (the pass filed a task) → `resolved` (that task is `done`) or
-  `declined` (that task was rejected; `declined_until` = now + `decline_suppress_days`). A declined
+  `declined` (that task was rejected; `declined_until` = now + 30 days). A declined
   record keeps collecting occurrences, and returns to `open` early if its summed cost in the window
   reaches twice the cost at decline.
 - **Not friction.** Not listed by `orbit friction list`, not resolvable by a `resolves` relation,
@@ -125,13 +125,15 @@ filed them as `proposed` tasks tagged `evolution` and `evolution-record:<record-
 `evolution-evidence.json` artifact. [ORB-22844] removed the routine, the job and its three
 activities. The thresholds `min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`,
 `min_cost_minutes` and `max_proposals` load with a deprecation warning and are ignored until
-2026-12-07. `window_days` (14) and `decline_suppress_days` (30) still apply: the digest's default
-window and a decline's measured window, and the suppression a rejected proposal starts. Proposal
+2026-12-07. The digest's default window and a decline's measured window stay 14 days, and the
+suppression a rejected proposal starts stays 30 days: [ORB-22808] fixed them at the former
+`window_days` and `decline_suppress_days` defaults, which now load with a deprecation warning
+and are ignored until 2026-12-08. Proposal
 tasks the pass filed stay linked to their records.
 
 ## Manager digest
 
-`orbit.resident.digest` / `orbit resident digest [--workspace …] [--since …] [--top N] --json`, derived on read (the default window is `resident.evolution.window_days`):
+`orbit.resident.digest` / `orbit resident digest [--workspace …] [--since …] [--top N] --json`, derived on read (the default window is 14 days):
 
 - residents: state, last outcome, open requests, stalled flag;
 - open escalations, oldest first;

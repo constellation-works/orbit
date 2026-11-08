@@ -6,10 +6,10 @@
 //! mistaken unmanaged session could use without lasting harm.
 
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_config::NoticeSettings;
 use orbit_types::record::{AuthorClass, NoticeAuthor, NoticeKind, NoticeScope};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 
+use super::limits;
 use crate::OrbitRuntime;
 use crate::runtime::authorization::resolved_caller_capabilities;
 
@@ -86,32 +86,23 @@ impl NoticePoster {
     }
 
     /// The longest expiry this poster may set for `kind`, in hours.
-    pub(crate) fn expiry_cap_hours(&self, settings: &NoticeSettings, kind: NoticeKind) -> u32 {
+    pub(crate) fn expiry_cap_hours(&self, kind: NoticeKind) -> u32 {
         match self.class {
-            AuthorClass::Operator | AuthorClass::System => settings.max_expiry_hours_operator,
-            AuthorClass::Orchestrator => kind_hours(&settings.max_expiry_hours_orchestrator, kind),
-            AuthorClass::Agent => settings.max_expiry_hours_agent,
+            AuthorClass::Operator | AuthorClass::System => limits::MAX_EXPIRY_HOURS_OPERATOR,
+            AuthorClass::Orchestrator => limits::max_expiry_hours_orchestrator(kind),
+            AuthorClass::Agent => limits::MAX_EXPIRY_HOURS_AGENT,
         }
     }
 
     /// The expiry used when a post names none, in hours. An agent's default
     /// is its cap.
-    pub(crate) fn default_expiry_hours(&self, settings: &NoticeSettings, kind: NoticeKind) -> u32 {
-        let default = kind_hours(&settings.default_expiry_hours, kind);
+    pub(crate) fn default_expiry_hours(&self, kind: NoticeKind) -> u32 {
         match self.class {
-            AuthorClass::Agent => settings.max_expiry_hours_agent,
+            AuthorClass::Agent => limits::MAX_EXPIRY_HOURS_AGENT,
             AuthorClass::Operator | AuthorClass::Orchestrator | AuthorClass::System => {
-                default.min(self.expiry_cap_hours(settings, kind))
+                limits::default_expiry_hours(kind).min(self.expiry_cap_hours(kind))
             }
         }
-    }
-}
-
-fn kind_hours(hours: &orbit_config::NoticeKindHours, kind: NoticeKind) -> u32 {
-    match kind {
-        NoticeKind::Incident => hours.incident,
-        NoticeKind::Maintenance => hours.maintenance,
-        NoticeKind::Info => hours.info,
     }
 }
 

@@ -861,8 +861,7 @@ The host default is `machine.auto_concurrency.mode`. See
 A profile is learned from the CPU and memory that delivery's workers recorded
 on this host. It appears once a delivery the drain admitted here finishes.
 Each profile keeps the most recent completed deliveries of its kind, however
-old. How many it keeps is `machine.auto_concurrency.profile_window` (default
-50), across every crew model and Orbit version. Admission prices a task by
+old: the last 50, across every crew model and Orbit version. Admission prices a task by
 its crew model's own deliveries of that kind when it has at least
 `machine.auto_concurrency.min_profile_deliveries`, and by all of them
 otherwise; the **Crew models** column counts the models behind each
@@ -898,8 +897,7 @@ A series with fewer deliveries than
 `machine.auto_concurrency.min_profile_deliveries` (default 10) is **sparse**:
 dimmed, with a hollow end. Admission then uses a wider profile. Each line
 ends at its horizon, the first minute where fewer than 1 in 10 of its
-deliveries are still running, and no later than
-`machine.auto_concurrency.horizon_cap_minutes` (default 120). Each minute
+deliveries are still running, and no later than 120 minutes. Each minute
 averages the deliveries still running then, so the tail is the long runs.
 
 The three charts share minutes since admission on the horizontal axis:
@@ -1432,8 +1430,8 @@ definition exactly as `orbit experiment create`, `update`, and `start`
 do, and shows its message next to the field it names, such as a
 guardrail threshold under **Guardrails** or a crew pool problem in that
 arm's **Crew pool**.
-Starting is refused while `experiments.enabled` is false or
-`experiments.max_running` experiments are already running. Each change
+Starting is refused while `experiments.enabled` is false or three
+experiments are already running. Each change
 appears in the timeline with actor `dashboard`.
 
 ## Automation

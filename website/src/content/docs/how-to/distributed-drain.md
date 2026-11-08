@@ -53,9 +53,7 @@ and hands back evidence for the reviewed head; it never merges.
 
 Admission uses a live executor census. Within a dispatch band, work only the
 requesting host can run leads ahead of priority; among the remaining work,
-scarcer tasks lead within a priority. `workflow.admission_affinity` defaults
-to `"band"`; choose `"priority"` to keep exclusive work within its priority,
-or `"off"` for the plain order. This also applies to the owner's local drain.
+scarcer tasks lead within a priority. This also applies to the owner's local drain.
 
 ## Set it up by hand
 

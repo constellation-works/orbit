@@ -3,7 +3,7 @@
 //!
 //! A failed run keeps its worktree while its task is unsettled, and a task
 //! parked in `someday` may wait there indefinitely. Once every task the
-//! worktree serves has been parked for `worktree.parked_reclaim_after_hours`,
+//! worktree serves has been parked for `WORKTREE_PARKED_RECLAIM_AFTER_HOURS`,
 //! measured from the status change rather than the run's end, the worktree
 //! goes through the same gates as a settled one, plus these: no live or
 //! undecidable worker, no claim still owed to its owner, and, for a clean

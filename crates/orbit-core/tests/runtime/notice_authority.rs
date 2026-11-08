@@ -28,8 +28,6 @@ fn runtime_at_config(root: &Path, config: &str) -> OrbitRuntime {
     OrbitRuntime::from_roots(&global, &orbit).unwrap()
 }
 
-const CONFIG_NO_AGENT_POSTING: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[notice]\nagent_posting = false\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
-
 /// The resolved tools of one shipped activity, through its own declared
 /// disallow list.
 fn activity_resolved_tools(
@@ -724,9 +722,9 @@ fn lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request() {
         if !editor {
             call(&runtime, "orbit.notice.post", request.clone(), &operator).unwrap();
         }
-        // Reach the configured cap with distinct writes of the same open subject.
+        // Reach the fixed cap with distinct writes of the same open subject.
         let mut last = Value::Null;
-        for report in 0..runtime.notice_settings().agent_posts_per_task_per_day {
+        for report in 0..orbit_core::application::notice::limits::AGENT_POSTS_PER_TASK_PER_DAY {
             request["body"] = json!(format!("Report {report}"));
             last = call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap();
         }
@@ -984,12 +982,11 @@ fn close_preserves_corroboration_committed_after_close_read() {
     assert_eq!(shown["notice"]["closed"]["cause"], "linked_task_done");
 }
 
-fn agent_posting_baseline_and_switch_govern_managed_runs() {
+fn agent_posting_baseline_governs_managed_runs() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = runtime_at(root.path());
     let task = add_task(&runtime, "Posting agent's bound task");
     let agent = agent_session(&runtime, &task);
-    let operator = session(McpCapability::Operator);
 
     // The three agent activities carry exactly the notice write tools in
     // their baselines; no other notice tool is granted by this slice.
@@ -1040,92 +1037,6 @@ fn agent_posting_baseline_and_switch_govern_managed_runs() {
         "the brief names the agent's notice: {:?}",
         brief.notices
     );
-
-    // With notice.agent_posting = false the tools leave the baselines and
-    // the owner refuses agent-class posts and closes, while the operator
-    // is unaffected.
-    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let runtime = runtime_at_config(root.path(), CONFIG_NO_AGENT_POSTING);
-    let task = add_task(&runtime, "Silenced agent's bound task");
-    let agent = agent_session(&runtime, &task);
-    for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
-        let resolved = activity_resolved_tools(&runtime, activity);
-        for tool in [
-            "orbit.notice.post",
-            "orbit.notice.show",
-            "orbit.notice.close",
-        ] {
-            assert!(
-                !resolved.effective_tools.iter().any(|name| name == tool),
-                "{activity} baseline must omit {tool} when agent posting is off"
-            );
-            assert!(
-                resolved.suppressed_tools.iter().any(|name| name == tool),
-                "{activity} must suppress {tool} for its child when agent posting is off: {:?}",
-                resolved.suppressed_tools
-            );
-            assert!(
-                propagated_deny_policy(&runtime, activity).denies(tool),
-                "{activity} stamped deny list must contain {tool} when agent posting is off"
-            );
-            assert!(
-                !propagated_policy_allows(&runtime, activity, tool),
-                "{activity} child policy must refuse {tool} when agent posting is off"
-            );
-        }
-        // The retained read stays in the baseline and callable through the
-        // propagated policy.
-        assert!(
-            resolved
-                .effective_tools
-                .iter()
-                .any(|name| name == "orbit.notice.list"),
-            "{activity} baseline must retain orbit.notice.list when agent posting is off"
-        );
-        assert!(
-            propagated_policy_allows(&runtime, activity, "orbit.notice.list"),
-            "{activity} child policy must allow orbit.notice.list when agent posting is off"
-        );
-    }
-    refused(
-        call(
-            &runtime,
-            "orbit.notice.post",
-            json!({"kind": "incident", "title": "Silenced", "linked_task": task}),
-            &agent,
-        ),
-        "notice_agent_posting_disabled",
-    );
-    let operator_notice = call(
-        &runtime,
-        "orbit.notice.post",
-        json!({"kind": "info", "title": "Operator still posts", "linked_task": task}),
-        &operator,
-    )
-    .unwrap();
-    let operator_id = operator_notice["notice"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    refused(
-        call(
-            &runtime,
-            "orbit.notice.close",
-            json!({"id": operator_id, "reason": "done"}),
-            &agent,
-        ),
-        "notice_agent_posting_disabled",
-    );
-    // The operator's own reads are unaffected by the agent switch.
-    let shown = call(
-        &runtime,
-        "orbit.notice.show",
-        json!({"id": operator_id}),
-        &operator,
-    )
-    .unwrap();
-    assert_eq!(shown["notice"]["id"], operator_id);
-    call(&runtime, "orbit.notice.list", json!({}), &operator).unwrap();
 }
 
 /// A link must resolve on the home owner: a task id whose prefix this
@@ -1170,10 +1081,9 @@ fn runtime_at_roots_config(global: &Path, orbit: &Path, config: &str) -> OrbitRu
     OrbitRuntime::from_roots(global, orbit).unwrap()
 }
 
-fn attention_notice_config(per_workspace_item_cap: u32) -> String {
-    format!(
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[attention]\nper_workspace_item_cap = {per_workspace_item_cap}\n\n[notice]\nmax_open_per_workspace = 60\nmax_open_global_per_owner = 60\n"
-    )
+fn attention_notice_config() -> String {
+    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n"
+        .to_string()
 }
 
 fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
@@ -1181,15 +1091,16 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     let global = root.path().join("home/.orbit");
     let home_root = root.path().join("home-ws/.orbit");
     let other_root = root.path().join("other-ws/.orbit");
-    let config = attention_notice_config(200);
+    let config = attention_notice_config();
     let home = runtime_at_roots_config(&global, &home_root, &config);
     let other = runtime_at_roots_config(&global, &other_root, &config);
     let operator = session(McpCapability::Operator);
     let home_id = home.workspace_id().unwrap().to_string();
     assert_ne!(home_id, other.workspace_id().unwrap().as_str());
 
+    // Within the fixed open-notice limits: 20 per workspace, 10 global per owner.
     let mut home_notice_ids = Vec::new();
-    for index in 0..51 {
+    for index in 0..11 {
         let posted = call(
             &home,
             "orbit.notice.post",
@@ -1199,7 +1110,7 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
         .unwrap();
         home_notice_ids.push(posted["notice"]["id"].as_str().unwrap().to_string());
     }
-    for index in 0..50 {
+    for index in 0..10 {
         call(
             &other,
             "orbit.notice.post",
@@ -1213,12 +1124,12 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     let query = |runtime: &OrbitRuntime, input: Value| {
         call(runtime, "orbit.attention", input, &operator).unwrap()
     };
-    let first = query(&home, json!({"kind": "notice_open", "limit": 50}));
-    assert_eq!(first["counts"]["matching"], 51);
-    assert_eq!(first["counts"]["returned"], 50);
-    assert_eq!(first["counts"]["by_kind"]["notice_open"], 50);
+    let first = query(&home, json!({"kind": "notice_open", "limit": 10}));
+    assert_eq!(first["counts"]["matching"], 11);
+    assert_eq!(first["counts"]["returned"], 10);
+    assert_eq!(first["counts"]["by_kind"]["notice_open"], 10);
     assert_eq!(first["counts"]["truncated"], true);
-    assert_eq!(first["items"].as_array().map(Vec::len), Some(50));
+    assert_eq!(first["items"].as_array().map(Vec::len), Some(10));
     assert!(first["degraded"].as_array().unwrap().is_empty());
     for item in first["items"].as_array().unwrap() {
         assert_eq!(item["workspace"]["id"], home_id);
@@ -1232,21 +1143,21 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     let first_cursor = first["cursor"]["next"].as_str().unwrap();
     let second = query(
         &home,
-        json!({"kind": "notice_open", "limit": 50, "since": first_cursor}),
+        json!({"kind": "notice_open", "limit": 10, "since": first_cursor}),
     );
     assert_eq!(second["counts"]["matching"], 1);
     assert_eq!(second["counts"]["returned"], 1);
-    assert_eq!(second["counts"]["unchanged"], 50);
+    assert_eq!(second["counts"]["unchanged"], 10);
     assert_eq!(second["cursor"]["status"], "accepted");
     assert!(second["degraded"].as_array().unwrap().is_empty());
     let second_cursor = second["cursor"]["next"].as_str().unwrap();
     let settled = query(
         &home,
-        json!({"kind": "notice_open", "limit": 50, "since": second_cursor}),
+        json!({"kind": "notice_open", "limit": 10, "since": second_cursor}),
     );
     assert_eq!(settled["counts"]["matching"], 0);
     assert_eq!(settled["counts"]["returned"], 0);
-    assert_eq!(settled["counts"]["unchanged"], 51);
+    assert_eq!(settled["counts"]["unchanged"], 11);
     assert!(settled["degraded"].as_array().unwrap().is_empty());
 
     let filtered = query(
@@ -1256,20 +1167,6 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     assert_eq!(filtered["counts"]["matching"], 0);
     assert!(filtered["items"].as_array().unwrap().is_empty());
     assert!(filtered["degraded"].as_array().unwrap().is_empty());
-
-    drop(home);
-    drop(other);
-    let capped_home = runtime_at_roots_config(&global, &home_root, &attention_notice_config(40));
-    let capped = query(&capped_home, json!({"kind": "notice_open", "limit": 100}));
-    assert_eq!(capped["counts"]["returned"], 40);
-    assert_eq!(capped["items"].as_array().map(Vec::len), Some(40));
-    assert!(
-        capped["degraded"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| { entry["kind"] == "notice_open" && entry["code"] == "item_cap" })
-    );
 }
 
 /// A notice in one workspace may link a task in another workspace the
@@ -1368,7 +1265,7 @@ fn cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick() {
 
 crate::scenario_table!(
     notice_authority,
-    agent_posting_baseline_and_switch_govern_managed_runs,
+    agent_posting_baseline_governs_managed_runs,
     operator_posts_updates_and_closes_any_notice,
     orchestrator_session_posts_fleet_wide_within_its_caps,
     run_bound_agent_reports_only_about_its_task,

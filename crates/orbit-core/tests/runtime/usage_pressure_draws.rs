@@ -87,11 +87,9 @@ fn config(pool: &str, purpose: &str, extra: &str) -> String {
     )
 }
 
-/// Pressure decides outright: a Claude crew at ×10⁶ against a Codex crew at
-/// the 10⁻⁶ floor, so the Codex member holds one ticket in about a billion.
-const DECISIVE: &str = "crew_selection = \"usage_pressure\"\n\
-                        usage_pressure_cap = 1000000\n\
-                        usage_pressure_strength = 10";
+/// Pressure decides: at the fixed cap of 8 a Claude crew at ×8 against a
+/// Codex crew at the ⅛ floor holds 64 tickets to the Codex member's one.
+const DECISIVE: &str = "crew_selection = \"usage_pressure\"";
 
 struct Fixture {
     root: TempDir,
@@ -245,11 +243,7 @@ fn static_selection_draws_and_records_as_before() {
     assert_eq!(unpooled.crew_source.as_deref(), Some("default"));
     read_example_week(&fx);
 
-    for extra in [
-        "",
-        "crew_selection = \"static\"",
-        "crew_selection = \"usage_pressure\"\nusage_pressure_strength = 0",
-    ] {
+    for extra in ["", "crew_selection = \"static\""] {
         fx.configure(&config(POOL, "[]", extra));
         let mut drawn = String::new();
         for _ in 0..5 {
@@ -521,7 +515,7 @@ fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
     fx.configure(&config(
         pool,
         "[]",
-        "crew_selection = \"usage_pressure\"\nprovider_limit_max_used_pct = 96",
+        "crew_selection = \"usage_pressure\"\nprovider_limit_overrides = [\"claude:96\"]",
     ));
     let admitted = fx.admit(json!({ "task_ids": [task.id] }));
     let selection = &admitted["crew_selection"];

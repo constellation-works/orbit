@@ -125,17 +125,32 @@ fn each_submission_kind_carries_its_notices() {
 }
 
 fn a_validation_environment_warning_reaches_every_kind() {
-    let _credential =
-        orbit_common::test_env::scoped([("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token"))]);
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    // A fixture HOME whose shell profiles all exit makes the login-shell
+    // probe fail, which is the validation-environment warning.
+    let home = root.path().join("shell-home");
+    std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+    for profile in [
+        ".zprofile",
+        ".zshrc",
+        ".bash_profile",
+        ".bashrc",
+        ".profile",
+        ".config/fish/config.fish",
+    ] {
+        std::fs::write(home.join(profile), "exit 42\n").unwrap();
+    }
+    let _env = orbit_common::test_env::scoped([
+        ("CLAUDE_CODE_OAUTH_TOKEN", Some("fixture-worker-token")),
+        ("HOME", Some(home.to_str().unwrap())),
+    ]);
     let runtime = throttled_runtime(
         root.path(),
-        "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
-         [workflow.validation_env]\nlogin_shell = false\n",
+        "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n",
     );
     let warning = runtime
         .validation_env_preflight_warning()
-        .expect("disabled login-shell resolution warns");
+        .expect("a failing login-shell probe warns");
     for kind in [
         SubmissionKind::Drain,
         SubmissionKind::PullDrain,

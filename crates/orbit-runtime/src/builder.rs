@@ -256,20 +256,13 @@ pub(crate) fn build_context_from_roots(
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
-    let proc_spawn_max_timeout_ms = u64::from(
-        runtime_config
-            .snapshot
-            .execution_proc_spawn_max_timeout_minutes,
-    ) * 60_000;
-    let agent_stall_minutes = runtime_config.snapshot.execution_agent_stall_minutes;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
-    let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
         task_url_template: runtime_config.pr.task_url_template.clone(),
-        close_superseded: runtime_config.pr.close_on_terminal,
+        close_superseded: orbit_types::workflow::PR_CLOSE_ON_TERMINAL,
         delivery_authors: runtime_config.pr.delivery_authors.clone(),
         ci_infrastructure_signatures: runtime_config.pr.ci_infrastructure_signatures.clone(),
         conventions: runtime_config.pr.conventions.clone(),
@@ -283,25 +276,18 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
-    let admission_affinity = runtime_config.snapshot.admission_affinity();
-    // Config admitted the mode's spelling; Core translates it into the exec
-    // layer's policy, as it does for PR settings above.
-    let shell_probe = runtime_config.snapshot.shell_probe();
+    // Config admitted the PATH entries and output variables; the probe,
+    // PATH mode and CARGO_INCREMENTAL handling are fixed [ORB-22808].
     let validation_env = orbit_exec::ValidationEnvPolicy {
-        login_shell: shell_probe.probes(),
-        interactive: shell_probe.interactive(),
+        login_shell: orbit_exec::VALIDATION_LOGIN_SHELL,
+        interactive: orbit_exec::VALIDATION_INTERACTIVE_PROBE,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         build_output_env: runtime_config
             .snapshot
             .workflow_validation_env_build_output_env
             .clone(),
-        cargo_incremental: runtime_config
-            .snapshot
-            .workflow_validation_env_cargo_incremental,
-        path_mode: orbit_exec::ValidationPathMode::parse(
-            &runtime_config.snapshot.workflow_validation_env_path_mode,
-        )
-        .unwrap_or_default(),
+        cargo_incremental: orbit_exec::VALIDATION_CARGO_INCREMENTAL,
+        path_mode: orbit_exec::VALIDATION_PATH_MODE,
     };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
@@ -330,13 +316,10 @@ pub(crate) fn build_context_from_roots(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
             codex_execution_policy,
-            proc_spawn_max_timeout_ms,
-            agent_stall_minutes,
         ),
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            automation_stall_window_minutes,
             pr_config,
             runtime_config.pr.clone(),
             workflow_base_branch,
@@ -346,7 +329,6 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
-            admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
             runtime_config.human_crews.clone(),
@@ -364,14 +346,11 @@ pub(crate) fn build_context_from_roots(
                 .machine()
                 .task_prefix
                 .unwrap_or_else(|| "ORB".to_string()),
-            runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
-            runtime_config.snapshot.worktree_parked_reclaim_after_hours,
             runtime_config.snapshot.mid_run_steering(),
             runtime_config.tag_instructions.clone(),
             runtime_config.review_skip_tags.clone(),
-            orbit_config::AttentionSettings::from_snapshot(&runtime_config.snapshot),
             crate::task::locks::UnlockedContextPaths::new(
                 &runtime_config.snapshot.workflow_unlocked_context_paths,
             )?,
@@ -403,9 +382,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.decision_channel_enabled,
             lease_policy,
             runtime_config.snapshot.experiments(),
-            runtime_config.snapshot.notice(),
             runtime_config.snapshot.machine_labels.clone(),
-            runtime_config.snapshot.machine_application_consent_max_days,
         ),
     ))
 }

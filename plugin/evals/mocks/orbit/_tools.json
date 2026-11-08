@@ -1493,7 +1493,7 @@
     },
     {
       "name": "orbit_experiment_resume",
-      "description": "Resume a paused experiment. Refused while experiments.max_running other experiments are already running. Operator only: an agent session is refused.",
+      "description": "Resume a paused experiment. Refused while 3 other experiments are already running. Operator only: an agent session is refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1617,7 +1617,7 @@
     },
     {
       "name": "orbit_experiment_start",
-      "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while experiments.max_running experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+      "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
       "inputSchema": {
         "type": "object",
         "properties": {

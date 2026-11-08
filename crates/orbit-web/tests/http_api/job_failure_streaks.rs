@@ -1,6 +1,6 @@
 //! The failing-job warning's reads: `/api/jobs` reports each job's failure
 //! streak and `/api/jobs/failure-streaks` returns the jobs at or above
-//! `jobs.failure_streak_warn`, in isolated children.
+//! the fixed warning threshold, in isolated children.
 
 use chrono::{Duration, Utc};
 use orbit_core::JobRunState;
@@ -130,29 +130,6 @@ fn non_runnable_jobs_are_hidden_from_the_failing_badge_and_report_runnability() 
                 field("task_pr_pipeline", "supports_no_input_submission"),
                 false
             );
-        },
-    );
-}
-
-#[test]
-fn a_zero_threshold_turns_the_warning_off() {
-    isolated(
-        "job_failure_streaks::a_zero_threshold_turns_the_warning_off",
-        || {
-            let fixture = Fixture::new();
-            seed_fixture(&fixture);
-            let config = fixture.global.join("config.toml");
-            let existing = std::fs::read_to_string(&config).unwrap_or_default();
-            std::fs::write(
-                &config,
-                format!("{existing}\n[jobs]\nfailure_streak_warn = 0\n"),
-            )
-            .unwrap();
-            let server = fixture.server(false);
-
-            let page = json_ok(server.get("/api/jobs/failure-streaks?workspace=ws_http_fixture"));
-            assert_eq!(page["threshold"], 0);
-            assert!(page["failing"].as_array().unwrap().is_empty(), "{page}");
         },
     );
 }

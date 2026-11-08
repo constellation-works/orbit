@@ -32,9 +32,10 @@ pub struct CrewConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrConfig {
     pub task_url_template: Option<String>,
-    /// `pr.close_on_terminal`: a run's `pr_open` also closes the earlier open
-    /// delivery pull requests of the tasks it publishes, so each task keeps
-    /// one. Off for hosts bound to no workspace configuration.
+    /// A run's `pr_open` also closes the earlier open delivery pull requests
+    /// of the tasks it publishes, so each task keeps one
+    /// ([`orbit_types::workflow::PR_CLOSE_ON_TERMINAL`] for a configured
+    /// host). Off for hosts bound to no workspace configuration.
     pub close_superseded: bool,
     /// `pr.delivery_authors`: forge logins whose pull requests count as
     /// Orbit's. Empty means the login that opened this run's pull request.

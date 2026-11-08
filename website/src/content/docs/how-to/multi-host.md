@@ -149,8 +149,8 @@ orbit run auto --pull project --host owner --for 8h --concurrency 3
 `--pull` requires the full host-qualified selector from discovery. It must
 name this replica's own owner and workspace. The owner admits only tasks
 whose crew and OS the follower can run, including the crew executor's OS
-restriction. Its live executor census gives scarce work precedence, controlled
-by `workflow.admission_affinity`; see [admission order](../distributed-drain/#how-it-fits-together).
+restriction. Its live executor census gives scarce work precedence within a dispatch
+band; see [admission order](../distributed-drain/#how-it-fits-together).
 Each leaf implements, validates,
 and opens a pull request, then hands the candidate back to the owner.
 

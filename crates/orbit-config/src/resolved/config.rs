@@ -47,9 +47,6 @@ struct DocumentAdmissionOptions {
 pub struct PrSettings {
     /// URL template used to link a task ID in PR descriptions.
     pub task_url_template: Option<String>,
-    /// Close a task's open Orbit-authored PRs when it reaches done, rejected
-    /// or archived (`pr.close_on_terminal`, default `true`).
-    pub close_on_terminal: bool,
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
@@ -74,9 +71,6 @@ pub struct ResolvedConfig {
     pub persistence: PersistenceConfig,
     /// Config-owned PR settings.
     pub pr: PrSettings,
-    /// Minutes a deferred delivery-automation reason may persist before it is
-    /// escalated (`[automation] stall_window_minutes`; default 60).
-    pub automation_stall_window_minutes: u32,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
@@ -134,14 +128,12 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures
                     .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
@@ -377,14 +369,12 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures
                     .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),

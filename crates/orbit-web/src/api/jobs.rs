@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
-use orbit_core::application::job::{JobFailureStreak, JobRunListParams, JobRunOrder};
+use orbit_core::application::job::{
+    JOB_FAILURE_STREAK_WARN, JobFailureStreak, JobRunListParams, JobRunOrder,
+};
 use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -195,20 +197,16 @@ pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
     }
 }
 
-/// Jobs whose current failure streak has reached `jobs.failure_streak_warn`,
-/// with that threshold. The dashboard reads this for the catalogue badges and
+/// Jobs whose current failure streak has reached the fixed
+/// [`JOB_FAILURE_STREAK_WARN`] threshold, with that threshold. The dashboard reads this for the catalogue badges and
 /// the Jobs rail count. Only manual-runnable jobs — the jobs the Catalogue
 /// shows — are counted, so the badge stays consistent with what the operator
 /// can see there; delivery and other non-runnable jobs' streaks do not count.
-/// A threshold of 0 turns the warning off: nothing is computed and `failing`
-/// is empty. Display only.
+/// Display only.
 pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
     use orbit_core::application::job::JobCatalogFilter;
     match blocking("list job failure streaks", move || {
-        let threshold = runtime.job_failure_streak_warn();
-        if threshold == 0 {
-            return Ok((threshold, Vec::new()));
-        }
+        let threshold = JOB_FAILURE_STREAK_WARN;
         let job_ids: Vec<String> = runtime
             .list_job_catalog_with_last_run(true, JobCatalogFilter::All)?
             .into_iter()

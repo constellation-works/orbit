@@ -500,12 +500,9 @@ its incremental cache would be write-only. When a binding is configured, Orbit
 sets `CARGO_INCREMENTAL=0` on the validation child — required validation, host
 evidence, baseline reruns and recovery alike — replacing any inherited value.
 That is applied where the command is spawned
-([`workflow.validation_env.cargo_incremental`](../CONFIG.md#incremental-compilation)),
-not by this repository's Makefile. The default `false` keeps incremental off so
-sccache can cache the rustc invocations this checkout's wrapper forwards.
-`cargo_incremental = true` leaves `CARGO_INCREMENTAL` untouched; pinned sccache
-`0.17.0` then rejects those invocations, so turn the compiler cache off
-(`ORBIT_COMPILER_CACHE=0`) before opting in. An incremental directory already
+([incremental compilation](../CONFIG.md#incremental-compilation)),
+not by this repository's Makefile, and has no opt-out: keeping incremental off
+lets sccache cache the rustc invocations this checkout's wrapper forwards. An incremental directory already
 in a target is not deleted. Baseline results are keyed by schema version,
 currently 10. Schema 9 added the workspace output bindings to the versioned
 cache key so earlier results cannot certify the new execution contract; old

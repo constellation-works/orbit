@@ -3,7 +3,6 @@
 use crate::OrbitRuntime;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_config::{ConfigRoots, load_effective_config};
 use orbit_store::contracts::EvolutionStoreBackend;
 use orbit_types::record::{EvolutionOccurrence, EvolutionRecord, EvolutionState};
 use orbit_types::task::{TaskComment, TaskStatus};
@@ -45,22 +44,6 @@ fn view(mut record: EvolutionRecord, since: Option<DateTime<Utc>>) -> Result<Val
     Ok(value)
 }
 impl OrbitRuntime {
-    /// One `resident.evolution.<name>` setting from the effective config.
-    fn evolution_setting(&self, name: &str) -> Result<u32, OrbitError> {
-        let effective =
-            load_effective_config(&ConfigRoots::new(self.global_root(), self.shared_root()))?;
-        effective
-            .value_for(&format!("resident.evolution.{name}"))
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| OrbitError::Execution(format!("missing evolution setting {name}")))
-    }
-    pub(crate) fn evolution_digest_window_days(&self) -> Result<u32, OrbitError> {
-        self.evolution_setting("window_days")
-    }
-    pub(crate) fn evolution_decline_suppress_days(&self) -> Result<u32, OrbitError> {
-        self.evolution_setting("decline_suppress_days")
-    }
     fn evolution_store(&self) -> Result<std::sync::Arc<dyn EvolutionStoreBackend>, OrbitError> {
         Ok(orbit_store::compose::evolution_store(self.sqlite_store()?))
     }
@@ -220,9 +203,9 @@ impl OrbitRuntime {
                     .map(|entry| entry.at)
                     .unwrap_or(task.updated_at);
                 let mut baseline = record.clone();
-                baseline.window_days = self.evolution_digest_window_days()?;
+                baseline.window_days = super::EVOLUTION_WINDOW_DAYS;
                 baseline.occurrences.retain(|event| event.at <= at);
-                decline(&mut baseline, at, self.evolution_decline_suppress_days()?);
+                decline(&mut baseline, at, super::EVOLUTION_DECLINE_SUPPRESS_DAYS);
                 record.window_days = baseline.window_days;
                 record.state = baseline.state;
                 record.declined_until = baseline.declined_until;
@@ -248,7 +231,7 @@ impl OrbitRuntime {
                 if record.state == EvolutionState::Resolved {
                     return Err(invalid("resolved evolution records cannot be declined"));
                 }
-                record.window_days = self.evolution_digest_window_days()?;
+                record.window_days = super::EVOLUTION_WINDOW_DAYS;
                 decline(record, Utc::now(), days);
                 Ok(())
             })

@@ -14,7 +14,6 @@ use orbit_common::OrbitError;
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
-const SECURITY_ALERT_SEVERITIES: &[&str] = &["low", "moderate", "high", "critical"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
 const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
@@ -197,7 +196,9 @@ pub use keys::{
 };
 pub(crate) use settings::resolve_percent;
 pub use settings::{
-    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
-    MachineSettings, MidRunSteeringSettings, NoticeKindHours, NoticeSettings,
-    ResourceThrottleSettings, WorkerContainmentSettings,
+    AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
+    AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
+    ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings,
 };

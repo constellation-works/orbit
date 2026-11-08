@@ -84,7 +84,7 @@ impl OrbitRuntime {
         if previous == task.status || previous == TaskStatus::Done || !task.status.is_terminal() {
             return true;
         }
-        if !self.context.settings().pr_settings().close_on_terminal {
+        if !orbit_types::workflow::PR_CLOSE_ON_TERMINAL {
             return true;
         }
         let landing_prs = if task.status == TaskStatus::Done {
@@ -127,7 +127,7 @@ impl OrbitRuntime {
             )
             || (previous == TaskStatus::Someday && task.status == TaskStatus::Backlog)
             || !matches!(task.status, TaskStatus::Backlog | TaskStatus::Someday)
-            || !self.context.settings().pr_settings().close_on_terminal
+            || !orbit_types::workflow::PR_CLOSE_ON_TERMINAL
         {
             return true;
         }

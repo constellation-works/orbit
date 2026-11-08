@@ -760,7 +760,8 @@ claim. Reading the census never scans receipts.
 A candidate that only the requester can run sorts first within its band, ahead of higher
 priorities. Among the rest, fewer eligible executors sorts first within a priority. Band stays
 the outer key. Owner-local admission uses the same comparator, with the owner as the requester.
-`workflow.admission_affinity` (`band` | `priority` | `off`) bounds how far exclusivity reaches.
+`workflow.admission_affinity` (`band` | `priority` | `off`) bounded how far exclusivity reaches;
+[ORB-22808] removed the key and fixed the reach at `band`.
 The contract is the [executor census](./specs/task-pull.md#executor-census-and-affinity).
 
 The owner still holds ordering authority. Followers declare capability, as before, and the owner

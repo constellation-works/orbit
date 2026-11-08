@@ -319,7 +319,7 @@ segment:
   admission that suppresses the arm cannot borrow an earlier run's dispatch evidence. A task not
   delivered and still in flight is `pending`. Each arm reports `delivery` (`roles`, `assigned`,
   `delivered`, `pending`, `rate` = delivered / (assigned − pending)). When any arm's rate is
-  below `experiments.min_delivered_rate` (default 0.9), or the horizon is reached with none of
+  below 0.9 (fixed since [ORB-22808]), or the horizon is reached with none of
   its tasks settled, the verdict is `withheld` with the reason
   ``arm `<arm>` treatment delivered on <n>/<m> runs`` and an `undelivered` warning, from the
   first settled task on and over any would-be `winner` or `no difference`. At or above the
@@ -331,8 +331,7 @@ segment:
   arm reduced to its delivered tasks; control and unchecked arms keep all theirs. When the two
   views disagree, the treatment's effect depends on whether it was delivered. The verdict is
   read on intention-to-treat only.
-- **Verdict.** A treatment arm with a delivered rate below `experiments.min_delivered_rate`
-  (default 0.9) gets verdict `withheld` before the horizon, even when its primary comparison
+- **Verdict.** A treatment arm with a delivered rate below 0.9 gets verdict `withheld` before the horizon, even when its primary comparison
   would otherwise be `winner` or `no difference`. If no delivery or sample-ratio check withholds
   the verdict, it remains `collecting` until every arm reaches `min_sample` or `max_days` passes
   (fixed horizon, so repeated looks do not inflate false wins). Then: `winner <arm>` when the primary
@@ -372,8 +371,11 @@ Policy only. Experiment definitions are store records.
 | Key | Default | Meaning |
 |---|---|---|
 | `experiments.enabled` | `false` | Off: no new assignments; running experiments keep their rows and in-flight tasks keep their arms |
-| `experiments.max_running` | `3` | Running experiments per workspace |
 | `experiments.config_keys` | `[]` | Allowlisted config keys arms may override in this workspace; each must also be on the code list |
+
+At most 3 experiments run at once in a workspace. `experiments.max_running` and
+`experiments.min_delivered_rate` set this limit and the 0.9 delivered rate until [ORB-22808]
+fixed them at those defaults.
 
 ### Surfaces
 
@@ -492,7 +494,7 @@ Policy only. Experiment definitions are store records.
   applied to any run.
 - The readout reports per-arm n, estimates with intervals, differences from control overall and
   per complexity, sample-ratio and drift warnings, and withholds a verdict before the horizon.
-- A treatment arm whose overlaid step did not succeed on at least `experiments.min_delivered_rate`
+- A treatment arm whose overlaid step did not succeed on at least 0.9
   of its settled tasks gets a `withheld` verdict naming the arm and its delivered count; the
   readout also reports each arm's delivered rate and the primary metric per-protocol.
 - Concluding stores the readout snapshot and, with a winner, files one `proposed` promotion

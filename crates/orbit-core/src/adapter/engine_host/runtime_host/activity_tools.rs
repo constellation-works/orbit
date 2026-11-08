@@ -24,34 +24,28 @@ const GRANT_LIFTING_ACTIVITY: &str = "agent_implement";
 pub(crate) const NOTICE_AGENT_ACTIVITIES: &[&str] =
     &["agent_implement", "agent_review_repair", "final_recovery"];
 
-/// The notice tools a managed agent's baseline carries when
-/// `notice.agent_posting` is on.
+/// The notice tools a managed agent's baseline carries.
 pub(crate) const NOTICE_AGENT_TOOLS: &[&str] = &[
     "orbit.notice.post",
     "orbit.notice.show",
     "orbit.notice.close",
 ];
 
-/// Apply the `notice.agent_posting` switch to a resolved baseline: when
-/// the switch is off the notice tools leave every baseline (the owner also
-/// refuses agent-class posts and closes); when it is on, the named
-/// activities gain the tools even if a future baseline change drops them.
+/// Give the named notice activities the agent notice tools, even if a
+/// future baseline change drops them. Managed agents always may post and
+/// close their own notices [ORB-22808].
 fn apply_notice_agent_posting_baseline(
-    runtime: &OrbitRuntime,
-    activity: Option<&str>,
-    disallow_list: Option<&[String]>,
+    activity: &str,
+    disallow_list: &[String],
     effective_tools: &mut Vec<String>,
 ) {
-    if !runtime.notice_settings().agent_posting {
-        effective_tools.retain(|tool| !NOTICE_AGENT_TOOLS.contains(&tool.as_str()));
-        return;
-    }
-    if !activity.is_some_and(|name| NOTICE_AGENT_ACTIVITIES.contains(&name)) {
+    if !NOTICE_AGENT_ACTIVITIES.contains(&activity) {
         return;
     }
     for tool in NOTICE_AGENT_TOOLS {
-        let denied = disallow_list.is_some_and(|list| tool_allowed(tool, list));
-        if !denied && !effective_tools.iter().any(|existing| existing == tool) {
+        if !tool_allowed(tool, disallow_list)
+            && !effective_tools.iter().any(|existing| existing == tool)
+        {
             effective_tools.push((*tool).to_string());
         }
     }
@@ -65,11 +59,9 @@ pub(super) fn resolve_activity_tools(
     let tasks = load_tasks(runtime, task_ids)?;
     let (requested_tools, omitted_requirement_notes) = admit_required_tools(runtime, &tasks, None)?;
     if requested_tools.is_empty() {
-        let mut effective_tools = baseline_tools.to_vec();
-        apply_notice_agent_posting_baseline(runtime, None, None, &mut effective_tools);
         return Ok(ResolvedActivityTools {
             requested_tools,
-            effective_tools,
+            effective_tools: baseline_tools.to_vec(),
             omitted_requirement_notes,
             granted_tools: Vec::new(),
             suppressed_tools: Vec::new(),
@@ -83,7 +75,6 @@ pub(super) fn resolve_activity_tools(
             effective_tools.push(tool.clone());
         }
     }
-    apply_notice_agent_posting_baseline(runtime, None, None, &mut effective_tools);
     Ok(ResolvedActivityTools {
         requested_tools,
         effective_tools,
@@ -120,7 +111,7 @@ pub(super) fn resolve_activity_tool_denials(
     } else {
         GrantedDenyLifts::default()
     };
-    let mut deny_policy = ActivityToolDenyPolicy {
+    let deny_policy = ActivityToolDenyPolicy {
         activity: activity.to_string(),
         disallow_list: disallow_list
             .iter()
@@ -128,26 +119,6 @@ pub(super) fn resolve_activity_tool_denials(
             .cloned()
             .collect(),
     };
-    // When `notice.agent_posting` is off the notice tools leave the
-    // effective baseline; they must also enter the deny policy, because a
-    // deny-mode child ignores the legacy allowlist and would otherwise
-    // still call them. Added here, before admission, so neither a required
-    // tool nor a granted lift (which only lifts declared entries) re-opens
-    // a suppressed name. Retained reads such as `orbit.notice.list` are
-    // not in `NOTICE_AGENT_TOOLS` and stay callable.
-    let suppressed_tools: Vec<String> = if runtime.notice_settings().agent_posting {
-        Vec::new()
-    } else {
-        NOTICE_AGENT_TOOLS
-            .iter()
-            .map(|tool| (*tool).to_string())
-            .collect()
-    };
-    for tool in &suppressed_tools {
-        if !deny_policy.denies(tool) {
-            deny_policy.disallow_list.push(tool.clone());
-        }
-    }
     let (requested_tools, omitted_requirement_notes) =
         admit_required_tools(runtime, &tasks, Some(&deny_policy)).map_err(|error| match error {
             DispatchError::RequiredToolAdmission {
@@ -170,18 +141,13 @@ pub(super) fn resolve_activity_tool_denials(
         &deny_policy.disallow_list,
         registered_tools.iter().map(String::as_str),
     );
-    apply_notice_agent_posting_baseline(
-        runtime,
-        Some(activity),
-        Some(disallow_list),
-        &mut effective_tools,
-    );
+    apply_notice_agent_posting_baseline(activity, disallow_list, &mut effective_tools);
     Ok(ResolvedActivityTools {
         requested_tools,
         effective_tools,
         omitted_requirement_notes,
         granted_tools: grants.lifted.into_iter().collect(),
-        suppressed_tools,
+        suppressed_tools: Vec::new(),
     })
 }
 

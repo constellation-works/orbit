@@ -76,17 +76,24 @@ pub struct WitnessedProgramGrant {
     pub programs: Result<std::collections::BTreeMap<String, PathBuf>, String>,
 }
 
+/// Longest timeout, in minutes, one `proc.spawn` call may use inside an
+/// activity: long enough for a cold workspace build and test gate, still
+/// bounded below a typical activity.
+///
+/// The former `execution.proc_spawn_max_timeout_minutes` default, fixed when the key was removed [ORB-22808].
+pub const PROC_SPAWN_MAX_TIMEOUT_MINUTES: u64 = 45;
+
 /// The wall-clock budget a managed activity grants `proc.spawn`.
 ///
 /// Built only by the host that dispatched the activity: from the deadline the
-/// CLI runner stamped into the provider's environment, and the operator's
-/// `execution.proc_spawn_max_timeout_minutes`. Tool input never contributes.
+/// CLI runner stamped into the provider's environment, and
+/// [`PROC_SPAWN_MAX_TIMEOUT_MINUTES`]. Tool input never contributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcSpawnBudget {
     /// When the activity's provider subprocess is stopped.
     pub deadline: std::time::SystemTime,
-    /// Operator ceiling for one `proc.spawn` call, however long the activity
-    /// has left.
+    /// Ceiling for one `proc.spawn` call, however long the activity has
+    /// left.
     pub max_timeout_ms: u64,
 }
 

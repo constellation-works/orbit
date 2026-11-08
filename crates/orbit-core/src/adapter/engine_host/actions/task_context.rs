@@ -13,6 +13,9 @@ use serde_json::Value;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 use crate::OrbitRuntime;
+use crate::application::notice::limits::{
+    BRIEF_BODY_CHARS, BRIEF_MAX_ITEMS, BRIEF_READ_TIMEOUT_MS,
+};
 use crate::application::task::{context_workspace_root, finding_fingerprint, is_review_finding};
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -149,11 +152,11 @@ pub(crate) fn task_context_for_agent_input(
     Ok(Some(context))
 }
 
-/// The `fleet_notices` brief for one prompt build, or `None` when
-/// `notice.brief_delivery` is off or no notice is open in scope. Notices
-/// are advisory, so the read runs under `notice.brief_read_timeout_ms` on
-/// its own thread and any failure or timeout answers the `unavailable`
-/// block instead of refusing or delaying the dispatch. A claimed leaf
+/// The `fleet_notices` brief for one prompt build, or `None` when no notice
+/// is open in scope. Notices are advisory, so the read runs under
+/// [`BRIEF_READ_TIMEOUT_MS`] on its own thread and any failure or timeout
+/// answers the `unavailable` block instead of refusing or delaying the
+/// dispatch. A claimed leaf
 /// reads through the worker binding's owner route as a host call to
 /// `orbit.notice.list`; every other run reads its owner's store.
 pub(crate) fn notices_for_agent_input(
@@ -162,10 +165,6 @@ pub(crate) fn notices_for_agent_input(
     _activity_name: &str,
     _input: &Value,
 ) -> Option<FleetNoticeBrief> {
-    let settings = *runtime.notice_settings();
-    if !settings.brief_delivery {
-        return None;
-    }
     let read = {
         let runtime = runtime.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -176,7 +175,7 @@ pub(crate) fn notices_for_agent_input(
             });
         match spawned {
             Ok(_) => receiver.recv_timeout(std::time::Duration::from_millis(u64::from(
-                settings.brief_read_timeout_ms,
+                BRIEF_READ_TIMEOUT_MS,
             ))),
             Err(error) => {
                 return Some(unavailable_fleet_notice_brief(&format!(
@@ -195,7 +194,7 @@ pub(crate) fn notices_for_agent_input(
             return Some(unavailable_fleet_notice_brief("notice read failed"));
         }
     };
-    build_fleet_notice_brief(notices, &settings)
+    build_fleet_notice_brief(notices)
 }
 
 /// The effective-open notices a brief considers, before its bounds apply.
@@ -225,12 +224,9 @@ fn read_open_notices_for_brief(
 
 /// Order, bound and quote `notices` as the `untrusted_data` block: kind,
 /// then reports descending, then newest update first, at most
-/// `brief_max_items`, each body cut to `brief_body_chars` characters. No
+/// [`BRIEF_MAX_ITEMS`], each body cut to [`BRIEF_BODY_CHARS`] characters. No
 /// evidence and no field naming a tool or command reaches the brief.
-fn build_fleet_notice_brief(
-    mut notices: Vec<Notice>,
-    settings: &orbit_config::NoticeSettings,
-) -> Option<FleetNoticeBrief> {
+fn build_fleet_notice_brief(mut notices: Vec<Notice>) -> Option<FleetNoticeBrief> {
     if notices.is_empty() {
         return None;
     }
@@ -242,7 +238,7 @@ fn build_fleet_notice_brief(
             .then_with(|| left.id.cmp(&right.id))
     });
     let total = notices.len();
-    notices.truncate(settings.brief_max_items.max(1) as usize);
+    notices.truncate(BRIEF_MAX_ITEMS as usize);
     let omitted = u64::try_from(total - notices.len()).unwrap_or(u64::MAX);
     let delivered = notices
         .iter()
@@ -252,7 +248,7 @@ fn build_fleet_notice_brief(
         .iter()
         .map(|notice| {
             let body_chars = notice.body.chars().count();
-            let limit = settings.brief_body_chars as usize;
+            let limit = BRIEF_BODY_CHARS as usize;
             let (body, body_truncated) = if body_chars > limit {
                 (notice.body.chars().take(limit).collect::<String>(), true)
             } else {

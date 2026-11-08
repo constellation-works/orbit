@@ -40,12 +40,6 @@ pub trait DeliveryHost {
         Ok(None)
     }
 
-    /// Minutes a deferred reason may persist before the evaluator escalates it
-    /// to a warning and one friction record.
-    fn stall_window_minutes(&self) -> u32 {
-        stall::DEFAULT_WINDOW_MINUTES
-    }
-
     /// The same replay proof `recover --replay-history` previews, for the
     /// evaluator's automatic repair of a diverged branch history. A host with
     /// no source proof refuses, which stalls the consumer for an operator.
