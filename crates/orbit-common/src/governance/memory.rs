@@ -8,9 +8,10 @@
 //! propose (slice M3) are also agent tools: core admits an agent's call only
 //! from a crew memory dreaming task's run, with the key fixed to that task's
 //! key (show also from a run in a memory arm), and a run's activity lists
-//! them only then. Propose is tool-only.
+//! them only then. Propose is tool-only. Proposal review is operator CLI
+//! only, including listing, which expires old proposals.
 use crate::governance::operation::{
-    CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
+    CliArgKind, CliGroup, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only, operation_registry,
     required,
 };
@@ -37,6 +38,12 @@ operation_registry! {
         Copy => COPY,
         /// Propose a note for the global memory (dreaming runs only).
         Propose => PROPOSE,
+        /// List open global-memory proposals with evidence and similarity.
+        Proposals => PROPOSALS,
+        /// Accept a proposal into a new global revision (operator only).
+        ProposalAccept => PROPOSAL_ACCEPT,
+        /// Reject a proposal with a reason (operator only).
+        ProposalReject => PROPOSAL_REJECT,
     }
 }
 
@@ -48,7 +55,11 @@ pub const MEMORY: NounSpec<MemoryVerb> = NounSpec {
     cli_about: "Inspect, export and reset crew memory (experimental)",
     audit_target_type: "crew_memory",
     audit_target_param: "key",
-    cli_groups: &[],
+    cli_groups: &[CliGroup {
+        name: "proposal",
+        cli_about: "Accept or reject a global-memory proposal",
+        params: &[],
+    }],
     operations: MEMORY_OPERATIONS,
 };
 
@@ -276,5 +287,79 @@ const PROPOSE: OperationSpec<MemoryVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const PROPOSAL_ID: ParamSpec = required(both(
+    "id",
+    ParamType::String,
+    "The global-memory proposal id.",
+    CliArgKind::Positional,
+    "Proposal id",
+));
+
+const PROPOSALS: OperationSpec<MemoryVerb> = OperationSpec {
+    verb: MemoryVerb::Proposals,
+    cli_path: &["proposals"],
+    tool_name: "orbit.memory.proposals",
+    tool_description: "List open global-memory proposals with their text, evidence, expiry and a display-only count of other proposing keys with similar open notes. Withdraws proposals older than four weeks and records each expiry. Refused while crew_memory.enabled is false. Operator CLI only.",
+    cli_about: "List open proposals, evidence and display-only similarity counts",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const PROPOSAL_ACCEPT: OperationSpec<MemoryVerb> = OperationSpec {
+    verb: MemoryVerb::ProposalAccept,
+    cli_path: &["proposal", "accept"],
+    tool_name: "orbit.memory.proposal.accept",
+    tool_description: "Accept an open proposal, appending its note to the global memory as a new revision. With edit, read the complete replacement global text from that UTF-8 file instead. Validates the resulting text against all global write rules except provenance; refuses with its resulting byte size above 3 KiB. The decision and revision are atomic and audited. Refused while crew_memory.enabled is false. Operator CLI only.",
+    cli_about: "Accept a proposal into a new global revision (3 KiB maximum)",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        PROPOSAL_ID,
+        both(
+            "edit",
+            ParamType::Path,
+            "UTF-8 file containing the complete replacement global text.",
+            CliArgKind::flag("edit"),
+            "Read the complete replacement global text from this UTF-8 file",
+        ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const PROPOSAL_REJECT: OperationSpec<MemoryVerb> = OperationSpec {
+    verb: MemoryVerb::ProposalReject,
+    cli_path: &["proposal", "reject"],
+    tool_name: "orbit.memory.proposal.reject",
+    tool_description: "Reject an open global-memory proposal with a nonempty reason. Preserves its text and evidence, stores the operator decision and appends its audit event atomically. Refused while crew_memory.enabled is false. Operator CLI only.",
+    cli_about: "Reject an open proposal with a reason",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        PROPOSAL_ID,
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Why the proposal is rejected; must be nonempty.",
+            CliArgKind::flag("reason"),
+            "Why the proposal is rejected",
+        ))),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };

@@ -10,7 +10,8 @@
 //! for a memory arm's dispatches. Slice M3 adds dreaming: the weekly
 //! `crew_memory_dream` routine (`dream`) and the agent tools' admission
 //! (`agent`), which binds a dreaming run's write and proposals to its own
-//! key and evidence pack.
+//! key and evidence pack. Slice M4 (`proposals`) adds operator review and
+//! four-week expiry, with atomic decision and revision audits.
 //! Design: `docs/design/crew-memory/2_design.md`.
 
 mod agent;
@@ -18,6 +19,7 @@ mod delivery;
 mod dream;
 mod key;
 mod operations;
+mod proposals;
 mod validate;
 
 use serde::{Deserialize, Serialize};

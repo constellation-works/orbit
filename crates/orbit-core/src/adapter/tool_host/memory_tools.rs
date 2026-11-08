@@ -69,6 +69,18 @@ pub(super) fn dispatch(
                 revision,
             )
         }
+        MemoryVerb::Proposals => runtime.crew_memory_proposals(),
+        MemoryVerb::ProposalAccept => runtime.crew_memory_proposal_accept(
+            &input.required_string("id")?,
+            input
+                .optional_raw_string("edit")?
+                .map(PathBuf::from)
+                .as_deref(),
+        ),
+        MemoryVerb::ProposalReject => runtime.crew_memory_proposal_reject(
+            &input.required_string("id")?,
+            &input.required_string("reason")?,
+        ),
         MemoryVerb::History => runtime.crew_memory_history(&input.required_string("key")?),
         MemoryVerb::Export => runtime.crew_memory_export(
             input

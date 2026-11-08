@@ -298,6 +298,13 @@ only then ([crew memory](../crew-memory/2_design.md) §6). Copy, export and
 reset stay unadvertised operator verbs. `GOVERNED_TOOL_PLACEMENT` records
 write and propose advertised.
 
+Current surface addition (2026-11-08): `orbit.memory.proposals`,
+`orbit.memory.proposal.accept` and `orbit.memory.proposal.reject` are
+unadvertised, governed `operator` operations. Listing can withdraw expired
+proposals; acceptance changes the notes every model receives, and rejection
+records the operator's decision. `GOVERNED_TOOL_PLACEMENT` records all three
+unadvertised ([crew memory](../crew-memory/2_design.md) §8).
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.

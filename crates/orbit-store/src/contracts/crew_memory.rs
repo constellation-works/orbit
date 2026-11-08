@@ -59,6 +59,17 @@ pub enum CrewMemoryProposalOutcome {
     },
 }
 
+/// An operator's decision on an open global-memory proposal.
+pub struct CrewMemoryProposalDecision {
+    pub workspace_id: String,
+    pub id: String,
+    /// `accepted` or `rejected`.
+    pub status: String,
+    pub actor: String,
+    pub at: DateTime<Utc>,
+    pub reason: String,
+}
+
 /// One row of the append-only crew memory audit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrewMemoryEventRow {
@@ -99,6 +110,33 @@ pub trait CrewMemoryStoreBackend: Send + Sync {
         event: &CrewMemoryEventRow,
         max_per_run: u32,
     ) -> Result<CrewMemoryProposalOutcome, OrbitError>;
+
+    /// Open proposals, oldest first (then id). Core expires old proposals
+    /// before reading this list.
+    fn crew_memory_open_proposals(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError>;
+
+    /// Withdraw open proposals created before `before`, recording each
+    /// expiry and its decision fields atomically with its audit event.
+    fn expire_crew_memory_proposals(
+        &self,
+        workspace_id: &str,
+        before: DateTime<Utc>,
+        at: DateTime<Utc>,
+    ) -> Result<usize, OrbitError>;
+
+    /// Decide an open proposal and append its audit event in one immediate
+    /// transaction. An acceptance also appends its global revision. The
+    /// tuple's number is the expected current global revision (0 if empty);
+    /// refuse a stale read rather than overwrite intervening operator work.
+    fn decide_crew_memory_proposal(
+        &self,
+        decision: &CrewMemoryProposalDecision,
+        event: &CrewMemoryEventRow,
+        revision: Option<(&CrewMemoryRevisionRow, u32)>,
+    ) -> Result<Option<CrewMemoryRevisionRow>, OrbitError>;
 
     /// One revision of `memory_key`: `revision`, or the newest when `None`.
     fn crew_memory_revision(

@@ -37,13 +37,22 @@ impl Execute for MemoryCommand {
             }
             MemoryVerb::Show => vec![Block::text(space_text(&value))],
             MemoryVerb::History => history_blocks(&value),
+            MemoryVerb::Proposals => proposal_blocks(&value),
+            MemoryVerb::ProposalReject => vec![Block::text(format!(
+                "proposal `{}` rejected: {}",
+                text(&value["id"]),
+                text(&value["reason"])
+            ))],
             MemoryVerb::Export => vec![Block::text(export_text(&value))],
             // Tool-only: no CLI path reaches it.
             MemoryVerb::Propose => vec![Block::text(format!(
                 "proposal `{}` opened",
                 text(&value["id"])
             ))],
-            MemoryVerb::Write | MemoryVerb::Reset | MemoryVerb::Copy => {
+            MemoryVerb::Write
+            | MemoryVerb::Reset
+            | MemoryVerb::Copy
+            | MemoryVerb::ProposalAccept => {
                 vec![Block::text(format!(
                     "{} `{}` revision {} ({} file(s), {} bytes, {})",
                     text(&value["action"]).replace('_', " "),
@@ -238,4 +247,19 @@ fn export_text(value: &Value) -> String {
         let _ = write!(out, "\n  {file}");
     }
     out
+}
+
+fn proposal_blocks(value: &Value) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    for row in value["proposals"].as_array().into_iter().flatten() {
+        blocks.push(Block::text(format!(
+            "{} · {} · {} other similar key(s) (display only)\nevidence: {}\nopened: {} · expires: {}\n{}",
+            text(&row["id"]), text(&row["key"]), text(&row["similar_keys"]),
+            list(&row["evidence"]), text(&row["created_at"]), text(&row["expires_at"]), text(&row["text"])
+        )));
+    }
+    if blocks.is_empty() {
+        blocks.push(Block::text("no open global-memory proposals".to_string()));
+    }
+    blocks
 }

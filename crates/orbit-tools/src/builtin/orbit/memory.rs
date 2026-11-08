@@ -18,6 +18,9 @@ impl GuardedModes for MemoryVerb {
             | Self::Write
             | Self::Reset
             | Self::Copy
+            | Self::Proposals
+            | Self::ProposalAccept
+            | Self::ProposalReject
             | Self::Propose => None,
         }
     }
@@ -34,6 +37,9 @@ impl GuardedModes for MemoryVerb {
             | Self::Write
             | Self::Reset
             | Self::Copy
+            | Self::Proposals
+            | Self::ProposalAccept
+            | Self::ProposalReject
             | Self::Propose => None,
         }
     }
@@ -46,6 +52,9 @@ impl GuardedModes for MemoryVerb {
             | Self::Write
             | Self::Reset
             | Self::Copy
+            | Self::Proposals
+            | Self::ProposalAccept
+            | Self::ProposalReject
             | Self::Propose => Ok(()),
         }
     }
@@ -58,6 +67,9 @@ impl GuardedModes for MemoryVerb {
             | Self::Write
             | Self::Reset
             | Self::Copy
+            | Self::Proposals
+            | Self::ProposalAccept
+            | Self::ProposalReject
             | Self::Propose => None,
         }
     }
