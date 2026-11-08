@@ -11,8 +11,11 @@ use super::performance::{TERMS, counted, evaluate_implementers, key, tier};
 use crate::application::agents::facts::ExecutionMode;
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 
-/// One implemented task of one crew-and-model row.
+/// One implemented task of one model-and-effort row.
 pub(in crate::application::agents) struct LedgerTask {
+    /// The crews whose counted attempts on this task fall in the row,
+    /// sorted. A task two crews both worked names both.
+    pub(in crate::application::agents) crews: Vec<String>,
     /// The pilot's tier, or `unassessed`.
     pub(in crate::application::agents) tier: &'static str,
     /// The row's earliest counted attempt start on the task.
@@ -31,10 +34,8 @@ pub(in crate::application::agents) struct LedgerTask {
 }
 
 /// One model-and-recorded-effort row of the implementer scorecard and its
-/// tasks, with the crews that contributed them.
+/// tasks; each task carries the crews that contributed it.
 pub(in crate::application::agents) struct LedgerRow {
-    pub(in crate::application::agents) crew: String,
-    pub(in crate::application::agents) crews: Vec<String>,
     pub(in crate::application::agents) model: String,
     pub(in crate::application::agents) tasks: Vec<LedgerTask>,
 }
@@ -101,6 +102,12 @@ pub(in crate::application::agents) fn implementer_ledger(
                         None
                     };
                     LedgerTask {
+                        crews: attempts
+                            .iter()
+                            .filter_map(|attempt| attempt.runner.crew.clone())
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect(),
                         tier: tier(task),
                         start,
                         reviewed: expectation.reviewed,
@@ -112,8 +119,6 @@ pub(in crate::application::agents) fn implementer_ledger(
                 })
                 .collect();
             LedgerRow {
-                crew: row.crew.clone(),
-                crews: row.crews.clone(),
                 model: row.model.clone(),
                 tasks,
             }

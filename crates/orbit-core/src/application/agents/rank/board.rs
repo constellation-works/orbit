@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use super::measures::{MEASURE_COUNT, Totals, composite, observe, totals};
 use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, Rng, by_tier, draw, percentile};
-use crate::application::agents::MODEL_UNKNOWN;
 use crate::application::agents::roles::LedgerRow;
+use crate::application::agents::{CREW_UNKNOWN, MODEL_UNKNOWN};
 
 /// Units of the other models' evidence a score is blended with.
 pub(super) const SHRINKAGE_K: f64 = 30.0;
@@ -98,13 +98,15 @@ pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
             lines: 0,
             sized_tasks: 0,
         });
-        for crew in &row.crews {
-            *model.crews.entry(crew.clone()).or_default() += row.tasks.len();
-        }
-        if row.crews.is_empty() {
-            *model.crews.entry(row.crew.clone()).or_default() += row.tasks.len();
-        }
         for task in row.tasks {
+            // Credit each crew only with the tasks it actually worked: a
+            // pooled row's tasks belong to different crews' subsets.
+            if task.crews.is_empty() {
+                *model.crews.entry(CREW_UNKNOWN.to_string()).or_default() += 1;
+            }
+            for crew in &task.crews {
+                *model.crews.entry(crew.clone()).or_default() += 1;
+            }
             model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
             if let Some(lines) = task.lines {
                 model.lines = model.lines.saturating_add(lines);

@@ -254,8 +254,11 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
     );
     assert_eq!(row(&payload, "strong")["units"], 40);
     assert_eq!(
-        row(&payload, "strong")["crews"].as_array().unwrap().len(),
-        2
+        row(&payload, "strong")["crews"],
+        serde_json::json!([
+            {"crew": "strong-a", "tasks": 20},
+            {"crew": "strong-b", "tasks": 20},
+        ])
     );
     assert_eq!(payload["unattributed"]["tasks"], 5);
     assert_eq!(payload["live"], false);
@@ -358,6 +361,31 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
     let live = agent_rank(&facts, &live, &RankSeasons::default(), Duration::ZERO);
     assert_eq!(live["provisional"], true);
     assert_eq!(row(&live, "recent")["units"], 3);
+}
+
+#[test]
+fn rank_credits_each_crew_only_its_own_pooled_tasks() {
+    // Two disjoint tasks by different crews at the same model and effort
+    // pool into one model row: each crew is credited only its own task.
+    let facts = facts(&[Work {
+        model: Some("pooled"),
+        crews: &["crew-a", "crew-b"],
+        tasks: 2,
+        verdict: accept,
+        regressed: 0,
+        cost: 1.0,
+        days_ago: 20,
+    }]);
+    let payload = agent_rank(&facts, &settled(), &RankSeasons::default(), Duration::ZERO);
+    let pooled = row(&payload, "pooled");
+    assert_eq!(pooled["units"], 2);
+    assert_eq!(
+        pooled["crews"],
+        serde_json::json!([
+            {"crew": "crew-a", "tasks": 1},
+            {"crew": "crew-b", "tasks": 1},
+        ])
+    );
 }
 
 #[test]
