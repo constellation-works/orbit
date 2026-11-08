@@ -1059,6 +1059,49 @@ fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
 }
 /// Malformed claimed artifact arrays fail at `implement_one` before delivery; valid, absent and null arrays still deliver.
 fn malformed_claimed_artifacts_fail_implement_one_before_delivery() {
+    for (field, artifacts, index, path) in [
+        (
+            "task_artifacts",
+            json!([
+                { "path": "report.json", "source_path": ".orbit/tmp/report.json" },
+                { "path": "review-plan.md", "source_path": ".orbit/tmp/review-plan.md" }
+            ]),
+            1,
+            "review-plan.md",
+        ),
+        (
+            "no_diff_artifacts",
+            json!([{ "path": "./ REVIEW-plan.json", "source_path": ".orbit/tmp/review-plan.json" }]),
+            0,
+            "REVIEW-plan.json",
+        ),
+        (
+            "task_artifacts",
+            json!([{ "path": "review-report.json", "source_path": ".orbit/tmp/review-report.json" }]),
+            0,
+            "review-report.json",
+        ),
+    ] {
+        let case = artifacts.to_string();
+        let failure = assert_malformed_field_fails(&case, json!({ field: artifacts }), field);
+        assert!(
+            failure.contains(orbit_types::workflow::CONTRACT_REFUSAL_MARKER),
+            "{case}: refusal carries the contract marker: {failure}"
+        );
+        assert!(
+            failure.contains(&format!("{field}[{index}]")),
+            "{case}: refusal names the artifact index: {failure}"
+        );
+        assert!(
+            failure.contains(path),
+            "{case}: refusal names the path: {failure}"
+        );
+        assert!(
+            failure.contains("reserved review- namespace") && failure.contains("rename"),
+            "{case}: refusal explains the reserved namespace and how to correct it: {failure}"
+        );
+    }
+
     for field in ["task_artifacts", "no_diff_artifacts"] {
         for artifacts in [
             json!([{ "path": "report.json", "name": ".orbit/tmp/report.json" }]),
