@@ -346,8 +346,9 @@ A granted tool must also be validated exactly like a requirement (exact
 canonical name, registered, agent-facing, enabled) and is checked at
 admission. For reviewed read/repeat-safe grants, the callable set is
 baseline ∪ required ∪ lifted grants. Mutating grants remain denied live and
-travel only as proposals; also requiring a denied mutation refuses
-implementer admission. Do not duplicate a mutating grant in `required_tools`.
+travel only as proposals; also requiring a denied mutation is refused at
+filing and still refuses implementer admission. Do not duplicate a mutating
+grant in `required_tools`.
 
 *Alternative rejected:* one field with an operator-only override flag.
 The flag would ride inside agent-editable task data, so every filing and

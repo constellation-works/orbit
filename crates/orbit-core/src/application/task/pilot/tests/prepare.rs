@@ -201,3 +201,90 @@ fn explicit_admission_between_selection_and_hydration_settles_superseded() {
     assert_eq!(outcome(&output, &task.id)["outcome"], "superseded");
     assert_not_piloted(&workspace, &task.id);
 }
+
+/// A requirement stored before filing refused it holds promotion.
+#[test]
+fn unliftable_required_tool_is_a_blocking_pilot_finding() {
+    let workspace = workspace(None);
+    let params: orbit_store::contracts::TaskCreateParams = serde_json::from_value(json!({
+        "actor": "test",
+        "title": "Stored disallowed requirement",
+        "description": "Filed before the requirement was refused.",
+        "acceptance_criteria": ["The stored requirement is reported before dispatch."],
+        "dependencies": [],
+        "relations": [],
+        "tags": [],
+        "required_tools": ["orbit.auto_task.update"],
+        "plan": "Report the requirement.",
+        "execution_summary": "",
+        "context_files": [],
+        "created_by": "test",
+        "status": TaskStatus::Proposed,
+        "priority": "medium",
+        "task_type": "bug",
+        "external_refs": [],
+        "comments": [],
+    }))
+    .expect("task create fixture");
+    let task = {
+        use crate::application::task::TaskRecords;
+        workspace
+            .runtime
+            .stores()
+            .task_records()
+            .create(params)
+            .expect("store a requirement filing would now refuse")
+    };
+
+    let activities = workspace.runtime.global_root().join("resources/activities");
+    std::fs::create_dir_all(&activities).expect("activity dir");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/activities/agent_implement.yaml"),
+        activities.join("agent_implement.yaml"),
+    )
+    .expect("seed agent_implement");
+
+    let path = workspace.repo.canonicalize().expect("canonicalize repo");
+    let prepared = run(
+        &workspace,
+        "prepare_task_pilot",
+        json!({"workspace_path": path, "task_ids": [task.id], "base_branch": "main"}),
+    );
+    let warnings = prepared["tasks"][0]["validation_tool_warnings"]
+        .as_array()
+        .expect("validation findings");
+    let finding = warnings
+        .iter()
+        .find_map(|warning| warning.as_str())
+        .unwrap_or_else(|| panic!("no finding: {prepared}"));
+    assert!(finding.contains("orbit.auto_task.update"), "{finding}");
+    assert!(finding.contains("agent_implement"), "{finding}");
+    assert!(finding.contains("disallow list"), "{finding}");
+    assert!(finding.contains("mutating"), "{finding}");
+    assert!(
+        finding.contains("operator") && finding.contains("separate operator-owned task"),
+        "{finding}"
+    );
+
+    let assessment = json!({
+        "duplicate_of": Value::Null,
+        "already_landed": Value::Null,
+        "validation_tool_warnings": warnings,
+    });
+    let held = super::super::promotion::promotion_findings(
+        "prepare_task_pilot",
+        &task.id,
+        &assessment,
+        &[],
+        &|_| false,
+    )
+    .expect("promotion findings");
+    assert!(
+        held.warnings
+            .iter()
+            .any(|warning| warning["field"] == "validation_tool_warnings"),
+        "the finding must hold promotion before dispatch: {:?}",
+        held.warnings
+    );
+}

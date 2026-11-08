@@ -90,7 +90,7 @@ A cron or interval definition that was asleep through several slots files one ma
 | `acceptance_criteria` | None | One string per criterion. `--criterion` repeats. |
 | `task_type` | `chore` | `feature`, `bug`, `refactor`, or `chore`. `--type`. |
 | `tags` | None | Extra tags. The `auto-task:<name>` tag is added for you. `--tag` repeats. |
-| `required_tools` | None | Exact tool names copied onto the task. `--required-tools`. An unknown name fails when the task is dispatched. |
+| `required_tools` | None | Exact tool names copied onto the task. `--required-tools`. An unknown name, or a name the implementing activity disallows and no grant could lift, fails when the definition is saved and when the task is filed. A read/repeat-safe exact denial can still be required. |
 | `context_files` | None | Context selectors (`file:`, `dir:`, or `symbol:`), one per line in the dashboard. There is no CLI flag; put them in the file. Older definitions omit the key. |
 | `priority` | `medium` | `low`, `medium`, `high`, or `critical`. |
 | `complexity` | Omitted | `low`, `medium`, `hard`, or `xhard` when you want an assessment. Omit the key to leave the task unassessed. There is no `unassessed` value to write. |

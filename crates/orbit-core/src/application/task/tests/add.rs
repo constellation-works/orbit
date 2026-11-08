@@ -166,3 +166,122 @@ fn keyed_creation_lost_reply_replays_without_history_or_events() {
     }
     assert_eq!(runtime.list_tasks().expect("tasks").len(), 2);
 }
+
+fn seed_implement_activity(runtime: &crate::OrbitRuntime) -> std::path::PathBuf {
+    let dir = runtime.global_root().join("resources/activities");
+    std::fs::create_dir_all(&dir).expect("activity dir");
+    let dest = dir.join("agent_implement.yaml");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/activities/agent_implement.yaml"),
+        &dest,
+    )
+    .expect("seed agent_implement");
+    dest
+}
+
+fn assert_unliftable_refusal(message: &str, tool: &str) {
+    assert!(message.contains(tool), "{message}");
+    assert!(message.contains("agent_implement"), "{message}");
+    assert!(message.contains("disallow list"), "{message}");
+    assert!(
+        message.contains("operator") && message.contains("separate operator-owned task"),
+        "{message}"
+    );
+}
+
+/// An allowed tool is a requirement the implementing activity can call.
+#[test]
+fn filing_accepts_an_allowed_required_tool() {
+    if !enter_isolated_child(module_path!(), "filing_accepts_an_allowed_required_tool") {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    seed_implement_activity(&runtime);
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Allowed requirement".into(),
+            required_tools: vec!["orbit.task.show".into()],
+            ..Default::default()
+        })
+        .expect("an allowed tool is a valid requirement");
+    assert_eq!(task.required_tools, ["orbit.task.show"]);
+}
+
+/// A disallowed mutating tool cannot be required: no grant would run it live.
+#[test]
+fn filing_refuses_an_unliftable_disallowed_required_tool() {
+    if !enter_isolated_child(
+        module_path!(),
+        "filing_refuses_an_unliftable_disallowed_required_tool",
+    ) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    seed_implement_activity(&runtime);
+    let error = runtime
+        .add_task(TaskAddParams {
+            title: "Disallowed mutating requirement".into(),
+            required_tools: vec!["orbit.auto_task.update".into()],
+            ..Default::default()
+        })
+        .expect_err("a disallowed mutating tool is refused at filing");
+    let message = error.to_string();
+    assert_unliftable_refusal(&message, "orbit.auto_task.update");
+    assert!(message.contains("mutating"), "{message}");
+    assert!(
+        runtime.list_tasks().expect("tasks").is_empty(),
+        "a refused requirement is not stored"
+    );
+}
+
+/// An exact denial of a read/repeat-safe tool can be required, and granted.
+#[test]
+fn filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift() {
+    if !enter_isolated_child(
+        module_path!(),
+        "filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift",
+    ) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let activity = seed_implement_activity(&runtime);
+    let text = std::fs::read_to_string(&activity).expect("read activity");
+    let needle = "  tool_disallow_list:\n";
+    assert!(
+        text.contains(needle),
+        "shipped agent_implement must declare a disallow list"
+    );
+    std::fs::write(
+        &activity,
+        text.replacen(needle, "  tool_disallow_list:\n    - orbit.task.show\n", 1),
+    )
+    .expect("deny orbit.task.show");
+
+    let refused = runtime
+        .add_task(TaskAddParams {
+            title: "Denied until classified read-only".into(),
+            required_tools: vec!["orbit.task.show".into()],
+            ..Default::default()
+        })
+        .expect_err("the default classification of an unclassified tool is mutating");
+    assert_unliftable_refusal(&refused.to_string(), "orbit.task.show");
+
+    let _classification = crate::application::job::set_grant_classification_override(
+        "orbit.task.show",
+        orbit_common::governance::authorization::ToolGrantClassification {
+            grantability: orbit_common::governance::authorization::ToolGrantability::Grantable,
+            effect: orbit_common::governance::authorization::GrantedToolEffect::ReadRepeatSafe,
+        },
+    );
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Liftable read-only requirement".into(),
+            required_tools: vec!["orbit.task.show".into()],
+            granted_tools: vec!["orbit.task.show".into()],
+            ..Default::default()
+        })
+        .expect("a grant can lift an exact read/repeat-safe denial");
+    assert_eq!(task.required_tools, ["orbit.task.show"]);
+    assert_eq!(task.granted_tools, ["orbit.task.show"]);
+}

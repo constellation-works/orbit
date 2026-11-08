@@ -701,6 +701,23 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-core`'s `application/task/tests/add.rs` cases
+  `filing_refuses_an_unliftable_disallowed_required_tool`,
+  `filing_accepts_an_allowed_required_tool` and
+  `filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift`, and
+  `application/task/pilot/tests/prepare.rs::unliftable_required_tool_is_a_blocking_pilot_finding`
+  (criteria 2 and 3, ORB-23342 regressing ORB-23331). They drive public
+  `add_task` and `prepare_task_pilot`. Filing refuses a disallowed mutating
+  required tool and names the activity and the operator remedy, accepts an
+  allowed tool, and accepts an exact denial only while a test-only
+  classification override marks that tool read/repeat-safe. The pilot finding
+  holds promotion for a task stored before the catalog is seeded, which
+  `add_task` would now refuse. No shipped tool is classified read/repeat-safe,
+  and a crate-root integration test compiles without `cfg(test)`, so it cannot
+  install that override. The mutating refusal is the observed admission
+  failure: a disallowed mutating tool was accepted at filing and blocked only
+  at dispatch.
+
 - `orbit-config`'s `resolved/tests/execution_env.rs::inherit_mode_omits_privilege_bearing_orbit_names`
   is a criterion 3 regression for ORB-23049. It drives the public
   `ExecutionEnvPolicy::agent_subprocess_env` with the internal inherit seam

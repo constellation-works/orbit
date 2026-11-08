@@ -395,7 +395,7 @@ pub(crate) fn prepare(
             );
         }
         snapshot["history_len"] = json!(history_len);
-        snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
+        snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(runtime, &task));
         let operator_tools = lane.operator_requirements(&task);
         if !operator_tools.is_empty() {
             snapshot[OPERATOR_TOOL_CANDIDATES] = json!(operator_tools);

@@ -1010,6 +1010,13 @@ activity keeps the fail-closed denial, so an implementer that is not
 `agent_implement` cannot start without a tool its task requires and its list
 withholds. [ORB-15162]
 
+Filing refuses an unliftable covered requirement up front, using the same
+classification admission uses, so a task cannot be stored and then fail at
+dispatch. A read/repeat-safe exact denial can still be required, because a
+grant could lift it before the run. Task-pilot reports a stored requirement
+that would fail admission as a blocking `validation_tool_warnings` finding
+before dispatch. A missing or allow-mode catalog does not invent a refusal.
+
 **Managed envelope.** A deny-mode run stamps:
 
 | Variable | Value |

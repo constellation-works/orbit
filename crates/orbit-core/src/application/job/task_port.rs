@@ -60,6 +60,26 @@ impl TaskJobPort for OrbitRuntime {
         super::granted_tool_refusal(self, tool_name)
     }
 
+    fn implementer_activity_name(&self) -> &'static str {
+        super::IMPLEMENTING_ACTIVITY
+    }
+
+    fn required_tool_implementer_disallow_list(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        super::implementing_activity_disallow_list(self)
+    }
+
+    fn unliftable_implementer_requirement(
+        &self,
+        disallow_list: &[String],
+        tool_name: &str,
+    ) -> Option<String> {
+        super::unliftable_required_tool_error(
+            super::IMPLEMENTING_ACTIVITY,
+            disallow_list,
+            tool_name,
+        )
+    }
+
     type CrewPools = CapturedCrewPools;
     type PrForge = PrForgeCheck;
 
