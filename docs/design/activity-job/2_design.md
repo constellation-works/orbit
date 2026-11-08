@@ -1819,8 +1819,8 @@ A step with `require_result` is accepted only on a receipt validated against own
 records and a granted workspace adapter, revalidated for exact source and age before
 a later step mints ([auto-task steps](./specs/auto-task-step.md#phase-3-as-built)).
 Raw task `done` never supplies it. `reuse_when` judges the definition's latest accepted
-result, which settles the step only after the same revalidation ([ORB-22649]). [ORB-20397] (someday) consumes accepted-result history for condition facts;
-[ORB-20166] (someday) owns disabled release-readiness composition examples. No live
+result, which settles the step only after the same revalidation ([ORB-22649]). [ORB-20397] (shipped) consumes accepted-result history for condition facts (`self.last_succeeded_at`);
+[ORB-20166] (disabled example) ships the disabled, nonseeded release-readiness job/routine composition examples, installed only after owner prerequisites. No live
 readiness configuration, provider work or release is authorized by these primitives.
 
 ## 9. Filesystem Policy and `fsProfile`
@@ -2091,8 +2091,8 @@ Read-only history does not need the same dependencies as live execution: retired
 - [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
 - [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
 - [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history.
-- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
-- [ORB-20397] — Expose accepted-result history through condition success facts (someday).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (disabled example).
+- [ORB-20397] — Expose accepted-result history through condition success facts (shipped).
 - [ORB-20566] — Admit read-only exploration only through an enforceable host/provider boundary.
 - [ORB-21441] — Resume held PR candidates after bounded base-chase exhaustion.
 - [ORB-21458] — Wait for policy-required pending checks before owner landing.
