@@ -396,7 +396,8 @@ serve ([specs/manager-channel.md](./specs/manager-channel.md)):
 The resident reports back only through Orbit: checkpoints and the execution summary on the
 assignment, decision requests for escalations, and `orbit attention` items. Its escalations are
 `decision_open` items, its handoffs `review_waiting`, and a resident with no checkpoint for twice its
-heartbeat, or three incomplete cycles in a row, is a new `resident_stalled` kind
+heartbeat, three incomplete cycles in a row, or its workspace's cycle routine
+disabled — no cycle can fire at all then, however recently it checkpointed — is a new `resident_stalled` kind
 ([operator-attention](../operator-attention/specs/attention-item.md)). The manager reads those; it
 needs no inbox of its own.
 

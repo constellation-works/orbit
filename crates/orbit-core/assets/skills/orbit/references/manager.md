@@ -152,8 +152,10 @@ metrics totals. The metrics report is the evidence behind those totals:
 per-mandate and per-day rates to read before a widening decision. To verify,
 run `orbit resident metrics --json` and read the returned measures.
 - `orbit.attention` — everything waiting on the human, including a stalled
-  resident (`resident_stalled`: no checkpoint for twice its heartbeat, or
-  three `incomplete` checkpoints in a row) and a handed-off mandate waiting
+  resident (`resident_stalled`: no checkpoint for twice its heartbeat,
+  three `incomplete` checkpoints in a row, or its workspace's cycle routine
+  disabled — no cycle can fire at all then, however recently it
+  checkpointed) and a handed-off mandate waiting
   in `review` (`review_waiting`). Read `degraded` before trusting an empty
   result; see [Attention](attention.md).
 
