@@ -72,9 +72,8 @@ use orbit_engine::{
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
-    ProviderFailureClass, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
-    is_baseline_red_failure, is_upgrade_pending,
+    BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass, ReviewGateHistoryNote,
+    UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure, is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -404,16 +403,13 @@ impl RuntimeKernel {
                             .find(|entry| {
                                 entry.to_status.is_some()
                                     || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                    || entry.event == BASELINE_RED_HOLD_EVENT
+                                    || BaselineRedHold::from_entry(entry).is_some()
                             })
                             .is_some_and(|entry| {
                                 (entry.event == FINAL_RECOVERY_REQUEUED_EVENT
                                     && entry.transition_run_id() == Some(run_id))
-                                    || (entry.event == BASELINE_RED_HOLD_EVENT
-                                        && BaselineRedHold::from_text(
-                                            entry.note.as_deref().unwrap_or_default(),
-                                        )
-                                        .is_some_and(|held| held.run_id == run_id))
+                                    || BaselineRedHold::from_entry(entry)
+                                        .is_some_and(|held| held.run_id == run_id)
                             })
                     {
                         return Ok(());

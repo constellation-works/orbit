@@ -143,7 +143,7 @@ pub fn blocked_workflow_interruption_update(
 
 /// [ORB-14258] Hold a task whose run failed because a required command fails
 /// on its base exactly as on the candidate: back to `backlog` under
-/// [`BASELINE_RED_HOLD_EVENT`], with the hold in the note, rather than
+/// [`BASELINE_RED_HOLD_EVENT`], with the hold as its decision and in the note, rather than
 /// `blocked`. Admission withholds the task until the required command passes
 /// on a new base tip.
 pub fn baseline_red_hold_update(job_id: &str, hold: &BaselineRedHold) -> TaskAutomationUpdate {
@@ -158,6 +158,7 @@ pub fn baseline_red_hold_update(job_id: &str, hold: &BaselineRedHold) -> TaskAut
             hold.base_sha,
             hold.failures_clause()
         ))),
+        status_decision: Some(TaskDecision::BaselineRedHold(hold.clone())),
         ..TaskAutomationUpdate::default()
     }
 }

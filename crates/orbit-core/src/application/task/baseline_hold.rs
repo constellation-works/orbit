@@ -39,9 +39,11 @@ use orbit_engine::{
     BaselineHoldStatus, DispatchError, baseline_hold_status, recorded_baseline_hold_status,
 };
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRunState, JobRunTrigger};
-use serde::{Deserialize, Serialize};
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_VERDICT_EVENT, BaselineHoldVerdict, BaselineRedHold, JobRunState,
+    JobRunTrigger,
+};
 use serde_json::{Value, json};
 
 use super::baseline_repair::{RepairIndex, RepairLink};
@@ -57,19 +59,6 @@ const TRIGGER_NAME: &str = "baseline-hold-refresh";
 const TRIGGER_CONSUMER: &str = "clock-sweep";
 /// Recent refresh runs scanned for a live one.
 const RUN_SCAN_LIMIT: usize = 20;
-
-/// History event recording the latest check of a standing hold.
-const BASELINE_RED_HOLD_VERDICT_EVENT: &str = "baseline_red_hold_verdict";
-
-/// A check of a standing [`BaselineRedHold`], persisted as the
-/// note of a [`BASELINE_RED_HOLD_VERDICT_EVENT`] entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct BaselineHoldVerdict {
-    /// The command passed on a new base tip, so admission may hand the task out.
-    lifted: bool,
-    /// Why, naming the base tip checked and the command.
-    reason: String,
-}
 
 /// What one check of the standing baseline-red holds did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -288,8 +277,7 @@ impl OrbitRuntime {
         hold: &BaselineRedHold,
         verdict: &BaselineHoldVerdict,
     ) -> Result<bool, OrbitError> {
-        let note = serde_json::to_string(verdict)
-            .map_err(|error| OrbitError::Execution(format!("encode hold verdict: {error}")))?;
+        let note = verdict.text();
         let mut recorded = false;
         self.stores()
             .tasks()
@@ -313,7 +301,7 @@ impl OrbitRuntime {
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            decision: Some(TaskDecision::BaselineHoldVerdict(verdict.clone())),
                         }],
                         ..Default::default()
                     },
@@ -338,15 +326,14 @@ impl StandingHold {
             .iter()
             .rposition(|entry| entry.to_status.is_some())?;
         let entry = &history[at];
-        if entry.event != BASELINE_RED_HOLD_EVENT || entry.to_status != Some(TaskStatus::Backlog) {
+        if entry.to_status != Some(TaskStatus::Backlog) {
             return None;
         }
-        let hold = BaselineRedHold::from_text(entry.note.as_deref()?)?;
+        let hold = BaselineRedHold::from_entry(entry)?;
         let verdict = history[at + 1..]
             .iter()
             .rev()
-            .filter(|entry| entry.event == BASELINE_RED_HOLD_VERDICT_EVENT)
-            .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok());
+            .find_map(BaselineHoldVerdict::from_entry);
         Some(Self { hold, verdict })
     }
 }

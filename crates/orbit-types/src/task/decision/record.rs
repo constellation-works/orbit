@@ -9,7 +9,9 @@ use super::{
     PublicationSettlingObservation, RecordedFinalRecovery,
 };
 use crate::task::{ContextFilesWidening, RegressionRiskMarks, TagsChanged};
-use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
+use crate::workflow::{
+    BaselineHoldVerdict, BaselineRedHold, FlakyValidation, HeldCandidate, KnownRedValidation,
+};
 
 /// History event the final-recovery applier records its decision on.
 pub const FINAL_RECOVERY_DECIDED_EVENT: &str = "final_recovery_decided";
@@ -103,6 +105,12 @@ pub enum TaskDecision {
     /// Tests a candidate failed and then passed in one isolated replay,
     /// recorded on the `flaky_validation` event.
     FlakyValidation(FlakyValidation),
+    /// The red-base hold a task was moved to `backlog` under, recorded on
+    /// the `baseline_red_hold` event.
+    BaselineRedHold(BaselineRedHold),
+    /// The latest check of a standing red-base hold, recorded on the
+    /// `baseline_red_hold_verdict` event.
+    BaselineHoldVerdict(BaselineHoldVerdict),
     /// Context files a prompt marked as regression-prone, recorded on the
     /// `regression_risk_marked` event until prompt marks were removed
     /// [ORB-22806]; kept so earlier history entries still load.

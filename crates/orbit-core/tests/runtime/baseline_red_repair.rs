@@ -9,8 +9,13 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::review_gate::{ReplayBudget, verify_base_failure};
 use orbit_engine::{BaselineHoldStatus, RuntimeHost, baseline_red_hold_update};
-use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskRelationType};
-use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
+use orbit_types::task::{
+    ExternalRef, Task, TaskDecision, TaskHistoryEntry, TaskPriority, TaskRelationType,
+};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BASELINE_RED_HOLD_VERDICT_EVENT, BaselineHoldVerdict,
+    BaselineRedFailures, BaselineRedHold,
+};
 use serde_json::Value;
 
 use super::review_baseline_hold::{git, held_on_red_base};
@@ -34,6 +39,19 @@ fn failing(tests: &[&str]) -> BaselineRedFailures {
 
 /// A new task, held by run finalization's hold update for `hold`.
 fn held_task(fixture: &Fixture, title: &str, hold: &BaselineRedHold) -> String {
+    held_task_with(
+        fixture,
+        title,
+        baseline_red_hold_update("task_pr_pipeline", hold),
+    )
+}
+
+/// A new task, moved to the backlog by `update`.
+fn held_task_with(
+    fixture: &Fixture,
+    title: &str,
+    update: orbit_engine::TaskAutomationUpdate,
+) -> String {
     let task = fixture
         .runtime
         .add_task(TaskAddParams {
@@ -43,12 +61,7 @@ fn held_task(fixture: &Fixture, title: &str, hold: &BaselineRedHold) -> String {
             ..Default::default()
         })
         .unwrap();
-    RuntimeHost::apply_task_automation_update(
-        &fixture.runtime,
-        &task.id,
-        baseline_red_hold_update("task_pr_pipeline", hold),
-    )
-    .unwrap();
+    RuntimeHost::apply_task_automation_update(&fixture.runtime, &task.id, update).unwrap();
     assert_eq!(
         fixture.runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Backlog,
@@ -533,6 +546,103 @@ fn a_cached_green_base_lifts_a_hold_without_filing_its_repair() {
     );
 }
 
+/// [ORB-22991] A hold records itself as a typed decision beside its
+/// unchanged note, and each verdict likewise; holds and verdicts written
+/// before typed decisions, as note text alone, still hold and lift.
+fn holds_and_verdicts_written_as_notes_alone_still_hold_and_lift() {
+    let (fixture, legacy) = held_on_red_base();
+    let hold = |run_id: &str| BaselineRedHold {
+        run_id: run_id.into(),
+        failures: failing(&["suite::broken"]),
+        ..legacy.clone()
+    };
+    let typed_update = baseline_red_hold_update("task_pr_pipeline", &hold("jrun-typed"));
+    let typed_note = typed_update.status_note.clone();
+    let typed = held_task_with(&fixture, "Typed hold", typed_update);
+    let hold_entry = |task_id: &str| {
+        fixture
+            .runtime
+            .get_task_history(task_id)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|entry| entry.event == BASELINE_RED_HOLD_EVENT)
+            .unwrap()
+    };
+    let entry = hold_entry(&typed);
+    assert_eq!(
+        entry.decision,
+        Some(TaskDecision::BaselineRedHold(hold("jrun-typed"))),
+        "a new hold carries its typed decision"
+    );
+    assert_eq!(entry.note, typed_note, "beside the note it always wrote");
+    assert_eq!(
+        entry.note.as_deref().and_then(BaselineRedHold::from_text),
+        Some(hold("jrun-typed")),
+        "older readers still find the hold in the note"
+    );
+
+    // Entries in the shape written before typed decisions: note text only.
+    let note_only = |run_id: &str| orbit_engine::TaskAutomationUpdate {
+        status_decision: None,
+        ..baseline_red_hold_update("task_pr_pipeline", &hold(run_id))
+    };
+    let note_held = held_task_with(&fixture, "Note-only hold", note_only("jrun-note"));
+    assert_eq!(hold_entry(&note_held).decision, None);
+    let note_lifted = held_task_with(&fixture, "Note-only lifted hold", note_only("jrun-lifted"));
+    RuntimeHost::apply_task_automation_update(
+        &fixture.runtime,
+        &note_lifted,
+        orbit_engine::TaskAutomationUpdate {
+            append_history: vec![TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "system".into(),
+                event: BASELINE_RED_HOLD_VERDICT_EVENT.into(),
+                note: Some(r#"{"lifted":true,"reason":"the base passes"}"#.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let refresh = fixture.runtime.refresh_baseline_holds(None).unwrap();
+    for task_id in [&typed, &note_held] {
+        assert!(
+            refresh.held.contains(task_id),
+            "{task_id} held: {refresh:?}"
+        );
+    }
+    assert!(
+        !refresh.held.contains(&note_lifted) && !refresh.lifted.contains(&note_lifted),
+        "a note-only lifting verdict is read: {refresh:?}"
+    );
+    let verdict = fixture
+        .runtime
+        .get_task_history(&note_held)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.event == BASELINE_RED_HOLD_VERDICT_EVENT)
+        .unwrap();
+    let Some(TaskDecision::BaselineHoldVerdict(recorded)) = verdict.decision.clone() else {
+        panic!("a new verdict carries its typed decision: {verdict:?}");
+    };
+    assert!(!recorded.lifted);
+    assert_eq!(
+        verdict
+            .note
+            .as_deref()
+            .map(serde_json::from_str::<BaselineHoldVerdict>)
+            .and_then(Result::ok),
+        Some(recorded),
+        "the verdict note keeps the serialized verdict older readers parse"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases_scenarios,
@@ -541,5 +651,6 @@ crate::scenario_table!(
     diagnostic_fingerprints_file_one_repair_and_link_later_holds,
     complete_failure_sets_key_repairs_before_display_truncation,
     persisted_holds_without_a_digest_find_their_existing_repair,
-    a_cached_green_base_lifts_a_hold_without_filing_its_repair
+    a_cached_green_base_lifts_a_hold_without_filing_its_repair,
+    holds_and_verdicts_written_as_notes_alone_still_hold_and_lift
 );

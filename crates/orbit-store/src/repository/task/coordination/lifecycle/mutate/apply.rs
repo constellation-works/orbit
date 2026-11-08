@@ -472,6 +472,9 @@ impl TaskCommitBoundary {
                         // the command passes on a new base tip.
                         } else if let Some(hold) = &value.baseline_red {
                             params.status_note = Some(hold.text(reason));
+                            params.status_decision = Some(
+                                orbit_types::task::TaskDecision::BaselineRedHold(hold.clone()),
+                            );
                             state.last_event =
                                 orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
                         // [ORB-15573] A release its leaf's provider refused is
