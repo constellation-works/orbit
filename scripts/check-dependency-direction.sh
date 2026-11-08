@@ -768,8 +768,13 @@ fi
 # only through `TaskExperimentPort`, which `experiment` implements on
 # `OrbitRuntime`. `search` sits above `task` [ORB-23016]: it reads task
 # candidates and re-exports task-owned selector matching; task must never
-# reach search for that pure helper.
-task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
+# reach search for that pure helper. `notice` sits outside the order but
+# above `task` [ORB-23017]: it reads tasks for poster authority and
+# linked-task status, so a transition into done closes linked notices only
+# through `TaskNoticePort`, which `notice` implements on `OrbitRuntime` in
+# `notice/close.rs` by delegating to the existing materializer. Tick repair,
+# dedupe, revision checks and owner fencing stay in notice.
+task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|notice'
 task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
@@ -783,7 +788,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident and experiment through its task ports, must not route through tag_instructions or search, and names backlog_forecast only in its two task/mod.rs re-exports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment and notice through its task ports, must not route through tag_instructions or search, and names backlog_forecast only in its two task/mod.rs re-exports"
   fail=1
 fi
 

@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 last_updated: 2026-11-08
-last_validated: 2026-11-05
+last_validated: 2026-11-08
 status: Implemented
 stage: shipped
 next: "—"
@@ -123,6 +123,7 @@ source scan, enforces the runtime direction.
 | Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
+| Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `task/mod.rs` keeps a two-line re-export shim | [ORB-22287] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
@@ -292,10 +293,20 @@ moved the backlog forecast out of `task` to its own place in the order:
   selectors and empty-path behavior. `search::task_selectors_contain_path`
   remains an explicit compatibility re-export; retiring it after consumers
   migrate is a follow-up [ORB-23016].
+- **Notice closure.** `notice` sits outside the order, above `task`: it reads
+  tasks for poster authority and linked-task status. A transition into done
+  closes linked notices through `task::TaskNoticePort`
+  (`close_linked_notices_for_done_transition`), which `notice` implements on
+  `OrbitRuntime` in `notice/close.rs` by delegating to
+  `materialize_notice_closures_for_done_task`. The hook keeps that helper's
+  unit return and warn-on-failure log. The closure tick, dedupe keys,
+  revision checks, owner fencing and closure timing stay in `notice`, and
+  `close_notice`, `run_notice_closure_tick` and the other public notice
+  APIs are unchanged [ORB-23017].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
-  `workspace_auto`, `experiment` or `search` by path, grouped tree or `super::` chain,
+  `workspace_auto`, `experiment`, `search` or `notice` by path, grouped tree or `super::` chain,
   when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
   `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
@@ -441,11 +452,22 @@ and a task write admits a resident comment under the task lock and refuses a
 resident record whose verbatim text needs redaction through it, by delegating
 to the unchanged resident helpers. The guard's `task` upper-module list names
 `resident`, so a path, grouped tree, `super::` chain or call to a
-resident-defined inherent method from `task` is refused. The remaining
-back-edges among the unordered modules (`resident`, `experiment`, `codebase`)
-and the rest of the application still keep
-the core strongly connected component and await a later audit. [ORB-22708]
-cut the lower modules’ direct edges into `landing`.
+resident-defined inherent method from `task` is refused.
+
+`notice` (fleet notices) sits outside the order but above `task` [ORB-23017].
+It reads tasks for poster authority and linked-task status, so a transition
+into done closes linked notices only through `task::TaskNoticePort`, which
+`notice` implements on `OrbitRuntime` in `notice/close.rs`. The hook delegates
+to `materialize_notice_closures_for_done_task`, keeping the unit return and
+the best-effort warn-on-failure log. The closure tick, dedupe keys, revision
+checks, owner fencing and closure timing stay in notice. The guard's `task`
+upper-module list names `notice`, so a path, grouped tree, `super::` chain
+or call to a notice-defined inherent method from `task` is refused.
+
+The remaining back-edges among the unordered modules (`resident`,
+`experiment`, `codebase`) and the rest of the application still keep the
+core strongly connected component and await a later audit. [ORB-22708] cut
+the lower modules’ direct edges into `landing`.
 
 ## Task References
 
@@ -479,5 +501,6 @@ cut the lower modules’ direct edges into `landing`.
 - [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 - [ORB-22807] — removed visual review: `visual_delivery`, `review::ReviewVisualPort`, `distributed::DistributedVisualPort`, `task::mock_admission` and `task::visual_review_json` are gone, `landing` calls down into `task`, `job` and `distributed` only, and the guard's `visual_delivery` rule is dropped.
+- [ORB-23017] — cut task's done-transition notice closure through `task::TaskNoticePort`, implemented by `notice`, and added `notice` to the guarded `task` upper modules.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

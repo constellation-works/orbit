@@ -8,6 +8,7 @@ use orbit_types::record::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskNoticePort;
 
 #[cfg(feature = "test-support")]
 use super::test_support;
@@ -226,6 +227,12 @@ impl OrbitRuntime {
             }
         }
         Ok(())
+    }
+}
+
+impl TaskNoticePort for OrbitRuntime {
+    fn close_linked_notices_for_done_transition(&self, task_id: &str) {
+        self.materialize_notice_closures_for_done_task(task_id);
     }
 }
 

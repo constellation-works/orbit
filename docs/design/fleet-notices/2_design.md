@@ -1,8 +1,8 @@
 ---
 title: Fleet Notices — Design
 owner: claude
-last_updated: 2026-11-05
-last_validated: 2026-11-05
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: fleet-notices
 doc_role: design
@@ -56,7 +56,7 @@ needed: every crate below already depends on the ones it would call.
 | Authorization catalog entries for `post` and `close` (Agent, Operator and Runner as an identity floor, like leases; poster-class resolution in core; `list` and `show` are open reads) | `crates/orbit-common/src/governance/authorization/catalog/operations.rs` |
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/migration/`, `crates/orbit-store/src/contracts/notice.rs`, `crates/orbit-store/src/driver/sqlite/notice_store.rs`, the store schema golden |
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
-| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `application/routines/sweep.rs`) materializes cross-workspace closures |
+| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/close.rs`. A transition into `done` calls it through `task::TaskNoticePort` (`close_linked_notices_for_done_transition`), right after the transition rather than inside its transaction; the hook keeps the helper's best-effort log. Reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `application/routines/sweep.rs`) materializes cross-workspace closures |
 | Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
 | Fixed limits | `crates/orbit-core/src/application/notice/limits.rs` |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |

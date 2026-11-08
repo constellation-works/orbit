@@ -136,7 +136,8 @@ class RelativeImportTests(unittest.TestCase):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
         owners = ("automation", "job", "review", "distributed", "pull_drain",
-                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto", "search")
+                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto",
+                  "search", "notice")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -229,6 +230,43 @@ class RelativeImportTests(unittest.TestCase):
                 "impl TaskResidentPort for OrbitRuntime {\n"
                 "    fn admit_locked_resident_comment(&self) {\n"
                 "        self.validate_resident_comment_write();\n    }\n}\n",
+        }, rejected=False)
+
+    def test_task_reaches_notice_only_through_its_port(self):
+        # [ORB-23017] Task called notice's done-transition materializer
+        # directly, closing a task <-> notice cycle: notice reads tasks for
+        # poster authority and linked-task status. One detector per call: the
+        # guard's chains stop at the first hit.
+        for rows in (
+            [("task/resolves.rs", "use crate::application::notice::Probe;\n")],
+            [("task/probe.rs", "use crate::application::{\n    notice::Probe,\n};\n")],
+            [("task/mod.rs", "use super::notice::Probe;\n"),
+             ("task/resolves.rs", "use super::super::notice::Probe;\n")],
+        ):
+            self.check_rows(rows, rejected=True)
+        self.check_rows([
+            ("task/resolves.rs",
+             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+             "        self.materialize_notice_closures_for_done_task();\n    }\n}\n"),
+        ], rejected=True, shared={
+            "notice/close.rs":
+                "impl OrbitRuntime {\n"
+                "    pub(crate) fn materialize_notice_closures_for_done_task(&self) {}\n}\n"})
+        self.check_files({
+            "task/notice_port.rs":
+                "pub(in crate::application) trait TaskNoticePort {\n"
+                "    fn close_linked_notices_for_done_transition(&self);\n}\n",
+            "task/resolves.rs":
+                "use crate::application::task::TaskNoticePort;\n"
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.close_linked_notices_for_done_transition();\n    }\n}\n",
+            "notice/close.rs":
+                "impl OrbitRuntime {\n"
+                "    pub(crate) fn materialize_notice_closures_for_done_task(&self) {}\n}\n"
+                "impl TaskNoticePort for OrbitRuntime {\n"
+                "    fn close_linked_notices_for_done_transition(&self) {\n"
+                "        self.materialize_notice_closures_for_done_task();\n    }\n}\n",
+            "notice/authority.rs": "use crate::application::task::TaskRecords;\n",
         }, rejected=False)
 
     def test_lower_modules_cannot_reach_the_forecast(self):

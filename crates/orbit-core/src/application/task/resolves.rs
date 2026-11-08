@@ -24,7 +24,7 @@ use orbit_types::task::{
 };
 use serde_json::Value;
 
-use super::{SYSTEM_ACTOR_LABEL, TaskCodebasePort, TaskRecordUpdateParams};
+use super::{SYSTEM_ACTOR_LABEL, TaskCodebasePort, TaskNoticePort, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::application::task::final_recovery::FINAL_RECOVERY_COMPLETED_EVENT;
@@ -69,7 +69,7 @@ impl OrbitRuntime {
         self.record_landed_diff_stats_on_done(previous_status, task);
         // ...and closes the fleet notices linked to the task.
         if previous_status != TaskStatus::Done {
-            self.materialize_notice_closures_for_done_task(task.id.as_str());
+            self.close_linked_notices_for_done_transition(task.id.as_str());
         }
         let task_history = match self.resolves_task_history(&task.id) {
             Ok(history) => history,
