@@ -75,7 +75,7 @@ A gatekeeping role (reviewers today, and any future verifier) earns only for obj
 
 **Recorded:** 2026-10-24 · [ORB-17779] removed implementer complexity weighting and centred every term on same-tier fleet expectations, extending [ORB-17118]'s unit-landed orchestrator principle.
 
-**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers.rs::rows`, `crates/orbit-core/src/application/agents/score.rs::score`
+**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers/performance.rs::implementer_rows`, `crates/orbit-core/src/application/agents/roles/implementers/tier_reference.rs::tier_references`, `crates/orbit-core/src/application/agents/score.rs::score`
 
 ### Context
 
@@ -88,18 +88,37 @@ when tiers have different outcome rates.
 
 Implementer landings count one each. Compare every term's actual count with
 the fleet's expected count on that row's tier mix, per 100 tasks, starting at
-100. Pool tiers below 30 observations with the largest tier before computing
-rates, rather than letting a handful of rare-tier tasks set their own rate.
-Keep cost outside the score and keep the existing shrinkage and support rules.
+100. **Amended 2026-11-08:** tiers below 30 fleet row-task observations retain
+their own evidence and shrink toward the nearest supported assessed tier
+(`low < medium < hard < xhard`, lower on distance ties). Unassessed tiers,
+or assessed tiers with no supported assessed neighbour, use the supported
+pool; if every tier is sparse, use the fleet pool. The previous largest-tier
+pool erased rare-tier evidence and could substitute medium outcomes for hard
+or xhard work.
+
+Use the [conservative exchange rule](./2_design.md#52-implementers) with `K = 30`:
+borrow `n × K / (n + K)` units of reference evidence and apply the opposite
+expected-count change to the reference. Cap simultaneous exchanges by each
+tier's borrowing budget, retaining its own evidence too. The all-sparse pool
+uses symmetric exchanges weighted by borrowing mass. This preserves fleet expected counts and keeps
+rates within the observed range, unlike independent shrinkage followed by
+unbounded count rescaling. Compute exchanges separately for implemented and
+reviewed populations; leave the escaped-regression size reference unchanged.
+Expose sparse-tier references and retained own weights in the JSON row stats.
+Keep cost outside the score and keep the existing row-score shrinkage and
+support rules.
 
 ### Consequences
 
-- A row matching each reference pool's rates has raw 100 regardless of mix.
+- A row matching each adjusted tier's expected rates has raw 100 regardless of mix.
+- Fleet expected counts are conserved; weeks with every tier supported retain
+  their previous rates and scores.
 - Expected counts and actual counts remain inspectable in the existing detail.
 - Cost: fleet-relative scores can move when peers change even if the crew's own
-  outcomes do not. Pooling sparse tiers trades exact per-tier invariance for a
-  supported reference; until those tiers grow, their crews inherit the larger
-  pool's rate and atypical difficulty can still affect their comparison.
+  outcomes do not. Sparse-tier shrinkage trades exact per-tier invariance for
+  a supported reference while retaining the rare tier's observed outcomes.
+  Supported reference tiers also receive balancing adjustments when they lend
+  evidence; a reference with no observations in a term's population lends none.
 
 ## Score escaped regressions against expected change size
 

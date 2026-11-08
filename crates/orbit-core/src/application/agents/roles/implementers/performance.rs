@@ -114,7 +114,7 @@ pub(super) fn work_by_row(
     work
 }
 
-pub(super) fn rows(
+pub(super) fn implementer_rows(
     facts: &AgentFacts,
     window: WindowBounds,
     _min_support: usize,
@@ -155,64 +155,41 @@ pub(super) fn rows(
             }
         }
     }
-    // Sparse tiers join the largest tier (lexical first on a tie). This
-    // bounds their reference by a supported pool and conserves fleet totals.
-    let largest = fleet
-        .iter()
-        .max_by(|(left, a), (right, b)| a.units.cmp(&b.units).then_with(|| right.cmp(left)))
-        .map(|(tier, _)| *tier);
-    if let Some(largest) = largest {
-        let pool_key = |tier: &'static str| {
-            if fleet[tier].units < MIN_TIER_TASKS {
-                largest
-            } else {
-                tier
-            }
-        };
-        let mut pools: BTreeMap<&str, Fleet> = BTreeMap::new();
-        for (&tier, stats) in &fleet {
-            let pool = pools.entry(pool_key(tier)).or_default();
-            pool.units += stats.units;
-            pool.reviewed_units += stats.reviewed_units;
-            for (&term, &count) in &stats.counts {
-                *pool.counts.entry(term).or_default() += count;
-            }
-        }
-        for ((row, (key, tasks)), regressions) in
-            rows.iter_mut().zip(&work).zip(&expected_regressions)
-        {
-            row.expected = Some(
-                TERMS
+    let references = super::tier_reference::tier_references(&fleet);
+    for ((row, (key, tasks)), regressions) in rows.iter_mut().zip(&work).zip(&expected_regressions)
+    {
+        let tiers: BTreeSet<_> = tasks.iter().map(|task| tier(task)).collect();
+        row.stats.push(Stat {
+            key: "tier_adjustments",
+            label: "Sparse tier adjustments",
+            value: json!(
+                tiers
                     .iter()
-                    .map(|term| {
-                        // Regression risk follows change size, so escaped
-                        // regressions take the size-adjusted expectation.
-                        if term.key == ESCAPED_REGRESSIONS {
-                            return (term.key, *regressions);
-                        }
-                        let review_term = is_implementer_review_term(term.key);
-                        let expected = tasks
-                            .iter()
-                            .filter(|task| {
-                                !review_term
-                                    || first_implementer_review(task, key, window).is_some()
-                            })
-                            .map(|task| {
-                                let pool = &pools[pool_key(tier(task))];
-                                let units = if review_term {
-                                    pool.reviewed_units
-                                } else {
-                                    pool.units
-                                };
-                                pool.counts.get(term.key).copied().unwrap_or(0.0)
-                                    / units.max(1) as f64
-                            })
-                            .sum();
-                        (term.key, expected)
-                    })
-                    .collect(),
-            );
-        }
+                    .filter_map(|tier| references.adjustments.get(tier))
+                    .collect::<Vec<_>>()
+            ),
+        });
+        row.expected = Some(
+            TERMS
+                .iter()
+                .map(|term| {
+                    // Regression risk follows change size, so escaped
+                    // regressions take the size-adjusted expectation.
+                    if term.key == ESCAPED_REGRESSIONS {
+                        return (term.key, *regressions);
+                    }
+                    let review_term = is_implementer_review_term(term.key);
+                    let expected = tasks
+                        .iter()
+                        .filter(|task| {
+                            !review_term || first_implementer_review(task, key, window).is_some()
+                        })
+                        .map(|task| references.rates[tier(task)][term.key])
+                        .sum();
+                    (term.key, expected)
+                })
+                .collect(),
+        );
     }
     rows
 }
@@ -397,7 +374,7 @@ fn charged_by_pre_landing_review(
 /// The scored escaped-regression term, also read by the diff context.
 pub(super) const ESCAPED_REGRESSIONS: &str = "escaped_regressions";
 
-/// Minimum fleet row-task observations before a tier has its own rate.
+/// Minimum fleet row-task observations before a tier supplies reference evidence.
 pub(super) const MIN_TIER_TASKS: usize = 30;
 
 #[derive(Default)]

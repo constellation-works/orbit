@@ -19,6 +19,7 @@ mod context;
 mod evidence;
 mod performance;
 mod size_curves;
+mod tier_reference;
 
 pub(super) use evidence::{by_type_cells, per_task_rows};
 pub(super) use size_curves::{TIERS as SIZE_CURVE_TIERS, size_curves};
@@ -27,6 +28,6 @@ pub(super) const ROLE: super::RoleSpec = super::RoleSpec {
     unit: "implemented tasks",
     terms: performance::TERMS,
     term_units: performance::REVIEW_TERM_UNITS,
-    rows: Some(performance::rows),
+    rows: Some(performance::implementer_rows),
     header: Some(performance::execution_header),
 };

@@ -324,20 +324,52 @@ contribution, with a null rate rather than a measured zero. Repeated rejects
 can exceed one per reviewed task. Other terms include unreviewed and unlanded
 implemented tasks, not just tasks with the outcome.
 
-**Sparse tiers:** a tier with fewer than 30 fleet observations joins the largest
-tier's pool; ties for largest use the lexically first tier name. All sparse
-tiers join that same pool, including unassessed. Supported tiers otherwise keep
-their own rates. If all tiers are sparse, the pool is the entire fleet. Both
-counts and their matching denominators are pooled before division, and no
-empty denominator is used. Within
-that pool the comparison is approximate by design: exact tier-mix invariance
-applies to the reference pools, not to distinct rates inside a sparse pool.
-Pooling conserves expected counts across the fleet within each term's population.
-The 30-observation pooling threshold still counts all implemented tasks; review
-rates inside each pool divide only by reviewed observations. Even a supported
-tier can have few reviews; this adds no separate review-support threshold.
-With different
-review coverage, the implemented-task-weighted raw average need not be 100;
+**Sparse tiers:** below 30 fleet row-task observations, a tier retains its own
+observations and borrows evidence from the nearest supported assessed tier in
+`low < medium < hard < xhard` order. Equal distances prefer the lower tier;
+size does not choose the reference. If no assessed tier is supported, or the
+sparse tier is unassessed, use the supported tiers together, weighted by their
+term denominators. If no tier is supported, use a borrowing-weighted fleet
+pool. A supported unassessed tier can participate in the supported pool but
+has no position in the assessed order.
+
+Borrowing is a **conservative exchange**, computed separately for each term's
+population. Let `n_t` be that tier's denominator, `r_t` its observed count
+per unit and `K = 30`. A sparse tier offers exchange mass
+`b_t = n_t × K / (n_t + K)`. Against a supported reference tier `u`, its
+unscaled exchange mass is `a_tu = b_t`; against a supported pool, distribute
+`b_t` over its members in proportion to their denominators. With no supported
+tiers, each unordered pair exchanges `a_tu = b_t × b_u / Σ b` instead. Zero
+denominators contribute no exchange mass. If a selected reference has no
+reviewed observations, review terms retain the sparse tier's observed rate.
+
+Let `e_t = Σ_u a_tu`. Scale all exchanges for a term by
+`q = min(1, min_t(b_t / e_t))`, ignoring zero `e_t`. Every tier, including
+a supported reference, exchanges at most its own borrowing budget and retains
+at least `n_t / (n_t + K)` of its own rate. Starting from observed counts,
+each pair adds
+`q × a_tu × (r_u − r_t)` to tier `t`'s expected count and subtracts the same
+amount from tier `u`. Thus every expected rate is a convex combination of
+observed rates, and expected fleet counts are conserved, up to floating-point
+roundoff. With one supported reference and no exposure cap, the sparse tier's
+rate is exactly `(count_t + K × r_u) / (n_t + K)`. Reference tiers receive the
+balancing adjustment. When all tiers are supported there are no exchanges and
+all existing rates and scores are unchanged. The escaped-regression term
+continues to use its separate size-adjusted, leave-one-row-out expectation.
+
+Each row's JSON `stats` includes `tier_adjustments`, an array for the sparse
+tiers present on that row (empty when none). Every entry reports `tier`,
+`adjusted: true`, `method: conservative_shrinkage`, `fleet_units`, `reference`
+(a tier, `supported_pool` or `fleet_pool`), `reference_tiers`, and `terms`.
+Each term reports its `units`, retained `own_weight` after exchange scaling,
+and `expected_rate` before display rounding; these exclude escaped regressions.
+This makes both the fallback and how much own evidence remains inspectable.
+
+The 30-observation threshold counts all implemented tasks; review exchanges
+and rates use only reviewed observations. Even a supported tier can have few
+reviews; this adds no separate review-support threshold. Exact per-tier mix
+invariance is approximate while borrowing is active. With different review
+coverage, the implemented-task-weighted raw average need not be 100;
 shrinkage still uses that actual fleet average. An empty fleet has no rows or
 fleet average.
 
