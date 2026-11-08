@@ -58,10 +58,13 @@ impl CiFailureQuery {
                     "window must be all or a duration such as 30d (units m, h, d or w); got '{window}'"
                 ))
             };
-            if !window.starts_with(|c: char| c.is_ascii_digit()) {
-                return Err(refused());
-            }
-            Some(super::query::parse_until(&window, until.unwrap_or(now)).map_err(|_| refused())?)
+            let span = super::query::parse_span(&window).map_err(|_| refused())?;
+            Some(
+                until
+                    .unwrap_or(now)
+                    .checked_sub_signed(span)
+                    .ok_or_else(refused)?,
+            )
         };
         let class = match class.map(str::trim).filter(|class| !class.is_empty()) {
             None => None,
