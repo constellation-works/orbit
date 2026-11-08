@@ -18,7 +18,7 @@ mod mcp_toolset;
 pub use error::{McpToolsetError, WorkerBindingError};
 pub use invocation::{
     AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS, CLAIMED_OWNER_TOOLS, WorkerInvocation,
-    is_claimed_owner_tool,
+    is_claimed_leaf_reachable_tool, is_claimed_owner_tool,
 };
 pub use mcp_rules::{
     McpIdRoute, McpIdRouteDeclaration, McpInputCondition, McpInputDecoration, McpPresentationRead,

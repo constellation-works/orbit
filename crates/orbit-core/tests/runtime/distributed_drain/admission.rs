@@ -1044,6 +1044,89 @@ fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
     }
 }
 
+/// A task requiring an owner-only tool that is not a coordination tool —
+/// the codebase analytics of the ORB-23443 incident — is skipped by a
+/// follower with the skip recorded, stays in the backlog for the owner, and
+/// does not block a follower claim on a task whose tools all cross the
+/// coordinator.
+fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let held = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/owner_only.rs",
+        None,
+        json!({"required_tools": ["orbit.codebase.analytics", "orbit.codebase.show"]}),
+    );
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert!(error_of(&idle).is_empty(), "{idle}");
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert!(
+        pair.owner_claims().is_empty(),
+        "no claim for an owner-only tool"
+    );
+    assert!(
+        pair.leaf_runs().is_empty(),
+        "no leaf for an owner-only tool"
+    );
+    assert_eq!(pair.owner_status(&held), "backlog");
+
+    let request = pair.wire.calls("orbit.task.pull").pop().unwrap();
+    let receipt = owner_call(&pair, "orbit.task.pull", request).unwrap();
+    assert!(receipt["receipt"]["claim"].is_null(), "{receipt}");
+    let reason = receipt["receipt"]["deferred_conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == held)
+        .expect("the skip is recorded for the held task")["reason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("orbit.codebase.analytics"), "{reason}");
+    assert!(reason.contains("owner-only"), "{reason}");
+    assert!(
+        reason.contains("outside the closed claimed-owner bridge"),
+        "{reason}"
+    );
+    assert_eq!(pair.owner_status(&held), "backlog");
+
+    // The owner itself still admits the skipped task: owner-local dispatch
+    // lists it and its implementer grant keeps the required tool.
+    let local = action(owner, "list_backlog_tasks", &json!({})).unwrap();
+    assert!(
+        local["task_ids"].as_array().unwrap().contains(&json!(held)),
+        "owner-local dispatch remains eligible: {local}"
+    );
+    let grant = owner
+        .resolve_activity_tool_denials(std::slice::from_ref(&held), "agent_implement", &[])
+        .unwrap();
+    assert!(
+        grant
+            .effective_tools
+            .iter()
+            .any(|name| name == "orbit.codebase.analytics"),
+        "{grant:?}"
+    );
+
+    // A task whose required tools all cross the coordinator is claimed.
+    let supported = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/crossing.rs",
+        None,
+        json!({"required_tools": [
+            "orbit.task.show", "orbit.search", "orbit.task.artifact.put", "proc.spawn",
+        ]}),
+    );
+    let leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), supported);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert!(!pair.owner_has_claim_for_task(&held));
+    assert_eq!(pair.owner_status(&held), "backlog");
+}
+
 /// Required tools must be satisfiable before a follower creates any claim or
 /// leaf (F2026-10-352/353/354). Provenance never changes that authority.
 fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
@@ -2651,6 +2734,7 @@ crate::scenario_table!(
     contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
     a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
     unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
+    owner_only_required_tools_stay_in_backlog_for_the_owner,
     no_drain_task_is_never_claimed_by_a_pull_follower,
     claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created,
     a_follower_is_handed_only_tasks_its_os_satisfies,

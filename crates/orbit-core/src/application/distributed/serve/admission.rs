@@ -7,7 +7,9 @@ use orbit_store::contracts::{
     ExecutorCapability, JobRunQuery,
 };
 use orbit_types::task::{NO_DRAIN_TAG, Task, TaskStatus};
-use orbit_types::tool::{CLAIMED_MODE_DENIED_TOOLS, is_claimed_owner_tool};
+use orbit_types::tool::{
+    CLAIMED_MODE_DENIED_TOOLS, is_claimed_leaf_reachable_tool, is_claimed_owner_tool,
+};
 use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
@@ -45,17 +47,23 @@ fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<Strin
 }
 
 /// A remote claimed implementer's restrictions, using the same deny set as
-/// the engine and the same coordination classification and closed bridge as
-/// dispatch. Workspace search and listing use the claimed-owner bridge;
-/// other coordination tools must remain satisfiable under the same boundary.
+/// the engine and the same closed bridge as dispatch. Reachability is
+/// [`is_claimed_leaf_reachable_tool`], derived from the claimed-owner list
+/// the leaf-side refusal uses: workspace search and listing cross that
+/// bridge, while every other owner workspace tool — coordination or not,
+/// such as the codebase analytics a leaf's sandboxed owner route refuses
+/// as `owner_route_unavailable` — cannot reach a remote leaf, so the task
+/// stays in the backlog for the owner.
 fn claimed_required_tool_hold(task: &Task) -> Option<String> {
     task.required_tools.iter().find_map(|tool| {
         let restriction = if CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()) {
             "denied in claimed mode; the implementer returns task state through its output"
+        } else if is_claimed_leaf_reachable_tool(tool) {
+            return None;
         } else if crate::runtime::is_coordination_tool(tool) && !is_claimed_owner_tool(tool) {
             "owner coordination outside the closed claimed-owner bridge"
         } else {
-            return None;
+            "owner-only outside the closed claimed-owner bridge"
         };
         Some(format!("required tool `{tool}` is {restriction}"))
     })

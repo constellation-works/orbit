@@ -143,3 +143,16 @@ pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
 pub fn is_claimed_owner_tool(tool: &str) -> bool {
     CLAIMED_OWNER_TOOLS.contains(&tool)
 }
+
+/// Whether a claimed leaf on another machine than its owner can reach
+/// `tool`. A local tool (`proc.spawn`, `github.*`, a plugin tool) runs in
+/// the leaf or through its run's broker, so a leaf reaches it. An Orbit
+/// workspace tool is served from the owner's state, so a remote leaf
+/// reaches it only when it crosses the coordinator, which is exactly
+/// [`CLAIMED_OWNER_TOOLS`] — the same list the leaf-side refusal in the
+/// claimed-owner bridge and the sandboxed owner route is built from, so
+/// admission and that refusal cannot drift.
+#[must_use]
+pub fn is_claimed_leaf_reachable_tool(tool: &str) -> bool {
+    !tool.starts_with("orbit.") || is_claimed_owner_tool(tool)
+}
