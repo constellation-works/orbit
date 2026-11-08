@@ -15,7 +15,6 @@ tags: [conflict-budget, footprints, admission, locks, conflict-recovery]
 
 # Scope: conflict budget for footprint admission
 
-Status: proposed.
 Bearing: admission holds a context lock for every declared `context_files` selector and defers a
 candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission/footprint.rs),
