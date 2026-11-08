@@ -720,8 +720,8 @@ removed. `resident.evolution.min_occurrences`, `min_distinct_cycles`,
 warning and have no effect. They are recognised until 2026-12-07, after which
 they are reported as unknown settings; delete them from the `config.toml` that
 sets them. `resident.evolution.window_days` and `decline_suppress_days` still
-apply to the evolution ledger, `scripts/ux-rules/run.mjs` can still be run by
-hand, and a review-filed bug is approved and promoted like any other task.
+apply to the evolution ledger, and a review-filed bug is approved and promoted
+like any other task.
 
 Explorer delegation has been removed. Existing `workflow.explore.*` and
 `workflow.purpose_crews.explorer` settings load with a deprecation warning
