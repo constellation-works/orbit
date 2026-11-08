@@ -30,9 +30,9 @@ pub(in crate::api) async fn diagnostics_resource_forecast(Ws(runtime): Ws) -> Re
             configured_mode: &settings.mode,
             host: runtime.host_capacity(),
             admit_cpu_percent: settings.admit_cpu_percent,
-            admit_memory_percent: settings.admit_memory_percent,
+            admit_memory_percent: orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
             min_profile_deliveries: settings.min_profile_deliveries,
-            horizon_cap_minutes: settings.horizon_cap_minutes,
+            horizon_cap_minutes: orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
             accuracy: AccuracyBody {
                 since: report.since,
                 report_at: report.report_at,
