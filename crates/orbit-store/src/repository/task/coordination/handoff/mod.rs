@@ -6,6 +6,7 @@ mod accept;
 mod authority;
 mod evidence;
 mod queries;
+mod repair;
 mod review;
 
 const HANDOFF: &str = "distributed-handoff-v1";

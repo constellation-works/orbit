@@ -2353,6 +2353,29 @@ follower or `orbit job resume`:
 
 ### Operator updates and external merges of handed-off PRs
 
+Follower acceptance records its `github-pr` reference in the same journal
+commit that moves the owner's task to `review`. Retrying the handoff keeps
+one reference; landing need not start for the dashboard to show the PR link
+and **Fix PR** control. Existing repair-readiness checks still apply: a
+foreign delivery without an owner-local delivery leaf shows the control
+disabled. Recording its reference does not grant cross-host repair authority.
+
+For older review tasks whose landing history names a PR but whose task has
+no `github-pr` reference, run this on the owner checkout after upgrading:
+
+```bash
+orbit doctor --fix-missing-pr-refs
+```
+
+The repair uses the owner's accepted follower handoffs, preserves unrelated
+references and all lifecycle, claim, reservation and landing state, and is
+safe to repeat. It skips tasks that already have a PR reference and tasks
+without an accepted PR handoff. Multiple distinct accepted PRs are ambiguous:
+the command refuses that task rather than guessing from free-text history.
+Inspect its accepted handoffs before resolving that ambiguity. Refresh the
+task detail after repair to see its PR link and CI controls. No handoff
+revocation, claim recovery or landing retry is needed for this repair.
+
 A landing, `orbit.task.retry_handoff` and auto-fix base-update admission
 accept a pull request head that is the accepted candidate plus a
 first-parent chain of base merges, such as a second **Update branch** an

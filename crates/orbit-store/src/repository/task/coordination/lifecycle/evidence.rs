@@ -8,7 +8,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskArtifact, TaskCommentRowV2, TaskRelation,
-    TaskRelationType,
+    TaskRelationType, push_external_ref_if_missing,
 };
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{
@@ -80,9 +80,7 @@ impl TaskCommitBoundary {
                 intent.envelope.context_files = context.clone();
             }
             for reference in &update.external_refs {
-                if !intent.envelope.external_refs.contains(reference) {
-                    intent.envelope.external_refs.push(reference.clone());
-                }
+                push_external_ref_if_missing(&mut intent.envelope.external_refs, reference.clone());
             }
             intent.envelope.validate()?;
         }
