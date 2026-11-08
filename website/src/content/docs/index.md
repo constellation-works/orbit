@@ -25,7 +25,7 @@ next: false
       </button>
       <span class="orbit-hero-install-status" role="status" aria-live="polite"></span>
     </div>
-    <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
+    <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · <a href="/getting-started/install/#windows">Windows via WSL2</a> · MIT licensed</p>
     <div class="orbit-hero-providers">
       <div class="orbit-hero-providers-label">Runs the agent CLI you already sign in to</div>
       <ul class="orbit-hero-providers-list">

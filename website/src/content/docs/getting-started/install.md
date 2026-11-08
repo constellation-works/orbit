@@ -10,11 +10,7 @@ repository. Every step is also below to do by hand.
 
 ## Prerequisites
 
-- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside a WSL2 Linux
-  distribution: the
-  [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md)
-  covers the distribution, sandbox, MCP clients and the scheduler there. That
-  path has not been run on a Windows host yet.
+- macOS or Linux, on x64 or arm64. On Windows, use [WSL2](#windows).
 - Node 18 or newer, for the npm install.
 - At least one signed-in agent CLI, such as Claude Code or Codex. Orbit runs
   every agent step through one. The
@@ -42,6 +38,19 @@ above. macOS bundles are attached only when the release was built with Apple
 signing credentials, so a release may have none. See
 [Use the desktop app](../../how-to/desktop/) for first launch, tray controls,
 and fleet notifications.
+
+## Windows
+
+Open a WSL2 Linux shell first, then install Orbit inside it:
+
+```bash
+npm install -g @orbit-tools/cli
+```
+
+Windows via WSL2 has not yet been verified on a Windows host. Native Windows
+is not supported; building from source does not change that. Running the npm
+command in a native Windows shell fails with `EBADPLATFORM` because the package
+supports macOS and Linux only. See the [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md) for setup.
 
 ## Install as an agent plugin
 

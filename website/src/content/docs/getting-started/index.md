@@ -10,7 +10,7 @@ the dashboard.
 
 ## Before you begin
 
-- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
+- macOS or Linux, on x64 or arm64. On Windows, use [WSL2](#windows).
 - Node 18 or newer, for the npm install.
 - At least one signed-in agent CLI, such as Claude Code or Codex.
 - The GitHub CLI (`gh`), signed in, so Orbit can open pull requests.
@@ -26,6 +26,19 @@ orbit init
 letters, such as `ABC`. The prefix is permanent on this machine. It also
 detects your agent CLIs, links Orbit's skills into your agents, and on Linux
 prepares the sandbox.
+
+### Windows
+
+Open a WSL2 Linux shell first, then install Orbit inside it:
+
+```bash
+npm install -g @orbit-tools/cli
+```
+
+Windows via WSL2 has not yet been verified on a Windows host. Native Windows
+is not supported; building from source does not change that. Running the npm
+command in a native Windows shell fails with `EBADPLATFORM` because the package
+supports macOS and Linux only. See the [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md) for setup.
 
 ## 2. Let your agent set up the repository
 
