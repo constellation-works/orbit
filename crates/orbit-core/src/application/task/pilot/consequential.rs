@@ -312,8 +312,46 @@ fn resolution_verb_applies(lower: &str, verb: &str) -> bool {
 }
 
 fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
+    // Walk back over any intervening adverbs ("do not automatically
+    // preserve", "never automatically keep"); a negation within that
+    // short window negates the verb, an unrelated word ends the scan so
+    // an affirmative verb preceded by an adverb still resolves.
     let prefix = lower[..verb_at].trim_end();
-    prefix.ends_with("not") || prefix.ends_with("n't")
+    let mut scanned = 0;
+    for token in prefix.rsplit(|c: char| c.is_whitespace()) {
+        let token = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+        if token.is_empty() {
+            continue;
+        }
+        scanned += 1;
+        if scanned > 4 {
+            break;
+        }
+        if token == "not" || token == "never" || token == "cannot" || token.ends_with("n't") {
+            return true;
+        }
+        if token.ends_with("ly")
+            || matches!(
+                token,
+                "ever"
+                    | "just"
+                    | "also"
+                    | "always"
+                    | "even"
+                    | "still"
+                    | "longer"
+                    | "now"
+                    | "again"
+                    | "or"
+                    | "and"
+            )
+            || OWNERSHIP_RESOLUTION_VERBS.contains(&token)
+        {
+            continue;
+        }
+        break;
+    }
+    false
 }
 
 fn rank(name: &str) -> u8 {
