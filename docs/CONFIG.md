@@ -2484,7 +2484,12 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   the same signature failing again with the passing base result enters the one automatic repair for
   the candidate's own failure. If that retry's evidence cannot be read or authenticated for
   `max_base_ci_cycles` consecutive polls, a same-check base pass sends a flaky failure to repair
-  (or requeue once spent). Candidate failures keep their candidate repair/requeue route, and
+  (or requeue once spent). For a candidate set with no cause evidence (no aggregate, no changed-file
+  citation, and no transient, inherited, unknown or inconclusive job), an eligible
+  set on a head with no prior rerun first gets one classification rerun on the
+  unchanged head. `ci_check_rerun_reserved` spends the shared once-per-head budget
+  before sending; a repeat failure takes the one automatic repair route, or
+  requeue if repair is spent. Other candidate failures keep their repair/requeue route, and
   inherited failures keep their base update/wait route. Other failure classes with unreadable
   retry evidence stop in review naming the read failure. If untouched-path evidence remains
   incomplete, landing holds the candidate in review as `delivery_base_checks_pending` after

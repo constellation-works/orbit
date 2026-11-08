@@ -1846,7 +1846,12 @@ one. From then on:
     When the unchanged-head rerun's evidence cannot be read or
     authenticated for `max_base_ci_cycles` consecutive polls, a same-check
     base pass sends a flaky failure to candidate repair (or requeue once
-    spent). Candidate failures keep their candidate repair/requeue route,
+    spent). For a candidate set with no cause evidence (no aggregate, no changed-file
+    citation, and no transient, inherited, unknown or inconclusive job), an eligible
+    set on a head with no prior rerun first gets one classification rerun on the
+    unchanged head. `ci_check_rerun_reserved` spends the shared once-per-head budget
+    before sending; a repeat failure takes the one automatic repair route, or
+    requeue if repair is spent. Other candidate failures keep their repair/requeue route,
     and inherited failures keep their base update/wait route. Other failure
     classes stop in review naming the read failure, not `waiting_for_base`.
     Without decisive evidence, `handoff_land` holds the candidate in review
@@ -1929,8 +1934,8 @@ one. From then on:
   separately failed required aggregate: it is classified on the next poll,
   even when every workflow job now passes.
 
-  Transient and flaky failures share one durable rerun budget per head across
-  owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
+  Transient, flaky and unattributed classification reruns share one durable rerun
+  budget per head across owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
   first: it stores the complete exact failed-job authorization before sending
   `gh run rerun <run> --failed`. A later `ci_check_rerun` means the request
   received a definite accepted reply. An absent reply record is ambiguous,

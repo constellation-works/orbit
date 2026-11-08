@@ -272,8 +272,14 @@ The owner enforces what it is owed in two places:
   failing again with a successful same-check run on the accepted base ancestry
   enters candidate recovery. When that rerun's evidence stays unreadable for
   `max_base_ci_cycles` polls, a same-check base pass sends a flaky failure to
-  candidate recovery. Candidate failures keep their candidate repair/requeue
-  route, and inherited failures keep their base update/wait route. Other
+  candidate recovery. A candidate set with no cause evidence (no aggregate, no
+  changed-file citation, and no transient, inherited, unknown or inconclusive
+  job) on a head with no prior rerun first gets one eligible classification
+  rerun on the unchanged head. `ci_check_rerun_reserved` spends the shared
+  once-per-head budget before sending; a repeat failure takes the one automatic
+  repair route, or requeue if repair is spent. Candidate failures otherwise
+  keep their candidate repair/requeue route, and inherited failures keep their
+  base update/wait route. Other
   failure classes with unreadable rerun evidence stop naming the read failure.
   Logged infrastructure/transient failures use
   `workflow.ci_infrastructure_retry.max_attempts` (default 3 total reruns)
