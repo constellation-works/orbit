@@ -40,6 +40,264 @@ pub(super) fn install_owned_with_identity_gate(
     listener
 }
 
+/// Owned substitute workers for a fixture that spawns an unknown number of
+/// child runs. A background acceptor records each worker's `(run, pid)`
+/// identity from the owned handshake; teardown writes the release marker,
+/// releases every accepted worker over its control socket, then waits until
+/// each worker is reaped and its supervisor observer has completed, so the
+/// caller may delete the marker and temporary root only after no substitute
+/// remains. Drop performs the same bounded cleanup on failure/unwind paths.
+#[cfg(unix)]
+pub(super) struct OwnedWorkers {
+    marker: std::path::PathBuf,
+    repo: std::path::PathBuf,
+    workers: std::sync::Arc<std::sync::Mutex<Vec<OwnedWorker>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    acceptor: Option<std::thread::JoinHandle<()>>,
+    cleaned: bool,
+}
+
+#[cfg(unix)]
+struct OwnedWorker {
+    run: String,
+    pid: u32,
+    process: Option<orbit_common::process::signal::BoundProcess>,
+    control: std::net::TcpStream,
+    released: bool,
+    kill_at: Option<Instant>,
+}
+
+#[cfg(unix)]
+fn reaped(pid: u32) -> bool {
+    // SAFETY: signal zero neither mutates memory nor delivers a signal.
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(unix)]
+pub(super) fn install_owned_workers(path: &Path, repo: std::path::PathBuf) -> OwnedWorkers {
+    use std::io::BufRead;
+    use std::sync::atomic::Ordering;
+    let listener = install_owned(path);
+    let workers: std::sync::Arc<std::sync::Mutex<Vec<OwnedWorker>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let acceptor = {
+        let workers = workers.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((control, _)) => {
+                        let _ = control.set_nonblocking(false);
+                        let _ = control.set_read_timeout(Some(Duration::from_secs(10)));
+                        let _ = control.set_write_timeout(Some(Duration::from_secs(10)));
+                        let mut reader = std::io::BufReader::new(control);
+                        let mut identity = String::new();
+                        if reader.read_line(&mut identity).is_err() {
+                            continue;
+                        }
+                        let Some((run, pid)) = identity.trim().split_once(' ') else {
+                            continue;
+                        };
+                        let Ok(pid) = pid.parse::<u32>() else {
+                            continue;
+                        };
+                        let process = orbit_common::process::signal::BoundProcess::bind(pid, None)
+                            .ok()
+                            .flatten();
+                        let _ =
+                            writeln!(std::io::stderr(), "owned substitute: run={run} pid={pid}");
+                        workers
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(OwnedWorker {
+                                run: run.to_string(),
+                                pid,
+                                process,
+                                control: reader.into_inner(),
+                                released: false,
+                                kill_at: None,
+                            });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+    };
+    OwnedWorkers {
+        marker: path.to_path_buf(),
+        repo,
+        workers,
+        stop,
+        acceptor: Some(acceptor),
+        cleaned: false,
+    }
+}
+
+#[cfg(unix)]
+impl OwnedWorkers {
+    /// Success-path teardown: every run in `expected` must have an owned
+    /// worker, and every owned worker must be reaped and observed.
+    pub(super) fn release_and_wait(&mut self, expected: &[String]) {
+        if let Err(error) = self.cleanup(expected, Duration::from_secs(30)) {
+            panic!("owned worker teardown failed: {error}");
+        }
+    }
+
+    fn cleanup(&mut self, expected: &[String], timeout: Duration) -> Result<(), String> {
+        use std::io::Write as _;
+        use std::sync::atomic::Ordering;
+        if self.cleaned {
+            return Ok(());
+        }
+        self.cleaned = true;
+        std::fs::write(&self.marker, "")
+            .map_err(|error| format!("write release marker: {error}"))?;
+        let deadline = Instant::now() + timeout;
+        let mut killed = false;
+        let mut quiet_since: Option<Instant> = None;
+        let mut last_count = 0usize;
+        let result = loop {
+            // Release workers accepted so far; late arrivals are released
+            // on a later pass while the acceptor is still running.
+            let mut release_error: Option<String> = None;
+            {
+                let mut workers = self
+                    .workers
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for worker in workers.iter_mut() {
+                    if !worker.released {
+                        match worker.control.write_all(&[1]) {
+                            Ok(()) => {
+                                worker.released = true;
+                                worker.kill_at = Some(Instant::now() + Duration::from_secs(2));
+                            }
+                            Err(error) => {
+                                release_error = Some(format!(
+                                    "release run={} pid={}: {error}",
+                                    worker.run, worker.pid
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if workers.len() != last_count {
+                    last_count = workers.len();
+                    quiet_since = None;
+                }
+            }
+            if let Some(error) = release_error {
+                break Err(error);
+            }
+            let snapshot: Vec<(String, u32)> = self
+                .workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .map(|worker| (worker.run.clone(), worker.pid))
+                .collect();
+            let expected_owned = expected
+                .iter()
+                .all(|run| snapshot.iter().any(|(owned, _)| owned == run));
+            let all_settled = snapshot.iter().all(|(run, pid)| {
+                reaped(*pid)
+                    && orbit_core::test_support::pipeline_worker_observer_completed(
+                        &self.repo, run, *pid,
+                    )
+            });
+            // On the Drop path the expected set is unknown: require a
+            // quiet period with no new arrivals before declaring done.
+            let quiet_done = if expected.is_empty() {
+                if all_settled {
+                    let since = quiet_since.get_or_insert_with(Instant::now);
+                    since.elapsed() >= Duration::from_millis(500)
+                } else {
+                    quiet_since = None;
+                    false
+                }
+            } else {
+                true
+            };
+            if expected_owned && all_settled && quiet_done {
+                break if killed {
+                    Err("owned worker did not observe release".to_string())
+                } else {
+                    Ok(())
+                };
+            }
+            {
+                let workers = self
+                    .workers
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for worker in workers.iter() {
+                    if !reaped(worker.pid)
+                        && worker.kill_at.is_some_and(|at| Instant::now() >= at)
+                        && let Some(process) = &worker.process
+                        && process.signal(libc::SIGKILL).is_ok()
+                    {
+                        killed = true;
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                break Err(format!(
+                    "workers not reaped/observed before deadline: {snapshot:?} expected_owned={expected_owned}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
+        result
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OwnedWorkers {
+    fn drop(&mut self) {
+        if self.cleaned {
+            return;
+        }
+        if let Err(error) = self.cleanup(&[], Duration::from_secs(10)) {
+            let _ = writeln!(std::io::stderr(), "owned worker cleanup failed: {error}");
+            if !std::thread::panicking() {
+                panic!("owned worker cleanup failed: {error}");
+            }
+        }
+    }
+}
+
+/// Non-Unix fallback: no owned handshake exists there, so retain the
+/// original marker-only contract.
+#[cfg(not(unix))]
+pub(super) struct OwnedWorkers {
+    marker: std::path::PathBuf,
+}
+
+#[cfg(not(unix))]
+pub(super) fn install_owned_workers(path: &Path, _repo: std::path::PathBuf) -> OwnedWorkers {
+    install(path, "created");
+    OwnedWorkers {
+        marker: path.to_path_buf(),
+    }
+}
+
+#[cfg(not(unix))]
+impl OwnedWorkers {
+    pub(super) fn release_and_wait(&mut self, _expected: &[String]) {
+        std::fs::write(&self.marker, "").unwrap();
+    }
+}
+
 fn install_with_control(path: &Path, mode: &str, control: &str, identity_gate: &str) {
     orbit_common::test_env::assert_child_test_exists(WAIT_TEST);
     orbit_core::test_support::install_substitute_pipeline_worker([

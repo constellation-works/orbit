@@ -177,12 +177,13 @@ deterministic_action_catalog!(define_deterministic_actions);
 
 pub use activity_roles::JobActivityRoles;
 pub use activity_v2::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, IncompleteContinuationPolicy,
-    OnDenial, Provider, ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint,
-    ProviderIdentity, ProviderParseError, ProviderResolution, ProviderResolveRequest,
-    ProviderSource, RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION,
-    ResponseCorrectionPolicy, RetiredAgentBackend, check_retired_backend_value,
-    requires_native_inspection, retired_provider_id,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, FleetNoticeGuidance,
+    IncompleteContinuationPolicy, OnDenial, Provider, ProviderAlias, ProviderDeprecation,
+    ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity, ProviderParseError,
+    ProviderResolution, ProviderResolveRequest, ProviderSource, RETIRED_BACKEND_MIGRATION,
+    RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION, ResponseCorrectionPolicy,
+    RetiredAgentBackend, check_retired_backend_value, requires_native_inspection,
+    retired_provider_id,
 };
 pub use audit_envelope::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, BranchOutcome, StepRecoveryDecisionRecord,
@@ -196,7 +197,8 @@ pub use job_v2::{
     TargetRef, TargetStep,
 };
 pub use response_correction::{
-    ResponseCorrectionActivityError, validate_response_correction_activity,
+    MUTATING_TOOLS, ResponseCorrectionActivityError, is_response_correction_mutating_tool,
+    validate_response_correction_activity,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;

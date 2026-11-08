@@ -61,6 +61,7 @@ mod crew_env;
 mod follower_claims;
 mod gap_fit;
 mod human_crew;
+mod load_failure;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;

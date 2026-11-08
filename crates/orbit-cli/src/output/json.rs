@@ -104,6 +104,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
         OrbitError::DecisionRefused { code, .. } => code.as_str(),
         OrbitError::NoticeRefused { code, .. } => code.as_str(),
+        OrbitError::TaskPilotRefused { code, .. } => code.as_str(),
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",

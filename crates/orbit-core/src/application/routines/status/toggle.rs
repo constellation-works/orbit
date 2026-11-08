@@ -1,24 +1,6 @@
 use super::*;
 
-/// Why a routine selection (toggle or trigger edit) was refused before any
-/// definition was read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoutineToggleRefusal {
-    /// A replica lists the routine, but only its owner may change it.
-    OwnerAuthority {
-        /// Operator-facing explanation naming the owner.
-        reason: String,
-        /// The machine that owns the workspace's coordination store.
-        owner_machine: String,
-    },
-    /// The report lists no schedulable routine of that name.
-    NotFound,
-    /// The routine comes from another source workspace than the caller's.
-    WorkspaceMismatch {
-        /// The routine's actual source workspace name.
-        source_workspace: String,
-    },
-}
+use super::super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 
 /// Select routine `name` from `report` for a definition edit.
 ///
@@ -30,13 +12,13 @@ pub fn select_listed_routine<'a>(
     report: &'a RoutineStatusReport,
     name: &str,
     source: Option<(&str, &Path)>,
-) -> Result<&'a LoadedRoutine, RoutineToggleRefusal> {
+) -> Result<&'a LoadedRoutine, RoutineEditRefusal> {
     if let Some(owned) = report
         .owner_only
         .iter()
         .find(|owned| owned.routine.definition.name == name)
     {
-        return Err(RoutineToggleRefusal::OwnerAuthority {
+        return Err(RoutineEditRefusal::OwnerAuthority {
             reason: owned.reason.clone(),
             owner_machine: owned.owner_machine.clone(),
         });
@@ -46,13 +28,14 @@ pub fn select_listed_routine<'a>(
         .iter()
         .find(|status| status.routine.definition.name == name)
     else {
-        return Err(RoutineToggleRefusal::NotFound);
+        return Err(RoutineEditRefusal::NotFound { name: name.into() });
     };
     let routine = &status.routine;
     if source.is_some_and(|(workspace, orbit_dir)| {
         routine.source_workspace != workspace || routine.source_orbit_dir != orbit_dir
     }) {
-        return Err(RoutineToggleRefusal::WorkspaceMismatch {
+        return Err(RoutineEditRefusal::WorkspaceMismatch {
+            name: name.into(),
             source_workspace: routine.source_workspace.clone(),
         });
     }
@@ -62,8 +45,9 @@ pub fn select_listed_routine<'a>(
 /// Select routine `name` from `report` and toggle its versioned `enabled`.
 ///
 /// Selection is [`select_listed_routine`]; the caller's `target` must still
-/// be the definition's before [`set_routine_enabled`] writes. The outer error
-/// is a failed write.
+/// be the definition's before [`set_routine_enabled`] writes. Every refusal,
+/// including a stale expectation or a retargeted definition, is one
+/// [`RoutineEditRefusal`]. The outer error is a failed write.
 pub fn toggle_listed_routine(
     report: &RoutineStatusReport,
     name: &str,
@@ -71,17 +55,17 @@ pub fn toggle_listed_routine(
     target: &str,
     expected_enabled: bool,
     enabled: bool,
-) -> Result<Result<RoutineToggleOutcome, RoutineToggleRefusal>, OrbitError> {
+) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
     let routine = match select_listed_routine(report, name, source) {
         Ok(routine) => routine,
         Err(refusal) => return Ok(Err(refusal)),
     };
     if routine.definition.target.as_ref_string() != target {
-        return Ok(Ok(RoutineToggleOutcome::TargetConflict {
+        return Ok(Err(RoutineEditRefusal::TargetMismatch {
             actual_target: routine.definition.target.clone(),
         }));
     }
-    set_routine_enabled(routine, expected_enabled, enabled).map(Ok)
+    set_routine_enabled(routine, expected_enabled, enabled).map(RoutineToggleOutcome::into_edit)
 }
 
 /// The routine's next scheduled occurrence, rendered host-local.
@@ -111,6 +95,22 @@ pub enum RoutineToggleOutcome {
     /// The definition now dispatches a different target than the one the
     /// caller selected, so no write occurred.
     TargetConflict { actual_target: RoutineTarget },
+}
+
+impl RoutineToggleOutcome {
+    /// This write result in the shared routine-edit contract.
+    pub fn into_edit(self) -> Result<RoutineEditOutcome, RoutineEditRefusal> {
+        match self {
+            Self::Changed => Ok(RoutineEditOutcome { changed: true }),
+            Self::Unchanged => Ok(RoutineEditOutcome { changed: false }),
+            Self::Conflict { actual_enabled } => {
+                Err(RoutineEditRefusal::StaleState { actual_enabled })
+            }
+            Self::TargetConflict { actual_target } => {
+                Err(RoutineEditRefusal::TargetMismatch { actual_target })
+            }
+        }
+    }
 }
 
 /// Change only the typed `enabled` field of a routine definition.

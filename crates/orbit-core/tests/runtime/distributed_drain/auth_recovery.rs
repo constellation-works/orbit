@@ -82,6 +82,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: vec![],
         tool_disallow_list: None,
         on_denial: OnDenial::Terminate,

@@ -9,6 +9,7 @@ pub use kinds::{
     DecisionRefusalCode, DependencyNotDelivered, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, PrivateVcsFailureClass,
     ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
-    SqliteContention, StorageLayer, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    SqliteContention, StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

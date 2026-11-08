@@ -22,6 +22,7 @@ pub(super) use revision::{arm_expire_source_after_next_head, clear_expired_sourc
 
 use super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
+use orbit_automation::{AutomationError, delivery::digest};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -41,6 +42,29 @@ pub(crate) struct Source<'a> {
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,
     fetch_origin: bool,
+}
+
+/// Keep persisted repository identities consistent across source readers.
+/// Only repositories without a remote need to resolve the common directory.
+fn repository_identity(
+    remote: &str,
+    common_dir: impl FnOnce() -> Result<String, AutomationError>,
+) -> Result<String, AutomationError> {
+    let remote = remote.trim();
+    let normalized = remote.trim_end_matches(".git");
+    if let Some(github) = normalized
+        .strip_prefix("https://github.com/")
+        .or_else(|| normalized.strip_prefix("git@github.com:"))
+    {
+        return Ok(github.to_owned());
+    }
+    // Non-GitHub identities hash the original remote, including `.git`.
+    let identity = if remote.is_empty() {
+        common_dir()?
+    } else {
+        remote.to_owned()
+    };
+    Ok(format!("git:{}", digest(identity.as_bytes())))
 }
 
 /// The source's monotonic budget clock; fixture clocks never affect UTC backoff.

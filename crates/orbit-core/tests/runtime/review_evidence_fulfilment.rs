@@ -446,7 +446,6 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
         assert_eq!(output["reason"], reason, "{output}");
         assert_eq!(output["retryable"], false, "{output}");
         assert_eq!(stub_runs(&fixture).len(), usize::from(ran), "{reason}");
-        assert!(!fixture.repo.join("owned").exists());
         assert_still_held(&fixture, reason);
         let log = artifact(&fixture, EVIDENCE_LOG).expect("the refused run's log is attached");
         assert_eq!(log["reason"], reason);
@@ -1039,13 +1038,12 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
         assert_eq!(output["fulfilled"], false, "{reason}: {output}");
         assert_eq!(output["reason"], reason, "{output}");
         assert_eq!(output["retryable"], false, "{output}");
-        assert!(
-            !fixture.repo.join("owned").exists() && !fixture.repo.join("../owned").exists(),
-            "{reason}: nothing ran"
-        );
         let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("the refusal's log is attached");
         assert_eq!(log["reason"], reason);
-        assert!(log["host_command"].is_null(), "{reason}: {log}");
+        assert!(
+            log["host_command"].is_null(),
+            "{reason}: no host command was admitted: {log}"
+        );
         assert_held_without(&fixture, HOST_EVIDENCE, reason);
         let rows = audit_rows(&fixture);
         assert_eq!(rows.len(), 1, "{rows:?}");

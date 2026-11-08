@@ -441,7 +441,7 @@ fn activity_draws_record_pressure_without_changing_filters_or_frozen_choices() {
         json!([{"name": "low_codex", "weight": 3}])
     );
     assert_eq!(draw.crew, "low_codex");
-    // A pre-pressure run-state record still deserializes and freezes its crew.
+    // A pre-pressure draw still deserializes to the same single-crew draw.
     let legacy: ActivityCrewDraw = serde_json::from_value(json!({
         "crew": "low_codex", "source": LOW, "eligible_pool": [{"name": "low_codex", "weight": 3}],
     }))

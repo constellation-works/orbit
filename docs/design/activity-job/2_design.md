@@ -1195,7 +1195,16 @@ in `task_pr_pipeline`:
   these tools. Keep the admission table and those disallow lists in sync with
   registered built-in Orbit writes; file and process access remains separately
   confined by the filesystem profile. Admission never permits
-  `incomplete_continuation` or `trustedHostExecution` with correction.
+  `incomplete_continuation` or `trustedHostExecution` with correction. A
+  task's `required_tools` cannot add a mutating tool either: asset load sees
+  only the activity's own list, so at run time the grant path
+  (`resolve_activity_tool_grant`) drops a requirement naming a tool from the
+  same admission table, records it as an omitted requirement, and strips it
+  from the effective grant of both the first invocation and any correction.
+  Non-mutating requirements remain grantable, activities without
+  `response_correction` keep the ordinary `required_tools` grant, and
+  deny-mode correction activities keep their existing refusal/drop
+  behaviour for covered requirements.
 - **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
   whose `recovery_activity` resolves dispatches it for a `success: false`
   outcome exactly as it does for an `Err` — once retries are exhausted, if the

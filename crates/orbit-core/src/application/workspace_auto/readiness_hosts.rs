@@ -1,22 +1,68 @@
 //! Follower capability observations for owner readiness, never admission authority.
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCensusEntry, browser_kit_unavailable,
     labels_unavailable, os_unavailable,
 };
 use orbit_types::task::{ExecutorOsLimit, Task};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::json;
 
 use crate::OrbitRuntime;
 
 /// Read once per readiness response. Historical claims and host reachability
 /// cannot establish the capability of a currently pulling drain.
 pub(super) struct FollowerEvidence {
-    rows: Result<Vec<(ExecutorCensusEntry, &'static str)>, OrbitError>,
+    rows: Result<Vec<(ExecutorCensusEntry, FollowerReportState)>, OrbitError>,
     limits: Result<BTreeMap<String, ExecutorOsLimit>, OrbitError>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum FollowerReportState {
+    Stopped,
+    Unavailable,
+    Stale,
+    Recent,
+}
+
+impl FollowerReportState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Unavailable => "unavailable",
+            Self::Stale => "stale",
+            Self::Recent => "recent",
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FollowerEvidenceStatus {
+    Unavailable,
+    NoCompatibleRecent,
+    CompatibleRecent,
+}
+
+#[derive(Serialize)]
+struct FollowerExecutorObservation {
+    machine_id: String,
+    run_id: String,
+    seen_at: DateTime<Utc>,
+    state: FollowerReportState,
+    compatible: bool,
+    refusal: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct FollowerExecutorEvidence {
+    pub(super) status: FollowerEvidenceStatus,
+    executors: Vec<FollowerExecutorObservation>,
+    detail: String,
 }
 
 impl FollowerEvidence {
@@ -42,32 +88,42 @@ impl FollowerEvidence {
         }
     }
 
-    pub(super) fn task_follower_evidence(&self, task: &Task) -> Value {
+    pub(super) fn task_follower_evidence(&self, task: &Task) -> FollowerExecutorEvidence {
         let (rows, limits) = match (&self.rows, &self.limits) {
             (Ok(rows), Ok(limits)) => (rows, limits),
             _ => {
-                return json!({"status": "unavailable", "executors": [],
-                "detail": "Follower executor evidence unavailable: capability declarations or executor OS limits could not be read. This host's OS refusal is local; follower admission is unknown."});
+                return FollowerExecutorEvidence {
+                    status: FollowerEvidenceStatus::Unavailable,
+                    executors: Vec::new(),
+                    detail: "Follower executor evidence unavailable: capability declarations or executor OS limits could not be read. This host's OS refusal is local; follower admission is unknown.".to_string(),
+                };
             }
         };
         let executors = rows
             .iter()
             .map(|(row, state)| {
                 let refusal = capability_refusal(row, task, limits);
-                json!({"machine_id": row.machine_id, "run_id": row.run_id,
-                    "seen_at": row.seen_at, "state": state,
-                    "compatible": refusal.is_none(), "refusal": refusal})
+                FollowerExecutorObservation {
+                    machine_id: row.machine_id.clone(),
+                    run_id: row.run_id.clone(),
+                    seen_at: row.seen_at,
+                    state: *state,
+                    compatible: refusal.is_none(),
+                    refusal,
+                }
             })
             .collect::<Vec<_>>();
         let compatible = executors
             .iter()
-            .filter(|row| row["compatible"] == true && row["state"] == "recent")
+            .filter(|row| row.compatible && row.state == FollowerReportState::Recent)
             .map(|row| {
                 format!(
                     "{} (run {}, last reported {})",
-                    row["machine_id"].as_str().unwrap_or("unknown"),
-                    row["run_id"].as_str().unwrap_or("unknown"),
-                    row["seen_at"].as_str().unwrap_or("unknown")
+                    row.machine_id,
+                    row.run_id,
+                    // Match Chrono's serde spelling, including `Z` and
+                    // automatic fractional-second precision.
+                    row.seen_at.to_rfc3339_opts(SecondsFormat::AutoSi, true)
                 )
             })
             .collect::<Vec<_>>();
@@ -77,18 +133,18 @@ impl FollowerEvidence {
                 .map(|row| {
                     format!(
                         "{} (run {}): {}{}",
-                        row["machine_id"].as_str().unwrap_or("unknown"),
-                        row["run_id"].as_str().unwrap_or("unknown"),
-                        row["state"].as_str().unwrap_or("unknown"),
-                        row["refusal"]
-                            .as_str()
+                        row.machine_id,
+                        row.run_id,
+                        row.state.as_str(),
+                        row.refusal
+                            .as_deref()
                             .map(|reason| format!(", {reason}"))
                             .unwrap_or_default()
                     )
                 })
                 .collect::<Vec<_>>();
             (
-                "no_compatible_recent",
+                FollowerEvidenceStatus::NoCompatibleRecent,
                 format!(
                     "No recent compatible executor declaration is available{}. Follower admission is unknown; registration and past claims do not prove a running eligible drain.",
                     if observations.is_empty() {
@@ -100,7 +156,7 @@ impl FollowerEvidence {
             )
         } else {
             (
-                "compatible_recent",
+                FollowerEvidenceStatus::CompatibleRecent,
                 format!(
                     "Compatible executor declaration(s): {}. Reports expire after {} seconds without another pull. A recent report is not a live heartbeat; follower capacity and admission remain unverified.",
                     compatible.join("; "),
@@ -108,7 +164,11 @@ impl FollowerEvidence {
                 ),
             )
         };
-        json!({"status": status, "executors": executors, "detail": detail})
+        FollowerExecutorEvidence {
+            status,
+            executors,
+            detail,
+        }
     }
 }
 
@@ -116,7 +176,7 @@ fn follower_report_state(
     runtime: &OrbitRuntime,
     row: &ExecutorCensusEntry,
     now: DateTime<Utc>,
-) -> &'static str {
+) -> FollowerReportState {
     // Run IDs alone are not a cross-machine identity: only matching location
     // evidence can establish that a locally visible run is this follower's.
     match runtime.stores().jobs().get_job_run(&row.run_id) {
@@ -127,11 +187,11 @@ fn follower_report_state(
                     .as_ref()
                     .is_some_and(|location| location.machine_id == row.machine_id) =>
         {
-            "stopped"
+            FollowerReportState::Stopped
         }
-        Err(_) => "unavailable",
-        _ if !row.fresh(now) || row.seen_at > now => "stale",
-        _ => "recent",
+        Err(_) => FollowerReportState::Unavailable,
+        _ if !row.fresh(now) || row.seen_at > now => FollowerReportState::Stale,
+        _ => FollowerReportState::Recent,
     }
 }
 

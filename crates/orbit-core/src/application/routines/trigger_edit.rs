@@ -14,11 +14,9 @@ use orbit_types::workflow::{OverlapPolicy, RoutineTarget, RoutineTrigger};
 use serde::Serialize;
 
 use super::due::parse_cron;
+use super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 use super::loader::LoadedRoutine;
-use super::status::{
-    RoutineStatusReport, RoutineToggleRefusal, checkout_edit_report, checkout_refusal,
-    select_listed_routine,
-};
+use super::status::{RoutineStatusReport, checkout_edit_report, select_listed_routine};
 use super::template::is_seeded_routine_file;
 use crate::OrbitRuntime;
 
@@ -48,6 +46,22 @@ pub enum RoutineTriggerEditOutcome {
         /// The target the definition holds now.
         actual_target: RoutineTarget,
     },
+}
+
+impl RoutineTriggerEditOutcome {
+    /// This write result in the shared routine-edit contract.
+    pub fn into_edit(self) -> Result<RoutineEditOutcome, RoutineEditRefusal> {
+        match self {
+            Self::Changed => Ok(RoutineEditOutcome { changed: true }),
+            Self::Unchanged => Ok(RoutineEditOutcome { changed: false }),
+            Self::Conflict { actual_trigger } => {
+                Err(RoutineEditRefusal::StaleTrigger { actual_trigger })
+            }
+            Self::TargetConflict { actual_target } => {
+                Err(RoutineEditRefusal::TargetMismatch { actual_target })
+            }
+        }
+    }
 }
 
 /// Which trigger kinds a definition may switch to without changing its
@@ -94,8 +108,9 @@ pub fn trigger_options(routine: &LoadedRoutine) -> RoutineTriggerOptions {
 ///
 /// Selection is [`select_listed_routine`]; the caller's `target` must still
 /// be the definition's, and `expected` the trigger it observed, before
-/// [`set_routine_trigger`] writes. The outer error is a failed or invalid
-/// write.
+/// [`set_routine_trigger`] writes. Every refusal, including a stale trigger
+/// or a retargeted definition, is one [`RoutineEditRefusal`]. The outer error
+/// is a failed or invalid write.
 pub fn edit_listed_routine_trigger(
     report: &RoutineStatusReport,
     name: &str,
@@ -103,17 +118,17 @@ pub fn edit_listed_routine_trigger(
     target: &str,
     expected: &RoutineTrigger,
     trigger: RoutineTrigger,
-) -> Result<Result<RoutineTriggerEditOutcome, RoutineToggleRefusal>, OrbitError> {
+) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
     let routine = match select_listed_routine(report, name, source) {
         Ok(routine) => routine,
         Err(refusal) => return Ok(Err(refusal)),
     };
     if routine.definition.target.as_ref_string() != target {
-        return Ok(Ok(RoutineTriggerEditOutcome::TargetConflict {
+        return Ok(Err(RoutineEditRefusal::TargetMismatch {
             actual_target: routine.definition.target.clone(),
         }));
     }
-    set_routine_trigger(routine, expected, trigger).map(Ok)
+    set_routine_trigger(routine, expected, trigger).map(RoutineTriggerEditOutcome::into_edit)
 }
 
 /// Replace one routine's trigger in a selected checkout, under the same role
@@ -124,10 +139,11 @@ pub(crate) fn edit_checkout_routine_trigger(
     target: &str,
     expected: &RoutineTrigger,
     trigger: RoutineTrigger,
-) -> Result<RoutineTriggerEditOutcome, OrbitError> {
+) -> Result<RoutineEditOutcome, OrbitError> {
     let report = checkout_edit_report(runtime)?;
-    edit_listed_routine_trigger(&report, name, None, target, expected, trigger)?
-        .map_err(checkout_refusal)
+    Ok(edit_listed_routine_trigger(
+        &report, name, None, target, expected, trigger,
+    )??)
 }
 
 /// Change only the `trigger` block of a routine definition.

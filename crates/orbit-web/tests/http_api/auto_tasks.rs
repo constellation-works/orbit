@@ -270,6 +270,20 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
             let outcome =
                 run_auto_task_scheduler_at(&fixture.runtime, now, SchedulerOptions::default())
                     .unwrap();
+            assert_eq!(
+                outcome
+                    .reports
+                    .iter()
+                    .map(|report| report.name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected.keys().map(String::as_str).collect(),
+                "scheduler must report every expected definition"
+            );
+            assert_eq!(
+                outcome.reports.len(),
+                expected.len(),
+                "one report per definition"
+            );
             for report in outcome.reports {
                 let open = expected[&report.name].2;
                 assert_eq!(

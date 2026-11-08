@@ -149,7 +149,8 @@ fn an_explicit_pilot_during_an_approve_proposed_drain_calls_the_provider_once() 
     }
     let workspace = Workspace::with_shipped_jobs();
     let workers = workspace._root.path().join("release-workers");
-    crate::worker_fixture::install(&workers, "created");
+    let mut owned_workers =
+        crate::worker_fixture::install_owned_workers(&workers, workspace.repo.clone());
     let calls = workspace._root.path().join("provider-calls");
     let release = workspace._root.path().join("provider-release");
     install_provider(&workspace, &calls, &release);
@@ -264,7 +265,20 @@ fn an_explicit_pilot_during_an_approve_proposed_drain_calls_the_provider_once() 
     executor.join().unwrap().unwrap();
     stop.store(true, Ordering::SeqCst);
     let drain_pilots = drain_pilots.join().unwrap();
-    std::fs::write(&workers, "").unwrap();
+    // Reap every substitute (explicit pilot, drain and dispatched children)
+    // before the release marker and temporary root are removed.
+    let mut expected_workers = vec![explicit.clone(), drain.clone()];
+    expected_workers.extend(
+        workspace
+            .runtime
+            .read_run_state(&drain)
+            .unwrap()
+            .unwrap()
+            .child_dispatches
+            .iter()
+            .map(|child| child.child_run_id.clone()),
+    );
+    owned_workers.release_and_wait(&expected_workers);
     assert_eq!(workspace.run(&drain).state, JobRunState::Success);
 
     // Exactly one provider invocation and one applied assessment. A pilot

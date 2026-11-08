@@ -40,6 +40,7 @@ fn agent_loop_activity(
             steering_instruction: None,
             notice_instruction: None,
             notice_posting_instruction: None,
+            fleet_notices: Default::default(),
             tools,
             on_denial: OnDenial::Terminate,
             model: None,

@@ -12,7 +12,7 @@ use crate::{
         auto_tasks::AutoTaskToggleProfile,
         job::JobCatalogFilter,
         routines::{
-            FireField, RoutineField, RoutineToggleOutcome, RoutineTriggerEditOutcome,
+            FireField, RoutineField,
             status::{checkout_routine_statuses, toggle_checkout_routine},
             trigger_edit::edit_checkout_routine_trigger,
         },
@@ -229,32 +229,16 @@ pub(in crate::adapter::tool_host) fn control(
             let expected = boolean(&input, "expected_enabled")?;
             let enabled = boolean(&input, "enabled")?;
             let target = required_string(&input, &["target"], "target")?;
-            match toggle_checkout_routine(runtime, &name, &target, expected, enabled)? {
-                RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => {
-                    json!({"enabled":enabled})
-                }
-                RoutineToggleOutcome::TargetConflict { .. } => {
-                    return Err(invalid("routine target changed; refresh before retrying"));
-                }
-                RoutineToggleOutcome::Conflict { .. } => {
-                    return Err(invalid("routine changed; refresh before retrying"));
-                }
-            }
+            let outcome = toggle_checkout_routine(runtime, &name, &target, expected, enabled)?;
+            json!({"enabled":enabled,"changed":outcome.changed})
         }
         ("routine", "set_trigger") => {
             let expected = trigger_field(&input, "expected_trigger")?;
             let trigger = trigger_field(&input, "trigger")?;
             let target = required_string(&input, &["target"], "target")?;
-            match edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)? {
-                RoutineTriggerEditOutcome::Changed => json!({"changed":true}),
-                RoutineTriggerEditOutcome::Unchanged => json!({"changed":false}),
-                RoutineTriggerEditOutcome::TargetConflict { .. } => {
-                    return Err(invalid("routine target changed; refresh before retrying"));
-                }
-                RoutineTriggerEditOutcome::Conflict { .. } => {
-                    return Err(invalid("routine trigger changed; refresh before retrying"));
-                }
-            }
+            let outcome =
+                edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)?;
+            json!({"changed":outcome.changed})
         }
         ("auto_task", "toggle") => {
             let profile = AutoTaskToggleProfile::Checked {

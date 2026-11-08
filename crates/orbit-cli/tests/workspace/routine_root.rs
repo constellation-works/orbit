@@ -607,8 +607,16 @@ fn routine_toggle_edits_and_audits_only_the_invoking_workspace() {
         &["--workspace", name_a, "routine", "enable", routine_b],
     );
     assert!(
-        stderr.contains(name_b) && stderr.contains("--workspace"),
-        "mismatch names the routine's workspace: {stderr}"
+        stderr.contains("workspace_mismatch:")
+            && stderr.contains(name_b)
+            && stderr.contains("--workspace"),
+        "mismatch carries the shared code and names the routine's workspace: {stderr}"
+    );
+    // An unlisted name is the shared `routine_not_found` refusal.
+    let stderr = refuse(repo_a, &["routine", "enable", "no-such-routine"]);
+    assert!(
+        stderr.contains("routine_not_found: routine 'no-such-routine' was not found"),
+        "unlisted routine reports the shared refusal: {stderr}"
     );
     // Neither does the cwd: running from A cannot enable B's routine.
     refuse(repo_a, &["routine", "enable", routine_b]);
@@ -645,6 +653,14 @@ fn routine_toggle_edits_and_audits_only_the_invoking_workspace() {
     }
     operator(repo_a, &["routine", "enable", routine_a]).success();
     assert!(definition(repo_a, routine_a).contains("enabled: true"));
+    // Re-enabling reports the shared outcome's `changed: false`.
+    let stdout = operator(repo_a, &["routine", "enable", routine_a, "--json"])
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out: Value = serde_json::from_slice(&stdout).expect("toggle JSON");
+    assert_eq!(out["changed"], false, "{out}");
     assert_eq!(
         definition(repo_b, routine_b),
         before_b,
@@ -661,8 +677,8 @@ fn routine_toggle_edits_and_audits_only_the_invoking_workspace() {
     );
     assert_eq!(
         applied_toggles(repo_a),
-        [format!("enable:{routine_a}")],
-        "A's audit holds only the toggle applied to A, not the ones aimed at B"
+        [format!("enable:{routine_a}"), format!("enable:{routine_a}")],
+        "A's audit holds only the toggles applied to A (the second unchanged), not the ones aimed at B"
     );
 }
 

@@ -228,10 +228,17 @@ only renamed or moved are translated on load and rewritten by
 | Finding verification | `review.verify_findings` | None. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | 2026-12-07 |
 | Agent scoreboard | `[scoring]` table (`scoring.enabled`) | None; nothing records scoreboard metrics. | 2026-11-12 |
 
-The `finding-verification`, `evolution-pass`, `ux-rules` and `pilot-warning-triage`
-routines are retired too. `orbit workspace sync` retires their seeded copies. A
-routine you wrote that targets one of their jobs, or the `pilot_warnings_held`
-trigger, loads as retired and never fires; remove it or retarget it. Triage a
+The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
+while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
+trigger rather than its job. `orbit workspace sync` retires their seeded copies. A
+routine you wrote that targets one of the three removed jobs
+(`finding_verification_pipeline`, `evolution_pass_pipeline`,
+`ux_rules_pipeline`) loads as retired and never fires unless the workspace
+defines a job of the same name, which resolves first and stays active;
+otherwise remove it or retarget it. A routine on the retired
+`pilot_warnings_held` trigger loads as retired even though its
+`escalation_triage_pipeline` job still ships, so a cron routine targeting that
+job without the retired trigger stays active. Triage a
 task held on pilot warnings from the dashboard's Triage action.
 
 ### Verify the cleanup

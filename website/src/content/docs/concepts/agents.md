@@ -603,8 +603,8 @@ inherits a failed task's crew. See [Purpose pools](../../reference/config/#purpo
 
 `workflow.mid_run_steering.enabled` lets operator comments added after dispatch
 reach later managed prompts. A bounded checkpoint holds promotion while new
-guidance is undelivered. Steering is off by default;
-see [Configuration](../../reference/config/).
+guidance is undelivered. `orbit init` turns it on in a new global config; when
+the key is absent it is off. See [Configuration](../../reference/config/).
 
 Use `orbit task update <id> --crew <name>` to select a crew explicitly.
 Automatic admission can redraw pool assignments and reassign an auto-task's

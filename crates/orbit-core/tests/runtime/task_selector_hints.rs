@@ -26,6 +26,11 @@ fn invalid_input_message(result: Result<Value, OrbitError>) -> String {
 
 #[test]
 fn task_tool_unknown_selectors_give_specific_recovery_hints() {
+    if !super::dispatch_admission::isolated(
+        "task_selector_hints::task_tool_unknown_selectors_give_specific_recovery_hints",
+    ) {
+        return;
+    }
     let (_root, runtime, workspace) = test_runtime();
     let added = runtime
         .run_tool(

@@ -164,21 +164,37 @@ fn a_network_request_beyond_the_grant_refuses_before_spawn() {
 #[test]
 fn granted_variables_alone_reach_the_script_and_their_values_are_redacted() {
     let child = "script_env_pass::granted_variables_alone_reach_the_script_and_their_values_are_redacted_in_child";
+    let home = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let logs = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
     });
     command
-        .args(["--exact", child, "--ignored", "--nocapture"])
+        .args([
+            "--exact",
+            child,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
         .env(PASSED, SECRET)
         .env(UNGRANTED, UNGRANTED_VALUE)
         .env_remove(MISSING);
-    let output = command.output().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, child, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         child,
         output.status,
         &output.stdout,
         &output.stderr,
+    );
+    let leaked = files_holding(home.path(), SECRET.as_bytes());
+    assert!(
+        leaked.is_empty(),
+        "the passed value is not stored under the child's HOME/cwd: {leaked:?}"
     );
 }
 
@@ -261,6 +277,6 @@ fn granted_variables_alone_reach_the_script_and_their_values_are_redacted_in_chi
     let leaked = files_holding(fixture.root.path(), SECRET.as_bytes());
     assert!(
         leaked.is_empty(),
-        "the passed value is stored nowhere: {leaked:?}"
+        "the passed value is not stored under the fixture root: {leaked:?}"
     );
 }

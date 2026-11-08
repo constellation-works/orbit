@@ -3,10 +3,12 @@ use std::sync::OnceLock;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
-use orbit_common::governance::task::{MINIMAL_TASK_FIELDS, select_fields};
+use orbit_common::governance::task::select_fields;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
-use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
+use orbit_core::application::task::{
+    TaskListResultPolicy, TaskListResultProfile, artifact_put_result,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
@@ -372,17 +374,9 @@ pub(crate) fn shape_tool_output(
         return Ok(shaped);
     }
 
-    if tool_name == "orbit.task.artifact.put" {
-        return Ok(filter_top_level_fields(
-            output,
-            &MINIMAL_TASK_FIELDS
-                .iter()
-                .map(|field| (*field).to_string())
-                .collect::<Vec<_>>(),
-        ));
-    }
-
-    Ok(output)
+    Ok(artifact_put_result::artifact_put_default_result(
+        tool_name, output,
+    ))
 }
 
 fn ensure_write_sidecars_present(

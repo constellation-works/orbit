@@ -31,6 +31,7 @@ use super::gap_fit::{
     GAP_FIT_REASON, GapFitPass, gap_fit_selection, release_refused_reservations,
     release_unadmitted_reservations,
 };
+use super::load_failure::leaf_load_failure_holds;
 use super::lock_busy::defer_lock_busy_pass;
 use super::pool::{
     DEFAULT_IDLE_SLEEP_SECONDS, DEFAULT_POLL_SLEEP_SECONDS, candidate_pool_limit, templated_u64,
@@ -199,6 +200,35 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     snapshot
         .include_tasks(runtime, &claimed)
         .map_err(|error| PassError::store(action, "read claimed tasks", error))?;
+    // [ORB-22892] A leaf of this drain that failed at job load (no activity
+    // step started, which the audit trail records) holds its task for the
+    // rest of this drain. The task itself is unchanged by such a failure, so
+    // without this the next iteration would dispatch the same deterministic
+    // failure again. The hold lifts when the task changes after the failure;
+    // a new drain starts fresh, and a leaf whose audit shows a started step
+    // is not held (see `load_failure`).
+    let mut leaf_load_holds = leaf_load_failure_holds(runtime, action, drain_run_id(input))?;
+    leaf_load_holds.retain(|task_id, hold| {
+        snapshot.admissible_leaves.contains(task_id)
+            && snapshot
+                .task_lookup
+                .get(task_id)
+                .is_none_or(|task| task.updated_at <= hold.finished_at)
+    });
+    let leaf_load_held: BTreeSet<String> = leaf_load_holds.keys().cloned().collect();
+    let leaf_load_waiting: Vec<DrainWaitingTask> = leaf_load_holds
+        .values()
+        .map(|hold| DrainWaitingTask {
+            task_id: hold.task_id.clone(),
+            reason: Some("leaf_load_failed".to_string()),
+            blocked_by: Vec::new(),
+            detail: Some(format!(
+                "leaf {} failed at job load: {}",
+                hold.leaf_run_id, hold.error
+            )),
+            findings: Vec::new(),
+        })
+        .collect();
     // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
     let light_budget = LightBudget::new(
         runtime
@@ -236,7 +266,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     let pending: Vec<String> = snapshot
         .admissible_leaves
         .iter()
-        .filter(|task_id| !claimed.contains(*task_id))
+        .filter(|task_id| !claimed.contains(*task_id) && !leaf_load_held.contains(*task_id))
         .cloned()
         .collect();
     // Under a CPU-only throttle the wave is chosen from CPU-light leaves
@@ -394,11 +424,12 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             inherited_leaf_runs: inherited as u64,
             max_active_leaf_runs,
         }),
-        queued: (pending.len() - admitted.len()) as u64,
+        queued: (pending.len() - admitted.len() + leaf_load_waiting.len()) as u64,
         deferred: repairs
             .waiting
             .iter()
             .cloned()
+            .chain(leaf_load_waiting.iter().cloned())
             .chain(selection.deferred.iter().map(|deferred| {
                 let blocked_by = deferred.blocking_task_ids();
                 DrainWaitingTask {
@@ -414,8 +445,10 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
             }))
             .chain(gap_fit_waiting.iter().cloned())
             .collect(),
-        deferred_total: (repairs.waiting.len() + selection.deferred.len() + gap_fit_waiting.len())
-            as u64,
+        deferred_total: (repairs.waiting.len()
+            + selection.deferred.len()
+            + gap_fit_waiting.len()
+            + leaf_load_waiting.len()) as u64,
         excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
         excluded_total: snapshot.excluded.len() as u64,
         waiting_recorded_at: None,
@@ -453,6 +486,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
                 gap_fit_waiting
                     .iter()
                     .chain(&repairs.waiting)
+                    .chain(leaf_load_waiting.iter())
                     .filter_map(|task| task.reason.clone()),
             )
             .collect(),
@@ -516,6 +550,13 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         // that looks under-filled can be read as contention rather than as an
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
+        // [ORB-22892] Tasks held for this drain after a leaf failed at job
+        // load, with the leaf and its load error.
+        "leaf_load_failed_holds": leaf_load_holds.values().map(|hold| json!({
+            "task_id": hold.task_id,
+            "leaf_run_id": hold.leaf_run_id,
+            "error": hold.error,
+        })).collect::<Vec<_>>(),
         // [ORB-17303] The repair-only pull this pass started for pending
         // landing repairs past their fallback window.
         "owner_repair_pull": repairs.started,

@@ -1,6 +1,6 @@
 //! Revisions, the fetched branch head and remote observation.
 
-use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::fs::git::{
     GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, git_fetch_lock_target,
     should_retry_git_ref_cas,
@@ -396,23 +396,9 @@ impl<'a> Source<'a> {
     /// anything else is identified by a digest of its remote or git dir.
     pub(crate) fn repository(&self) -> Result<String, AutomationError> {
         let remote = self.origin_url()?.unwrap_or_default();
-
-        let normalized = remote.trim_end_matches(".git");
-        let repository = if let Some(github) = normalized
-            .strip_prefix("https://github.com/")
-            .or_else(|| normalized.strip_prefix("git@github.com:"))
-        {
-            github.to_string()
-        } else {
-            let identity = if remote.is_empty() {
-                self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?
-            } else {
-                remote
-            };
-            format!("git:{}", digest(identity.as_bytes()))
-        };
-
-        Ok(repository)
+        super::repository_identity(&remote, || {
+            self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        })
     }
 }
 

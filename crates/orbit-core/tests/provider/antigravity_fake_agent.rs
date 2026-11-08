@@ -124,6 +124,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("gemini-3.8-flash-high".to_string()),

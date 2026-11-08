@@ -58,10 +58,17 @@ pub struct AgentLoopSpec {
     /// instruction is byte-identical to `instruction` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_instruction: Option<String>,
+    /// Which of the engine's built-in fleet-notice instructions this
+    /// activity opts into. A non-empty [`Self::notice_instruction`] or
+    /// [`Self::notice_posting_instruction`] replaces the matching built-in
+    /// text; the delivery gates are the same either way.
+    #[serde(default, skip_serializing_if = "FleetNoticeGuidance::is_none")]
+    pub fleet_notices: FleetNoticeGuidance,
     /// How the agent must treat the task context's `fleet_notices` block,
     /// appended to the instruction only when the host delivers one for this
-    /// prompt. Declaring it is what asks the host for open notices; absent,
-    /// the prompt carries no block and no notice read happens.
+    /// prompt. Declaring it (or [`Self::fleet_notices`]) is what asks the
+    /// host for open notices; with neither, the prompt carries no block and
+    /// no notice read happens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_instruction: Option<String>,
     /// How the agent posts a fleet notice, appended to the instruction only
@@ -171,7 +178,8 @@ pub struct AgentLoopSpec {
     /// profile and denies the built-in Orbit mutation tools, including writes
     /// to coordination state outside the worktree
     /// ([`validate_response_correction_activity`]), so those mutations cannot
-    /// be repeated by a correction.
+    /// be repeated by a correction. A task's `required_tools` cannot add one
+    /// either: the runtime grant drops such a requirement with a note.
     ///
     /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -854,6 +862,42 @@ impl AgentLoopSpec {
             }
             _ => std::borrow::Cow::Borrowed(&self.instruction),
         }
+    }
+}
+
+/// An activity's opt-in to the built-in fleet-notice instructions,
+/// serialized as `fleet_notices: none|read|post`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetNoticeGuidance {
+    /// No built-in text; only the activity's own instructions, if any.
+    #[default]
+    None,
+    /// The untrusted-data handling, which rides only with a delivered
+    /// `fleet_notices` brief.
+    Read,
+    /// [`Self::Read`] plus the posting guidance, which rides whenever the
+    /// dispatch may call `orbit.notice.post`.
+    Post,
+}
+
+impl FleetNoticeGuidance {
+    /// No built-in instruction is selected.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The built-in untrusted-data handling is selected.
+    #[must_use]
+    pub const fn reads(self) -> bool {
+        matches!(self, Self::Read | Self::Post)
+    }
+
+    /// The built-in posting guidance is selected.
+    #[must_use]
+    pub const fn posts(self) -> bool {
+        matches!(self, Self::Post)
     }
 }
 

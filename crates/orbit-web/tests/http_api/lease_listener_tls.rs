@@ -120,7 +120,9 @@ fn unusable_tls_material_and_permissive_keys_refuse_startup() {
 }
 
 fn assert_tls_refused(home: &Path, tls: &str) {
-    write_settings(home, "0.0.0.0:0", tls);
+    // A silent fallback to plaintext must succeed here, so it cannot be
+    // mistaken for TLS validation rejecting the configuration.
+    write_settings(home, "127.0.0.1:0", tls);
     let error = orbit_config::load_lease_listener_settings(home)
         .and_then(|settings| LeaseListenerConfig::from_settings(&settings))
         .expect_err("unusable TLS must refuse startup")

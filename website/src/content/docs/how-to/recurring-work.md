@@ -7,8 +7,8 @@ sidebar:
 
 A per-machine **host scheduler clock** drives all scheduled work. On each tick, due
 **routines** start job runs and due **auto-tasks** file tasks. Most routines
-and auto-tasks ship disabled; the `host-health` auto-task ships enabled in new
-workspaces. [Routines and
+and auto-tasks ship disabled; the `worktree-gc` and `task-pilot` routines and
+the `host-health` auto-task ship enabled in new workspaces. [Routines and
 Auto-Tasks](../../concepts/scheduling/) explains the model; this page is the
 procedure.
 
@@ -165,10 +165,11 @@ The shipped `worktree-gc` and `task-pilot` routines start enabled; the other
 shipped routines start disabled. `orbit workspace sync`
 refreshes the routines after an upgrade and keeps your edits.
 
-Change a routine's enablement with its switch in **Automation → Routines**, or set
-`enabled: true` in its YAML. Git ignores `.orbit/`, so the change applies to
-this checkout on this machine. Start with worktree GC, and turn on the ship
-sweep last (see [Ship unattended](#ship-unattended)).
+Change a routine's enablement with its switch in **Automation → Routines**, with
+`orbit routine enable <name>` or `orbit routine disable <name>` (operator only),
+or by setting `enabled` in its YAML. Git ignores `.orbit/`, so the change applies
+to this checkout on this machine. Start with worktree GC. No routine ships work;
+to ship unattended, see [Ship unattended](#ship-unattended).
 
 ![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group paged at three routines per page, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 

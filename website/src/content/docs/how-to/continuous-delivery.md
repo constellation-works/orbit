@@ -119,7 +119,7 @@ an empty result collection successfully, retaining any held-task skip details.
 For a nonempty selection, at least one pilot partition must succeed before
 apply runs; valid partitions can still apply when a sibling pilot fails.
 
-Before you approve, check the pilot run (in **Runs**) and the selectors it
+Before you approve, check the pilot run (in **Jobs › History**) and the selectors it
 applied (the task's **context files** in **Tasks**). From the CLI:
 
 ```bash
@@ -298,8 +298,8 @@ The window length bounds only when new work may start; a task in flight when
 it expires still finishes. **Parallel tasks** (`--concurrency`, default 5) is
 not a batch size: the drain refills each free slot from the whole backlog.
 
-`--auto-concurrency shadow|enforce` selects forecast-based admission for this
-window: `shadow` records what the forecast would admit, while `enforce` uses
+`--auto-concurrency off|shadow|enforce` selects forecast-based admission for
+this window (`off` disables it): `shadow` records what the forecast would admit, while `enforce` uses
 measured CPU and memory profiles to fit new work within host capacity. The
 concurrency ceiling still applies. Omit the flag to use the host's configured
 mode.
@@ -354,7 +354,7 @@ A task's submitted run is not its status; check the task itself.
 
 `--allow-crew` limits one drain to the crews you name, for example when a
 provider is down, rate-limited, or out of budget. Ask your agent or use the
-CLI, or toggle **Allowed crews** on **Drain → Start**.
+CLI; the dashboard's **Start a window** card has no crew restriction.
 
 ```bash
 orbit run auto --for 4h --allow-crew opus,sonnet
@@ -422,7 +422,7 @@ combined with flags that start a drain, including `--for`, `--concurrency`,
 `--complete`, `--approve-proposed`, or `--allow-crew`.
 
 **Cancel work in flight.** Cancel each child you want to abandon: open it in
-**Runs** and click **cancel**, or:
+**Jobs** and click **cancel**, or:
 
 ```bash
 orbit run trace "$AUTO_RUN_ID"           # find the child run IDs
@@ -453,7 +453,7 @@ fixing.
 By hand, find out why the run failed before you retry. Fix a real code,
 review, or dependency problem first; do not rerun blindly.
 
-1. **Find the failure.** In **Runs**, filter to **Failed** and open the run;
+1. **Find the failure.** In **Jobs › History**, filter to **Failed** and open the run;
    it opens on the failed step and its error. From the CLI,
    `orbit run history --failures` groups failures by task and root cause;
    `orbit run show "$AUTO_RUN_ID"` lists the window's failed children, and
@@ -466,7 +466,7 @@ review, or dependency problem first; do not rerun blindly.
    rechecked with `orbit task recheck-blocked --confirm` after their cause
    clears; transient recovery requires an authenticated published candidate
    and is bounded. Otherwise, once the cause is fixed, either:
-   - click **Resume** on the failed run in **Runs** (`orbit job resume
+   - click **Resume** on the failed run in **Jobs** (`orbit job resume
      <run-id>`) to continue from its first unsuccessful step; or
    - move the task back to `backlog` with its status dropdown in **Tasks**
      (`orbit task update "$TASK_ID" --status backlog`) so a later window runs
@@ -564,7 +564,7 @@ A host-specific or environmental failure that keeps recurring needs the host
 fixed, not another attempt.
 
 A run stuck `pending` with no live worker holds its task reservations; cancel
-it in **Runs** or with `orbit run cancel "$RUN_ID" --confirm`. The
+it in **Jobs** or with `orbit run cancel "$RUN_ID" --confirm`. The
 [stuck job runs runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md)
 explains how to tell a stuck run from a slow one.
 
@@ -580,10 +580,12 @@ orbit gc worktrees --confirm
 orbit gc worktrees --reclaim --confirm
 ```
 
-`orbit gc worktrees` collects only worktrees whose task is `done`, `rejected`,
-or `archived`, and removes nothing without `--confirm`. On a replica it reads
+`orbit gc worktrees` collects worktrees whose task is `done`, `rejected`, or
+`archived`, or has been parked in `someday` for
+`worktree.parked_reclaim_after_hours` (default 336), and removes nothing without `--confirm`. On a replica it reads
 task status from the owner machine. `--reclaim` deletes declared
-`worktree.reclaim` paths (default `["target"]`) only after terminal-run, worker,
+`worktree.reclaim` paths (default
+`["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]`) only after terminal-run, worker,
 registration, confinement, symlink and Git content checks. The failed run's
 checkout and unmatched evidence stay available for rescue. The scheduled sweep
 also reclaims declared output in every kept terminal worktree. To limit it by age or to one run, see

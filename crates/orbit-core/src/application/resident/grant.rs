@@ -10,9 +10,19 @@
 //! human through the decision answer path, applies exactly that addition
 //! with `via: decision:<id>`. Narrowing applies for any caller that can
 //! write the assignment and records that caller.
+//!
+//! The dashboard's Residents form is one operation of its own,
+//! [`OrbitRuntime::grant_resident_authority_as_dashboard_operator`]: a
+//! dashboard session is never the native operator, so its widening raises
+//! the request and the operator answers it `grant` in the same action. Its
+//! form may widen and narrow at once; that runs as two recorded changes,
+//! widening first, and the outcome names both steps.
 
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::agent_context_declared;
+use orbit_common::governance::operation::{OperationInput, OperationVerb};
+use orbit_common::governance::resident::ResidentVerb;
+use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
@@ -27,7 +37,7 @@ use orbit_types::workflow::{
 };
 
 use super::control::{ResidentControlState, resident_control_from_history};
-use super::{resident_mandate_ended, resident_mandate_from_artifact};
+use super::{ResidentEffectiveAuthority, resident_mandate_ended, resident_mandate_from_artifact};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 use crate::runtime::authorization::resolved_caller_capabilities;
@@ -99,6 +109,203 @@ pub struct ResidentGrantOutcome {
     /// Whether that request already existed, so nothing was written.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub deduplicated: bool,
+}
+
+/// The dashboard Residents form's grant, as the operator sent it. The lists
+/// are read exactly as `orbit.resident.grant` reads its input.
+#[derive(Debug, Clone, Default)]
+pub struct ResidentDashboardGrantParams {
+    /// The mandate's assignment task.
+    pub task_id: String,
+    /// Rights to add.
+    pub add: Vec<String>,
+    /// Workspaces to add to the scope.
+    pub workspaces: Vec<String>,
+    /// Rights to remove.
+    pub remove: Vec<String>,
+    /// Workspaces to drop from the scope.
+    pub drop_workspaces: Vec<String>,
+    /// A shorter mandate deadline, RFC 3339.
+    pub deadline: Option<String>,
+    /// The operator's words behind a widening, recorded verbatim.
+    pub quote: Option<String>,
+    /// The human the widening's grant request is answered as.
+    pub answered_by: String,
+}
+
+impl ResidentDashboardGrantParams {
+    /// Whether the form asks for a widening (rights or workspaces to add).
+    pub fn widens(&self) -> bool {
+        !self.add.is_empty() || !self.workspaces.is_empty()
+    }
+
+    fn narrows(&self) -> bool {
+        !self.remove.is_empty()
+            || !self.drop_workspaces.is_empty()
+            || non_blank(self.deadline.as_deref()).is_some()
+    }
+}
+
+/// What a dashboard grant did, naming both steps of a mixed form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResidentDashboardGrantOutcome {
+    /// The widening applied; any narrowing changed nothing.
+    Granted,
+    /// Nothing changed: every requested right and workspace was already
+    /// held, or the narrowing removed nothing held.
+    Unchanged,
+    /// A narrowing-only form changed the authority.
+    Narrowed,
+    /// The widening applied, then the narrowing did.
+    GrantedAndNarrowed,
+    /// Every requested right and workspace was already held; the narrowing
+    /// applied.
+    UnchangedAndNarrowed,
+    /// The widening applied and stays recorded; the narrowing was refused.
+    GrantedNarrowingRefused,
+    /// Every requested right and workspace was already held; the narrowing
+    /// was refused.
+    UnchangedNarrowingRefused,
+}
+
+/// The dashboard grant's result: the fields `POST /api/residents/<id>/grant`
+/// renders, in that order.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResidentDashboardGrant {
+    /// What the grant did.
+    pub outcome: ResidentDashboardGrantOutcome,
+    /// Why the narrowing step was refused, after an applied or unchanged
+    /// widening.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowing_error: Option<String>,
+    /// The answered grant request. Absent for a single unchanged or
+    /// narrowing change; `null` for a mixed form whose widening was already
+    /// held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<Option<DecisionRequest>>,
+    /// The authority record after the grant.
+    pub authority: Option<ResidentAuthority>,
+    /// The effective authority after the grant, as `orbit.resident.show`
+    /// reports it; absent for a single unchanged or narrowing change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_authority: Option<ResidentEffectiveAuthority>,
+}
+
+impl ResidentDashboardGrant {
+    /// One core change, reported as `orbit.resident.grant` reports it.
+    fn single_change(outcome: ResidentDashboardGrantOutcome, authority: ResidentAuthority) -> Self {
+        Self {
+            outcome,
+            narrowing_error: None,
+            request: None,
+            authority: Some(authority),
+            effective_authority: None,
+        }
+    }
+}
+
+/// The note and provenance a dashboard widening's grant answer records.
+const RESIDENT_DASHBOARD_GRANT_NOTE: &str = "Granted from the dashboard Residents view";
+const RESIDENT_DASHBOARD_PROVENANCE: &str = "dashboard";
+
+fn non_blank(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resident_rights_input(
+    input: &OperationInput,
+    field: &str,
+) -> Result<Vec<ResidentRight>, OrbitError> {
+    input
+        .optional_string_list(field)?
+        .unwrap_or_default()
+        .iter()
+        .map(|name| {
+            ResidentRight::parse(name).ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "unknown right `{name}` in `{field}`; rights are {}",
+                    ResidentRight::NAMES
+                ))
+            })
+        })
+        .collect()
+}
+
+/// `orbit.resident.grant`'s parsed input as one grant call's change.
+pub(crate) fn resident_grant_params_from_input(
+    input: &OperationInput,
+) -> Result<ResidentGrantParams, OrbitError> {
+    let deadline = input
+        .optional_string("deadline")?
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|at| at.with_timezone(&Utc))
+                .map_err(|_| {
+                    OrbitError::InvalidInput("`deadline` must be an RFC 3339 timestamp".into())
+                })
+        })
+        .transpose()?;
+    Ok(ResidentGrantParams {
+        task_id: input.required_string("task_id")?,
+        add: resident_rights_input(input, "add")?,
+        workspaces: input
+            .optional_string_list("workspaces")?
+            .unwrap_or_default(),
+        remove: resident_rights_input(input, "remove")?,
+        drop_workspaces: input
+            .optional_string_list("drop_workspaces")?
+            .unwrap_or_default(),
+        deadline,
+        quote: input.optional_raw_string("quote")?,
+    })
+}
+
+/// One half of a dashboard form, read as `orbit.resident.grant` reads its
+/// input: only the non-empty lists and the given deadline and quote.
+fn dashboard_grant_half(
+    task_id: &str,
+    lists: [(&str, &[String]); 2],
+    deadline: Option<&str>,
+    quote: Option<&str>,
+) -> Result<ResidentGrantParams, OrbitError> {
+    let mut input = serde_json::Map::new();
+    input.insert("task_id".into(), serde_json::json!(task_id));
+    for (key, list) in lists {
+        if !list.is_empty() {
+            input.insert(key.into(), serde_json::json!(list));
+        }
+    }
+    if let Some(deadline) = deadline {
+        input.insert("deadline".into(), serde_json::json!(deadline));
+    }
+    if let Some(quote) = quote {
+        input.insert("quote".into(), serde_json::json!(quote));
+    }
+    let input = ResidentVerb::Grant
+        .spec()
+        .parse_input(serde_json::Value::Object(input))?;
+    resident_grant_params_from_input(&input)
+}
+
+/// The dashboard's caller: operator capability without the native
+/// terminal. A widening carries a relaying session so core raises the
+/// request the operator then answers.
+fn dashboard_grant_caller(relaying: bool) -> ResidentGrantCaller {
+    let mut session = ToolSessionContext::default();
+    session
+        .effective_capabilities
+        .extend([McpCapability::Agent, McpCapability::Operator]);
+    if relaying {
+        session.origin_session_id = Some(format!("dashboard:{}", audit_execution_id("resident")));
+    }
+    ResidentGrantCaller {
+        session,
+        ..Default::default()
+    }
 }
 
 fn invalid(message: impl Into<String>) -> OrbitError {
@@ -262,6 +469,112 @@ impl OrbitRuntime {
             })?;
         outcome.ok_or_else(|| {
             OrbitError::Execution(format!("the grant on task {task_id} was not recorded"))
+        })
+    }
+
+    /// The dashboard Residents form's grant, from the operator session.
+    ///
+    /// A narrowing-only form is one grant call. A widening needs the
+    /// operator's `quote`; it raises the `resident_authority` request and
+    /// answers it `grant` as `answered_by`, so the change is recorded as
+    /// `via: decision:<id>`. A form that also narrows then narrows as a
+    /// second recorded change; a refused narrowing leaves the widening
+    /// recorded and is reported in `narrowing_error`, never as a refusal of
+    /// the whole call. `orbit.resident.grant` itself still refuses one call
+    /// that both widens and narrows.
+    pub fn grant_resident_authority_as_dashboard_operator(
+        &self,
+        params: ResidentDashboardGrantParams,
+    ) -> Result<ResidentDashboardGrant, OrbitError> {
+        use ResidentDashboardGrantOutcome as Outcome;
+        let deadline = non_blank(params.deadline.as_deref());
+        let quote = non_blank(params.quote.as_deref());
+        let narrow = || {
+            dashboard_grant_half(
+                &params.task_id,
+                [
+                    ("remove", &params.remove),
+                    ("drop_workspaces", &params.drop_workspaces),
+                ],
+                deadline.as_deref(),
+                None,
+            )
+            .and_then(|change| {
+                self.grant_resident_authority(&dashboard_grant_caller(false), change)
+            })
+        };
+        if !params.widens() {
+            let narrowed = narrow()?;
+            let outcome = if narrowed.outcome == "unchanged" {
+                Outcome::Unchanged
+            } else {
+                Outcome::Narrowed
+            };
+            return Ok(ResidentDashboardGrant::single_change(
+                outcome,
+                narrowed.authority,
+            ));
+        }
+        if quote.is_none() {
+            return Err(invalid(
+                "a widening needs your words authorizing it; they are recorded verbatim on the grant request",
+            ));
+        }
+        let widening = dashboard_grant_half(
+            &params.task_id,
+            [("add", &params.add), ("workspaces", &params.workspaces)],
+            None,
+            quote.as_deref(),
+        )?;
+        let raised = self.grant_resident_authority(&dashboard_grant_caller(true), widening)?;
+        // `unchanged` means every requested right and workspace was already
+        // held: nothing widened and no request exists.
+        let widening_applied = raised.outcome != "unchanged";
+        if !widening_applied && !params.narrows() {
+            return Ok(ResidentDashboardGrant::single_change(
+                Outcome::Unchanged,
+                raised.authority,
+            ));
+        }
+        let request = match raised.request {
+            Some(request) if raised.outcome == "requested" => {
+                Some(self.answer_decision_request_as_human(
+                    &request.id,
+                    RESIDENT_AUTHORITY_GRANT,
+                    Some(RESIDENT_DASHBOARD_GRANT_NOTE.to_string()),
+                    params.answered_by.clone(),
+                    Some(RESIDENT_DASHBOARD_PROVENANCE.to_string()),
+                )?)
+            }
+            request => request,
+        };
+        // The widening is already recorded; a refused narrowing must not
+        // report the whole call as refused.
+        let (outcome, narrowing_error) = if !params.narrows() {
+            (Outcome::Granted, None)
+        } else {
+            match (widening_applied, narrow()) {
+                (true, Ok(narrowed)) if narrowed.outcome == "unchanged" => (Outcome::Granted, None),
+                (false, Ok(narrowed)) if narrowed.outcome == "unchanged" => {
+                    (Outcome::Unchanged, None)
+                }
+                (true, Ok(_)) => (Outcome::GrantedAndNarrowed, None),
+                (false, Ok(_)) => (Outcome::UnchangedAndNarrowed, None),
+                (true, Err(error)) => (Outcome::GrantedNarrowingRefused, Some(error.to_string())),
+                (false, Err(error)) => {
+                    (Outcome::UnchangedNarrowingRefused, Some(error.to_string()))
+                }
+            }
+        };
+        let task = self.get_task(params.task_id.trim())?;
+        let history = self.get_task_history(&task.id)?;
+        let view = self.resident_view(task, &history)?;
+        Ok(ResidentDashboardGrant {
+            outcome,
+            narrowing_error,
+            request: Some(request),
+            effective_authority: Some(view.effective()),
+            authority: view.authority.ok(),
         })
     }
 

@@ -50,12 +50,12 @@ orbit web serve
 The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
 this machine. Keep it running in its own terminal.
 
-![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
+![The Tasks view's status cards with Approve, View run and Ship actions, and the Drain, Locks held and Log dock tabs.](../../../assets/dashboard/dashboard-tasks.png)
 
 | Section | What you do there |
 |---|---|
 | **Tasks** | Approve proposed tasks, ship backlog tasks, edit a task's details, and review finished work. |
-| **Runs** | Follow a run's steps and events, and cancel, resume, or replay it. |
+| **Jobs** | Follow a run's steps and events, and cancel, resume, or replay it. |
 | **Health** | See what is failing now: incidents, policy denials, errors, and every recorded event. |
 | **Analytics** | Follow delivery trends: run durations, reliability, costly paths, and cost. |
 | **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, run a delivery window, and set up resident orchestrator mandates. |

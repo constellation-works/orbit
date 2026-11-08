@@ -77,7 +77,7 @@ file locks.
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-![The Tasks dock with Auto-drain status, a throttle note and Start a window](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock's Drain, Locks held and Log tabs, an Auto-drain card showing a CPU load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The window bounds only when new work starts; a task already running when it
 closes still finishes. The **Start a window** card's eligible and waiting
@@ -120,8 +120,8 @@ local ship or auto runs. Two limits on per-run completion:
 
 ## Watch and recover runs
 
-The dashboard's **Runs** view lists every run, with **Live** and **Failed**
-filters. A run's detail shows its steps, events, and timing; a failed run opens
+The dashboard's **Jobs** view shows runs in flight under **Live** and every
+run under **History**, with **All** and **Failed** filters. A run's detail shows its steps, events, and timing; a failed run opens
 on the step it stopped at and the error it recorded. From there you can
 **cancel** a running run, **Resume** a failed one from its first unfinished
 step, or **Replay run** to start it again.

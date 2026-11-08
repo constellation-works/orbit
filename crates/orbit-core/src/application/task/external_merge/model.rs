@@ -27,13 +27,13 @@ pub struct ExternalMergeSettlement {
 ///
 /// The CLI row carries the five settlement fields; the HTTP row carries those
 /// five plus `status: "done"`. Each surface keeps its own envelope (the CLI
-/// always serves `{settled: [...]}`, HTTP serves a bare row for one task and
-/// `{settled, skipped}` for a batch); the profile only selects the row shape.
+/// always serves `{settled: [...]}`, HTTP serves a bare row for one task);
+/// the profile only selects the row shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalMergeSettlementProfile {
     /// `orbit task settle-merged`: the five settlement fields, no `status`.
     Cli,
-    /// Dashboard HTTP single and batch rows: the five fields plus `status`.
+    /// Dashboard HTTP row: the five fields plus `status`.
     Http,
 }
 
@@ -63,22 +63,4 @@ impl ExternalMergeSettlement {
             }),
         }
     }
-}
-
-/// A candidate task the batch settlement skipped, with why it did not settle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalMergeSkippedTask {
-    /// The skipped task.
-    pub task_id: String,
-    /// Why it did not settle, without the per-task refusal prefix.
-    pub reason: String,
-}
-
-/// The outcome of settling every candidate from its own recorded PRs.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ExternalMergeBatchSettlement {
-    /// Tasks settled to `done`, in candidate order.
-    pub settled: Vec<ExternalMergeSettlement>,
-    /// Candidates left unchanged, in candidate order, with why.
-    pub skipped: Vec<ExternalMergeSkippedTask>,
 }

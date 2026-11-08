@@ -136,12 +136,18 @@ on this host.
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments are always omitted. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
 
-The `finding-verification`, `evolution-pass`, `ux-rules` and `pilot-warning-triage`
-routines were removed. `orbit workspace sync` retires a workspace's seeded copies,
-and a definition that still targets one of their jobs, or the `pilot_warnings_held` trigger,
-loads as retired and never fires. Triage a task held on pilot warnings from the dashboard's
+The `finding-verification`, `evolution-pass`, and `ux-rules` routines were removed,
+while `pilot-warning-triage` was retired via its `pilot_warnings_held` state
+trigger rather than its job. `orbit workspace sync` retires a workspace's seeded copies,
+and a definition that still targets one of the three removed jobs
+(`finding_verification_pipeline`, `evolution_pass_pipeline`,
+`ux_rules_pipeline`) loads as retired and never fires unless the workspace
+defines a job of the same name, which resolves first and stays active. A
+definition on the retired `pilot_warnings_held` trigger loads as retired even
+though its `escalation_triage_pipeline` target still ships, so a cron definition
+targeting that job without the retired trigger stays active. Triage a task held on pilot warnings from the dashboard's
 Triage action, which still runs `escalation_triage_pipeline`. No routine or installed command
-runs the UX rules now. The leftover keys of these removals are listed in
+runs the UX rules now; Orbit runs no UI rule checks and files no tasks from them. The leftover keys of these removals are listed in
 [Maintenance — Retired features](maintenance.md#retired-features-and-their-keys).
 
 ## Built in: final recovery of blocked tasks

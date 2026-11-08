@@ -504,6 +504,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
             };
             // One priced and one unpriced local run for `coverage`, both
             // with no recorded model so they share one row.
+            let mut unpriced_task = None;
             for (run, priced) in [
                 ("jrun-coverage-priced", true),
                 ("jrun-coverage-unpriced", false),
@@ -537,6 +538,8 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
                 );
                 if priced {
                     priced_cost(&fixture, run, 6.0, &id);
+                } else {
+                    unpriced_task = Some(id);
                 }
             }
             // One attempt pulled by another machine with no run recorded.
@@ -678,7 +681,12 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
 
             // Pricing the unpriced run updates coverage only: the missing
             // run still suppresses the average and the score is unchanged.
-            priced_cost(&fixture, "jrun-coverage-unpriced", 12.0, &missing);
+            priced_cost(
+                &fixture,
+                "jrun-coverage-unpriced",
+                12.0,
+                unpriced_task.as_deref().unwrap(),
+            );
             let next = agent_scorecard(
                 &fixture.runtime.agent_scan().unwrap(),
                 AgentRole::Implementers,
