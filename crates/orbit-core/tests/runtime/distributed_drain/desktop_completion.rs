@@ -371,6 +371,10 @@ enum Landing {
 /// commit unless the fixture squashes it). The owner requires `commands`,
 /// reviews on its `sol` crew, and has the shipped reconciliation job seeded.
 struct Delivery {
+    // Declared before `pair` so its Drop releases, reaps and observer-settles
+    // every substitute before the pair's TempDir root is removed, on success,
+    // refusal and unwind paths alike.
+    _workers: crate::worker_fixture::OwnedWorkers,
     pair: Pair,
     owner: OrbitRuntime,
     repo: PathBuf,
@@ -552,11 +556,14 @@ impl Delivery {
         // Each submitted run executes in-process through `Self::execute`.
         // The substitute child test stands in for the detached worker until
         // then, so the supervisor
-        // never sees a worker that exited before its run started.
+        // never sees a worker that exited before its run started. The owned
+        // fixture records each substitute's (run, pid) handshake; the guard
+        // in `Self` releases and reaps it before the fixture root is removed.
         let started = pair._root.path().join("started-{run_id}");
-        crate::worker_fixture::install(&started, "created");
+        let workers = crate::worker_fixture::install_owned_workers(&started, repo.clone());
 
         Self {
+            _workers: workers,
             claim_id: claim["claim_id"].as_str().unwrap().to_string(),
             handoff_id: claim["handoff"]["handoff_id"].as_str().unwrap().to_string(),
             pair,
