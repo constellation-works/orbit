@@ -1013,8 +1013,7 @@ fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
 /// `machine.mcp.toolsets` host config restores exactly the named groups.
 #[test]
 fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
-    const OPT_IN: [(&str, &str); 7] = [
-        ("orbit_lease_list", "leases"),
+    const OPT_IN: [(&str, &str); 6] = [
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
         ("orbit_orchestrator_show", "analytics"),
@@ -1058,7 +1057,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     let mut flagged = workspace.serve_with_args(&[
         "--operator",
         "--toolset",
-        "leases,experiments,analytics,decision-channel,notice",
+        "experiments,analytics,decision-channel,notice",
     ]);
     let listed = flagged.tools_list();
     let names = tool_names(&listed);
@@ -1097,15 +1096,16 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
         );
     }
 
-    set_host_toolsets(&workspace, &["leases"]);
+    set_host_toolsets(&workspace, &["experiments"]);
     let mut configured = workspace.serve_with_args(&["--operator"]);
     let listed = configured.tools_list();
     let names = tool_names(&listed);
     for (tool, toolset) in OPT_IN {
         assert_eq!(
             names.contains(&tool),
-            toolset == "leases",
-            "machine.mcp.toolsets = [\"leases\"] must restore exactly the lease tools: {tool}"
+            toolset == "experiments",
+            "machine.mcp.toolsets = [\"experiments\"] must restore exactly the experiment \
+             tools: {tool}"
         );
     }
 
@@ -1120,8 +1120,8 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     for (tool, toolset) in OPT_IN {
         assert_eq!(
             names.contains(&tool),
-            matches!(toolset, "leases" | "notice"),
-            "a stamped notice toolset must add to the configured leases: {tool}"
+            matches!(toolset, "experiments" | "notice"),
+            "a stamped notice toolset must add to the configured experiments: {tool}"
         );
     }
 }

@@ -1,7 +1,8 @@
 use orbit_core::runtime::task::locks::lease;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, error_code, isolated, json_ok};
+use super::support::{Fixture, error_code, isolated, json_ok, leases_enabled};
+use orbit_core::runtime::task::locks::lease::install_test_lease_policy;
 
 #[test]
 fn notice_poll_and_sse_resume_share_durable_sequence() {
@@ -10,13 +11,8 @@ fn notice_poll_and_sse_resume_share_durable_sequence() {
         || {
             use std::io::BufRead as _;
             let fixture = Fixture::new();
-            std::fs::write(
-                fixture.work.join("config.toml"),
-                "[lease]\nenabled = true\n",
-            )
-            .unwrap();
             std::fs::write(fixture.work.parent().unwrap().join("held.txt"), "held\n").unwrap();
-            let server = fixture.server(true);
+            let server = fixture.server_with_leases(true);
             let first = json_ok(server.send(
                 "POST",
                 "/api/leases",
@@ -87,7 +83,7 @@ fn notice_poll_and_sse_resume_share_durable_sequence() {
                 400
             );
             assert_eq!(server.get("/api/leases/notices?limit=0").status(), 400);
-            let reopened = fixture.server(false);
+            let reopened = fixture.server_with_leases(false);
             assert_eq!(
                 json_ok(reopened.get(&format!("/api/leases/notices?after={cursor}&lease_id={id}"))),
                 filtered
@@ -104,12 +100,7 @@ fn workspace_listing_reports_whether_leases_are_enabled() {
             let fixture = Fixture::new();
             let off = json_ok(fixture.server(false).get("/api/workspaces"));
             assert_eq!(off[0]["lease_enabled"], false, "leases default off: {off}");
-            std::fs::write(
-                fixture.work.join("config.toml"),
-                "[lease]\nenabled = true\n",
-            )
-            .unwrap();
-            let on = json_ok(fixture.server(false).get("/api/workspaces"));
+            let on = json_ok(fixture.server_with_leases(false).get("/api/workspaces"));
             assert_eq!(on[0]["lease_enabled"], true, "{on}");
         },
     );
@@ -121,17 +112,13 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
         "leases::lease_routes_share_runtime_state_and_gate_writes",
         || {
             let fixture = Fixture::new();
-            std::fs::write(
-                fixture.work.join("config.toml"),
-                "[lease]\nenabled = true\n[lease.hard]\nagent = \"allow\"\n",
-            )
-            .unwrap();
+            install_test_lease_policy(&fixture.work, leases_enabled());
             std::fs::write(fixture.work.parent().unwrap().join("held.txt"), "held\n").unwrap();
             std::fs::write(fixture.work.parent().unwrap().join("other.txt"), "other\n").unwrap();
             let runtime =
                 orbit_core::OrbitRuntime::from_roots(&fixture.global, &fixture.work).unwrap();
-            let operator = fixture.server(true);
-            let read_only = fixture.server(false);
+            let operator = fixture.server_with_leases(true);
+            let read_only = fixture.server_with_leases(false);
             let request = json!({"principal": "alice", "selectors": ["file:held.txt"], "mode": "hard", "ttl_seconds": 600});
             let response = operator.send("POST", "/api/leases", request.clone());
             assert_eq!(

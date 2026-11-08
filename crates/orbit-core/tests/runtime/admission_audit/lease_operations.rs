@@ -1,10 +1,11 @@
 //! Path-lease operations at the runtime boundary: request, renew, release,
-//! show, list and check, with the `lease.*` policy read from workspace config.
+//! show, list and check. Path leases are not configurable [ORB-22808], so each
+//! test installs the lease policy its workspace opens with.
 
 use super::tool_support::{create_context_task, invalid_input_message};
 use orbit_common::test_env::ScopedEnv;
 use orbit_core::runtime::OrbitRuntime;
-use orbit_core::runtime::task::locks::lease;
+use orbit_core::runtime::task::locks::lease::{self, LeasePolicy, install_test_lease_policy};
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -32,9 +33,18 @@ fn caller_env(agent: Option<&'static str>) -> ScopedEnv {
     )
 }
 
-/// A runtime whose workspace `config.toml` is `config`, with `src/lib.rs`,
-/// `src/other.rs` and `docs/guide.md` on disk.
-fn lease_runtime(config: &str) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
+/// The fixed lease policy with path leases enabled.
+fn enabled_policy() -> LeasePolicy {
+    LeasePolicy {
+        enabled: true,
+        ..LeasePolicy::FIXED
+    }
+}
+
+/// A runtime whose workspace `config.toml` is `config` and whose lease
+/// policy is `policy`, with `src/lib.rs`, `src/other.rs` and `docs/guide.md`
+/// on disk.
+fn lease_runtime(config: &str, policy: LeasePolicy) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
@@ -42,6 +52,7 @@ fn lease_runtime(config: &str) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     std::fs::create_dir_all(&global_root).expect("create global root");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(workspace_root.join("config.toml"), config).expect("write workspace config");
+    install_test_lease_policy(&workspace_root, policy);
     for (path, body) in [
         ("src/lib.rs", "pub fn ok() {}\n"),
         ("src/other.rs", "pub fn other() {}\n"),
@@ -57,13 +68,11 @@ fn lease_runtime(config: &str) -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
 }
 
 fn enabled_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
-    lease_runtime("[lease]\nenabled = true\n")
+    lease_runtime("", enabled_policy())
 }
 
-fn request(runtime: &OrbitRuntime, mut input: Value) -> Value {
-    input["model"] = json!("codex");
-    super::tool_support::run_tool_as_operator(runtime, "orbit.lease.request", input)
-        .expect("lease request")
+fn request(runtime: &OrbitRuntime, input: Value) -> Value {
+    lease::request(runtime, input, None, Some("codex".into())).expect("lease request")
 }
 
 fn holder_ids(conflicts: &Value) -> Vec<(String, String)> {
@@ -113,8 +122,13 @@ fn notices_survive_restart_and_capture_lease_and_task_transitions() {
         return;
     }
     let _env = caller_env(None);
-    let (_root, runtime, repo_root) =
-        lease_runtime("[lease]\nenabled = true\n[lease.hard]\nhuman = \"never\"\n");
+    let (_root, runtime, repo_root) = lease_runtime(
+        "",
+        LeasePolicy {
+            hard_allowed_human: false,
+            ..enabled_policy()
+        },
+    );
     let first = request(
         &runtime,
         json!({"principal":"alice", "selectors":["dir:src"], "mode":"hard"}),
@@ -143,14 +157,8 @@ fn notices_survive_restart_and_capture_lease_and_task_transitions() {
     backdate(&runtime, other_id);
     lease::show(&runtime, json!({"lease_id":other_id})).unwrap();
     lease::show(&runtime, json!({"lease_id":other_id})).unwrap();
-    let read = |runtime: &OrbitRuntime| {
-        super::tool_support::run_tool_as_operator(
-            runtime,
-            "orbit.lease.notices",
-            json!({"after":0, "limit":500}),
-        )
-        .unwrap()
-    };
+    let read =
+        |runtime: &OrbitRuntime| lease::notices(runtime, json!({"after":0, "limit":500})).unwrap();
     let page = read(&runtime);
     let notices = page["notices"].as_array().unwrap();
     assert!(
@@ -183,12 +191,7 @@ fn notices_survive_restart_and_capture_lease_and_task_transitions() {
         && n["lease_id"] == id
         && n["payload"]["mode"] == "advisory"));
     assert!(
-        super::tool_support::run_tool_as_operator(
-            &runtime,
-            "orbit.lease.notices",
-            json!({"after": page["cursor"]})
-        )
-        .unwrap()["notices"]
+        lease::notices(&runtime, json!({"after": page["cursor"]})).unwrap()["notices"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -198,11 +201,7 @@ fn notices_survive_restart_and_capture_lease_and_task_transitions() {
     assert_eq!(read(&reopened), page);
     let other_workspace = repo_root.parent().unwrap().join("another/.orbit");
     std::fs::create_dir_all(&other_workspace).unwrap();
-    std::fs::write(
-        other_workspace.join("config.toml"),
-        "[lease]\nenabled = true\n",
-    )
-    .unwrap();
+    install_test_lease_policy(&other_workspace, enabled_policy());
     let isolated = OrbitRuntime::from_roots(&runtime.global_root(), &other_workspace).unwrap();
     assert!(read(&isolated)["notices"].as_array().unwrap().is_empty());
 }
@@ -295,9 +294,7 @@ fn landed_facts_notify_only_matching_bases_once() {
             .run_tool("orbit.codebase.show", json!({"path":"src/lib.rs"}))
             .unwrap();
     }
-    let page =
-        super::tool_support::run_tool_as_operator(&runtime, "orbit.lease.notices", json!({}))
-            .unwrap();
+    let page = lease::notices(&runtime, json!({})).unwrap();
     let landings: Vec<_> = page["notices"]
         .as_array()
         .unwrap()
@@ -425,7 +422,8 @@ fn hard_surface_drops_unlocked_context_paths() {
     }
     let _env = caller_env(None);
     let (_root, runtime, repo_root) = lease_runtime(
-        "[lease]\nenabled = true\n\n[workflow]\nunlocked_context_paths = [\"docs/**\"]\n",
+        "[workflow]\nunlocked_context_paths = [\"docs/**\"]\n",
+        enabled_policy(),
     );
     // A docs-only task keeps its unlocked entries, so it holds the guide.
     let task = create_context_task(
@@ -478,7 +476,12 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
     let (_root, runtime, _repo_root) = {
         let _env = caller_env(None);
         lease_runtime(
-            "[lease]\nenabled = true\nhard = { agent = \"never\" }\nmax_priority = { agent = \"normal\" }\n",
+            "",
+            LeasePolicy {
+                hard_allowed_agent: false,
+                max_priority_agent: lease::LeasePriority::Normal,
+                ..enabled_policy()
+            },
         )
     };
 
@@ -500,7 +503,7 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
             downgraded["notice"]
                 .as_str()
                 .is_some_and(|notice| notice.contains("granted as advisory")
-                    && notice.contains("lease.hard.agent")),
+                    && notice.contains("no hard leases for the agent")),
             "{downgraded}"
         );
 
@@ -510,7 +513,10 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
             None,
             Some("codex".into()),
         ));
-        assert!(message.contains("lease.max_priority.agent"), "{message}");
+        assert!(
+            message.contains("the lease policy's agent ceiling"),
+            "{message}"
+        );
     }
 
     let _human = caller_env(None);
@@ -701,16 +707,15 @@ fn check_reports_coverage_and_other_holders_without_changing_state() {
 }
 
 #[test]
-fn disabled_leases_refuse_every_operation_naming_the_key() {
-    if !super::isolate(
-        module_path!(),
-        "disabled_leases_refuse_every_operation_naming_the_key",
-    ) {
+fn disabled_leases_refuse_every_operation() {
+    if !super::isolate(module_path!(), "disabled_leases_refuse_every_operation") {
         return;
     }
     let _env = caller_env(None);
-    for config in ["", "[lease]\nenabled = false\n"] {
-        let (_root, runtime, _repo_root) = lease_runtime(config);
+    // A workspace that still sets the withdrawn key opens with the fixed,
+    // disabled policy like any other.
+    for config in ["", "[lease]\nenabled = true\n"] {
+        let (_root, runtime, _repo_root) = lease_runtime(config, LeasePolicy::FIXED);
         let lease_id = json!({"lease_id": "lease-1"});
         let selectors = json!({"principal": "alice", "selectors": ["file:src/lib.rs"]});
         let results = [
@@ -723,7 +728,10 @@ fn disabled_leases_refuse_every_operation_naming_the_key() {
         ];
         for result in results {
             let message = invalid_input_message(result);
-            assert!(message.contains("lease.enabled"), "{config:?}: {message}");
+            assert!(
+                message.contains("path leases are disabled"),
+                "{config:?}: {message}"
+            );
         }
     }
 }
@@ -733,9 +741,8 @@ fn lease_id(answer: &Value) -> String {
 }
 
 fn lease_notices(runtime: &OrbitRuntime, lease_id: &str) -> Vec<Value> {
-    super::tool_support::run_tool_as_operator(
+    lease::notices(
         runtime,
-        "orbit.lease.notices",
         json!({"after": 0, "limit": 500, "lease_id": lease_id}),
     )
     .expect("read lease notices")["notices"]
@@ -867,7 +874,7 @@ fn hard_requests_queue_by_priority_and_age_and_are_granted_when_blockers_end() {
     let aged = lease::show(&runtime, json!({"lease_id": normal_id})).unwrap();
     assert_eq!(
         aged["lease"]["state"], "granted",
-        "past lease.aging_minutes the older request moves up to high and, older, goes first: {aged}"
+        "past the aging minutes the older request moves up to high and, older, goes first: {aged}"
     );
     assert_eq!(aged["lease"]["selectors"], json!(["dir:src"]), "{aged}");
     assert!(

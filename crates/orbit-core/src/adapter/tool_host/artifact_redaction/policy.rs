@@ -122,10 +122,6 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
-        OrbitBuiltinAction::Lease(verb) => ActionPolicy {
-            declared: verb.spec().params,
-            ..NO_REDACTION
-        },
         OrbitBuiltinAction::Friction(verb) => ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
@@ -340,7 +336,6 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
         },
-        OrbitBuiltinAction::Lease(_) => false,
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => false,
         },

@@ -1,4 +1,4 @@
-//! Binding the intake socket: resolving `lease.intake.peer_user`, and the
+//! Binding the intake socket: resolving the intake peer user, and the
 //! socket's directory, ownership, mode and stale-file handling.
 
 use std::io;
@@ -14,7 +14,7 @@ use super::LEASE_INTAKE_SOCKET_PATH;
 const RUN_DIR_MODE: u32 = 0o750;
 const SOCKET_MODE: u32 = 0o660;
 
-/// The OS user `lease.intake.peer_user` names, resolved at startup.
+/// The OS user the intake peer user names, resolved at startup.
 #[derive(Debug, Clone)]
 pub(super) struct PeerUser {
     pub(super) name: String,
@@ -28,19 +28,19 @@ impl PeerUser {
     fn resolve(name: &str) -> Result<Self, OrbitError> {
         let Some((uid, gid)) = lookup_user(name)? else {
             return Err(OrbitError::InvalidInput(format!(
-                "lease.intake.peer_user names `{name}`, which is not a user on this host; \
-                 create the lease listener user first or unset the setting"
+                "the lease intake peer user `{name}` is not a user on this host; create the \
+                 lease listener user first"
             )));
         };
         if uid == 0 {
             return Err(OrbitError::InvalidInput(format!(
-                "lease.intake.peer_user must not be root (`{name}` has uid 0); name the lease \
+                "the lease intake peer user must not be root (`{name}` has uid 0); name the lease \
                  listener's own user"
             )));
         }
         if uid == operator_uid() {
             return Err(OrbitError::InvalidInput(format!(
-                "lease.intake.peer_user must not be the operator's own user `{name}`: every \
+                "the lease intake peer user must not be the operator's own user `{name}`: every \
                  agent runs as it; name the lease listener's own user"
             )));
         }
@@ -60,7 +60,9 @@ fn operator_uid() -> libc::uid_t {
 /// `(uid, primary gid)` of `name`, or `None` when there is no such user.
 fn lookup_user(name: &str) -> Result<Option<(libc::uid_t, libc::gid_t)>, OrbitError> {
     let c_name = std::ffi::CString::new(name).map_err(|_| {
-        OrbitError::InvalidInput("lease.intake.peer_user must not contain a NUL byte".to_string())
+        OrbitError::InvalidInput(
+            "the lease intake peer user must not contain a NUL byte".to_string(),
+        )
     })?;
     let mut buf = vec![0 as libc::c_char; 1024];
     loop {
@@ -88,7 +90,7 @@ fn lookup_user(name: &str) -> Result<Option<(libc::uid_t, libc::gid_t)>, OrbitEr
             continue;
         }
         return Err(OrbitError::Io(format!(
-            "look up lease.intake.peer_user `{name}`: {}",
+            "look up the lease intake peer user `{name}`: {}",
             io::Error::from_raw_os_error(rc)
         )));
     }
@@ -188,15 +190,14 @@ fn prepare_run_dir(dir: &Path, peer: &PeerUser) -> Result<(), OrbitError> {
         Ok(metadata) => {
             if !metadata.is_dir() {
                 return Err(OrbitError::InvalidInput(format!(
-                    "{} must be a directory for the lease intake socket \
-                     (lease.intake.peer_user)",
+                    "{} must be a directory for the lease intake socket",
                     dir.display()
                 )));
             }
             if metadata.uid() != operator_uid() {
                 return Err(OrbitError::InvalidInput(format!(
                     "{} is owned by uid {}, not the operator; the lease intake socket \
-                     (lease.intake.peer_user) needs a directory the operator owns",
+                     needs a directory the operator owns",
                     dir.display(),
                     metadata.uid()
                 )));
@@ -222,7 +223,7 @@ fn prepare_run_dir(dir: &Path, peer: &PeerUser) -> Result<(), OrbitError> {
 fn restrict(path: &Path, peer: &PeerUser, mode: u32) -> Result<(), OrbitError> {
     std::os::unix::fs::lchown(path, None, Some(peer.gid)).map_err(|error| {
         OrbitError::InvalidInput(format!(
-            "lease.intake.peer_user `{}`: cannot give {} to its primary group (gid {}): \
+            "lease intake peer user `{}`: cannot give {} to its primary group (gid {}): \
              {error}; add the operator's user to that group so the socket can be shared \
              with the lease listener only",
             peer.name,
@@ -250,7 +251,7 @@ fn remove_stale_socket(path: &Path) -> Result<(), OrbitError> {
     if !metadata.file_type().is_socket() || metadata.uid() != operator_uid() {
         return Err(OrbitError::InvalidInput(format!(
             "{} exists and is not a socket the operator owns; remove it before serving the \
-             lease intake socket (lease.intake.peer_user)",
+             lease intake socket",
             path.display()
         )));
     }

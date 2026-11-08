@@ -2,8 +2,9 @@
 //!
 //! The lease listener runs as its own OS user and cannot open the operator's
 //! Orbit store, so it hands authenticated lease operations to Orbit Web over
-//! a Unix socket. Orbit Web serves the socket only when the operator's global
-//! `lease.intake.peer_user` names that user, and accepts a connection only
+//! a Unix socket. Orbit Web serves the socket only when an intake peer user
+//! names that user (none does: path leases are not configurable
+//! [ORB-22808]), and accepts a connection only
 //! when the kernel reports that user as its peer. Every agent runs as the
 //! operator, so the operator's own user is refused like any other.
 //!

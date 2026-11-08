@@ -137,7 +137,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (36)
+### Shipped (35)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -161,7 +161,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operator Attention](./design/operator-attention/1_overview.md) | — | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | — | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | — | codex |
-| [Path Leases](./design/path-leases/1_overview.md) | — | claude |
 | [Plugins](./design/plugins/1_scope.md) | — | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
@@ -178,11 +177,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
-### Parked (3)
+### Parked (4)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Parked: phases 2-5 archived (ORB-18489); reschedule the feature to resume | claude |
 
@@ -227,7 +227,7 @@ a conservative title/status fallback.
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Implemented | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Implemented | codex |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Draft | claude |
-| [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented. | Draft | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Lease storage, queue, notices, the loopback REST routes, orbit-auth credentials, the Unix intake socket and the token-authenticated lease listener are implemented but unreachable: the lease.* config keys, the orbit lease CLI and the orbit.lease.* MCP tools were withdrawn in ORB-22808 and leases stay disabled. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |

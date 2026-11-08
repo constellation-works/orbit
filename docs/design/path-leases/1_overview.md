@@ -1,15 +1,15 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-11-06
+last_updated: 2026-11-08
 last_validated: 2026-11-06
 status: Draft
-stage: shipped
-next: "—"
+stage: parked
+next: "Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases"
 feature: path-leases
 doc_role: overview
 type: design
-summary: "Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented."
+summary: "Lease storage, queue, notices, the loopback REST routes, orbit-auth credentials, the Unix intake socket and the token-authenticated lease listener are implemented but unreachable: the lease.* config keys, the orbit lease CLI and the orbit.lease.* MCP tools were withdrawn in ORB-22808 and leases stay disabled."
 tags: [path-leases, locks, admission, reservations, notifications]
 paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
@@ -17,6 +17,13 @@ related_artifacts: []
 ---
 
 # Path Leases — Overview
+
+> **Surfaces withdrawn [ORB-22808] 2026-11-08: config keys, CLI and MCP tools removed;
+> machinery retained, unreachable.** The 27 `lease.*` keys load with a deprecation warning and no
+> effect, `orbit lease` and the `orbit.lease.*` tools are gone, and every runtime holds a fixed,
+> disabled lease policy. The store, queue, notices, REST routes, intake socket, listener and
+> `orbit-auth` remain, exercised by their tests through a test-only policy seam. The rest of this
+> document describes the design as shipped before the withdrawal.
 
 > **Status: Committed scope shipped.** Lease storage and request, renew, release, show, list and
 > check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web

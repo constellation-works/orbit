@@ -49,7 +49,8 @@ pub enum McpToolset {
     Exec,
     /// Plugin and external tools.
     Plugins,
-    /// Resource leases.
+    /// Path-lease tools. Empty since the `orbit.lease.*` tools were removed
+    /// [ORB-22808]; kept so a server or role that names `leases` still loads.
     Leases,
     /// Experiment definitions, lifecycle and readouts.
     Experiments,

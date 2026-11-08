@@ -27,7 +27,7 @@ impl AddressRange {
     fn parse(raw: &str) -> Result<Self, OrbitError> {
         let invalid = || {
             OrbitError::InvalidInput(format!(
-                "lease.listener.trusted_proxy entry '{raw}' is not an IP address or CIDR range \
+                "trusted_proxy entry '{raw}' is not an IP address or CIDR range \
                  (for example 10.0.0.5 or 10.0.0.0/24)"
             ))
         };
@@ -78,7 +78,7 @@ fn address_bits(address: IpAddr) -> u8 {
     }
 }
 
-/// The parsed `lease.listener.trusted_proxy` list.
+/// The parsed lease listener `trusted_proxy` list.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrustedProxies(Vec<AddressRange>);
 

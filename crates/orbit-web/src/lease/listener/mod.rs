@@ -1,7 +1,7 @@
 //! The lease listener (`docs/design/path-leases/2_design.md` §7.1–§7.3).
 //!
-//! `orbit lease listen` runs this as the lease listener user (`orbit-lease`
-//! by convention), never as the operator, so agents running as the operator
+//! It runs as the lease listener user (`orbit-lease` by convention), never
+//! as the operator, so agents running as the operator
 //! can neither mint its tokens nor run code as it. It serves the lease
 //! routes under `/api` and `/healthz`, and nothing else: no dashboard,
 //! cookie, browser session or CORS. Every lease request needs a bearer lease
@@ -26,7 +26,7 @@ mod startup;
 mod tls;
 mod transport;
 
-pub use config::LeaseListenerConfig;
+pub use config::{LeaseListenerConfig, LeaseListenerSettings, LeaseListenerTlsSettings};
 pub use limits::LeaseListenerLimits;
 pub use router::lease_listener_router;
 pub use startup::{run_lease_listener, serve_lease_listener, serve_lease_listener_on};

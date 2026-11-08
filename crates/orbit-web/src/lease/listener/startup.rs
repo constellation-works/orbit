@@ -2,21 +2,24 @@
 
 use super::config::refused;
 use super::router::build_listener_router;
-use super::{LeaseListenerConfig, transport};
+use super::{LeaseListenerConfig, LeaseListenerSettings, transport};
 use orbit_auth::environment::{LISTENER_USER, check_listener_execution_environment};
 use orbit_auth::store::LeaseTokenStore;
 use orbit_core::OrbitError;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-/// `orbit lease listen`: check the execution environment and the intake
-/// socket's owner, read `lease.listener.*` from the running user's Orbit
-/// home, open its token store, and serve until SIGINT or SIGTERM.
+/// Check the execution environment and the intake socket's owner, validate
+/// the listener settings, open the running user's token store, and serve
+/// until SIGINT or SIGTERM.
+///
+/// Path leases are not configurable [ORB-22808]: no command runs this, and
+/// the unconfigured [`LeaseListenerSettings::default`] it validates names no
+/// bind address, so it refuses to start.
 pub fn run_lease_listener() -> Result<(), OrbitError> {
     let orbit_home = orbit_common::fs::path::global_orbit_dir()?;
     check_listener_execution_environment(&orbit_home)?;
-    let settings = orbit_config::load_lease_listener_settings(&orbit_home)?;
-    let config = LeaseListenerConfig::from_settings(&settings)?;
+    let config = LeaseListenerConfig::from_settings(&LeaseListenerSettings::default())?;
     refuse_intake_socket_owner(&config.intake_socket)?;
     let store = LeaseTokenStore::open_in_orbit_home(&orbit_home)?;
     serve_lease_listener(config, store)
@@ -32,9 +35,8 @@ fn refuse_intake_socket_owner(socket: &Path) -> Result<(), OrbitError> {
             let directory = socket.parent().unwrap_or(socket);
             let metadata = std::fs::metadata(directory).map_err(|error| {
                 refused(&format!(
-                    "cannot inspect the lease intake socket {} or its directory: {error}. Set \
-                     lease.listener.intake_socket to the socket Orbit Web serves when the \
-                     operator sets lease.intake.peer_user",
+                    "cannot inspect the lease intake socket {} or its directory: {error}. Name \
+                     the socket Orbit Web serves to the lease listener user",
                     socket.display()
                 ))
             })?;
@@ -76,7 +78,7 @@ pub fn serve_lease_listener(
             .await
             .map_err(|error| {
                 OrbitError::Io(format!(
-                    "lease listener cannot bind {} (lease.listener.bind): {error}",
+                    "lease listener cannot bind {}: {error}",
                     config.bind
                 ))
             })?;

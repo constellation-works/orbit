@@ -19,6 +19,17 @@ const CHILD_TEST: &str = "ORBIT_HTTP_TEST_CHILD";
 const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
 
 /// No environment mutation in the parent: managed authority is removed only on the child command.
+/// Asks the server child to open its workspace with path leases enabled.
+const LEASES_ENABLED: &str = "ORBIT_HTTP_LEASES_ENABLED";
+
+/// The fixed lease policy with path leases enabled.
+pub(super) fn leases_enabled() -> orbit_core::runtime::task::locks::lease::LeasePolicy {
+    orbit_core::runtime::task::locks::lease::LeasePolicy {
+        enabled: true,
+        ..orbit_core::runtime::task::locks::lease::LeasePolicy::FIXED
+    }
+}
+
 pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     if std::env::var(CHILD_TEST).ok().as_deref() == Some(name) {
         body();
@@ -248,6 +259,12 @@ impl Fixture {
             None,
             &env,
         )
+    }
+
+    /// A server whose workspace opens with path leases enabled, which no
+    /// configuration can do [ORB-22808].
+    pub(super) fn server_with_leases(&self, operator: bool) -> Server {
+        self.server_with_envs(operator, &[(LEASES_ENABLED, std::ffi::OsStr::new("1"))])
     }
 
     /// A server with extra environment for the server child.
@@ -666,6 +683,12 @@ pub(super) fn serve_fixture() {
         install_selection_barrier(parties.parse().expect("selection barrier parties"));
     }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
+    if std::env::var(LEASES_ENABLED).as_deref() == Ok("1") {
+        orbit_core::runtime::task::locks::lease::install_test_lease_policy(
+            &root.join("repo/.orbit"),
+            leases_enabled(),
+        );
+    }
     // Ordinary fixtures launch a harmless stub; replay fixtures execute only
     // their disposable sleep job through the real worker.
     if std::env::var("ORBIT_HTTP_REPLAY_WORKER").as_deref() == Ok("1") {
