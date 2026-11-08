@@ -150,3 +150,187 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
     assert_eq!(control_arm["task_ids"][0], control_id);
     assert!(control_arm.get("memory_captures").is_none());
 }
+
+/// Plant unreadable checkpoint bytes for `run_id` in this fixture's store.
+fn plant_unreadable_checkpoint(runtime: &OrbitRuntime, run_id: &str) {
+    let changed = runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+             SELECT workspace_id, run_id, ?1 FROM job_runs WHERE run_id = ?2 \
+             ON CONFLICT(workspace_id, run_id) DO UPDATE SET pipeline_state_json = excluded.pipeline_state_json",
+            rusqlite::params!["{", run_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1, "fixture checkpoint for {run_id}");
+}
+
+/// Criterion 1: a shadow readout succeeds when the enrolled task's oldest
+/// run has unreadable `pipeline_state_json` but its input already carries
+/// `experiment_capture`; the reported digest is the one from that input.
+#[test]
+fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
+    if !crate::dispatch_admission::isolated(
+        "experiment_readout::shadow_memory::shadow_readout_uses_input_capture_despite_unreadable_checkpoint",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "shadow-memory-corrupt-checkpoint",
+            ExperimentDefinitionInput {
+                mode: Some("shadow".into()),
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "memory", "overlay": { "memory": { "roles": ["implement"], "global": true } } }
+                ])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    let task_id = enroll_arm_task(&runtime, &experiment.id, "memory", TaskComplexity::Low);
+    let delivery = CrewMemoryDelivery::render(
+        TagInstructionRole::Implement,
+        "model-null-rev",
+        true,
+        Some("2026-11-02T02:00:00Z".into()),
+        CrewMemoryBlock {
+            model: Vec::new(),
+            global: String::new(),
+            revision: CrewMemoryRevisions {
+                model: None,
+                global: None,
+            },
+        },
+    );
+    let expected_digest = delivery.digest.clone();
+    let overlay_json = json!({"memory":{"roles":["implement"],"global":true}}).to_string();
+    let store = runtime.sqlite_store().unwrap();
+    let record = store
+        .experiment_record(&runtime.workspace_id().unwrap(), &experiment.id)
+        .unwrap()
+        .unwrap();
+    let arm = record.arms.iter().find(|arm| arm.name == "memory").unwrap();
+    let capture = json!({
+        "task_id": task_id,
+        "assignments": [{
+            "experiment": experiment.id,
+            "arm": "memory",
+            "segment": 1,
+            "forced": false,
+            "digest": arm.overlay_digest,
+            "overlay_json": overlay_json,
+            "live": false,
+            "memory": { "enabled": true, "deliveries": [delivery] }
+        }]
+    });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_local_pipeline",
+            1,
+            Utc::now(),
+            Some(
+                json!({ "task_id": task_id, "task_ids": [task_id], "experiment_capture": capture }),
+            ),
+            None,
+        )
+        .unwrap();
+    plant_unreadable_checkpoint(&runtime, &run.run_id.to_string());
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = readout
+        .arms
+        .iter()
+        .find(|arm| arm.name == "memory")
+        .unwrap();
+    assert_eq!(arm.memory_captures.len(), 1);
+    assert_eq!(arm.memory_captures[0].task_id, task_id);
+    assert_eq!(arm.memory_captures[0].digest, expected_digest);
+}
+
+/// Criterion 2: a live readout succeeds when an enrolled task has a run
+/// with unreadable `pipeline_state_json` and no `experiment_capture`.
+#[test]
+fn live_readout_succeeds_with_unreadable_checkpoint_and_no_capture() {
+    if !crate::dispatch_admission::isolated(
+        "experiment_readout::shadow_memory::live_readout_succeeds_with_unreadable_checkpoint_and_no_capture",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "live-corrupt-checkpoint",
+            ExperimentDefinitionInput {
+                mode: Some("live".into()),
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "memory", "overlay": { "memory": { "roles": ["implement"], "global": true } } }
+                ])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    let task_id = enroll_arm_task(&runtime, &experiment.id, "memory", TaskComplexity::Low);
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_local_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_id": task_id, "task_ids": [task_id] })),
+            None,
+        )
+        .unwrap();
+    plant_unreadable_checkpoint(&runtime, &run.run_id.to_string());
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(readout.experiment.mode, "live");
+    assert_eq!(readout.enrollment.analysed, 1);
+}

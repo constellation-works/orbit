@@ -147,8 +147,10 @@ impl OrbitRuntime {
             let mut pools = input
                 .and_then(|value| value.get("auto_crew_pools"))
                 .cloned();
+            // An unreadable checkpoint leaves admission evidence
+            // unavailable for this run rather than failing the readout.
             if (selection.is_none() || pools.is_none())
-                && let Some(state) = self.read_run_state(&run.run_id.to_string())?
+                && let Some(state) = self.read_run_state(&run.run_id.to_string()).ok().flatten()
             {
                 if selection.is_none() {
                     selection = state.crew_selection.filter(|selection| {
@@ -216,6 +218,7 @@ impl OrbitRuntime {
         created_at: DateTime<Utc>,
         enrolled: &[&ExperimentAssignment],
         now: DateTime<Utc>,
+        shadow: bool,
     ) -> Result<Observed, OrbitError> {
         let ids: BTreeSet<String> = enrolled.iter().map(|row| row.task_id.clone()).collect();
         if ids.is_empty() {
@@ -279,7 +282,13 @@ impl OrbitRuntime {
         let mut interactive_excluded = 0;
 
         let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id, &ids)?;
-        let mut captured_memory = self.captured_memory_from_runs(experiment_id, &ids)?;
+        // Captures are only reported for shadow arms, so a live readout
+        // never scans (or fails on) historical pipeline checkpoints.
+        let mut captured_memory = if shadow {
+            self.captured_memory_from_runs(experiment_id, &ids)?
+        } else {
+            BTreeMap::new()
+        };
         for (id, claim) in &claimed_treatments {
             if let Some(memory) = &claim.captured_memory {
                 captured_memory
@@ -489,18 +498,26 @@ impl OrbitRuntime {
                     .then_with(|| left.run_id.cmp(&right.run_id))
             });
             for run in runs {
-                let state = self.read_run_state(&run.run_id.to_string())?;
-                let raw = run
+                // The run input already answers when it carries a capture;
+                // pipeline state is only a fallback for runs without one.
+                // An unreadable fallback checkpoint skips this run instead
+                // of failing the whole readout, matching the soft skip for
+                // a capture that does not deserialize below.
+                let raw = match run
                     .input
                     .as_ref()
                     .and_then(|input| input.get("experiment_capture"))
                     .cloned()
-                    .or_else(|| {
-                        state
+                {
+                    Some(raw) => Some(raw),
+                    None => match self.read_run_state(&run.run_id.to_string()) {
+                        Ok(state) => state
                             .as_ref()
                             .and_then(|state| state.initial_input.get("experiment_capture"))
-                            .cloned()
-                    });
+                            .cloned(),
+                        Err(_) => continue,
+                    },
+                };
                 let Some(raw) = raw else { continue };
                 let Ok(capture) = serde_json::from_value::<CapturedExperiments>(raw) else {
                     continue;
