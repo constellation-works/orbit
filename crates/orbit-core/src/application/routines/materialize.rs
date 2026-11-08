@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use orbit_automation::routines::loader::retired_routine_job_reason;
+use orbit_automation::routines::loader::{is_retired_state_trigger, retired_routine_job_reason};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -585,15 +585,28 @@ fn reconcile_untracked_retired_routines(
             continue;
         };
         let job = definition.target.job_name();
-        let Some(retirement) = retired_routine_job_reason(job) else {
+        let job_retirement = retired_routine_job_reason(job);
+        let trigger_retired = definition
+            .trigger
+            .state
+            .as_ref()
+            .is_some_and(|state| is_retired_state_trigger(state.kind));
+        if job_retirement.is_none() && !trigger_retired {
             continue;
-        };
+        }
 
         if shipped_shape_of(stem, &existing) != Some(ShippedShape::Retired) {
-            let detail = format!(
-                "routine '{}' targets retired job '{job}' ({retirement}) but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a job this Orbit ships",
-                path.display()
-            );
+            let detail = if let Some(retirement) = job_retirement {
+                format!(
+                    "routine '{}' targets retired job '{job}' ({retirement}) but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a job this Orbit ships",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "routine '{}' observes a retired state trigger but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a trigger this Orbit ships",
+                    path.display()
+                )
+            };
             refuse_unconfined_routine(result, stem, &path, &detail);
             continue;
         }
