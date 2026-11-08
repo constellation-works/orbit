@@ -1,7 +1,9 @@
 //! A detached leaf stays `submitted` with no status until the drain's
 //! admission pass sees the child run end. The pass then records `terminal`
 //! and the child's final status. Before that record, the same assertion
-//! sees `phase=submitted` and no status.
+//! sees `phase=submitted` and no status. A leaf that ends after the drain's
+//! last pass is recorded by the next reconciling read of the drain run
+//! [ORB-23198].
 
 use chrono::{DateTime, Utc};
 use orbit_core::DrainAdmissionsStopRequest;
@@ -145,4 +147,83 @@ fn a_finished_leaf_is_recorded_terminal_on_the_drain() {
             .map(|child| child.child_run_id.clone()),
     );
     owned_workers.release_and_wait(&expected_workers);
+}
+
+/// [ORB-23198] A default single-tick drain ends with its leaf still live, so
+/// no admission pass ever sees the leaf finish. The next reconciling read of
+/// the finished drain records the dispatch terminal with the leaf's status.
+#[test]
+fn a_leaf_finished_after_the_drain_ended_is_recorded_terminal() {
+    if !crate::dispatch_admission::isolated(
+        "drain_approval::leaf_dispatch::a_leaf_finished_after_the_drain_ended_is_recorded_terminal",
+    ) {
+        return;
+    }
+    let workspace = Workspace::with_shipped_jobs();
+    let release = workspace._root.path().join("release-workers");
+    let mut owned_workers =
+        crate::worker_fixture::install_owned_workers(&release, workspace.repo.clone());
+    let task = workspace.backlog_task("late-leaf-dispatch");
+
+    let drain = workspace
+        .runtime
+        .submit_pipeline_run(
+            "workspace_auto_pipeline",
+            json!({
+                "max_active_leaf_runs": 1,
+                "completion": "review",
+                "approve_proposed": false,
+            }),
+            None,
+            None,
+        )
+        .unwrap()
+        .run_id;
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&drain)
+        .unwrap();
+    let drain_run = workspace.jobs().get_job_run(&drain).unwrap().unwrap();
+    assert_eq!(
+        drain_run.state,
+        JobRunState::Success,
+        "a single-tick drain ends after its only pass"
+    );
+    let leaf = workspace
+        .leaf_for(&drain, &task)
+        .expect("the drain admitted the leaf");
+    assert!(
+        !workspace.run(&leaf).state.is_terminal(),
+        "the leaf must outlive the drain"
+    );
+    let open = leaf_dispatch(&workspace, &drain, &leaf);
+    assert_eq!(open.phase, ChildDispatchPhase::Submitted, "{open:?}");
+    assert_eq!(open.child_status, None, "{open:?}");
+
+    workspace
+        .runtime
+        .apply_task_automation_update(
+            &task.id,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    workspace.finish(&leaf, JobRunState::Failed);
+    let shown = workspace.run(&drain);
+    assert_eq!(shown.state, JobRunState::Success);
+    let settled = leaf_dispatch(&workspace, &drain, &leaf);
+    assert_eq!(
+        settled.phase,
+        ChildDispatchPhase::Terminal,
+        "a leaf that ended after the drain's last pass must be recorded by the read: {settled:?}"
+    );
+    assert_eq!(
+        settled.child_status.as_deref(),
+        Some("failed"),
+        "the dispatch status is the child's final status: {settled:?}"
+    );
+
+    owned_workers.release_and_wait(&[drain, leaf]);
 }

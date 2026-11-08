@@ -82,7 +82,9 @@ pub(crate) fn classify_workspace_auto_tasks(
 fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result<Value, PassError> {
     // Before any other work, so a later pass error still leaves a finished
     // leaf's dispatch recorded. The next iteration retries a write that lost.
-    super::leaf_settlement::settle_terminal_leaf_dispatches(runtime, input);
+    if let Some(run_id) = super::super::drains::drain_run_id(input) {
+        super::leaf_settlement::settle_terminal_leaf_dispatches(runtime, run_id);
+    }
     let mode = super::super::mode::effective_mode(runtime, input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     runtime
