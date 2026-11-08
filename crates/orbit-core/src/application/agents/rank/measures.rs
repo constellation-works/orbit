@@ -68,7 +68,9 @@ pub(super) const MEASURES: [Measure; MEASURE_COUNT] = [
         weight: 10.0,
         units: "implemented tasks",
         sign: -1.0,
-        unrecorded: Some("final-recovery decisions record no fault yet"),
+        unrecorded: Some(
+            "final-recovery fault is recorded but the ranking measure is not yet computed",
+        ),
         definition: "Final-recovery decisions whose fault is implementer.",
     },
     Measure {
@@ -79,7 +81,7 @@ pub(super) const MEASURES: [Measure; MEASURE_COUNT] = [
         units: "implemented tasks",
         sign: -1.0,
         unrecorded: None,
-        definition: "The implementer scorecard's crew-caused rework, which already leaves out review verdicts; CI failures and final recoveries are not recorded yet, so nothing else is subtracted.",
+        definition: "The implementer scorecard's crew-caused rework, which already leaves out review verdicts; CI failures are not yet classified by cause and final-recovery faults are not yet computed as a ranking measure, so neither is subtracted.",
     },
     Measure {
         key: "tool_call_errors",
