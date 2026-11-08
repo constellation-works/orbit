@@ -322,7 +322,7 @@ because review reruns checks. Pair a pre-landing layer with
 (section 6).
 
 Selective pre-landing review (`[review.selective_before_landing]`) was
-removed [ORB-22808]: its keys load with a deprecation warning and are ignored
+removed: its keys load with a deprecation warning and are ignored
 until 2026-12-08. Delete the table; use `review.timing = "before_landing"` or
 `review.before_landing_hosts` instead.
 
