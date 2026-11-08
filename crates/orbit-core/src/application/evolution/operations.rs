@@ -1,6 +1,7 @@
 //! Workspace capability-gap ledger and proposal suppression.
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskEvolutionPort;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::EvolutionStoreBackend;
@@ -43,6 +44,13 @@ fn view(mut record: EvolutionRecord, since: Option<DateTime<Utc>>) -> Result<Val
     }
     Ok(value)
 }
+
+impl TaskEvolutionPort for OrbitRuntime {
+    fn project_task_checkpoint_costs(&self, comments: &[TaskComment]) -> Result<(), OrbitError> {
+        self.ingest_checkpoint_costs(comments)
+    }
+}
+
 impl OrbitRuntime {
     fn evolution_store(&self) -> Result<std::sync::Arc<dyn EvolutionStoreBackend>, OrbitError> {
         Ok(orbit_store::compose::evolution_store(self.sqlite_store()?))

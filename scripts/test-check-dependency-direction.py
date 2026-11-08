@@ -177,7 +177,7 @@ class RelativeImportTests(unittest.TestCase):
         # the guard derives that owner's inherent names.
         owners = ("automation", "job", "review", "distributed", "pull_drain",
                   "admission", "backlog_forecast", "sweep_filing", "workspace_auto",
-                  "search", "notice")
+                  "search", "notice", "evolution")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -796,13 +796,21 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_task_port_and_task_owned_calls_accepted(self):
         self.check_files({
-            "task/mod.rs": "pub(crate) trait TaskAutomationPort {\n    fn schedule_probe(&self);\n}\n",
+            "task/mod.rs": "pub(crate) trait TaskAutomationPort {\n    fn schedule_probe(&self);\n}\n"
+                           "pub(in crate::application) trait TaskEvolutionPort {\n"
+                           "    fn project_task_checkpoint_costs(&self);\n}\n",
             "task/worker.rs":
                 "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-                "        self.schedule_probe();\n        self.task_local_probe();\n    }\n}\n",
+                "        self.schedule_probe();\n        self.task_local_probe();\n"
+                "        self.project_task_checkpoint_costs();\n    }\n}\n",
             "task/state.rs": "impl OrbitRuntime {\n    pub(crate) fn task_local_probe(&self) {}\n}\n",
             "automation/port.rs":
                 "impl TaskAutomationPort for OrbitRuntime {\n    fn schedule_probe(&self) {}\n}\n",
+            "evolution/operations.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn ingest_checkpoint_costs(&self) {}\n}\n"
+                "impl TaskEvolutionPort for OrbitRuntime {\n"
+                "    fn project_task_checkpoint_costs(&self) {\n"
+                "        self.ingest_checkpoint_costs();\n    }\n}\n",
         }, rejected=False)
 
     def test_grouped_relative_imports_rejected(self):
@@ -825,7 +833,8 @@ class RelativeImportTests(unittest.TestCase):
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
             ("job", ("distributed", "pull_drain", "review")),
-            ("task", ("job", "review", "distributed", "sweep_filing", "workspace_auto")),
+            ("task", ("job", "review", "distributed", "sweep_filing", "workspace_auto",
+                      "evolution")),
         ):
             self.check_rows([
                 (f"{owner}/worker.rs", f"use {tree};\n")
