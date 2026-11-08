@@ -1097,6 +1097,18 @@ sweeps and shutdown admission holds start no landing work. Transient-failure
 and unknown-mergeability policies can use this same reservation mechanism;
 they do not by themselves grant waiting-gate eligibility.
 
+`orbit.workflow.land` does not use that reservation. While GitHub reports
+mergeability `UNKNOWN` it reads the pull request again, waiting a fixed 90
+seconds: after 5, 10, 20 and 40 seconds, then once more with whatever of the
+90 remains. It then refuses with the existing `pull request #N mergeability
+is unknown` reason. A pull request reported conflicting is refused on the
+first read. The bound is fixed, not a `config.toml` key: the delay is GitHub
+recomputing mergeability after a push to the base, not an operator policy.
+Deciding whether to rerun a failed check reads those checks without waiting
+on mergeability. The owner landing step already treats an unknown merge state
+as pending and polls inside its `max_wait_seconds` budget (default 3600
+seconds).
+
 These codes come from typed refusals, never from matching diagnostic wording.
 The refusing action keeps its existing task transition and landing evidence;
 run finalization does not change the task's status. Retry, step recovery, final

@@ -10,9 +10,10 @@
 //! and revoked through the owner's own claim mutations and operator console,
 //! so the claim journal decides whether a revoked handoff settles.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -20,7 +21,10 @@ use orbit_core::application::review::{DistributedClaimState, ExpectedCandidate};
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
-use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
+use orbit_core::runtime::task_pr_forge::{
+    ForgePullRequest, LeasePullRequest, MergedPullRequest, PullRequestBlockers,
+    PullRequestMergeOutcome, TaskPrForge,
+};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::TaskCommitBoundary;
@@ -1976,4 +1980,269 @@ fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
             );
         }
     }
+}
+
+/// GitHub mergeability answers a landing read can return.
+#[derive(Clone, Copy)]
+enum MergeabilityAnswer {
+    Unknown,
+    Conflicting,
+    Mergeable,
+}
+
+struct MergeabilityLandState {
+    pull: ForgePullRequest,
+    base: String,
+    answers: VecDeque<MergeabilityAnswer>,
+    repeat: MergeabilityAnswer,
+    reads: u32,
+    merges: Vec<(u64, String)>,
+    merged: Option<MergedPullRequest>,
+}
+
+/// An open delivery PR whose mergeability follows a scripted sequence.
+/// The last answer repeats once the sequence is exhausted. A forgotten
+/// virtual clock cannot spin: reads past the landing budget panic.
+struct MergeabilityLandForge(Mutex<MergeabilityLandState>);
+
+const LAND_PR: u64 = 8801;
+const LAND_HEAD: &str = "0dbd8e2000000000000000000000000000000000";
+const LAND_READ_CAP: u32 = 8;
+
+impl MergeabilityLandForge {
+    fn open(
+        task: &str,
+        base: &str,
+        answers: &[MergeabilityAnswer],
+        repeat: MergeabilityAnswer,
+    ) -> Self {
+        Self(Mutex::new(MergeabilityLandState {
+            pull: ForgePullRequest {
+                number: LAND_PR,
+                head_branch: format!("orbit/{task}-47642870"),
+                body: format!("Delivers {task}.\n\nOrbit run jrun-1"),
+                author: BOT.to_string(),
+            },
+            base: base.to_string(),
+            answers: VecDeque::from(answers.to_vec()),
+            repeat,
+            reads: 0,
+            merges: Vec::new(),
+            merged: None,
+        }))
+    }
+
+    fn reads(&self) -> u32 {
+        self.0.lock().unwrap().reads
+    }
+
+    fn merges(&self) -> Vec<(u64, String)> {
+        self.0.lock().unwrap().merges.clone()
+    }
+
+    fn next_answer(state: &mut MergeabilityLandState) -> MergeabilityAnswer {
+        state.reads += 1;
+        assert!(
+            state.reads <= LAND_READ_CAP,
+            "mergeability reads ran past the landing budget"
+        );
+        state.answers.pop_front().unwrap_or(state.repeat)
+    }
+
+    fn blockers(state: &MergeabilityLandState, conflicting: bool) -> PullRequestBlockers {
+        PullRequestBlockers {
+            pull: state.pull.clone(),
+            head_sha: LAND_HEAD.to_string(),
+            conflicting,
+            failed_required_checks: Vec::new(),
+            pending_required_checks: Vec::new(),
+            passed_required_checks: vec!["Test".to_string()],
+        }
+    }
+}
+
+impl TaskPrForge for MergeabilityLandForge {
+    fn open_pull_requests(&self, _: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
+        let state = self.0.lock().unwrap();
+        Ok(state
+            .merged
+            .is_none()
+            .then(|| state.pull.clone())
+            .into_iter()
+            .collect())
+    }
+
+    fn lease_pull_request(
+        &self,
+        _: &Path,
+        binding: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        let number: u64 = binding.trim_start_matches('#').parse().unwrap();
+        let state = self.0.lock().unwrap();
+        Ok(Some(LeasePullRequest {
+            number,
+            base_branch: state.base.clone(),
+            merged: state.merged.is_some(),
+        }))
+    }
+
+    fn pull_request_blockers(
+        &self,
+        _: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        let mut state = self.0.lock().unwrap();
+        if state.merged.is_some() || state.pull.number != number {
+            return Ok(None);
+        }
+        match Self::next_answer(&mut state) {
+            MergeabilityAnswer::Unknown => {
+                Err(OrbitError::PullRequestMergeabilityUnknown { number })
+            }
+            MergeabilityAnswer::Conflicting => Ok(Some(Self::blockers(&state, true))),
+            MergeabilityAnswer::Mergeable => Ok(Some(Self::blockers(&state, false))),
+        }
+    }
+
+    fn merge_pull_request(
+        &self,
+        _: &Path,
+        number: u64,
+        head_sha: &str,
+    ) -> Result<PullRequestMergeOutcome, OrbitError> {
+        let mut state = self.0.lock().unwrap();
+        state.merges.push((number, head_sha.to_string()));
+        let pull = state.pull.clone();
+        state.merged = Some(MergedPullRequest {
+            pull,
+            base_branch: state.base.clone(),
+            head_sha: head_sha.to_string(),
+            merge_commit: MERGE_COMMIT.to_string(),
+        });
+        Ok(PullRequestMergeOutcome::Merged {
+            merge_commit: MERGE_COMMIT.to_string(),
+        })
+    }
+
+    fn merged_pull_requests(&self, _: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
+        Ok(self.0.lock().unwrap().merged.clone().into_iter().collect())
+    }
+
+    fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
+        Ok(BOT.to_string())
+    }
+
+    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), OrbitError> {
+        Ok(())
+    }
+}
+
+/// A review task whose delivery PR answers `answers`, then `repeat`.
+/// The wait advances on a virtual clock so the 90-second budget does not sleep.
+fn mergeability_land(
+    answers: &[MergeabilityAnswer],
+    repeat: MergeabilityAnswer,
+) -> (Fixture, Arc<MergeabilityLandForge>, String) {
+    let mut fx = Fixture::new();
+    let task = fx.add_task("Mergeability land", TaskStatus::Review, &[LAND_PR]);
+    let forge = Arc::new(MergeabilityLandForge::open(
+        &task, &fx.base, answers, repeat,
+    ));
+    fx.runtime = fx.runtime.clone().with_task_pr_forge(forge.clone());
+    (fx, forge, task)
+}
+
+fn virtual_mergeability_wait() -> orbit_common::test_env::ScopedEnv {
+    orbit_common::test_env::scoped([("ORBIT_TEST_MERGEABILITY_WAIT", Some("virtual"))])
+}
+
+crate::scenario_table!(
+    mergeability_unknown_landing,
+    land_waits_out_unknown_mergeability_then_merges,
+    land_refuses_unknown_mergeability_after_the_budget,
+    land_refuses_a_conflicting_pull_request_immediately,
+);
+
+fn land_waits_out_unknown_mergeability_then_merges() {
+    let _wait = virtual_mergeability_wait();
+    let (fx, forge, task) = mergeability_land(
+        &[
+            MergeabilityAnswer::Unknown,
+            MergeabilityAnswer::Unknown,
+            MergeabilityAnswer::Mergeable,
+        ],
+        MergeabilityAnswer::Mergeable,
+    );
+    let started = Instant::now();
+    let landed = fx
+        .runtime
+        .land_task_pull_request(&task, Some("operator"))
+        .expect("unknown mergeability yields to a later mergeable read");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the budget advanced without sleeping"
+    );
+    assert_eq!(landed.pull_request, LAND_PR);
+    assert_eq!(landed.merge_commit, MERGE_COMMIT);
+    assert_eq!(landed.status, TaskStatus::Done);
+    assert!(landed.settlement_pending.is_none(), "{landed:?}");
+    assert_eq!(forge.reads(), 3, "two unknown reads, then one mergeable");
+    assert_eq!(forge.merges(), vec![(LAND_PR, LAND_HEAD.to_string())]);
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+}
+
+fn land_refuses_unknown_mergeability_after_the_budget() {
+    let _wait = virtual_mergeability_wait();
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Unknown);
+    let started = Instant::now();
+    let error = fx
+        .runtime
+        .land_task_pull_request(&task, Some("operator"))
+        .expect_err("the budget refuses a pull request that stays unknown");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the budget advanced without sleeping"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("task_landing_refused")
+            && message.contains(&format!("pull request #{LAND_PR} mergeability is unknown")),
+        "{message}"
+    );
+    assert_eq!(forge.reads(), 6, "the fixed budget is six reads");
+    assert!(
+        forge.merges().is_empty(),
+        "unknown mergeability never merges"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Review);
+}
+
+fn land_refuses_a_conflicting_pull_request_immediately() {
+    let _wait = virtual_mergeability_wait();
+    let (fx, forge, task) = mergeability_land(
+        &[MergeabilityAnswer::Conflicting],
+        MergeabilityAnswer::Mergeable,
+    );
+    let started = Instant::now();
+    let error = fx
+        .runtime
+        .land_task_pull_request(&task, Some("operator"))
+        .expect_err("a conflict is a refusal");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a conflict does not wait"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("task_landing_refused")
+            && message.contains(&format!("pull request #{LAND_PR} conflicts with its base")),
+        "{message}"
+    );
+    assert!(
+        !message.contains("mergeability is unknown"),
+        "a conflict is not the unknown-mergeability refusal: {message}"
+    );
+    assert_eq!(forge.reads(), 1, "a conflict is refused on the first read");
+    assert!(forge.merges().is_empty());
+    assert_eq!(fx.status(&task), TaskStatus::Review);
 }
