@@ -642,6 +642,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // `experiments` toolset, which a dreaming run's dispatch stamps.
     ("orbit.memory.copy", Placement::Unadvertised),
     ("orbit.memory.export", Placement::Unadvertised),
+    ("orbit.memory.proposal.accept", Placement::Unadvertised),
+    ("orbit.memory.proposal.reject", Placement::Unadvertised),
+    ("orbit.memory.proposals", Placement::Unadvertised),
     ("orbit.memory.propose", Placement::Advertised),
     ("orbit.memory.reset", Placement::Unadvertised),
     ("orbit.memory.write", Placement::Advertised),

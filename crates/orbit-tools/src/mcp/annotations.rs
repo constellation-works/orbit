@@ -86,7 +86,10 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.task.artifact.put" => A::destructive(true),
         // Replaces a memory space's files with a new revision; each call
         // appends another revision.
-        "orbit.memory.write" => A::destructive(false),
+        "orbit.memory.write" | "orbit.memory.proposal.accept" => A::destructive(false),
+        "orbit.memory.proposal.reject" => A::additive(false),
+        // Listing can withdraw newly expired proposals; a repeat changes none.
+        "orbit.memory.proposals" => A::destructive(true),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also
         // closes the published pull request.

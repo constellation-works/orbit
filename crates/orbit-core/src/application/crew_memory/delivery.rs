@@ -10,7 +10,7 @@ use orbit_types::workflow::{
 };
 
 use super::MemoryKey;
-use super::operations::parse_revision_files;
+use super::operations;
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -28,7 +28,7 @@ impl OrbitRuntime {
         let mut block = CrewMemoryBlock::default();
         let mut revised_at = None;
         if let Some(row) = store.crew_memory_revision(&workspace_id, key.as_str(), None)? {
-            block.model = parse_revision_files(&row)?
+            block.model = operations::crew_memory_revision_files(&row)?
                 .into_iter()
                 .map(|file| CrewMemoryNote {
                     path: file.path,
@@ -45,7 +45,7 @@ impl OrbitRuntime {
             && let Some(row) =
                 store.crew_memory_revision(&workspace_id, MemoryKey::global().as_str(), None)?
         {
-            block.global = parse_revision_files(&row)?
+            block.global = operations::crew_memory_revision_files(&row)?
                 .into_iter()
                 .map(|file| file.text)
                 .collect::<Vec<_>>()

@@ -161,6 +161,9 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | MemoryVerb::Write
             | MemoryVerb::Reset
             | MemoryVerb::Copy
+            | MemoryVerb::Proposals
+            | MemoryVerb::ProposalAccept
+            | MemoryVerb::ProposalReject
             | MemoryVerb::Propose => Refused,
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
