@@ -656,6 +656,7 @@ Resolve the named refusal before starting a new delivery attempt. Apart from
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. | Let the next auto-fix pass reread the pull-request status; do not dispatch a repair on that evidence. |
 | `delivery_forge_observation_unavailable` | Read-only forge reads kept failing with a transport error before any completion mutation. Nothing changed on the forge and the task stays in review. | Run `orbit job resume <run_id>`: it reads the forge again and continues completion from its checkpoints. |
 | `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
+| `delivery_check_repair_activity_absent` | An in-budget auto-fix check repair was admitted, and the job has no `step_failure_recovery` to run it. The repair stays uncommitted. | Give the job a `step_failure_recovery` activity and start a new delivery attempt. An exhausted repair budget remains a failure, not this hold. |
 
 ## Check Git State For Workflow Failures
 

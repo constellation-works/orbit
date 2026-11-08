@@ -45,6 +45,10 @@ pub enum DeliveryRefusal {
     /// after transport recovers. A task already in progress follows ordinary
     /// run failure handling, or claim settlement for a claimed leaf, instead.
     OriginUnavailable,
+    /// An in-budget `--auto-fix` check repair was admitted, and the job has
+    /// no `step_failure_recovery` to run it. The run holds; the repair stays
+    /// uncommitted. Spending the repair budget is still a failure.
+    CheckRepairActivityAbsent,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -75,6 +79,7 @@ impl DeliveryRefusal {
             Self::OriginUnavailable => "delivery_origin_unavailable",
             Self::VisualNotEstablished => "delivery_visual_not_established",
             Self::VisualReviewUnresolved => "delivery_visual_review_unresolved",
+            Self::CheckRepairActivityAbsent => "delivery_check_repair_activity_absent",
         }
     }
 
@@ -98,6 +103,7 @@ impl DeliveryRefusal {
             "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
             "delivery_visual_not_established" => Some(Self::VisualNotEstablished),
             "delivery_visual_review_unresolved" => Some(Self::VisualReviewUnresolved),
+            "delivery_check_repair_activity_absent" => Some(Self::CheckRepairActivityAbsent),
             _ => None,
         }
     }
