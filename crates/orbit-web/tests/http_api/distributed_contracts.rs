@@ -1,4 +1,4 @@
-use super::support::{Fixture, Server, isolated};
+use super::support::{Fixture, Server, error_code, isolated};
 use axum::http::StatusCode;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
@@ -217,6 +217,61 @@ fn default_claim_response_stays_small_with_long_settled_history() {
             );
             let json: Value = serde_json::from_slice(&bytes).expect("JSON response");
             assert_eq!(json["claims"].as_array().expect("claims").len(), 5);
+        },
+    );
+}
+
+fn edit_registry(
+    fixture: &Fixture,
+    edit: impl FnOnce(&mut orbit_types::workspace::WorkspaceRegistry),
+) {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    edit(&mut registry);
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+}
+
+#[test]
+fn retry_handoff_inactive_workspace_is_typed_workspace_unavailable() {
+    isolated(
+        "distributed_contracts::retry_handoff_inactive_workspace_is_typed_workspace_unavailable",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let body = serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"retry safely","request_key":"r1"});
+            let uri = "/api/distributed/handoffs/abc123/retry?workspace=ws_http_fixture";
+            // The selected workspace becomes inactive (its checkout moved)
+            // before the replay. The Ws extractor answers before the retry
+            // handler and its receipt lookup, so the refusal is environmental:
+            // it stays a 400 but must carry the typed code the browser uses
+            // to retain a retained request_key.
+            let registry_path =
+                orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+            let original_registry = std::fs::read(&registry_path).unwrap();
+            edit_registry(&fixture, |registry| {
+                registry.checkouts[0].repo_root = fixture.path("missing-checkout");
+            });
+            let refused = error_code(
+                server.send("POST", uri, body.clone()),
+                400,
+                "workspace_unavailable",
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("is inactive")),
+                "{refused}"
+            );
+            // After the workspace is active again the same replay is no longer
+            // refused as workspace_unavailable; it reaches the handler.
+            std::fs::write(&registry_path, &original_registry).unwrap();
+            let restored = server.send("POST", uri, body);
+            let restored_body: Value = restored.json().unwrap();
+            assert_ne!(
+                restored_body.get("code"),
+                Some(&serde_json::json!("workspace_unavailable")),
+                "{restored_body}"
+            );
         },
     );
 }

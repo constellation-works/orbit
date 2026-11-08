@@ -1135,12 +1135,17 @@ export function retryHandoff(claim, reason, requestId) {
   // HTTP status) may follow a received request, a 408/429/5xx reply does
   // not prove no reservation happened, and an authorization refusal
   // (401/403/404) on a retained key is checked before the receipt lookup,
-  // so it says nothing about an earlier uncertain attempt.
+  // so it says nothing about an earlier uncertain attempt. The same holds
+  // for the typed `workspace_unavailable` refusal: the workspace extractor
+  // answers it before the handler (and its receipt lookup) runs, and the
+  // workspace may only be temporarily inactive in the registry, so it
+  // proves nothing about an earlier uncertain attempt's receipt.
   const settled = (error) => {
     const status = error && typeof error.status === "number" ? error.status : null;
     if (status === null) return false;
     if (status === 408 || status === 429 || status >= 500) return false;
     if (retainedKey && (status === 401 || status === 403 || status === 404)) return false;
+    if (retainedKey && error.code === "workspace_unavailable") return false;
     return status >= 400 && status < 500;
   };
   return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/retry`, {
