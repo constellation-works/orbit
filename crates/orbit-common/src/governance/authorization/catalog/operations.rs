@@ -487,6 +487,24 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "exporting crew memory writes files into a directory on this host, so only an operator may do it",
     },
+    GovernedOperation {
+        id: "orbit.memory.proposals",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
+    },
+    GovernedOperation {
+        id: "orbit.memory.proposal.accept",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
+    },
+    GovernedOperation {
+        id: "orbit.memory.proposal.reject",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
+    },
     // Script grants (script steps phase 1): the operator's host-local
     // consent to run one workspace script at one content digest. No Agent
     // capability, so `classify_agent_tool_grant` makes both tools

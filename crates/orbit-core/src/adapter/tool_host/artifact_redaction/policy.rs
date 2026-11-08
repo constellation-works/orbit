@@ -256,6 +256,9 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | MemoryVerb::Export
             | MemoryVerb::Reset
             | MemoryVerb::Copy
+            | MemoryVerb::Proposals
+            | MemoryVerb::ProposalAccept
+            | MemoryVerb::ProposalReject
             | MemoryVerb::Propose => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION

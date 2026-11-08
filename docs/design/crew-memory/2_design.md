@@ -11,12 +11,12 @@ summary: "Proposed design for crew memory: per-model spaces in the owner store, 
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
-related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23066, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-23066, ORB-10736]
 ---
 
 # Crew Memory — Design
 
-This doc is the accepted design. Slices M1, M2 and M3 (§10) are built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`; the `memory` overlay surface (§5) with its capture, envelope field and readout strata (§7); and dreaming (§6): the `crew_memory_dream` routine, the evidence pack, the key-scoped agent tools and the readout's dreaming overhead. Memory reaches a prompt only in a `live` memory arm. It covers:
+This doc is the accepted design. Slices M1–M4 (§10) are built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`; the `memory` overlay surface (§5) with its capture, envelope field and readout strata (§7); and dreaming (§6): the `crew_memory_dream` routine, the evidence pack, the key-scoped agent tools and the readout's dreaming overhead; plus operator review of global-memory proposals (§8). Memory reaches a prompt only in a `live` memory arm. It covers:
 - the experimental gate (§1);
 - how memory is keyed (§2) and stored (§3);
 - what a space may hold (§4);
@@ -50,8 +50,8 @@ Memory is operational data in the owner's store. The host's single SQLite store 
 | Table | Holds |
 |---|---|
 | `crew_memory_revisions` | workspace id, key (a model id, or `global`), revision number, files (path → content JSON), content digest, evidence task ids, writer (run id and crew, or operator), reason, created at. Append-only. |
-| `crew_memory_proposals` | workspace id, id, proposing key, proposing run, text, evidence task ids, status (`open`, `accepted`, `rejected`, `withdrawn`), decided by and at, decision reason |
-| `crew_memory_events` | Append-only audit: write refused (with the rule), revision written, proposal opened, accepted or rejected, operator reset or copy |
+| `crew_memory_proposals` | workspace id, id, proposing key, proposing run, text, evidence task ids, status (`open`, `accepted`, `rejected`, `withdrawn`), decided by and at, decision reason, created at |
+| `crew_memory_events` | Append-only audit: write refused (with the rule), revision written, proposal opened, accepted, rejected or expired, operator reset or copy |
 
 A space's current content is its newest revision. Nothing is edited in place, so a readout can recover what any run received from the digest that run recorded (§5). On disk, `orbit memory export [--dir]` renders the layout Daniel sketched, `global.md` and `<model>/<file>.md`, for reading. Orbit never reads those files back. See [Memory lives in the owner store and reaches followers through the admission receipt](./4_decisions.md#memory-lives-in-the-owner-store-and-reaches-followers-through-the-admission-receipt).
 
@@ -172,12 +172,12 @@ The first experiment covers implementers only.
 
 ## 8. The Global Memory and Its Review
 
-Proposals collect in `crew_memory_proposals`. `orbit memory proposals` lists the open ones with their evidence and how many keys proposed something similar, using a normalised-token overlap that is shown but never acted on. An operator (Daniel, or an orchestrator whose mandate grants it) can:
+Proposals collect in `crew_memory_proposals`. `orbit memory proposals` lists the open ones with their evidence and how many keys proposed something similar, using a normalised-token overlap that is shown but never acted on. The count is distinct **other** proposing model keys among open proposals: lowercase alphanumeric tokens form sets, and two notes are similar when their Jaccard overlap (intersection / union) is at least 0.5. Empty token sets are not similar, and multiple notes from one key count once. No decision or promotion uses the count. An operator (Daniel, or an orchestrator whose mandate grants it) can:
 
-- **Accept:** `orbit memory proposal accept <id> [--edit <file>]`. This writes a new global revision. The operator may edit the text, and the edit still has to pass the §4 rules except provenance.
-- **Reject** with a reason.
+- **Accept:** `orbit memory proposal accept <id> [--edit <file>]`. Without `--edit`, this appends the proposed note to the current global text, separated by two newlines, and writes a new global revision. With `--edit`, the UTF-8 file is the **complete replacement global text**, so an operator can drop or compress older notes to fit the cap. The resulting whole text passes the §4 rules except provenance. Acceptance preserves the cited evidence and commits the proposal decision, global revision and `proposal_accepted` event in one transaction. If global memory changed since it was read, acceptance refuses without deciding the proposal; read it again before retrying.
+- **Reject:** `orbit memory proposal reject <id> --reason <text>`. The nonempty reason, deciding operator and time are stored atomically with a `proposal_rejected` event. Decided proposals cannot be decided again.
 
-Open proposals expire after 4 weeks. The global memory is subject to the 3 KiB cap, so accepting a proposal may require dropping an older note. The accept command shows the resulting size and refuses when it is over the cap.
+Open proposals older than 4 weeks become `withdrawn`, with `decided_by = system`, reason `expired after 4 weeks` and a `proposal_expired` event. Expiration is lazy: every list, accept or reject first expires old open proposals, so they cannot be listed as open or decided. Repeated listing records no duplicate expiry. These three CLI commands are operator-only, support `--json`, and refuse while `crew_memory.enabled` is false, before expiring or reading proposals. Decision and expiry events appear in `orbit memory history global`. The global memory is subject to the 3 KiB cap, so accepting a proposal may require dropping an older note. The accept command shows the resulting size and refuses when it is over the cap.
 
 ## 9. Surfaces
 
@@ -195,7 +195,7 @@ Each slice is one task, filed only after this design is accepted:
 - **M1. Store, write rules, CLI.** Tables, the §4 validation, `orbit memory show|history|export|reset|copy`, and the `[crew_memory] enabled` key. No delivery. Built by [ORB-23113], which adds `orbit memory write` as the operator seed path; every M1 verb is operator CLI only (no MCP scope), and the `orbit.memory.write` agent tool arrives with M3.
 - **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`. Built by [ORB-23114].
 - **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution. Built by [ORB-23115]; proposals are stored, and listing, accepting and rejecting them is M4.
-- **M4. Global review.** Proposals and accept/reject.
+- **M4. Global review.** Built by [ORB-23116]: proposal listing with display-only similarity, operator accept/reject, atomic decision audits and four-week expiry (§8).
 - **M5. Run the experiment.** A one-week shadow, then live until the sample or the 6-week cap, then conclude. Then either the promotion design change or the removal task.
 
 ## 11. Concerns & Honest Limitations
@@ -216,6 +216,7 @@ Each slice is one task, filed only after this design is accepted:
 - [ORB-23113] — builds slice M1: store, write rules, operator CLI
 - [ORB-23114] — builds slice M2: the `memory` overlay surface, capture, envelope field and readout strata
 - [ORB-23115] — builds slice M3: the `crew_memory_dream` routine, evidence pack, key-scoped agent tools and dreaming cost
+- [ORB-23116] — builds slice M4: operator global-memory proposal review and expiry
 - [ORB-23066] — adds `--until` to the scorecards, used for the settled reviewer window
 - [ORB-10736] — retired the native project-learning subsystem
 

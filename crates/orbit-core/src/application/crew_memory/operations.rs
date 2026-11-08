@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use chrono::{SubsecRound, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow, CrewMemoryStoreBackend};
+use orbit_store::contracts::{
+    CrewMemoryEventRow, CrewMemoryProposalDecision, CrewMemoryRevisionRow, CrewMemoryStoreBackend,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -33,7 +35,14 @@ pub(super) struct DreamingWrite<'a> {
 pub(super) enum WriteAction {
     Write,
     Reset,
-    Copy { from: MemoryKey, from_revision: u32 },
+    Copy {
+        from: MemoryKey,
+        from_revision: u32,
+    },
+    Accept {
+        proposal_id: String,
+        expected_revision: u32,
+    },
 }
 
 impl WriteAction {
@@ -42,6 +51,7 @@ impl WriteAction {
             Self::Write => "write",
             Self::Reset => "reset",
             Self::Copy { .. } => "copy",
+            Self::Accept { .. } => "proposal accept",
         }
     }
 
@@ -51,6 +61,7 @@ impl WriteAction {
             Self::Write => "revision_written",
             Self::Reset => "reset",
             Self::Copy { .. } => "copied",
+            Self::Accept { .. } => "proposal_accepted",
         }
     }
 }
@@ -83,7 +94,7 @@ impl OrbitRuntime {
         Ok(key)
     }
 
-    fn operator_memory_writer(&self) -> MemoryWriter {
+    pub(super) fn operator_memory_writer(&self) -> MemoryWriter {
         let label = self.actor_label().trim();
         MemoryWriter::Operator {
             actor: if label.is_empty() { "operator" } else { label }.to_string(),
@@ -220,18 +231,41 @@ impl OrbitRuntime {
             detail["from"] = json!(from);
             detail["from_revision"] = json!(from_revision);
         }
-        let stored = store.append_crew_memory_revision(
-            &row,
-            &CrewMemoryEventRow {
-                workspace_id,
-                memory_key: key.to_string(),
-                at: now,
-                action: action.event().to_string(),
-                actor: writer.actor().to_string(),
-                revision: None,
-                detail_json: detail.to_string(),
-            },
-        )?;
+        let mut event = CrewMemoryEventRow {
+            workspace_id: workspace_id.clone(),
+            memory_key: key.to_string(),
+            at: now,
+            action: action.event().to_string(),
+            actor: writer.actor().to_string(),
+            revision: None,
+            detail_json: detail.to_string(),
+        };
+        let stored = if let WriteAction::Accept {
+            proposal_id,
+            expected_revision,
+        } = &action
+        {
+            detail["proposal_id"] = json!(proposal_id);
+            event.detail_json = detail.to_string();
+            store
+                .decide_crew_memory_proposal(
+                    &CrewMemoryProposalDecision {
+                        workspace_id,
+                        id: proposal_id.clone(),
+                        status: "accepted".to_string(),
+                        actor: writer.actor().to_string(),
+                        at: now,
+                        reason: reason.unwrap_or_default(),
+                    },
+                    &event,
+                    Some((&row, *expected_revision)),
+                )?
+                .ok_or_else(|| {
+                    OrbitError::Store("proposal acceptance wrote no revision".to_string())
+                })?
+        } else {
+            store.append_crew_memory_revision(&row, &event)?
+        };
         let mut view = revision_view(key, Some(&stored))?;
         view["action"] = json!(action.event());
         Ok(view)
@@ -257,7 +291,7 @@ impl OrbitRuntime {
                 .crew_memory_current(&workspace_id)?
                 .iter()
                 .map(|row| {
-                    let files = parse_revision_files(row)?;
+                    let files = crew_memory_revision_files(row)?;
                     Ok(json!({
                         "key": row.memory_key,
                         "revision": row.revision,
@@ -333,7 +367,7 @@ impl OrbitRuntime {
         let mut written = Vec::new();
         for row in &rows {
             let key = parse_memory_key(&row.memory_key)?;
-            let files = parse_revision_files(row)?;
+            let files = crew_memory_revision_files(row)?;
             if key.is_global() {
                 if let Some(file) = files.first() {
                     write_export(&dir, &PathBuf::from("global.md"), &file.text)?;
@@ -416,8 +450,8 @@ impl OrbitRuntime {
                 OrbitError::InvalidInput(format!("crew memory `{from}` has no revision to copy"))
             })?;
         let write = MemoryWrite {
-            files: parse_revision_files(&source)?,
-            evidence: parse_evidence(&source)?,
+            files: crew_memory_revision_files(&source)?,
+            evidence: crew_memory_revision_evidence(&source)?,
         };
         self.write_crew_memory_revision(
             &to,
@@ -450,7 +484,7 @@ fn content_digest(files: &[MemoryFile]) -> Result<String, OrbitError> {
     ))
 }
 
-pub(super) fn parse_revision_files(
+pub(super) fn crew_memory_revision_files(
     row: &CrewMemoryRevisionRow,
 ) -> Result<Vec<MemoryFile>, OrbitError> {
     serde_json::from_str(&row.files_json).map_err(|error| {
@@ -461,7 +495,9 @@ pub(super) fn parse_revision_files(
     })
 }
 
-fn parse_evidence(row: &CrewMemoryRevisionRow) -> Result<Vec<String>, OrbitError> {
+pub(super) fn crew_memory_revision_evidence(
+    row: &CrewMemoryRevisionRow,
+) -> Result<Vec<String>, OrbitError> {
     serde_json::from_str(&row.evidence_json).map_err(|error| {
         OrbitError::Store(format!(
             "invalid crew memory evidence on revision {} of `{}`: {error}",
@@ -501,7 +537,7 @@ pub(super) fn revision_view(
             "caps": caps,
         }));
     };
-    let files = parse_revision_files(row)?;
+    let files = crew_memory_revision_files(row)?;
     Ok(json!({
         "key": key,
         "revision": row.revision,
@@ -509,7 +545,7 @@ pub(super) fn revision_view(
         "bytes": byte_count(&files),
         "files": files,
         "digest": row.content_digest,
-        "evidence": parse_evidence(row)?,
+        "evidence": crew_memory_revision_evidence(row)?,
         "writer": {
             "kind": row.writer_kind,
             "actor": row.writer_actor,

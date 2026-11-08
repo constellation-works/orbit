@@ -231,7 +231,9 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
     let experiment = "an experiment id is workspace-local and carries no host prefix";
     let run = "a run id is host-local: a run executes where it was admitted";
     let notice = "a notice id is workspace-local and carries no host prefix";
-    let workspace_local: [(&str, &str); 26] = [
+    let memory_proposal =
+        "a crew memory proposal id is workspace-local and carries no task host prefix";
+    let workspace_local: [(&str, &str); 28] = [
         ("orbit.friction.show", friction),
         ("orbit.friction.update", friction),
         ("orbit.friction.resolve", friction),
@@ -258,6 +260,8 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
         ("orbit.workflow.run.show", run),
         ("orbit.workflow.run.resume", run),
         ("orbit.notice.show", notice),
+        ("orbit.memory.proposal.accept", memory_proposal),
+        ("orbit.memory.proposal.reject", memory_proposal),
     ];
     for (name, reason) in workspace_local {
         assert_eq!(
