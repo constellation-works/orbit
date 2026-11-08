@@ -15,6 +15,11 @@ set -euo pipefail
 #
 # Runs in `make ci-fast` (local) and scripts/ci-guardrails.sh (CI).
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "crate-agent-guides: ripgrep (rg) is required; install it before running" >&2
+  exit 1
+fi
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 

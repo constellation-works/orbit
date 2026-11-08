@@ -27,7 +27,11 @@ def production_lines(path: Path):
             in_test_module = True
             brace_depth = line.count("{") - line.count("}")
             continue
-        if pending_test_module and re.search(r"\bmod\s+\w+\s*;", line):
+        # cfg applies to the next item, not a later module. Keep it across
+        # blank/comment/attribute lines only; a test-only use/fn/const consumes it.
+        item = strip_line_comment(line).strip()
+        item = re.sub(r"#\[[^\]]*\]", "", item).strip()
+        if pending_test_module and item:
             pending_test_module = False
 
         if in_test_module:

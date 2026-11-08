@@ -91,6 +91,19 @@ def changed_paths(base):
 # changed path under a prefix selects the readers and their reverse dependents.
 FILE_READERS = (
     (Path("scripts/build-budget.py"), ("orbit-engine",)),
+    (Path("scripts/ci-await-jobs.py"), ("orbit-engine",)),
+    (Path("scripts/ci-test-affected.py"), ("orbit-core",)),
+    (Path("scripts/release-readiness-adapter.py"), ("orbit-engine",)),
+    (Path("examples/release-readiness/scripts/release-readiness.yaml"), ("orbit-engine",)),
+    (Path(".github/workflows/ci.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/ci-macos.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/website-check.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/codeql.yml"), ("orbit-engine",)),
+    (Path("docs/design/auto-tasks/1_overview.md"), ("orbit-core",)),
+    (Path("crates/orbit-engine/tests/engine/pr_landing/fixtures/base-refresh-forge.sh"), ("orbit-core",)),
+    (Path("crates/orbit-tools/tests/fixtures/plugins"), ("orbit-cli",)),
+    (Path("crates/orbit-agent/tests/provider_invocation/fixtures"), ("orbit-engine",)),
+    (Path("crates/orbit-core/assets/executors"), ("orbit-cli",)),
     (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
     (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
     (Path("crates/orbit-core/assets/auto_tasks"), ("orbit-cli",)),
@@ -99,16 +112,13 @@ FILE_READERS = (
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
     (Path("website/src/content/docs/reference/config.md"), ("orbit-cli",)),
-    # The generated skill mirror of crates/orbit-core/assets/skills, whose own
-    # change selects orbit-core. orbit-core's default_catalog test reads the
-    # mirror's reference pages, but the always-run sync-plugin-skills.sh guard
-    # fails any mirror that differs from its source, so a mirror-only change
-    # selects no crate.
-    (Path("plugin/skills"), ()),
+    # default_catalog reads the generated setup references as well as their source.
+    (Path("plugin/skills"), ("orbit-core",)),
     # Read only by scripts/test-qa-full-sweep.py, which the guardrails run.
     (Path("scripts/qa-full-sweep-inventory.json"), ()),
-    # The guardrail runs the sweep itself. No Cargo test reads the script.
-    (Path("scripts/test-qa-full-sweep.py"), ()),
+    # review_baseline_hold executes the sweep and its imported npm validator.
+    (Path("scripts/test-qa-full-sweep.py"), ("orbit-core",)),
+    (Path("scripts/check_npm_package.py"), ("orbit-core",)),
     # [ORB-21420] Read only by scripts/unit-test-inventory.py --check, a
     # repository guard every CI guardrails run executes. No Cargo test reads it.
     (Path("scripts/unit-test-baseline.json"), ()),
@@ -224,8 +234,8 @@ def pull_request_scope(metadata, paths):
     (workspace manifests, toolchain, .cargo/, .github/, scripts/, plugin/ and
     any other repository file a test may read) unless FILE_READERS declares
     which crates read it, or it is Markdown outside crates/ and plugin/: no
-    Cargo test reads that, and the one such page a test reads is a
-    FILE_READERS entry that selects its reader. The CI guardrails job still
+    Cargo test reads undeclared Markdown; pages read by tests have
+    FILE_READERS entries that select their readers. The CI guardrails job still
     runs the scripts/test-* self-tests whose inputs changed, such as
     test-release-promotion.py for RELEASING.md. A member manifest can change
     the features of the whole workspace build, so it runs everything too.

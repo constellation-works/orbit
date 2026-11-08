@@ -62,6 +62,46 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-store/src/driver/sqlite", "crates/orbit-store/src/fs",
         ):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
+        self.prepare_config_paths()
+
+    def prepare_config_paths(self):
+        src = self.root / "crates/orbit-config/src"
+        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
+                         "unknown.rs", "config_io.rs", "crew_defaults.rs", "resolved/compatibility.rs"):
+            path = src / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("")
+        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
+            (src / relative).mkdir(exist_ok=True)
+
+    def test_missing_config_scan_paths_fail_closed(self):
+        src = self.root / "crates/orbit-config/src"
+        for relative in ("aliases.rs", "registry"):
+            with self.subTest(path=relative):
+                path = src / relative
+                parked = path.with_name(path.name + ".parked")
+                path.rename(parked)
+                try:
+                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("dependency direction guard passed", result.stdout)
+                finally:
+                    parked.rename(path)
+
+    def test_missing_scan_paths_fail_closed(self):
+        for relative in ("task", "contracts", "automation"):
+            with self.subTest(path=relative):
+                path = self.app / relative
+                path.rmdir()
+                try:
+                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("dependency direction guard passed", result.stdout)
+                finally:
+                    path.mkdir()
 
     def check_import(self, relative, source, rejected):
         path = self.app / relative
@@ -845,7 +885,7 @@ class RelativeImportTests(unittest.TestCase):
         finally:
             for path in paths:
                 path.unlink(missing_ok=True)
-            shutil.rmtree(src.parent, ignore_errors=True)
+            self.prepare_config_paths()
 
     def test_config_registry_cannot_name_resolved(self):
         snapshot = "registry/settings/snapshot.rs"
@@ -902,7 +942,6 @@ class RelativeImportTests(unittest.TestCase):
         )], rejected=True, base=src)
         for leaf, source in (
             ("aliases.rs", "use crate::registry::read_optional;"),
-            ("attention.rs", "use crate::registry::ConfigSnapshot;"),
             ("seeding.rs", "use crate::{describe_config_key, raw::Probe};"),
         ):
             with self.subTest(leaf=leaf):

@@ -1349,6 +1349,14 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
+        config = self.root / "crates/orbit-config/src"
+        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
+                         "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
+            path = config / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
+            (config / relative).mkdir(exist_ok=True)
         (self.root / "Cargo.toml").write_text(
             '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
         )
@@ -2212,6 +2220,23 @@ class OrphanModuleTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r"^test (.*) \.\.\. ok$", executed.stdout,
                                         re.MULTILINE)), expected)
 
+    def test_disconnected_directory_modules_and_sibling_tests_are_rejected(self):
+        self.write_source("lib.rs", "mod foo;\n#[cfg(test)] mod tests;\n")
+        self.write_source("foo/mod.rs", "mod child;\n")
+        self.write_source("foo/child.rs", "#[test] fn child_runs() {}\n")
+        self.write_source("tests/mod.rs", "mod case;\n")
+        self.write_source("tests/case.rs", "#[test] fn case_runs() {}\n")
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.write_source("lib.rs", "// both declarations removed\n")
+        self.compile_and_execute(set())
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            "crates/fixture/src/foo/mod.rs", "crates/fixture/src/foo/child.rs",
+            "crates/fixture/src/tests/mod.rs", "crates/fixture/src/tests/case.rs",
+        })
+
     def test_spaced_and_escaped_paths_register_only_compiler_destinations(self):
         # Source spellings are Rust escapes, not Python's decoded strings.
         variants = (
@@ -2339,8 +2364,8 @@ class OrphanModuleTests(unittest.TestCase):
         self.check_trailing_comment_paths("live.rs")
 
     def test_trailing_comment_paths_reject_uncompiled_default_files(self):
-        # mod.rs is exempt from candidate checks: a missed override otherwise
-        # silently licenses the default sibling without any false-positive clue.
+        # A directory owner is registered only by its actual declaring path;
+        # a missed override must not license the default sibling.
         self.check_trailing_comment_paths("mod.rs")
 
     def test_symlinked_crate_roots_register_only_their_logical_children(self):
@@ -2718,6 +2743,74 @@ class OrphanModuleTests(unittest.TestCase):
             ("orphan module", "crates/fixture/src/unregistered/chosen.rs"),
             ("orphan test module", "crates/fixture/src/tests/chosen.rs"),
         })
+
+
+class ScriptFailClosedTests(unittest.TestCase):
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="script-fail-closed-", dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "scripts").mkdir()
+
+    def test_public_ids_after_test_only_non_module_items_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        for item in ("use std::fmt;", "fn helper() {}", "const HELPER: u8 = 0;"):
+            with self.subTest(item=item):
+                source.write_text('#[cfg(test)]\n' + item + '\nmod production {\n'
+                                  '    pub const LABEL: &str = "ORB-12345";\n}\n')
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ORB-12345", result.stderr)
+
+    def test_crate_guides_require_ripgrep(self):
+        guard = self.root / "scripts/check-crate-agent-guides.sh"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        crates = self.root / "crates"
+        for name in ("orbit-cli", "orbit-cmd", "orbit-common", "orbit-core", "orbit-engine",
+                     "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
+            directory = crates / name
+            directory.mkdir(parents=True)
+            (directory / "CLAUDE.md").write_text("Guide\n")
+            (directory / "AGENTS.md").symlink_to("CLAUDE.md")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        for tool in ("dirname", "find", "sort", "readlink"):
+            (bin_dir / tool).symlink_to(shutil.which(tool))
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True,
+                                env=dict(os.environ, PATH=str(bin_dir)))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ripgrep", result.stderr)
+
+    def test_cache_rejects_unset_or_empty_home_before_any_path_operation(self):
+        guard = SCRIPTS / "compiler-cache.sh"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        marker = self.root / "path-operation"
+        # Never let a regressed HOME check actually touch /compiler or /bin.
+        for tool in ("mkdir", "rm", "curl", "dirname", "sccache"):
+            stub = bin_dir / tool
+            stub.write_text('#!/bin/sh\n: > "$PATH_OPERATION"\nexit 99\n')
+            stub.chmod(0o755)
+        for home in (None, ""):
+            for command in (("status",), ("setup", "--install"), ("remove", "--yes")):
+                with self.subTest(home=home, command=command):
+                    env = dict(os.environ, PATH=str(bin_dir), PATH_OPERATION=str(marker))
+                    env.pop("HOME", None)
+                    env.pop("SCCACHE_DIR", None)
+                    if home is not None:
+                        env["HOME"] = home
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run(["/bin/bash", str(guard), *command], env=env,
+                                            text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("HOME is unset", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertFalse(marker.exists(), "derived a path before rejecting HOME")
 
 
 class PythonPreflightTests(unittest.TestCase):

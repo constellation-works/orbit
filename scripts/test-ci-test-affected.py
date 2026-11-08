@@ -70,7 +70,9 @@ class AffectedTestGateTests(unittest.TestCase):
     """Exercise the gate against real Git diffs and a non-compiling Cargo fixture."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "scripts").mkdir()
@@ -332,10 +334,10 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertFalse(any("--no-fail-fast" in call for call in self.calls()),
                          "a renamed test must be checked before any remaining tests run")
 
-    def test_a_workflow_edit_is_checked_even_when_no_crate_is_selected(self):
+    def test_a_workflow_edit_selects_its_reader_and_checks_macos_filters(self):
         (self.root / ".github/workflows").mkdir(parents=True)
         (self.root / ".github/workflows/ci-macos.yml").write_text("name: macOS Platform\n")
-        self.assertEqual(self.selected(), [])
+        self.assertIn("orbit-engine", self.selected())
         result = self.gate(GUARD_TEST_MACOS_EXIT="7")
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(self.macos_checks(), 1)
@@ -372,6 +374,56 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 self.git("checkout", "--", path)
         (self.root / "scripts/build-budget.py").write_text("changed\n")
         self.assertEqual(self.selected(), sorted(set(self.core_dependents + ["orbit-engine"])))
+
+    def test_repository_readers_select_their_cargo_tests(self):
+        readers = {
+            "scripts/test-qa-full-sweep.py": self.core_dependents,
+            "scripts/ci-test-affected.py": self.core_dependents,
+            "scripts/check_npm_package.py": self.core_dependents,
+            "crates/orbit-core/assets/executors/codex.yaml": self.core_dependents,
+            "crates/orbit-engine/tests/engine/pr_landing/fixtures/base-refresh-forge.sh": sorted({*self.core_dependents, "orbit-engine"}),
+            "scripts/ci-await-jobs.py": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/ci.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/ci-macos.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/website-check.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/codeql.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            "scripts/release-readiness-adapter.py": sorted({*self.core_dependents, "orbit-engine"}),
+            "examples/release-readiness/scripts/release-readiness.yaml": sorted({*self.core_dependents, "orbit-engine"}),
+            "docs/design/auto-tasks/1_overview.md": self.core_dependents,
+            "plugin/skills/orbit-setup/references/auto-tasks.md": self.core_dependents,
+            "crates/orbit-tools/tests/fixtures/plugins/uv-example/plugin.yaml": ["orbit-cli", "orbit-tools"],
+        }
+        for relative, expected in readers.items():
+            with self.subTest(path=relative):
+                path = self.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                previous = path.read_text() if path.exists() else None
+                path.write_text((previous or "") + "# changed\n")
+                try:
+                    self.assertEqual(self.selected(), expected)
+                    if relative == "scripts/test-qa-full-sweep.py":
+                        paths = self.root / ".scratch/changed-paths"
+                        paths.parent.mkdir(exist_ok=True)
+                        paths.write_text(relative + "\n")
+                        original = self.metadata.read_text()
+                        metadata = json.loads(original)
+                        for name in ("orbit-auth", "orbit-exec", "orbit-policy", "orbit-store"):
+                            metadata["workspace_members"].append(name)
+                            metadata["packages"].append(dict(
+                                id=name, name=name, manifest_path=str(self.root / "crates" / name / "Cargo.toml"),
+                                dependencies=[], targets=[dict(name=name, kind=["lib"], doctest=True)]))
+                        self.metadata.write_text(json.dumps(metadata))
+                        try:
+                            result = self.gate("--pull-request-scope", str(paths))
+                        finally:
+                            self.metadata.write_text(original)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("orbit-core", result.stdout.splitlines()[0])
+                finally:
+                    if previous is None:
+                        path.unlink()
+                    else:
+                        path.write_text(previous)
 
     def test_unknown_declared_reader_fails_closed(self):
         metadata = json.loads(self.metadata.read_text())
