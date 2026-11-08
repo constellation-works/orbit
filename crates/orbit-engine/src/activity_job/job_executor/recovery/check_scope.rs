@@ -6,7 +6,9 @@ use std::path::Path;
 
 use orbit_types::identity::lower_hex;
 use orbit_types::task::ContextWideningStep;
-use orbit_types::workflow::{PrAutoFixBlocker, pr_auto_fix_attempts};
+use orbit_types::workflow::{
+    PR_AUTO_FIX_NO_EDIT_RERUN_EVENT, PrAutoFixBlocker, PrAutoFixNoEditRerun, pr_auto_fix_attempts,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -47,12 +49,35 @@ pub(super) fn instruction(run: &str, step: &str, failure: &str) -> String {
          not restrict this admitted CI repair, including shared-base defects. No unrelated \
          work, CI workflow or gate changes, metadata or secrets. Orbit checks this record \
          against the admitted head and actual edits before committing; missing, stale or \
-         unexplained edits refuse the repair. The record does not grant authority."
+         unexplained edits refuse the repair. The record does not grant authority. If the \
+         failure is not caused by the candidate (a flake or infrastructure failure), make \
+         no edit and write no record: Orbit reruns the failed checks once on the unchanged \
+         head instead of committing a repair."
     )
 }
 
 fn refused(detail: impl std::fmt::Display) -> RecoveryCommitRefusal {
     RecoveryCommitRefusal::Uncommittable(format!("CI repair scope: {detail}"))
+}
+
+/// What binding an admitted check repair decided.
+pub(super) enum CheckScopeBind {
+    /// The repair explained its edits; commit it before the retry.
+    Bound,
+    /// The repair made no edit and wrote no scope record. Nothing is
+    /// committed; the retry reruns completion on the unchanged head, where
+    /// the watcher reruns the failed checks once.
+    NoEdit,
+}
+
+/// Whether the worktree holds a delivery edit outside `.orbit/` scratch.
+fn worktree_has_delivery_edit(root: &Path) -> Result<bool, RecoveryCommitRefusal> {
+    let status = git_output(root, &["status", "--porcelain"]).map_err(refused)?;
+    Ok(status.lines().any(|line| {
+        let path = line.get(3..).unwrap_or_default();
+        let path = path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"');
+        !path.is_empty() && path != ".orbit" && !path.starts_with(".orbit/")
+    }))
 }
 
 /// Require a host admission for this exact run/head, then bind explanations.
@@ -62,7 +87,7 @@ pub(super) fn bind(
     step: &JobV2Step,
     failure: &str,
     bound: &mut Value,
-) -> Result<(), RecoveryCommitRefusal> {
+) -> Result<CheckScopeBind, RecoveryCommitRefusal> {
     if bound
         .pointer("/failed_step_input/auto_fix")
         .and_then(Value::as_bool)
@@ -117,8 +142,23 @@ pub(super) fn bind(
         .ok_or_else(|| refused("no durable CI repair admission for this run, PR and head"))?;
     let relative = report_path(&ctx.run_id, &step.id, failure);
     // Refuse scratch symlinks as well as a symlink in place of the report.
+    // An absent record is a repair outcome, not an OS error: with no edit
+    // it hands the head to the one rerun; with edits it refuses in words.
     for part in [".orbit", ".orbit/tmp", relative.as_str()] {
-        let metadata = std::fs::symlink_metadata(root.join(part)).map_err(refused)?;
+        let metadata = match std::fs::symlink_metadata(root.join(part)) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if worktree_has_delivery_edit(root)? {
+                    return Err(refused(
+                        "the CI repair changed files but wrote no scope record; \
+                         no scope record was written, so no edit is explained",
+                    ));
+                }
+                record_no_edit_rerun(ctx, step, failure, task, &owner_run, pr, &head, &admitted)?;
+                return Ok(CheckScopeBind::NoEdit);
+            }
+            Err(error) => return Err(refused(error)),
+        };
         if metadata.file_type().is_symlink() || (part == relative && !metadata.is_file()) {
             return Err(refused("scope record traverses a symlink"));
         }
@@ -174,6 +214,69 @@ pub(super) fn bind(
         .map_err(refused)?;
     bound["ci_repair_paths"] = json!(paths);
     bound["ci_repair_evidence"] = evidence;
+    Ok(CheckScopeBind::Bound)
+}
+
+/// Record a no-edit repair durably before the retry, so the completion
+/// watcher reruns the failed checks once on this head instead of admitting
+/// another repair or holding as a duplicate. The admitted attempt already
+/// spent one auto-fix attempt for the head.
+#[allow(clippy::too_many_arguments)]
+fn record_no_edit_rerun(
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    failure: &str,
+    task: &str,
+    owner_run: &str,
+    pr: &str,
+    head: &str,
+    admitted: &orbit_types::workflow::PrAutoFixAttempt,
+) -> Result<(), RecoveryCommitRefusal> {
+    let record = PrAutoFixNoEditRerun {
+        pr_number: pr.to_string(),
+        head_sha: head.to_string(),
+        run_id: ctx.run_id.clone(),
+        attempt: admitted.attempt,
+    };
+    let note = serde_json::to_string(&record).map_err(refused)?;
+    let history = ctx.host.get_task_history(task).map_err(refused)?;
+    if !history.iter().any(|entry| {
+        entry.event == PR_AUTO_FIX_NO_EDIT_RERUN_EVENT && entry.note.as_deref() == Some(&note)
+    }) {
+        ctx.host
+            .apply_task_automation_update(
+                task,
+                crate::context::TaskAutomationUpdate {
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into(),
+                        note: Some(note),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..crate::context::TaskAutomationUpdate::default()
+                },
+            )
+            .map_err(refused)?;
+    }
+    let evidence = json!({
+        "schema_version": 1, "run_id": ctx.run_id, "owner_run_id": owner_run, "step": step.id,
+        "admission": admitted, "failed_head": head, "outcome": "no_edit_no_scope_record",
+        "reason": "the CI repair made no edit and wrote no scope record; the failed checks rerun once on the unchanged head",
+        "failure": bounded_recovery_text("CI repair failure", &ctx.run_id, failure, MAX_RECOVERY_ERROR_MESSAGE_BYTES),
+    });
+    let retained = orbit_common::security::redaction::redact_all_json(evidence);
+    ctx.host
+        .attach_task_validation_log(
+            task,
+            owner_run,
+            &format!("auto-fix/{}/no-edit-{head}.json", ctx.run_id),
+            serde_json::to_vec(&retained).map_err(refused)?,
+        )
+        .map_err(refused)?;
     Ok(())
 }
 

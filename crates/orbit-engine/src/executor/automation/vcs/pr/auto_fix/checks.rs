@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
+use orbit_types::workflow::{
+    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, pr_auto_fix_no_edit_reruns,
+};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -151,6 +153,43 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
     let tip = commit_sha(workspace, &base_ref)?;
     let base = git_output(workspace, &["merge-base", head, &tip])?;
+    // A repair that made no edit already spent its auto-fix attempt for this
+    // head. Rerun its failed checks once on the unchanged head instead of
+    // admitting another repair; a head whose rerun already failed stops.
+    if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
+        if ci_rerun_recorded(host, auto_fix, head) {
+            return Ok(CiRerunRecovery::Stopped(format!(
+                "the CI repair made no edit and wrote no scope record; its one rerun of the \
+                 failed checks on head {head} failed again, so no further repair or rerun runs \
+                 for this head"
+            )));
+        }
+        match super::super::super::landing::checks::request_no_edit_repair_rerun(
+            host,
+            workspace,
+            &auto_fix.task_ids,
+            status,
+            &failed,
+            base.trim(),
+            base_name.strip_prefix("origin/").unwrap_or(&base_name),
+            deadline_ms,
+        )? {
+            super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+                return Ok(CiRerunRecovery::BackingOff(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::Wait(reason)
+            | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+                return Ok(CiRerunRecovery::Waiting(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::Acted(_) => {
+                return Ok(CiRerunRecovery::Retried);
+            }
+            super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+                return Ok(CiRerunRecovery::Stopped(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::NotEligible => {}
+        }
+    }
     match super::super::super::landing::checks::plan_ci_rerun(
         host,
         workspace,
@@ -199,6 +238,41 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     /// The retry budget is spent on stopped jobs or logged infrastructure
     /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
+}
+
+/// Whether a repair of `head` on a task this run watches ended with no
+/// edit and no scope record. An unreadable history is no record.
+fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    pr_number: &str,
+    head: &str,
+) -> bool {
+    auto_fix.task_ids.iter().any(|task| {
+        host.get_task_history(task).is_ok_and(|history| {
+            pr_auto_fix_no_edit_reruns(&history, pr_number)
+                .iter()
+                .any(|record| record.head_sha == head)
+        })
+    })
+}
+
+/// Whether a CI rerun was already sent for `head` on a task this run
+/// watches. An unreadable history is no record.
+fn ci_rerun_recorded<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    head: &str,
+) -> bool {
+    auto_fix.task_ids.iter().any(|task| {
+        host.get_task_history(task).is_ok_and(|history| {
+            history
+                .iter()
+                .filter(|entry| entry.event == "ci_check_rerun")
+                .filter_map(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok())
+                .any(|note| note["head"].as_str() == Some(head))
+        })
+    })
 }
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the

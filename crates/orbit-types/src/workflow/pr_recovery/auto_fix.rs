@@ -23,6 +23,32 @@ pub const PR_AUTO_FIX_ADMITTED_EVENT: &str = "pr_auto_fix_admitted";
 /// History event recording a repaired head the watcher published.
 pub const PR_AUTO_FIX_PUSHED_EVENT: &str = "pr_auto_fix_pushed";
 
+/// History event recording an admitted check repair that made no edit and
+/// wrote no scope record: the repair judged the failure not caused by the
+/// candidate, so the watcher reruns the failed checks once on the same head.
+pub const PR_AUTO_FIX_NO_EDIT_RERUN_EVENT: &str = "pr_auto_fix_no_edit_rerun";
+
+/// One no-edit check repair, as recorded in task history. The repair attempt
+/// that produced it already spent one auto-fix attempt for the head; the
+/// rerun it triggers additionally reserves the head's shared CI rerun budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixNoEditRerun {
+    pub pr_number: String,
+    pub head_sha: String,
+    pub run_id: String,
+    pub attempt: u32,
+}
+
+/// Every no-edit repair recorded for `pr_number`, oldest first.
+pub fn pr_auto_fix_no_edit_reruns(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Vec<PrAutoFixNoEditRerun> {
+    ledger_notes(history, PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
+        .filter(|record: &PrAutoFixNoEditRerun| record.pr_number == pr_number)
+        .collect()
+}
+
 /// History event recording a failed head held for an inherited base failure.
 pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
 

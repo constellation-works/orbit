@@ -141,5 +141,7 @@ pub(in crate::executor::automation::vcs) use recovery::{
     CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,
 };
 
-pub(in crate::executor::automation::vcs) use rerun::{CiRerunStep, plan_ci_rerun};
+pub(in crate::executor::automation::vcs) use rerun::{
+    CiRerunStep, plan_ci_rerun, request_no_edit_repair_rerun,
+};
 pub(in crate::executor::automation::vcs) use review_watch::classify_watched_failures;

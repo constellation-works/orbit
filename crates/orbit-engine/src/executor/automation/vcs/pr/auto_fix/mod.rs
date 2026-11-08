@@ -58,6 +58,11 @@
 //! pull request (or, for a reviewed head, hands it to the re-review round)
 //! before it watches the new head. The published head is recorded in the
 //! ledger, so a later round or a resume pins the head this run published.
+//! A repair that makes no edit and writes no scope record judged the
+//! failure not caused by the candidate: nothing is committed, the no-edit
+//! outcome is recorded against its already-spent attempt, and the watcher
+//! reruns the failed required checks once on the unchanged head through
+//! the shared CI rerun budget. Only a rerun that fails again stops.
 //!
 //! [`head_check_evidence`]: super::super::landing::checks::head_check_evidence
 

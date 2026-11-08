@@ -980,6 +980,10 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
     let aggregate = host.scripted.lock().unwrap()["test_ci_repair"]["aggregate"]
         .as_str()
         .map(ToOwned::to_owned);
+    let repair_mode = host.scripted.lock().unwrap()["test_ci_repair"]["mode"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let contract = |commit: &str| git(&host.repo, &["show", &format!("{commit}:src/contract")]);
     match operation {
         "pr.required_checks" => {
@@ -1065,6 +1069,25 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         "ci.job_log" => Some(
             json!({"log":"error: src/contract: expected fixed, found broken\nsource contract failed"}),
         ),
+        // The no-edit rerun's authenticated plan, echoing the exact roots
+        // the planner classified from the jobs and logs above.
+        "ci.rerun_plan" if repair_mode.starts_with("no_edit") => Some(json!({"plan":{
+            "schema_version":1, "repository":"orbit/test", "repository_id":500,
+            "pr_number":input["pr"], "head_sha":input["head_sha"],
+            "head_branch":input["head_branch"], "base_branch":input["base_branch"],
+            "accepted_base":input["accepted_base"], "run_id":input["run_id"],
+            "run_attempt":1, "workflow_id":900, "roots":input["roots"],
+            "failed_jobs":[{"id":input["roots"][0]["job_id"]}],
+            "authentication":{},
+        }})),
+        // Sending the rerun flips the forge's checks only on the green row;
+        // the red row's rerun concludes with the same source-contract failure.
+        "ci.rerun_failed" if repair_mode.starts_with("no_edit") => {
+            if repair_mode == "no_edit_green" {
+                fs::write(forge.join("checks"), "success\n").unwrap();
+            }
+            Some(json!({"stdout":"", "stderr":""}))
+        }
         "ci.check_annotations" => {
             let aggregate = aggregate.unwrap_or_default();
             let head = input["head_sha"].as_str().unwrap();
@@ -1127,6 +1150,10 @@ pub(super) fn perform_ci_repair(
         .insert("test_ci_repair".into(), input.clone());
     let error = input["error_message"].as_str().unwrap();
     assert!(is_check_repair(error), "{mode}: {error}");
+    if mode.starts_with("no_edit") {
+        // The failure is not the candidate's: no edit, no scope record.
+        return Ok(json!({"summary":"failure is not caused by the candidate; no edit"}));
+    }
     let report = error
         .split("before writing retry, write ")
         .nth(1)
@@ -1280,6 +1307,13 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                     _ => "CI repair scope",
                 };
                 assert!(error.contains(expected), "{mode}: {error}");
+                if mode == "missing" {
+                    assert!(
+                        error.contains("wrote no scope record")
+                            && !error.contains("No such file or directory"),
+                        "an edit with no scope record refuses in words, not as an OS error: {error}"
+                    );
+                }
                 if matches!(mode, "budget" | "review_required") {
                     assert!(
                         !host
@@ -1311,6 +1345,73 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                 }
             );
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+        },
+    );
+}
+
+/// A check repair that makes no edit and writes no scope record reruns the
+/// failed checks once on the unchanged head instead of blocking. A green
+/// rerun clears the head; a red rerun stops in words. The spent repair
+/// attempt and the one recorded rerun bound both rows.
+#[test]
+fn no_edit_check_repair_reruns_failed_checks_once() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_reruns_failed_checks_once",
+        "no_edit_green no_edit_red",
+        |mode, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let outcome = run_repair_job(&host, auto_fix_input(&fx));
+            let history = host.history(TASK_ID);
+            let reruns = history
+                .iter()
+                .filter(|entry| entry.event == "ci_check_rerun")
+                .count();
+            assert!(
+                history.iter().any(|entry| {
+                    entry.event == orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT
+                }),
+                "{mode}: the no-edit repair is recorded"
+            );
+            assert_eq!(reruns, 1, "{mode}: exactly one rerun is sent");
+            assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert_candidate_head_unchanged(&fx, mode);
+            if mode == "no_edit_green" {
+                let result = outcome.expect(mode);
+                assert!(result.success, "{result:?}");
+                assert_eq!(
+                    result.pipeline["complete_pr"]["merge"]["reason"], "auto_fix_mergeable",
+                    "{mode}"
+                );
+                assert_eq!(
+                    result.pipeline["complete_pr"]["merge"]["head_sha"], fx.candidate,
+                    "{mode}: the green rerun clears the unchanged head"
+                );
+            } else {
+                let error = match outcome {
+                    Ok(result) => {
+                        assert!(!result.success, "{mode}: {result:?}");
+                        result.message.unwrap_or_default()
+                    }
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains("made no edit and wrote no scope record")
+                        && error.contains("failed again"),
+                    "{mode}: {error}"
+                );
+                assert!(
+                    !error.contains("No such file or directory"),
+                    "{mode}: {error}"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+            }
         },
     );
 }
@@ -2895,7 +2996,18 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                     "{case}: recovery grants no merge"
                 );
                 if !case.starts_with("dirty_") {
-                    assert_eq!(repair_attempts(&host).len(), 1, "{case}: one source repair");
+                    // The stub recovery makes no edit, so completion retries
+                    // on the unchanged head; on the then-dirty row that retry
+                    // also admits the conflict repair. The source (failed
+                    // checks) repair itself is still admitted exactly once.
+                    assert_eq!(
+                        repair_attempts(&host)
+                            .iter()
+                            .filter(|attempt| attempt.blocker == PrAutoFixBlocker::FailedChecks)
+                            .count(),
+                        1,
+                        "{case}: one source repair"
+                    );
                 }
                 return;
             }
