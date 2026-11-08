@@ -18,8 +18,10 @@
 #   it) settles superseded with its reason.
 # - Automatic (no task_ids): every qualifying task, oldest task first, up to
 #   max_tasks.
-# - State-triggered: the seeded `pilot_warning_triage` routine
-#   (`kind: pilot_warnings_held`) submits one crew-homogeneous batch per run.
+# - Manual: run from the dashboard's Triage action or via
+#   `orbit run job escalation_triage_pipeline`. The retired
+#   `pilot_warning_triage` routine (`kind: pilot_warnings_held`) no longer
+#   submits runs.
 #
 # Prepare pins one landing-branch revision without touching the primary
 # checkout. Outside a Git work tree it pins none (`source_revision` null),
@@ -42,8 +44,8 @@
 #
 # There is no apply step. Each triager records its decision through
 # `orbit.task.block_triage`, which writes one comment, one decision request
-# and one `pilot_warning_triaged` history marker; the routine settles each
-# member from that marker, never from the agent's final message.
+# and one `pilot_warning_triaged` history marker; historical routine member
+# settlement read that marker, never the agent's final message.
 
 schemaVersion: 2
 kind: Job
