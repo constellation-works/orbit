@@ -20,8 +20,9 @@ use super::git::{
     verify_direct_remote_target,
 };
 use super::handoff::{
-    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, completed_task_ids_from_input,
-    load_handoff_context, record_failed_handoff,
+    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, comment_already_recorded,
+    completed_task_ids_from_input, forge_hold_operation_id, load_handoff_context,
+    record_failed_handoff,
 };
 use super::operations;
 use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
@@ -172,12 +173,9 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
         hold.waited_ms / 1000,
         hold.diagnostic,
     );
+    let operation_id = forge_hold_operation_id(&context.batch_id);
     for task in &context.tasks {
-        if host
-            .get_task_comments(&task.id)?
-            .iter()
-            .any(|comment| comment.message.starts_with(&header))
-        {
+        if comment_already_recorded(&host.get_task_comments(&task.id)?, &operation_id, &header) {
             continue;
         }
         host.apply_task_automation_update(
@@ -187,7 +185,7 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
-                    operation_id: None,
+                    operation_id: Some(operation_id.clone()),
                 }],
                 ..TaskAutomationUpdate::default()
             },

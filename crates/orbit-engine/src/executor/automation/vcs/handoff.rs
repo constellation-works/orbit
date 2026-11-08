@@ -16,6 +16,52 @@ use super::pr::meaningful_execution_summary;
 
 pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 
+/// Idempotency key for the forge-hold comment of one batch.
+pub(super) fn forge_hold_operation_id(batch_id: &str) -> String {
+    format!("forge-hold:{batch_id}")
+}
+
+/// Idempotency key for the failed-handoff comment of one batch and phase.
+pub(super) fn failed_handoff_operation_id(batch_id: &str, phase: FailedHandoffPhase) -> String {
+    format!("pr-handoff-failed:{batch_id}:{}", phase.label())
+}
+
+/// Whether a once-per-key comment carrying `operation_id` is already on the
+/// task. The typed receipt is authoritative; the text form is only the
+/// legacy fallback below.
+pub(super) fn comment_already_recorded(
+    comments: &[TaskComment],
+    operation_id: &str,
+    legacy_prefix: &str,
+) -> bool {
+    comments.iter().any(|comment| {
+        match comment
+            .operation_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+        {
+            Some(id) => id == operation_id,
+            // Legacy fallback: comments written before the typed receipt
+            // carried the key in their message text instead. Retire 30 days
+            // after this ships, in the style of `legacy_text_receipt`.
+            None => {
+                comment.by == FAILED_HANDOFF_ACTOR && comment.message.starts_with(legacy_prefix)
+            }
+        }
+    })
+}
+
+/// Idempotency key and legacy text prefix for a review-repair comment,
+/// derived from its recipe body: `review-repair-after-merge:<pr_number>`.
+pub(super) fn review_repair_comment_key(body: &str) -> Option<(String, String)> {
+    let prefix = review_repair_prefix(body)?;
+    let pr_number = prefix.rsplit('#').next()?;
+    Some((
+        format!("review-repair-after-merge:{pr_number}"),
+        prefix.to_string(),
+    ))
+}
+
 /// The durable execution-summary first line that blocks delivery.
 const DELIVERY_FAILED_LINE: &str = "Outcome: failed";
 
@@ -263,18 +309,17 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     // blocks the task and copies this error, recipe included, into the summary.
     let block = repair.is_some() && host.worker_invocation().is_none();
 
+    let (operation_id, legacy_prefix) = match repair.as_deref().and_then(review_repair_comment_key)
+    {
+        Some((key, prefix)) => (key, prefix),
+        None => (
+            failed_handoff_operation_id(&context.batch_id, phase),
+            header.clone(),
+        ),
+    };
     for task in &context.tasks {
         let comments = host.get_task_comments(&task.id)?;
-        let duplicate = if let Some(prefix) = repair.as_deref().and_then(review_repair_prefix) {
-            comments
-                .iter()
-                .any(|comment| comment.message.starts_with(prefix))
-        } else {
-            comments
-                .iter()
-                .any(|comment| comment.message.starts_with(&header))
-        };
-        if duplicate {
+        if comment_already_recorded(&comments, &operation_id, &legacy_prefix) {
             continue;
         }
         host.apply_task_automation_update(
@@ -290,7 +335,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
-                    operation_id: None,
+                    operation_id: Some(operation_id.clone()),
                 }],
                 ..TaskAutomationUpdate::default()
             },
