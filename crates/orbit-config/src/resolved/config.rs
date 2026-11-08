@@ -53,6 +53,8 @@ pub struct PrSettings {
     /// Log-line prefixes that mark a failed CI job as an infrastructure failure
     /// (`workflow.ci_infrastructure_signatures`). Empty declares none.
     pub ci_infrastructure_signatures: Vec<String>,
+    /// Bounded, backed-off retries of logged infrastructure failures.
+    pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
     /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
     /// shape what a delivery publishes.
     pub conventions: orbit_types::workflow::DeliveryConventions,
@@ -132,6 +134,10 @@ impl ResolvedConfig {
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures
                     .clone(),
+                ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy {
+                    max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
+                    backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
+                },
                 conventions: snapshot.delivery_conventions(),
             },
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
@@ -373,6 +379,10 @@ impl ResolvedConfig {
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures
                     .clone(),
+                ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy {
+                    max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
+                    backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
+                },
                 conventions: snapshot.delivery_conventions(),
             },
             workflow_base_branch: snapshot.workflow_base_branch.clone(),

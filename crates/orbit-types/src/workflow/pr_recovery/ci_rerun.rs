@@ -1,4 +1,4 @@
-//! One unchanged-head CI retry, reserved before external mutation.
+//! Unchanged-head CI retries, reserved before external mutation.
 use crate::task::TaskHistoryEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,20 +38,80 @@ pub struct CiRerunPlan {
     pub authentication: Value,
 }
 
+/// Owner-configured budget for logged infrastructure/transient failures.
+/// Conclusion-only cancellations/timeouts and flaky failures retain one rerun.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CiInfrastructureRetryPolicy {
+    pub max_attempts: u32,
+    pub backoff_seconds: u64,
+}
+
+impl Default for CiInfrastructureRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            backoff_seconds: 60,
+        }
+    }
+}
+
+/// A logged transient set can use the infrastructure budget. A candidate or
+/// flaky sibling, or a conclusion-only stop, cannot expand its authorization.
+pub fn ci_rerun_is_infrastructure(plan: &CiRerunPlan) -> bool {
+    !plan.roots.is_empty()
+        && plan.roots.iter().all(|root| {
+            root.classification == "transient" && !root.signature.starts_with("concluded ")
+        })
+}
+
 /// Admission is atomic under the owning task/claim boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiRerunAdmission {
     Reserved,
+    /// A durable prior reservation imposes this absolute not-before.
+    Backoff {
+        not_before_ms: u64,
+    },
+    /// No source repair is authorized by exhaustion of infrastructure retries.
+    InfrastructureExhausted {
+        attempts: u32,
+    },
     Observe(Box<CiRerunPlan>),
     Refused(String),
 }
 
-/// Never ignore malformed reservations or reuse a head's shared retry budget.
+/// Legacy one-rerun admission for consumers without infrastructure policy.
 pub fn decide_ci_rerun(history: &[TaskHistoryEntry], plan: &CiRerunPlan) -> CiRerunAdmission {
-    if plan.schema_version != 1 || plan.roots.is_empty() || plan.failed_jobs.is_empty() {
+    decide_ci_rerun_with_policy(
+        history,
+        plan,
+        CiInfrastructureRetryPolicy {
+            max_attempts: 1,
+            backoff_seconds: 0,
+        },
+        u64::MAX,
+    )
+}
+
+/// Decide under the owning task/claim lock; unknown sends consume a reservation.
+/// Only a newly authenticated provider attempt can spend the next reservation.
+pub fn decide_ci_rerun_with_policy(
+    history: &[TaskHistoryEntry],
+    plan: &CiRerunPlan,
+    policy: CiInfrastructureRetryPolicy,
+    now_ms: u64,
+) -> CiRerunAdmission {
+    if plan.schema_version != 1
+        || plan.roots.is_empty()
+        || plan.failed_jobs.is_empty()
+        || plan
+            .roots
+            .iter()
+            .any(|root| !matches!(root.classification.as_str(), "transient" | "flaky"))
+    {
         return CiRerunAdmission::Refused("incomplete CI retry authorization".into());
     }
-    let mut reserved: Option<CiRerunPlan> = None;
+    let mut reserved: Vec<(CiRerunPlan, u64)> = Vec::new();
     let mut legacy_spent = false;
     for entry in history {
         if entry.event == CI_RERUN_RESERVED_EVENT {
@@ -71,12 +131,20 @@ pub fn decide_ci_rerun(history: &[TaskHistoryEntry], plan: &CiRerunPlan) -> CiRe
                 && prior.pr_number == plan.pr_number
                 && prior.head_sha == plan.head_sha
             {
-                if reserved.as_ref().is_some_and(|existing| existing != &prior) {
-                    return CiRerunAdmission::Refused(
-                        "conflicting CI retry reservations for this head".into(),
-                    );
+                if let Some((existing, _)) = reserved.iter().find(|(existing, _)| {
+                    existing.run_id == prior.run_id && existing.run_attempt == prior.run_attempt
+                }) {
+                    if existing != &prior {
+                        return CiRerunAdmission::Refused(
+                            "conflicting CI retry reservations for this attempt".into(),
+                        );
+                    }
+                } else {
+                    reserved.push((
+                        prior,
+                        u64::try_from(entry.at.timestamp_millis()).unwrap_or(0),
+                    ));
                 }
-                reserved = Some(prior);
             }
         } else if entry.event == "ci_check_rerun" {
             let prior = entry
@@ -99,10 +167,35 @@ pub fn decide_ci_rerun(history: &[TaskHistoryEntry], plan: &CiRerunPlan) -> CiRe
             }
         }
     }
-    if let Some(prior) = reserved {
-        return CiRerunAdmission::Observe(Box::new(prior));
+    if let Some((prior, _)) = reserved
+        .iter()
+        .find(|(prior, _)| prior.run_id == plan.run_id && plan.run_attempt <= prior.run_attempt)
+    {
+        return CiRerunAdmission::Observe(Box::new(prior.clone()));
     }
-    if legacy_spent {
+    if let Some((prior, _)) = reserved.last() {
+        if !ci_rerun_is_infrastructure(plan) {
+            // Flaky and conclusion-only failures retain the shared one-rerun
+            // contract: observe its reservation even on a later attempt.
+            return CiRerunAdmission::Observe(Box::new(prior.clone()));
+        }
+        let attempts = u32::try_from(reserved.len()).unwrap_or(u32::MAX);
+        if attempts >= policy.max_attempts {
+            return CiRerunAdmission::InfrastructureExhausted { attempts };
+        }
+        let last_ms = reserved.iter().map(|(_, at)| *at).max().unwrap_or(0);
+        let delay_ms = policy
+            .backoff_seconds
+            .saturating_mul(1000)
+            .saturating_mul(1_u64 << attempts.saturating_sub(1).min(20));
+        let not_before_ms = last_ms.saturating_add(delay_ms);
+        if now_ms < not_before_ms {
+            return CiRerunAdmission::Backoff { not_before_ms };
+        }
+    } else if ci_rerun_is_infrastructure(plan) && policy.max_attempts == 0 {
+        return CiRerunAdmission::InfrastructureExhausted { attempts: 0 };
+    }
+    if legacy_spent && reserved.is_empty() {
         return CiRerunAdmission::Refused(
             "the shared unchanged-head CI retry budget is spent".into(),
         );

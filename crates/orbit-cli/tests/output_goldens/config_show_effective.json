@@ -385,6 +385,20 @@
         }
       ]
     },
+    "workflow.ci_infrastructure_retry.backoff_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.ci_infrastructure_retry.max_attempts": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.ci_infrastructure_signatures": {
       "scope": "built-in",
       "state": "default",

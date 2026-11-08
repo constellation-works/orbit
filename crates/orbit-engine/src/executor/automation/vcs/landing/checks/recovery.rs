@@ -190,6 +190,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             "{reason}; the failure was not classified ({why}), so the candidate stays in review"
         ))
     };
+    if let Some(reason) = super::rerun::infrastructure_backoff(
+        host,
+        std::slice::from_ref(&context.task_id),
+        head,
+        &pr.to_string(),
+    )? {
+        return Ok(CheckRecoveryStep::WaitForBase(reason));
+    }
     let head_jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
         Err(error) => {
@@ -409,21 +417,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     {
         return Ok(unclassified(unreadable_job_text(&jobs)));
     }
-    // A conclusion stop still has to reach the planner after its one rerun,
-    // so an exhausted budget records the jobs instead of a generic hold.
-    let conclusion_stop = jobs
-        .iter()
-        .any(|job| job.signature.starts_with("concluded "))
-        && jobs
-            .iter()
-            .all(|job| job.class == CheckFailureClass::Transient);
-    let planned = if has_aggregates
-        || (recovery.rerun
-            && jobs
-                .iter()
-                .all(|job| job.class == CheckFailureClass::Transient)
-            && !conclusion_stop)
-    {
+    let planned = if has_aggregates {
         Ok(super::rerun::CiRerunStep::NotEligible)
     } else {
         super::rerun::plan_ci_rerun(
@@ -469,7 +463,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         recovery.unreadable_rerun_cycles.remove(head);
     }
     match planned {
-        super::rerun::CiRerunStep::Wait(reason) => {
+        super::rerun::CiRerunStep::Backoff(reason) | super::rerun::CiRerunStep::Wait(reason) => {
             return Ok(CheckRecoveryStep::WaitForBase(reason));
         }
         super::rerun::CiRerunStep::Unreadable(reason) if unreadable_retry.is_none() => {
@@ -488,7 +482,16 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             return Ok(CheckRecoveryStep::Acted);
         }
         super::rerun::CiRerunStep::BudgetSpent(reason) => {
-            return Ok(CheckRecoveryStep::Stop(reason));
+            return Ok(CheckRecoveryStep::Stop(format!(
+                "{reason}; {}",
+                describe(
+                    jobs.iter()
+                        .map(|job| job.class)
+                        .max()
+                        .unwrap_or(CheckFailureClass::Candidate),
+                    &jobs,
+                )
+            )));
         }
         super::rerun::CiRerunStep::NotEligible => {}
     }

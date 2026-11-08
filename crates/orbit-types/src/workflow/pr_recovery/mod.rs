@@ -25,5 +25,6 @@ pub use infrastructure::{
 };
 
 pub use ci_rerun::{
-    CI_RERUN_RESERVED_EVENT, CiRerunAdmission, CiRerunPlan, CiRerunRoot, decide_ci_rerun,
+    CI_RERUN_RESERVED_EVENT, CiInfrastructureRetryPolicy, CiRerunAdmission, CiRerunPlan,
+    CiRerunRoot, ci_rerun_is_infrastructure, decide_ci_rerun, decide_ci_rerun_with_policy,
 };

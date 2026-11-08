@@ -11,7 +11,7 @@
 //! success counts [ORB-15677] [ORB-15812]. A failed check is classified from
 //! its job log: one inherited from the base updates the branch, and one that
 //! still fails on a base tip where the same job passes earns one repair
-//! [ORB-16322]; a transient one is rerun once, and the candidate's own earns
+//! [ORB-16322]; a transient one uses the configured retry budget, and the candidate's own earns
 //! one repair [ORB-15956].
 //! Evidence that cannot be read decides none of those and spends nothing,
 //! and a branch update is verified against the base as the provider merged
@@ -745,6 +745,7 @@ struct FakeForge {
     ops: Mutex<Vec<(String, Value)>>,
     updates: Mutex<Vec<HandoffLandingUpdate>>,
     history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    ci_retry_policy: orbit_types::workflow::CiInfrastructureRetryPolicy,
 }
 
 impl FakeForge {
@@ -767,6 +768,7 @@ impl FakeForge {
             ops: Mutex::default(),
             updates: Mutex::default(),
             history: Mutex::default(),
+            ci_retry_policy: Default::default(),
         }
     }
 
@@ -829,6 +831,12 @@ impl FakeForge {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        orbit_engine::PrConfig {
+            ci_infrastructure_retry: self.ci_retry_policy,
+            ..Default::default()
+        }
+    }
     fn apply_task_automation_update(
         &self,
         _task_id: &str,
@@ -843,12 +851,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         _tasks: &[String],
         _handoff: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         let mut history = self.history.lock().unwrap();
-        let decision = orbit_types::workflow::decide_ci_rerun(&history, plan);
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &history,
+            plan,
+            self.ci_retry_policy,
+            now_ms,
+        );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
             history.push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
+                at: chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
                 by: "owner".into(),
                 event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
                 note: Some(serde_json::to_string(plan).unwrap()),
@@ -934,7 +948,13 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         note: &str,
     ) -> Result<(), OrbitError> {
         if handoff_id != self.context.handoff_id
-            || !matches!(event, "ci_check_rerun" | "ci_base_suspect")
+            || !matches!(
+                event,
+                "ci_check_rerun"
+                    | "ci_base_suspect"
+                    | "ci_infrastructure_retry_backoff"
+                    | "ci_infrastructure_retry_exhausted"
+            )
         {
             return Err(OrbitError::InvalidInput(
                 "current handoff claim does not authorize this history event".into(),
@@ -1963,8 +1983,11 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                 "shared_budget",
                 "transient_after_flake",
             ] {
-                let (_sandbox, forge, head, base) =
+                let (_sandbox, mut forge, head, base) =
                     forge_fixture(true, matches!(case, "repair_spent" | "repeat_spent"));
+                if case == "transient_after_flake" {
+                    forge.ci_retry_policy.max_attempts = 1;
+                }
                 forge.job(
                     &head,
                     failed(
@@ -2029,7 +2052,11 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                         &forge,
                         case,
                         if case == "transient_after_flake" {
-                            &["classified `transient`", "one rerun"]
+                            &[
+                                "ci_infrastructure_retry_exhausted",
+                                "classification=transient",
+                                "attempts=1",
+                            ]
                         } else if case == "shared_budget" {
                             &["CI retry was reserved", "observing without resending"]
                         } else {
@@ -3044,13 +3071,14 @@ fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
     );
 }
 
-/// [ORB-15956] A check that failed on the network is rerun once before it is
-/// judged: a passing rerun lands, and a second transient failure stops in
-/// review with the classification rather than rerunning again.
+/// A one-attempt infrastructure budget retains the original rerun-once
+/// behavior: a passing rerun lands, and another transient failure records
+/// its exhausted classification and count without admitting source repair.
 #[test]
-fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
+fn a_transient_check_failure_respects_the_configured_retry_limit() {
     for (rerun, lands) in [(passed(1, 12), true), (failed(1, 12, NETWORK_FLAKE), false)] {
-        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
+        let (_sandbox, mut forge, candidate, _base) = forge_fixture(true, false);
+        forge.ci_retry_policy.max_attempts = 1;
         forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
         forge.state.lock().unwrap().after_rerun = Some(rerun);
 
@@ -3078,8 +3106,22 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
             assert_reason(
                 &forge,
                 "transient",
-                &["classified `transient`", "one rerun"],
+                &[
+                    "ci_infrastructure_retry_exhausted",
+                    "classification=transient",
+                    "attempts=1",
+                    "limit=1",
+                ],
             );
+            let history = forge.history.lock().unwrap();
+            let holds = history
+                .iter()
+                .filter(|entry| entry.event == "ci_infrastructure_retry_exhausted")
+                .collect::<Vec<_>>();
+            assert_eq!(holds.len(), 1);
+            let hold: Value = serde_json::from_str(holds[0].note.as_deref().unwrap()).unwrap();
+            assert_eq!(hold["classification"], "transient");
+            assert_eq!(hold["attempts"], 1);
         }
     }
 }

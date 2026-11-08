@@ -110,7 +110,7 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     )
 }
 
-/// Produce the first retry through the same planner as claimed landing.
+/// Recover CI through the same durable retry planner as claimed landing.
 #[allow(
     clippy::too_many_arguments,
     reason = "auto-fix recovery passes the pull status and deadline into the same planner landing uses"
@@ -166,6 +166,9 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         &auto_fix.run_id,
         observation,
     )? {
+        super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+            Ok(CiRerunRecovery::BackingOff(reason))
+        }
         super::super::super::landing::checks::CiRerunStep::NotEligible => {
             Ok(CiRerunRecovery::NotEligible)
         }
@@ -184,6 +187,8 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
 
 /// What the shared CI retry decided for this poll.
 pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
+    /// Infrastructure pacing holds independently of the planner evidence deadline.
+    BackingOff(String),
     /// The planner holds for the named reason. The caller bounds the hold:
     /// past its deadline the failure goes to the repair path.
     Waiting(String),
@@ -191,8 +196,8 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     Retried,
     /// The failure is not a CI retry. The caller may repair it.
     NotEligible,
-    /// The retry budget is spent on jobs that are still cancelled or timed
-    /// out. The reason names them. Do not admit a repair.
+    /// The retry budget is spent on stopped jobs or logged infrastructure
+    /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
 }
 
