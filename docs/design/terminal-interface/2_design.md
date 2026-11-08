@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-05
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -54,7 +54,7 @@ The eight per-domain wrappers this replaced (`status_color`/`_cell`, `priority_c
 
 `entry::run` resolves the sink and calls `sink.apply_color_policy()` (which overrides `colored`'s own detection process-wide); `entry/finish.rs` passes it to `output::render::emit` — the single consumer. There is no `OnceLock`: [ORB-10586] threaded the payload return through `Execute::execute`, which made the sink available as a renderer parameter, and removed the process-global `sink::install`/`sink::active` path. §9 records the remaining limitations.
 
-Both backends are now told, never asked: `Table::render_at` calls `enforce_styling()` or `force_no_tty()` from `sink.color_allowed()`, and `colored` is overridden at startup. `NO_COLOR=1` on a terminal therefore produces byte-identical output to a redirect on both a table-rendering and a line-rendering command. Table width comes from `sink.truncate_width()`, so a zero-width sink truncates nothing. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §1 and [./specs/color-and-styling.md](./specs/color-and-styling.md) §2 [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload), [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
+Both backends are now told, never asked: `Table::render_at` calls `enforce_styling()` or `force_no_tty()` from `sink.color_allowed()`, and `colored` is overridden at startup. `NO_COLOR=1` on a terminal therefore produces byte-identical output to a redirect on both a table-rendering and a line-rendering command. Table width comes from `sink.truncate_width()`, so a zero-width sink truncates nothing. Diagnostic summary prose wraps to the same width through `OutputSink::wrap_prose`, which `Block::Prose` selects for summary blocks [ORB-21940]; piped and machine-readable forms stay unwrapped. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §1 and [./specs/color-and-styling.md](./specs/color-and-styling.md) §2 [Terminal Output Is a Rendering of a Structured Payload](./4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload), [One Semantic Color Vocabulary, Gated at the Sink](./4_decisions.md#one-semantic-color-vocabulary-gated-at-the-sink).
 
 **Mode now drives the success path too.** A command returns a payload — a JSON document plus the blocks of its human view — and `output::render::emit` projects it into `table`, plain, `json`, or `ndjson` [ORB-10586]. `--format` and `ORBIT_FORMAT` are live on every list and detail command, `auto` on a pipe produces the plain form, and `ndjson` streams one record per line with a flush per record. Satisfies [./specs/output-modes.md](./specs/output-modes.md) §2–§3. Some commands return `CommandOutput::Silent` because their effect is the output or they have no record stream: MCP `serve`/`listen`, `lease listen`, web `serve`/`connect`/`open`, host-prerequisites-only `init`, and pipeline-worker execution. `output::render::emit` produces no output for `Silent`; mutations with a success record, including task update and workspace init, return payloads and honor the resolved mode.
 
@@ -122,6 +122,7 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 - [ORB-21574] — Make filtered table cells neutral while keeping their columns visible.
 - [ORB-21575] — Add full detail recovery for audited truncated views.
 - [ORB-21576] — Move non-record health/status trailers to stderr in every mode.
+- [ORB-21940] — Wrap diagnostic summary prose to the terminal width.
 - [T20260427-43] — Extend the earlier duplicated color vocabulary for friction status.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

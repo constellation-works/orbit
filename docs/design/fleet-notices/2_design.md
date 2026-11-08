@@ -243,5 +243,6 @@ The maintenance dispatch hold (§7) is deliberately not filed; it waits for v1 t
 - [ORB-21213] — slice 3: managed-agent posting
 - [ORB-21214] — slice 4: federation and global aggregation
 - [ORB-21215] — slice 5: dashboard banner and view, attention kind
+- [ORB-22808] — removed the `notice.*` config switches, making agent posting and brief delivery always on
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
