@@ -19,7 +19,8 @@ fn tags(values: &[&str]) -> Vec<String> {
 }
 
 /// The template is the most specific key, then `no-diff-expected`, then
-/// everything else.
+/// everything else. An empty `auto-task:` tag names no template, so the first
+/// non-empty one does, in either order [ORB-23059].
 #[test]
 fn work_class_prefers_template_then_no_diff_then_change() {
     for (task_tags, expected) in [
@@ -32,6 +33,23 @@ fn work_class_prefers_template_then_no_diff_then_change() {
         (&["auto-task:"][..], "change"),
         (&["auto-concurrency"][..], "change"),
         (&[][..], "change"),
+        (
+            &["auto-task:", "auto-task:docs-audit"][..],
+            "auto-task:docs-audit",
+        ),
+        (
+            &["auto-task:docs-audit", "auto-task:"][..],
+            "auto-task:docs-audit",
+        ),
+        (
+            &["no-diff-expected", "auto-task:", "auto-task:docs-audit"][..],
+            "auto-task:docs-audit",
+        ),
+        (
+            &["auto-task:docs-audit", "auto-task:", "no-diff-expected"][..],
+            "auto-task:docs-audit",
+        ),
+        (&["auto-task:", "no-diff-expected"][..], "no-diff"),
     ] {
         assert_eq!(work_class(&tags(task_tags)), expected, "{task_tags:?}");
     }
