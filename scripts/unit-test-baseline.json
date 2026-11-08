@@ -351,6 +351,7 @@
         "application/task/tests/add.rs::filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift",
         "application/task/tests/add.rs::filing_accepts_an_allowed_required_tool",
         "application/task/tests/add.rs::filing_refuses_an_unliftable_disallowed_required_tool",
+        "application/task/tests/add.rs::filing_without_required_tools_survives_a_malformed_global_activity",
         "application/task/tests/add.rs::keyed_creation_lost_reply_replays_without_history_or_events",
         "application/task/tests/lifecycle.rs::guarded_update_writes_every_legal_edge_and_refuses_every_other_one",
         "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
