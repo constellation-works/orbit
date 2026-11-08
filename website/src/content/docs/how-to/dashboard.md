@@ -1173,8 +1173,9 @@ and it is not a model the tool call reported. Tools offers `24h`, `7d`, and
 
 ## Agents
 
-**Agents** is an Analytics view. It ranks the crews and models behind each
-agent role in the selected workspace. The window starts at **Last 500**: the
+**Agents** is an Analytics view. It ranks the models by recorded reasoning effort behind each
+agent role in the selected workspace: one row per model and recorded effort
+(`model @ effort`; orchestrators keep their attribution rows). The window starts at **Last 500**: the
 newest 500 delivery attempts, whatever their age. The selector offers
 **Last 500**, **Last 1000**, **7d**, and **30d**: a calendar tab (`7d` or
 `30d`) follows the dashboard's window, while the `1h`, `24h`, and **all**
@@ -1189,8 +1190,11 @@ on.
   they count against. Every problem counts against one role, or is not scored
   (for example, rework caused by infrastructure). Select a legend entry to open
   that role.
-- **The ranking** lists one row per crew and model, with a rate per 100 units
-  of work for each term and the score. Rows with fewer than 10 units are greyed,
+- **The ranking** lists one row per model and recorded reasoning effort, labelled `model @ effort`
+  with the crews that contributed its units as secondary detail, with a rate per 100 units
+  of work for each term and the score. A rendered effort shows its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
+  a null effort is the **provider default** and unrecorded work is its own **effort unknown** row per model.
+  Two efforts of one model are two rows, however many crews ran them. Rows with fewer than 10 units are greyed,
   unranked, and listed last.
 - **The detail column** shows the selected row: its score, its raw score and
   the fleet average (a row above the average is pulled down toward it, the
@@ -1212,7 +1216,7 @@ with no recorded cause count against no one; their number shows under the
 score as `N unclassified`, because such a score rests on less evidence.
 The **Rework by cause** panel shows where each orchestrator's rework went.
 
-The **Implementers** tab ranks each crew and model separately. It credits
+The **Implementers** tab ranks each model at each recorded effort separately (`model @ effort`). It credits
 weighted landed work and first-pass accepts, and counts review rejects,
 reviewer repairs, crew-caused rework, and escaped regressions. A review
 reject is counted once; regressions the reviewer missed count against
@@ -1225,8 +1229,8 @@ tier, then other rows overall, or zero without peers. The buckets come from the
 fleet median lines changed for the task's tier and type, never the row's own
 diff, and the row's own escapes and observations are never in its expectation.
 A defect a pre-landing review already rejected or repaired counts once, as that
-verdict, not again as an escaped regression. Each task counts once per crew and
-model that started an implementation run in the window.
+verdict, not again as an escaped regression. Each task counts once per model-and-effort row
+that started an implementation run in the window: a task two rows worked counts once under each.
 
 Cost per weighted landed task, median completed run time and tasks by tier
 appear under **Shown, not scored** in the detail column. Cost uses recorded
@@ -1247,8 +1251,8 @@ panel, shown on this tab, picks which tasks the ranking, detail, and size
 curves count: **Managed** (the default), **All** (managed and interactive), or
 **Interactive** on its own. Unclassified tasks count in none. Cost and run time
 count managed tasks whatever you pick. **Interactive work by crew**, under the
-panels, lists each crew and model's managed, interactive, and unclassified
-tasks, with how many interactive tasks landed and how many a regression names,
+panels, lists each model-and-effort row's managed, interactive, and unclassified
+tasks (with the row's contributing crews), with how many interactive tasks landed and how many a regression names,
 so interactive work stays visible while the default leaves it out. The CLI and
 tools take the same choice as `--execution` and `execution`.
 
@@ -1259,8 +1263,8 @@ under the crew reference of its final implementation run as dispatched in the
 window, and needs a recorded diff size and at least 7 days since completion.
 Each crew reference as dispatched is its own curve, pooling every model
 recorded under that reference (the picker entry names those models), so
-`opus@medium` and `opus@high` are separate. The ranking above stays one row
-per crew and model. Buckets double in width, and each point shows its Wilson 95%
+the `opus@medium` and `opus@high` crew references are separate curves. The ranking above stays one row
+per model and recorded effort. Buckets double in width, and each point shows its Wilson 95%
 interval. Use **Complexity** to narrow the curves to one tier, and the crew
 checklist above the chart to choose which curves are drawn; crews with at least
 30 tasks and a drawn bucket start selected. Buckets with fewer than 10 tasks are
@@ -1291,7 +1295,7 @@ infrastructure. How often a reviewer accepts or rejects is never scored.
   regression, and unresolved (not judged yet, incomplete, or fixes that
   failed).
 
-The **Pilots** tab grades each task-pilot crew and model on the done tasks
+The **Pilots** tab grades each task-pilot model at each recorded effort (`model @ effort`, with contributing crews as detail) on the done tasks
 whose newest pilot assessment was written in the window, compared with the
 files each task actually landed. Bulk tasks (more than 12 landed files) and
 `no-diff-expected` tasks are left out. It credits **F1 lift**, the F1 points the
@@ -1314,9 +1318,9 @@ tasks assessed above it. **Not placed** counts tasks without a tier or a
 priced implementation. Cost only places tasks in tiers; it is never scored.
 
 From a terminal, `orbit agents scorecard --role <role>` ranks one role's
-crews and models over its own `--window` (`30d` by default, not the dashboard
-window), and `orbit agents show --role <role> --crew <crew>` lists one row's
-tasks.
+models by recorded reasoning effort over its own `--window` (`30d` by default, not the dashboard
+window), and `orbit agents show --role <role> --crew <crew> [--model <model>] [--effort <effort>]` lists one row's
+tasks (`--effort` narrows a crew-and-model selection to one recorded effort).
 
 ### Experiments
 
