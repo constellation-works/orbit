@@ -243,7 +243,6 @@ fn comments(server: &Server, id: &str) -> usize {
         .len()
 }
 
-/// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
 fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
     isolated(
@@ -284,6 +283,7 @@ fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
     );
 }
 
+/// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
 fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
     isolated(
