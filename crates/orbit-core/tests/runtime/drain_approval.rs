@@ -24,6 +24,7 @@ mod advisory;
 #[cfg(unix)]
 mod explicit_pilot_reuse;
 mod landed_creation;
+mod leaf_dispatch;
 mod pilot_mutations;
 #[cfg(unix)]
 mod required_tools;
