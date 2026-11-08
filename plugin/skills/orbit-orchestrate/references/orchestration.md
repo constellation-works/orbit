@@ -475,7 +475,9 @@ request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
 with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
 refuse a second request while a pilot is pending or running, while delivery
-holds the task, or on a replica. A decision option with action `re_pilot`
+holds the task, or on a replica. A refusal reports the same stable `code` on
+the CLI, MCP and dashboard (`task_pilot_unsupported_status`, `_human_crew`,
+`_already_running`, `_delivery_running` or `_replica_checkout`). A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite. Existing
 `orbit run task-pilot <id>` remains an explicit assessment command.
 

@@ -57,6 +57,8 @@ if (selection === "--fixture-core") {
   await page.clock.setFixedTime(new Date("2026-10-08T07:26:47-07:00"));
   const resources = {
     sample_age_seconds: 8,
+    max_age_seconds: 60,
+    stale: false,
     throttle: false,
     thresholds: { enabled: true },
     cpu: { percent: 32, severity: "ok" },
@@ -97,6 +99,22 @@ if (selection === "--fixture-core") {
           ],
         };
         break;
+      case "/api/dashboard/chrome": {
+        const reply = (body) => ({ status: 200, body: JSON.stringify(body) });
+        payload = {
+          notices: reply({ items: [], total: 0, limit: 100, truncated: false }),
+          summary: reply({ events: 14, failed_runs: 1, window: "24h" }),
+          routines: reply({
+            machine_name: "local-demo",
+            controls_authorized: true,
+            capabilities: {},
+            session_explanation: "Synthetic dashboard fixture.",
+            routines: [],
+          }),
+          failures: reply({ failing: [] }),
+        };
+        break;
+      }
       case "/api/tasks":
         payload = {
           items: [
@@ -292,6 +310,11 @@ if (selection === "--hosts-only" || selection === "--run-detail") {
 }
 
 await open("tasks?status=in-progress,review,blocked,proposed,backlog", "#tasks-body .row");
+// The Tasks page leaves host telemetry to its slower polling cadence. Wait
+// for the fixture's sample so the rail foot shows real demo readings.
+if (selection === "--fixture-core") {
+  await page.waitForFunction(() => document.querySelector("#host-block")?.classList.contains("ok"), null, { timeout: 15000 });
+}
 
 // The whole Tasks view: the top bar with host resources and the refresh
 // clock, the rail, the status cards, and the Drain dock beside them.
@@ -307,7 +330,7 @@ await tall(1600, async () => {
     const b = rows.at(-1).getBoundingClientRect();
     return { x: b.x, y: b.y, width: b.width, height: b.height };
   });
-  await shot("dashboard-approve-ship", [page.locator("#tasks-panel > header"), end]);
+  await shot("dashboard-approve-ship", [page.locator("#tasks-panel > .controls"), end]);
 });
 
 // The Tasks dock: auto-drain status, its throttle note and Start a window.

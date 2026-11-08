@@ -3,21 +3,8 @@ use orbit_common::OrbitError;
 use crate::OrbitRuntime;
 use crate::application::task::TaskWorkspaceAutoPort;
 
-use super::model::{
-    ExternalMergeBatchSettlement, ExternalMergeSettlement, ExternalMergeSkippedTask,
-    SETTLEABLE_STATUSES,
-};
+use super::model::{ExternalMergeSettlement, SETTLEABLE_STATUSES};
 use super::{candidate, refusal};
-
-/// The reason a per-task refusal names, without its `task '<id>' does not
-/// settle …:` prefix; any other error keeps its full message.
-fn external_merge_skip_reason(error: &OrbitError, id: &str) -> String {
-    let OrbitError::InvalidInput(message) = error else {
-        return error.to_string();
-    };
-    let prefix = format!("task '{id}' does not settle from a merged delivery pull request: ");
-    message.strip_prefix(&prefix).unwrap_or(message).to_string()
-}
 
 impl OrbitRuntime {
     /// Settle every task whose delivery PR is among the forge's most recently
@@ -90,42 +77,6 @@ impl OrbitRuntime {
             }
         }
         Ok(settled)
-    }
-
-    /// Settle every `blocked`, `in-progress` and `review` task from its own
-    /// recorded PRs, as [`Self::settle_externally_merged_task_as`] does per
-    /// task, so a merge older than the recent-merges listing also settles.
-    /// One task that cannot settle is reported in `skipped` and left
-    /// unchanged; the rest still settle.
-    pub fn settle_externally_merged_tasks_from_recorded_prs_as(
-        &self,
-        actor: Option<&str>,
-    ) -> Result<ExternalMergeBatchSettlement, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let mut ids = Vec::new();
-        for status in SETTLEABLE_STATUSES {
-            for task in self.stores().tasks().list_tasks_filtered(
-                Some(status),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )? {
-                ids.push(task.id);
-            }
-        }
-        let mut batch = ExternalMergeBatchSettlement::default();
-        for id in ids {
-            match self.settle_externally_merged_task_as(&id, actor) {
-                Ok(settlement) => batch.settled.push(settlement),
-                Err(error) => batch.skipped.push(ExternalMergeSkippedTask {
-                    reason: external_merge_skip_reason(&error, &id),
-                    task_id: id,
-                }),
-            }
-        }
-        Ok(batch)
     }
 
     /// Settle task `id` from its merged delivery PR, reading each PR Orbit

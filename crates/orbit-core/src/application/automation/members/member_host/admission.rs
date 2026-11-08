@@ -5,7 +5,7 @@ use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind};
 
 use super::super::super::preparation;
 use super::super::Host;
-use super::host::{Escalation, already_preparing, already_triaging};
+use super::host::already_preparing;
 use crate::application::task::pilot;
 
 impl Host<'_> {
@@ -121,14 +121,6 @@ impl Host<'_> {
                     Err(error) => return Err(error.into()),
                 };
                 match request.state {
-                    // An enabled precedent-decision category holds the
-                    // notification for up to its wait, so a model answer
-                    // that lands in time is never also sent to the human.
-                    DecisionRequestState::Open
-                        if self.runtime.precedent_decision_notify_wait(&request) =>
-                    {
-                        return Ok(MemberAdmission::Withhold("precedent_decision_wait".into()));
-                    }
                     DecisionRequestState::Open => {}
                     DecisionRequestState::Answered => {
                         return Ok(MemberAdmission::Retire("request_answered".into()));
@@ -139,38 +131,6 @@ impl Host<'_> {
                     DecisionRequestState::Expired => {
                         return Ok(MemberAdmission::Retire("request_expired".into()));
                     }
-                }
-            }
-            return Ok(MemberAdmission::Admit);
-        }
-
-        if self.is_escalation_triage() {
-            let active = self.cached_preparations("escalation_triage", || {
-                preparation::active_escalation_triages(self.runtime)
-            })?;
-            for id in &member.task_ids {
-                let escalation = match self
-                    .cached_task(id)
-                    .and_then(|task| self.escalation_of(&task))
-                {
-                    Ok(escalation) => escalation,
-                    Err(OrbitError::NotFound {
-                        kind: NotFoundKind::Task,
-                        ..
-                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
-                    Err(error) => return Err(error.into()),
-                };
-                match escalation {
-                    Escalation::Qualifies(fingerprint) if fingerprint == member.fingerprint => {}
-                    // A re-pilot wrote another assessment, or the task was
-                    // blocked again; that is its own member.
-                    Escalation::Qualifies(_) => {
-                        return Ok(MemberAdmission::Retire("material_changed".into()));
-                    }
-                    Escalation::Gone(reason) => return Ok(MemberAdmission::Retire(reason)),
-                }
-                if let Some(run_ids) = active.get(id) {
-                    return Ok(MemberAdmission::Withhold(already_triaging(run_ids)));
                 }
             }
             return Ok(MemberAdmission::Admit);

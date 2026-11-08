@@ -147,6 +147,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

@@ -29,8 +29,8 @@ use super::rules::{
     match_auto_decision_rule, parse_decision_rules, set_rule_auto_in_markdown,
 };
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 use crate::application::task::base_revision::{list_blob_paths_at, read_blob_at};
-use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
 
 const CORPUS_REL: &str = "docs/agents/corpus";
 
@@ -192,20 +192,12 @@ impl OrbitRuntime {
                 "decision request `{request_id}` vanished after it was re-opened"
             ))
         })?;
-        // The operator reversing a model answer counts against its category
-        // like a veto.
-        if located
-            .resolution
-            .as_ref()
-            .is_some_and(|resolution| resolution.model.is_some())
-        {
-            self.record_model_answer_review_outcome(&located, true);
-        }
         Ok(reopened)
     }
 
-    /// The reversal step shared by `orbit decision reverse` and a model
-    /// answer's veto: check `request` holds a reversible automation answer,
+    /// The reversal step of `orbit decision reverse`: check `request` holds a
+    /// reversible automation answer (a precedent answer, or a model answer
+    /// recorded before decision assistance was removed [ORB-22808]),
     /// restore the status it recorded and append the re-open event as
     /// `actor_label`. The caller holds the task write lock.
     pub(super) fn reopen_automation_answer(

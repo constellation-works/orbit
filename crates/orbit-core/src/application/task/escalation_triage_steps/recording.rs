@@ -15,7 +15,7 @@ use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::pilot::HeldPilotWarnings;
 use crate::OrbitRuntime;
-use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
+use crate::application::task::TaskRecords;
 
 use super::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningCandidacy, PilotWarningDecision,
@@ -179,7 +179,6 @@ impl OrbitRuntime {
             if let Some(action) = &human_action {
                 decision = decision.with_human_action(action.clone());
             }
-            let noted = decision.clone();
             self.write_pilot_warning_triage(
                 &task,
                 &held,
@@ -188,7 +187,6 @@ impl OrbitRuntime {
                 &comment,
                 decision,
             )?;
-            self.enqueue_open_decision_for_precedent(&noted);
             answer = Some(json!({
                 "task_id": id,
                 "subject": "pilot_warning",

@@ -228,12 +228,12 @@ Today's per-8-active-hours rate toggle is dropped: active hours mean something o
 
 ### 4.5a Proposed delivery-quality profile (not a score term)
 
-The [decision-assistance grader proposal](../decision-assistance/specs/delivery-quality.md)
-would add an independently calibrated advisory profile of delivered code [ORB-20000]:
+The [decision-assistance grader proposal](../_archived/decision-assistance/specs/delivery-quality.md)
+would have added an independently calibrated advisory profile of delivered code [ORB-20000]:
 scope fit, robustness, structure, standards, verification and maintainability.
-It is design-only, with no grader consumer or dashboard surface implemented.
-It leaves this document's current terms, rates, weights, attribution and
-crew-selection inputs unchanged.
+It never had a grader consumer or dashboard surface, and its shadow runtime was
+removed with decision assistance in [ORB-22808]. This document's current terms,
+rates, weights, attribution and crew-selection inputs never depended on it.
 
 Keep grade evidence/version, coverage, uncertainty and actual contribution
 attribution separate from observed outcomes. A high grade cannot offset a

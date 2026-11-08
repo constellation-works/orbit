@@ -378,6 +378,10 @@ pub trait AuditEventStoreBackend: Send + Sync {
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
     ) -> Result<(i64, i64, i64, i64, f64, i64), OrbitError>;
+    /// Event count for `since`, without duration samples. Same population as
+    /// the total returned by [`Self::get_audit_event_stats`] when `tool` is
+    /// unset.
+    fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError>;
     fn get_audit_event_durations(
         &self,
         since: Option<&DateTime<Utc>>,

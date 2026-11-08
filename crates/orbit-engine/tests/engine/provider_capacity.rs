@@ -133,6 +133,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

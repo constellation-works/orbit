@@ -46,6 +46,21 @@ impl Store {
         .map_err(sqlite_store_error)
     }
 
+    /// `COUNT(*)` for the same `since` population as [`Self::get_audit_event_stats`].
+    ///
+    /// A `since` bound is a covering read of `idx_audit_events_timestamp`.
+    /// Callers that only need the event denominator use this instead of
+    /// loading every duration in the window.
+    pub fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError> {
+        let conn = self.read()?;
+        let (conditions, param_values) = since_tool_filter(since, None);
+        let where_clause = where_clause(&conditions);
+        let sql = format!("SELECT COUNT(*) FROM audit_events {where_clause}");
+        let param_refs = param_refs(&param_values);
+        conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+            .map_err(sqlite_store_error)
+    }
+
     pub fn get_audit_event_durations(
         &self,
         since: Option<&DateTime<Utc>>,

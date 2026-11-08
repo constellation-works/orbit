@@ -59,9 +59,7 @@
 //! (`orbit clock tick` / `orbit sweep`) runs the same owner pass for every
 //! registered, active owner workspace, so a merged task settles with no drain
 //! running. `orbit task settle-merged <id>` reads the task's own PRs one by
-//! one, so a merge older than that listing settles too; the dashboard's
-//! batch settlement runs that per-task read over every candidate and
-//! reports each skip instead of refusing the batch.
+//! one, so a merge older than that listing settles too.
 //!
 //! `orbit.workflow.land` merges the delivery PR of a task in `review` and then
 //! settles it here ([`land`]), so a landing and an observed merge complete a
@@ -79,10 +77,8 @@ mod rescued;
 use crate::runtime::task_pr_forge::MergedPullRequest;
 use candidate::{RevokedHandoff, names_delivery};
 pub use land::{TASK_LANDING_REFUSED, TaskPullRequestLanding};
-pub use model::ExternalMergeBatchSettlement;
 pub use model::ExternalMergeSettlement;
 pub use model::ExternalMergeSettlementProfile;
-pub use model::ExternalMergeSkippedTask;
 use model::SETTLEABLE_STATUSES;
 pub(crate) use persistence::settled_merge_commit;
 use refusal::refused;

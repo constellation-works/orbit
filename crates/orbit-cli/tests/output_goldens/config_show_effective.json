@@ -7,13 +7,6 @@
     "workspace_exists": true
   },
   "provenance": {
-    "assistance": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "attention.age_bump_hours": {
       "scope": "built-in",
       "state": "default",

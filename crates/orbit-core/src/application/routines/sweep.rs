@@ -500,30 +500,6 @@ pub(crate) fn run_sweep_at_with_providers_at(
             }),
         }
     }
-    // Shadow consumers reconcile committed owner tasks, independently of
-    // creation event delivery. No calls on dry runs, replicas or disabled hosts.
-    if !options.dry_run {
-        for (workspace, runtime) in &discovered.entries {
-            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
-                continue;
-            }
-            if runtime.coordination_write_owner().is_none()
-                && runtime.run_task_quality_tick().is_err()
-            {
-                tracing::debug!("task quality reconciliation deferred");
-            }
-            if runtime.coordination_write_owner().is_none()
-                && runtime.run_delivery_quality_tick().is_err()
-            {
-                tracing::debug!("delivery quality reconciliation deferred");
-            }
-            if runtime.coordination_write_owner().is_none()
-                && runtime.run_precedent_decision_tick().is_err()
-            {
-                tracing::debug!("precedent decision reconciliation deferred");
-            }
-        }
-    }
     // [ORB-14273] After the executable generation settles, the clock resumes each
     // run the current upgrade interrupted at most once, and audits every run it
     // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).

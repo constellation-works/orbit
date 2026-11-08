@@ -505,31 +505,11 @@ or revoked channel is refused with `channel_not_registered` or `channel_revoked`
 - `review_approval` also binds to the candidate under review.
 - Either request reads `superseded` once its binding stops matching.
 
-The result carries `requests` (the digest), `raised` (what this call raised),
-`expiring` (every still-open request expiring within 24 hours) and
-`model_answered`: one `{review, request}` pair per model answer still awaiting a
-human, where `request` is the request the `model` actor answered (its
-`resolution.model` holds the probability, threshold and cited precedents) and
-`review` is the open `model_answer_review` request with answers `confirm` and
-`veto`. Only a human answers a review, through `orbit decision answer`, the
-dashboard or a channel submission: `confirm` makes the model answer precedent with
-the confirming human as decider; `veto` re-opens the original request and restores
-the task's previous status. Review requests are listed only there. Repeated calls
+The result carries `requests` (the digest), `raised` (what this call raised)
+and `expiring` (every still-open request expiring within 24 hours). Repeated calls
 reuse requests for unchanged task bindings, while newly eligible tasks can add
 requests. With the decision channel disabled in this workspace, the call raises
-nothing, writes nothing and returns no requests. `assist_demoted` lists the
-workspace's precedent-decision categories the rolling window demoted to shadow,
-each with its demotion evidence, until the operator re-enables or disables them.
-
-**Model answers in enabled categories.** A model answers a request only in a
-category the operator enabled from the CLI with
-`orbit decision assist enable <category> --readout <task>/<artifact>`, and only
-when the request's tier is `routine` or `reversible`. `orbit decision assist
-disable` and `status` complete the surface. All three are operator CLI only:
-the tools are inactive, and an agent session or plugin callback is refused.
-Agents raise requests exactly as before; declaring a low `risk_tier` on an
-option that has lasting effects is never a way to skip the human, because the
-tier, the holdback, the veto digest and demotion all bound it.
+nothing, writes nothing and returns no requests.
 
 ### Raising a decision
 

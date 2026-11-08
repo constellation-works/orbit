@@ -160,7 +160,7 @@ artifacts.
 |---|---|
 | `orbit config show` | Effective merged view. Identity (`machine.id`, `machine.task_prefix`) leads, then Machine, Delivery (`workflow.*`), Crews, Execution, Review and Housekeeping. Each row's description is one sentence, followed by the key's allowed values in brackets when it has any; defaults and interactions are in this reference. Unconfigured advanced keys are hidden with a count per section. `--all` (alias `--advanced`) lists every key, expands unset sections, and appends Paths, Crew purposes and Review, which restate rows above. `--json` adds `provenance` and always includes `crew_purposes` and `review`. |
 | `orbit config get <key>` | One value. |
-| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global` (copy the global file without its global-only keys: `[assistance]`, `[machine]`, each `[crews.<name>] env`, `lease.intake.peer_user` and `[lease.listener]`). |
+| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global` (copy the global file without its global-only keys: `[machine]`, each `[crews.<name>] env`, `lease.intake.peer_user` and `[lease.listener]`). |
 | `orbit config keys` | Every fixed settable key with type, section, description and allowed values (a fifth, last column). `--json` adds `detail` (longer guidance, or `null`) and `allowed`. |
 | `orbit config path` | The resolved `config.toml` path. |
 
@@ -190,138 +190,6 @@ For crew fields, the library’s `EffectiveConfigValue.fallback` describes remov
 For registered settings, fallback values and global comparisons use the config layer's admitted JSON in the current workspace's settings and crew context. For example, a global `workflow.purpose_crews.review = "sol"` supplies `["sol"]`, and complexity pools are compared in canonical crew order with duplicate bare members collapsed. `shadowed_by.value` keeps the raw file projection, including a scalar crew or the written pool order. If a shadowed global setting cannot be admitted in that context, its comparison is `null`; its removal fallback is also `null` rather than predicting a successful reload. Replace-only security settings still fall back to built-in values.
 
 ---
-
-## `[assistance]` — optional bounded model annotations
-
-The single advanced `assistance` table is **global-only**. Workspace files and
-workspace-scoped writes refuse it, including an empty table. Global settings are
-never copied into a new workspace file. It is shown by `orbit config show --json`
-and read with `orbit config get assistance`; a replacement uses
-`orbit config set --global assistance '<table>'`. Nested fields are part of this
-one setting, not separately registered dotted keys.
-
-The default is off and unfunded:
-
-```toml
-[assistance]
-policies = []
-```
-
-No task/report consumer or background worker is automatically installed or
-activated. Composition exposes a library service for explicitly integrated
-consumers. `off` enqueues nothing and reads no credential. `shadow` retains results
-for operator comparison while the advisory read returns nothing. `advisory`
-permits annotations for the matching current source and policy; no mode grants
-workflow authority. Moving from shadow to advisory changes the cache identity.
-
-Fields omitted from `[assistance.limits]` or `[assistance.budget]` use their
-built-in defaults. Unknown fields in either table are rejected.
-
-| Field | Built-in default | Meaning |
-|---|---|---|
-| `limits.concurrency` | `2` | Active claims across the host store (1–64). |
-| `limits.queue_capacity` / `max_records` | `128` / `1024` | Pending work / all retained work; overflow records a coverage-gap counter. |
-| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age for queued work, including retry-pending work, and per-attempt deadline (timeout at most 120s). Expired queued work is not current and has no advisory; queue age does not expire a completed result. |
-| `limits.retry_delay_seconds` / `max_attempts` | `5` / `2` | Delayed retries, at most five attempts including the first. |
-| `limits.max_request_bytes` / `max_response_bytes` | `16384` / `65536` | Serialized outbound request and received response bounds. Oversize is explicit, never silently clipped. |
-| `limits.max_input_tokens` | `32768` | Conservative reservation per attempt; body bytes plus framing must fit. |
-| `limits.retention_seconds` | `604800` | Terminal payload/attempt retention after the queue deadline; at most 30 days. A completed result stays readable until this retention ends or it is superseded. |
-| `budget.epoch` | `unfunded` | Host allocation identity. Its cumulative counters survive payload retention. |
-| `budget.token_ceiling` / `spend_ceiling_microusd` | `0` / `0` | Cumulative reserved input tokens / micro-USD for that allocation. |
-| `budget.input_microusd_per_million_tokens` / `pricing_version` | absent / absent | Operator-verified uncached Decisions input price ceiling and provenance version. Missing pricing refuses calls; it never means free. |
-| `policies` | `[]` | Exact workspace/use-case grants, described below. |
-
-A claim refused before any outbound request is entered (unavailable credential,
-changed configuration, a request over its input bound, a superseded subject, or
-a deadline reached before send) releases its reservation to the allocation and
-records no outcome-unknown attempt, because nothing was sent. A claim whose
-request entered the transport keeps its full reservation, including connect and
-client-build failures, which are conservatively charged.
-
-Each policy requires `workspace_id`, `use_case`, `model` (`gpt-6-luna`),
-`model_revision` (an operator-maintained cache epoch), `policy_version`,
-`contract_digest` (the `sha256:`-prefixed lowercase-hex SHA-256 digest of the
-`serde_json::to_vec` serialization of the typed contract, e.g. `sha256:`
-followed by 64 `0-9a-f` characters), `evidence_fields`,
-`evidence_ref_prefixes`, and `credential_env`. Its optional `mode` defaults to
-`off`. A bare 64-character hex string without the `sha256:` prefix, or
-uppercase hex, is rejected. The digest binds exact question names/types,
-choices, rubrics, criterion references, versions and evaluated thresholds. Consumer taxonomies remain in
-the consumer. Evidence field/reference grants can only be narrowed by a packet;
-ungranted fields/references are omitted with explicit truncation metadata.
-
-`credential_env` must name an `ORBIT_ASSISTANCE_*` host environment variable.
-That namespace is refused by the agent subprocess environment builder even in
-explicit passthrough or crew mappings. Resolve the intended project's key only
-in the adapter; config contains its reference, never its value. The fixed
-destination is `https://api.openai.com/v1/decisions`; there is no configurable
-endpoint, redirect, proxy or agent-crew route. Explicit secret-value and shared
-credential-pattern redaction run before storage and transmission. References
-are provenance strings, never fetched attachments or instructions.
-
-Live evaluation and activation still require the separate operator decision in
-the [evaluation protocol](design/decision-assistance/2_evaluation.md). This
-configuration surface does not activate either priority consumer. See the
-[service contract](design/decision-assistance/specs/service.md) for API usage,
-attempt accounting, freshness and the offline fixture command.
-
-### Precedent retrieval grants
-
-`assistance.precedent_providers` is an optional host-only array (default `[]`).
-Each entry grants an exact `workspace_id`, `built_in` (default `false`) and an
-ordered `plugin_tools` list (default `[]`). This retrieves decision evidence;
-it starts no model calls, notifications or automatic answers. For example,
-inside the host configuration:
-
-```toml
-[[assistance.precedent_providers]]
-workspace_id = "ws_example"
-built_in = true
-plugin_tools = ["history.retrieve"]
-```
-
-Only active, granted, read-only plugin tools are eligible. Each receives
-`orbit.precedent-provider/1` through ordinary audited plugin dispatch, with its
-existing callback session and sandbox. The built-in source runs first; plugin
-source order follows configuration. Removing the entry disables retrieval on
-the next call. There are at most 128 workspace entries and eight plugin tools
-per entry; duplicate workspaces or tool names are refused. See the
-[provider API and bounds](design/decision-assistance/specs/service.md#precedent-provider-application-boundary).
-
-### Precedent-decision shadow consumer
-
-`use_case = "precedent_decision"` is the shadow consumer for an open human
-decision. It stays off until a host policy sets `mode = "shadow"`. `off` and
-`advisory` enqueue nothing and do not consult precedent providers. Shadow
-builds one packet after a request is raised and still open, enqueues it, and
-seals the settled prediction in a private ledger. Dashboard, mail,
-`orbit decision show`, the digest, and advisory reads do not show that
-prediction.
-
-The grant's `evidence_fields` must include `option_ids` (the packet-bound
-choice). Also grant `request`, `task_context`, `precedents`, and `provenance`
-when that evidence should leave the host, and allow `evidence_ref_prefixes`
-`task:` and `decision:`. A granted `precedents` value carries each retained
-record's question, option labels and consequences, bounded context, and
-citation (`source`, `ref`, digest). Those option ids are local to the
-historical record. Omitting `precedents` keeps that text on the host.
-Credential-pattern redaction still applies to the values that are sent, and
-the serialized request stays within `limits.max_request_bytes`. The contract
-digest is the granted question template `precedent-decision/1`, not a
-per-request expansion. Retrieval uses at most eight precedents. Shadow
-mode does not wait before notifying the human.
-
-A category can answer on its own only after the operator enables it with
-`orbit decision assist enable <category> --readout <task>/<artifact>`, from a
-`precedent-decision-readout/1` that met every registered target under this
-exact grant. Enablements live in a host-only store beside the decision
-channels (`state/decision-channels/precedent-assist.json` under the global
-root), never in configuration. Changing this policy (its digest or
-`model_revision`) suspends them. In an enabled category only `routine` and
-`reversible` requests are answered; 10% (holdback) still go to the human; the
-notification waits up to 120 seconds for the assessment. The rolling window
-keeps 30 outcomes and demotes the category after 2 vetoes. These consumer
-settings are fixed defaults in this release.
 
 ## `[machine]` — who this machine is
 
@@ -2963,3 +2831,4 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes`, `max_proposals` | Ignored: the weekly evolution pass routine (`evolution_pass_pipeline` and its rank, draft and apply activities) was removed [ORB-22844], so nothing files evolution proposal tasks automatically. The evolution ledger, `orbit evolution`, the `orbit.evolution.*` tools and `orbit resident digest` stay, and `resident.evolution.window_days` and `decline_suppress_days` still apply. Delete the keys. Recognised until 2026-12-07. |
 | `ux_rules.surfaces`, `runner`, `ui_base_url`, `max_new_tasks`, `file_at`, `disabled` | Ignored: the `ux-rules` routine, `ux_rules_pipeline` and its rule-findings filer were removed [ORB-22844]; nothing runs the rules on a schedule or files tasks from them, and no `ux_rules_runner` script grant is needed. Delete the `[ux_rules]` table. Recognised until 2026-12-07. |
 | `review.verify_findings` | Ignored: the `finding_verification` routine and `finding_verification_pipeline` were removed [ORB-22844], and nothing holds a review-filed bug as `unverified_review_finding`; it is approved and promoted like any other task. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding with a REJECTED verdict, and verdicts the removed job wrote still load. Delete the key. Recognised until 2026-12-07. |
+| `assistance` | Ignored: decision assistance was removed [ORB-22808]: its model service, the task-quality, delivery-quality and precedent-decision consumers, precedent retrieval and `orbit decision assist`. Nothing calls the OpenAI Decisions endpoint. Delete the global `[assistance]` table. Recognised until 2026-12-08; after that it is an unknown key. |

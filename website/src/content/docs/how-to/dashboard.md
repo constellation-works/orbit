@@ -10,7 +10,7 @@ errors, automation, and settings. It has no login and binds to loopback only.
 To use another machine's dashboard, tunnel to it over SSH, or switch to a
 registered host with the host picker.
 
-![The dashboard's Tasks view: the top bar with the host's load, memory, and disk and the refresh clock, tasks in status cards with Approve, View run, and Ship, and the Drain dock on the right.](../../../assets/dashboard/dashboard-tasks.png)
+![The Tasks view: status filters and task cards with Approve, View run and Ship, Drain, Locks held and Log dock tabs, and host load, memory and disk readings in the rail foot.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
@@ -559,7 +559,7 @@ Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the
 auto-drain card, Start card or Log selected. The dock keeps the throttle as an
 amber note and forecast peaks as compact meters against their thresholds.
 
-![The Tasks dock: Drain, Locks held and Log tabs above Auto-drain status, a host-throttle note, admission forecast and the Start a window controls.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock with Drain, Locks held and Log tabs, an Auto-drain card showing the load throttle hold, and Start a window controls for 1 to 24 hours.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -1998,7 +1998,7 @@ Open **Settings › Hosts** (`#config/hosts`) to manage the serving machine's
 [`hosts.toml`](../../reference/config/#host-registry). Through
 `orbit web connect`, this is the remote machine's registry.
 
-![Settings › Hosts: Add host, the local host labelled local · edited here with its load, memory, disk, and drain health, and an unreachable remote with its error code, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
+![Settings › Hosts: Add host, a local demo host with its workspace and health readings, and an unreachable remote with its error status, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
 
 Captured on 2026-10-10 from an isolated demo registry.
 `build-box.invalid` is an intentionally unreachable example SSH target.

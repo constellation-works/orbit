@@ -470,6 +470,33 @@ pub(super) fn job_run_list_sql(
     let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
     let order_clause = job_run_order_sql(query.order_by);
     if query.order_by == JobRunOrder::Recency
+        && query.job_id.is_some()
+        && names_success(query)
+        && let Some(limit) = query.limit
+    {
+        // A page that admits successes walks a success history that can be
+        // most of the workspace, so the state index would visit every job's
+        // successes. Seek this job instead, sort narrow IDs before hydrating
+        // the bounded page, and pin the job index because SQLite has no
+        // selectivity statistics. Other pages keep their existing selection:
+        // a job-prefix walk over them would scale with that job's success
+        // history [ORB-22917].
+        params.push(Box::new(limit as i64));
+        return (
+            format!(
+                "SELECT {JOB_RUN_COLUMNS} FROM (SELECT run_id AS selected_run_id, \
+                 COALESCE(finished_at, started_at, created_at) AS selected_recency \
+                 FROM job_runs INDEXED BY idx_job_runs_ws_job_created \
+                 WHERE {where_clause} ORDER BY {order_clause} LIMIT ?{}) AS selected \
+                 CROSS JOIN job_runs WHERE workspace_id = ?1 \
+                 AND run_id = selected.selected_run_id \
+                 ORDER BY selected.selected_recency DESC, run_id ASC",
+                params.len()
+            ),
+            params,
+        );
+    }
+    if query.order_by == JobRunOrder::Recency
         && query.states.len() > 1
         && let Some(limit) = query.limit
     {
@@ -570,6 +597,12 @@ fn live_states_only(query: &JobRunQuery) -> bool {
         && !query.terminal_only
         && query.state.as_ref().is_none_or(live)
         && query.states.iter().all(live)
+}
+
+/// Whether `query` names finished successes in either state filter, as a
+/// failure-streak read does. Only such pages read success history.
+fn names_success(query: &JobRunQuery) -> bool {
+    query.state == Some(JobRunState::Success) || query.states.contains(&JobRunState::Success)
 }
 
 /// Columns [`row_to_job_run`] reads, in its order.

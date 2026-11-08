@@ -1,5 +1,4 @@
 mod admission_load;
-pub mod assistance;
 mod audit;
 mod backlog_forecast;
 mod codebase_facts;

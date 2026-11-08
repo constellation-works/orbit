@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 use orbit_automation::automation_error_to_orbit;
 use orbit_automation::delivery::recovery;
 use orbit_common::OrbitError;
+use orbit_types::workflow::AutoTaskDefinition;
 use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryRequest};
-use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 
 use super::{ownership, source::Source};
 
@@ -27,17 +27,7 @@ pub fn recover_auto_task(
     request: &RecoveryRequest,
     now: DateTime<Utc>,
 ) -> Result<RecoveryPreview, OrbitError> {
-    let AutoTaskSchedule::Deliveries {
-        deliveries_landed: declared,
-        ..
-    } = &definition.schedule
-    else {
-        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
-    };
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
 
     // The repository the debt was observed in is a compatibility fact, so it is
     // read from the configured branch rather than the executor's HEAD.

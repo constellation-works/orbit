@@ -109,8 +109,8 @@ cross-workspace case is materialized by the owner's sweep ([notice-record](./not
   to an older owner is `tool_not_on_this_host`.
 - No existing tool, list or schema changes shape. The default MCP toolset is unchanged, so long-lived
   MCP clients are unaffected by the upgrade.
-- The brief block is a new optional key in the task context; an activity without
-  `notice_instruction` never receives it.
+- The brief block is a new optional key in the task context; an activity that does not opt in
+  (`fleet_notices: read` or `post`, or its own `notice_instruction`) never receives it.
 
 ## Agent Signature
 

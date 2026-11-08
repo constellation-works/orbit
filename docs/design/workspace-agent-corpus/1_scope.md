@@ -229,11 +229,10 @@ office knowledge remain in the orbit-office Library. No Library read or write
 is introduced. Only a current rule may be cited. Raw entries never answer a
 new request. A current rule the operator marked auto may answer a request
 that names it exactly; every other corpus match leaves the request open.
-Separately, [ORB-21097] shipped default-off, operator-enabled category assistance:
-the precedent-decision consumer can answer eligible routine/reversible requests as
-the `model` actor under its own grant, evidence, holdback and review rules
-([precedent-decision scope](../decision-assistance/specs/precedent-decisions.md)).
-That route does not grant authority to raw corpus entries or non-auto rules.
+Separately, [ORB-21097] shipped default-off, operator-enabled category assistance
+through the `model` actor
+([precedent-decision scope](../_archived/decision-assistance/specs/precedent-decisions.md));
+it was removed with decision assistance in [ORB-22808].
 Task tags, comments and result messages cannot write trusted corpus
 text or select an arbitrary revision for injection.
 

@@ -5335,6 +5335,7 @@ mod upgrade;
 mod workspace_authority;
 
 mod plugins;
+mod repilot;
 mod serving_hosts;
 
 /// Read-only presentation uses the production host's task filter and audit path.

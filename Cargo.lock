@@ -2151,7 +2151,6 @@ dependencies = [
  "orbit-tools",
  "orbit-types",
  "regex",
- "reqwest",
  "rsa",
  "rusqlite",
  "serde",

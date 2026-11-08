@@ -197,67 +197,6 @@ raises with that topic answered from the rule.
 
 These three commands are CLI only. They have no MCP tool.
 
-#### Model answers in one category
-
-`orbit decision assist` turns model answers on or off for one
-precedent-decision category, and shows this host's enablements. Enablements
-live in a host-only store, not in workspace configuration. Enabling and
-disabling are the operator's: both are refused from an agent envelope. The
-host grant they rest on is described in
-[Decision assistance](../../reference/config/#decision-assistance); the
-assessment behind an enabled category is an external model call under that
-grant.
-
-Enable one category from the readout that measured it:
-
-```bash
-orbit decision assist enable --readout '<task>/<artifact-path>' '<category>'
-```
-
-`<category>` is `<workspace-id>/<gate>` or
-`<workspace-id>/agent_request/<topic-file>`, as `orbit decision show` prints
-it. `--readout` is required: a `precedent-decision-readout/1` artifact, as
-`<task>/<artifact-path>`. Its policy digest must equal the live host grant's,
-its labels must be recorded human decisions, and the category must meet every
-registered target. The confirmation names the category, threshold, policy,
-model revision, readout and holdback share.
-
-An enabled category changes less than it sounds like. Only routine and
-reversible requests are ever answered; a holdback share still goes to the
-human, and every other request routes to the human exactly as before. A grant
-or model-revision change suspends the enablement, and the rolling window can
-demote it to shadow. Only the operator enables it again.
-
-To stop model answers in a category at once:
-
-```bash
-orbit decision assist disable '<category>'
-```
-
-No further model answer is applied in it, and its open requests wait for a
-human answer.
-
-To inspect this host's enablements:
-
-```bash
-orbit decision assist status
-```
-
-The table shows each category's effective state (`enabled`, `disabled`,
-`demoted`, or `suspended`), threshold, policy, agreed/total rolling window,
-readout and, when ended, the reason, actor and time. With no enablements it
-reports that none exist. The table does not show the demotion evidence. To
-inspect it, use structured JSON:
-
-```bash
-orbit decision assist status --json
-```
-
-For a demoted category, `ended.demotion` contains the trigger, outcome and
-veto counts, and request IDs from the window.
-
-These three commands have no MCP tool.
-
 ## Request an approval digest
 
 As the operator, inspect the digest with:

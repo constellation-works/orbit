@@ -128,6 +128,7 @@ fn spec(model: Option<&str>, timeout_seconds: u64) -> AgentLoopSpec {
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: model.map(str::to_string),

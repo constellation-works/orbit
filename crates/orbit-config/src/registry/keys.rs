@@ -376,10 +376,18 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("lease.listener.trusted_proxy", LEASE_REMOVED_NOTE),
     ("lease.max_priority.agent", LEASE_REMOVED_NOTE),
     ("lease.max_priority.human", LEASE_REMOVED_NOTE),
+    // [ORB-22808] Decision assistance was removed on 2026-11-08. The
+    // `[assistance]` table loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when it becomes an ordinary
+    // unknown setting.
+    ("assistance", ASSISTANCE_REMOVED_NOTE),
 ];
 
 const LEASE_REMOVED_NOTE: &str = "ignored: path leases are not configurable and stay \
      disabled; delete the [lease] table. This key stops being recognised after 2026-12-08";
+
+const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
+     [assistance] table. This key stops being recognised after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
      removed; resident.evolution.window_days and decline_suppress_days still apply to the \
@@ -506,9 +514,7 @@ pub(crate) fn is_machine_identity_key(key: &str) -> bool {
 /// the `[machine]` table and each crew's `env` list, which routes host
 /// variables into that crew's agents.
 pub fn is_global_only_key(key: &str) -> bool {
-    key == "assistance"
-        || key.starts_with("assistance.")
-        || key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
+    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
         || matches!(
             parse_crew_field_key(key),

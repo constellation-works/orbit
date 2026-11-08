@@ -28,17 +28,7 @@ pub fn reset_auto_task(
     request: &ResetRequest,
     now: DateTime<Utc>,
 ) -> Result<ResetPreview, OrbitError> {
-    let AutoTaskSchedule::Deliveries {
-        deliveries_landed: declared,
-        ..
-    } = &definition.schedule
-    else {
-        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
-    };
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
 
     // The baseline is read from the configured branch, not the executor's
     // HEAD. Preserve remote-first resolution, but let operator reset and

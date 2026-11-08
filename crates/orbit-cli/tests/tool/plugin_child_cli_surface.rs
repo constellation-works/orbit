@@ -304,15 +304,6 @@ fn the_refusal_is_the_whole_cli_surface_including_self_upgrade() {
         vec!["audit", "prune", "--older-than", "30d"],
         vec!["plugin", "list"],
         vec!["update"],
-        // Enabling a precedent-decision category is the operator's alone.
-        vec![
-            "decision",
-            "assist",
-            "enable",
-            "ws_fixture/agent_request/pricing",
-            "--readout",
-            "ORB-1/readout.json",
-        ],
     ] {
         let stderr = stderr_of(&fixture.orbit(&args));
         assert!(

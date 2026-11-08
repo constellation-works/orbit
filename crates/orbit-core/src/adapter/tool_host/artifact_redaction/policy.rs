@@ -254,10 +254,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelList
             | DecisionVerb::ChannelRevoke
-            | DecisionVerb::ChannelRotateKey
-            | DecisionVerb::AssistEnable
-            | DecisionVerb::AssistDisable
-            | DecisionVerb::AssistStatus => ActionPolicy {
+            | DecisionVerb::ChannelRotateKey => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

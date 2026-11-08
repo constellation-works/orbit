@@ -627,6 +627,43 @@ impl std::fmt::Display for NoticeRefusalCode {
     }
 }
 
+/// Stable refusal codes of an explicit task-pilot submission, carried by
+/// [`crate::OrbitError::TaskPilotRefused`] and reported unchanged by every
+/// transport (CLI, MCP, remote and HTTP).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPilotRefusalCode {
+    /// The task is not `proposed` or `backlog`.
+    UnsupportedStatus,
+    /// The task is assigned to a human crew.
+    HumanCrew,
+    /// A live pilot run already holds the task.
+    AlreadyRunning,
+    /// A live delivery run carries the task.
+    DeliveryRunning,
+    /// This checkout is a replica; the owner machine pilots.
+    ReplicaCheckout,
+}
+
+impl TaskPilotRefusalCode {
+    /// The protocol name exposed as the structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedStatus => "task_pilot_unsupported_status",
+            Self::HumanCrew => "task_pilot_human_crew",
+            Self::AlreadyRunning => "task_pilot_already_running",
+            Self::DeliveryRunning => "task_pilot_delivery_running",
+            Self::ReplicaCheckout => "task_pilot_replica_checkout",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskPilotRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A named source-repair authority refusal, carried by
 /// [`crate::OrbitError::SourceRepairAuthorityRefused`].
 ///

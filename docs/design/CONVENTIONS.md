@@ -295,7 +295,6 @@ Retired features are removed from this table along with their folder.
 | Backlog Forecast | [docs/design/backlog-forecast/](./backlog-forecast/) | claude |
 | Condition Triggers | [docs/design/condition-triggers/](./condition-triggers/) | claude |
 | Conflict Budget | [docs/design/conflict-budget/](./conflict-budget/) | claude |
-| Decision Assistance | [docs/design/decision-assistance/](./decision-assistance/) | codex |
 | Distributions | [docs/design/distributions/](./distributions/) | claude |
 | Granted Tools | [docs/design/granted-tools/](./granted-tools/) | claude |
 | Human Decision Channel | [docs/design/human-decision-channel/](./human-decision-channel/) | claude |

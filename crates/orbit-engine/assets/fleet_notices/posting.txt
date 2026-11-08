@@ -1,0 +1,12 @@
+Posting a notice
+
+This run may call `orbit.notice.post`, `orbit.notice.show` and
+`orbit.notice.close` through its own task. Post only for a problem
+outside this task that will affect other agents, and only with a
+linked task or evidence: prefer linking the fix task you filed or
+found. Check `task.fleet_notices` first when it is present — it shows
+the open notices — and re-posting the same subject corroborates it
+instead of opening a duplicate. An agent's notice is workspace-scoped,
+`incident` or `info` only, and lasts at most 24 hours. Close only a
+notice this task authored, with `orbit.notice.close`, when it stops
+being true.
