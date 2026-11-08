@@ -79,6 +79,15 @@ Ranks are bands. A model shares its band with the one above it unless the paired
 gives the higher model at least an 80% chance of really being ahead. The score and its
 interval are always shown.
 
+**R3 shadow recommendation (2026-11 · [ORB-23304]):** evaluate a wider 95% threshold.
+Across eight retained-history rolling cutoffs, ±50% weight perturbations changed band
+membership in 14/96 cases at 80%, versus 6/96 at 95%. This remains sensitive, and CI-cause,
+recovery-fault and tool-attribution coverage is incomplete. R2's implemented threshold
+remains 80%; 95% is a shadow target pending further evidence and Daniel's adoption
+decision. The task's readout also includes eight complete weekly windows and recommends
+evaluating two-sided K = 30 shrinkage in shadow. Cost: wider bands yield more co-leaders
+and less separation without guaranteeing weight stability.
+
 ### Consequences
 
 - A week with no clear leader says so, rather than crowning a winner on noise.
@@ -185,5 +194,6 @@ frozen or published.
 ## Task References
 
 - [ORB-23297] — designs the model ranking (this folder)
+- [ORB-23304] — R3 calibration and replay readout; recommends wider bands for shadow evaluation
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
