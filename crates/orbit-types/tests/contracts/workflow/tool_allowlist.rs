@@ -1,8 +1,6 @@
 use serde_json::Value;
 
-use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
-};
+use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, AgentLoopSpec, Provider};
 use orbit_types::workflow::activity_job::{ToolAllowlistError, validate_activity_tool_allowlist};
 
 /// [ORB-10959] Granting `proc.spawn` without declaring the program allowlist
@@ -35,31 +33,9 @@ fn agent_loop_activity(
         output_schema_json: Value::Null,
         fs_profile: None,
         spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
-            crew_name: None,
-            instruction: "test".to_string(),
-            steering_instruction: None,
-            notice_instruction: None,
-            notice_posting_instruction: None,
-            fleet_notices: Default::default(),
             tools,
-            on_denial: OnDenial::Terminate,
-            model: None,
-            reasoning_effort: None,
-            max_iterations: 1,
-            backend: None,
-            provider: Provider::default(),
-            wall_clock_timeout_seconds: 30,
-            require_response_envelope: false,
-            require_completion_envelope: true,
             proc_allowed_programs,
-            proc_disallowed_programs: None,
-            trusted_host_execution: false,
-            tool_disallow_list: None,
-            crew_env: Vec::new(),
-            crew_account: None,
-            crew_vision_disabled: false,
-            incomplete_continuation: None,
-            response_correction: None,
+            ..AgentLoopSpec::for_provider("test".to_string(), Provider::default(), 30)
         }),
     }
 }

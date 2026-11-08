@@ -248,13 +248,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
             .lock()
             .unwrap()
             .push(activity.to_string());
-        Ok(ResolvedActivityTools {
-            requested_tools: Vec::new(),
-            effective_tools: Vec::new(),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
-            suppressed_tools: Vec::new(),
-        })
+        Ok(ResolvedActivityTools::default())
     }
 
     fn tool_context_for_activity(

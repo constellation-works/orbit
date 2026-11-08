@@ -86,9 +86,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         Ok(orbit_engine::ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
             effective_tools,
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
-            suppressed_tools: Vec::new(),
+            ..Default::default()
         })
     }
 

@@ -30,8 +30,8 @@ use orbit_engine::{
 use orbit_store::Store;
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, OnDenial,
-    Provider, V2AuditEvent, V2AuditEventKind,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2, JobV2StepBody, Provider,
+    V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
     BaselineRedHold, ClaimFailureClass, failed_provider, is_baseline_red_failure,
@@ -126,33 +126,7 @@ impl FakeProvider {
 }
 
 pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
-    AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "implement the task".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: vec![],
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider,
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
-    }
+    AgentLoopSpec::for_provider("implement the task".to_string(), provider, 30)
 }
 
 pub(super) fn writer(root: &Path, run_id: &str) -> Arc<V2AuditWriter> {

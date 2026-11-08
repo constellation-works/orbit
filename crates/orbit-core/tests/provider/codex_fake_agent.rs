@@ -27,7 +27,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::ExecutorDef;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
 const VALIDATION_PYTHON: &str = "Python 3.99.0 (validation_env)";
 const PROFILE_PYTHON: &str = "Python 3.9.6 (login profile)";
@@ -173,31 +173,12 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     )
     .expect("build audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Codex,
-        wall_clock_timeout_seconds: 60,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Codex,
+            60,
+        )
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name,

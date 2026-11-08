@@ -847,7 +847,56 @@ pub enum OnDenial {
     Continue,
 }
 
+impl Default for AgentLoopSpec {
+    fn default() -> Self {
+        Self {
+            instruction: String::new(),
+            steering_instruction: None,
+            fleet_notices: FleetNoticeGuidance::None,
+            notice_instruction: None,
+            notice_posting_instruction: None,
+            tools: Vec::new(),
+            tool_disallow_list: None,
+            on_denial: OnDenial::Terminate,
+            model: None,
+            reasoning_effort: None,
+            max_iterations: default_max_iterations(),
+            backend: None,
+            provider: Provider::default(),
+            wall_clock_timeout_seconds: default_cli_wall_clock_timeout_seconds(),
+            require_response_envelope: false,
+            require_completion_envelope: default_require_completion_envelope(),
+            incomplete_continuation: None,
+            response_correction: None,
+            proc_allowed_programs: None,
+            proc_disallowed_programs: None,
+            trusted_host_execution: false,
+            crew_env: Vec::new(),
+            crew_name: None,
+            crew_account: None,
+            crew_vision_disabled: false,
+        }
+    }
+}
+
 impl AgentLoopSpec {
+    /// Shared test constructor: neutral defaults with the given instruction,
+    /// provider and wall-clock timeout. Fixtures override fields with
+    /// struct-update syntax (`..AgentLoopSpec::for_provider(..)`).
+    pub fn for_provider(
+        instruction: impl Into<String>,
+        provider: Provider,
+        wall_clock_timeout_seconds: u64,
+    ) -> Self {
+        Self {
+            instruction: instruction.into(),
+            provider,
+            wall_clock_timeout_seconds,
+            max_iterations: 1,
+            ..Self::default()
+        }
+    }
+
     /// The instruction bytes for one envelope. With steering disabled, or
     /// with no `steering_instruction` declared, this is exactly
     /// `instruction`; with steering enabled and a declared paragraph, it is

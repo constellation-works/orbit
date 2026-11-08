@@ -41,9 +41,7 @@ use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
-use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
-};
+use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, AgentLoopSpec, Provider};
 use orbit_types::workflow::{
     ConventionTemplate, FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState,
     PipelineState,
@@ -3220,33 +3218,11 @@ fn dispatch_audited_linked_activity(
 
 /// A one-iteration Codex agent loop that requires the completion envelope.
 fn agent_loop(instruction: &str) -> ActivityV2Spec {
-    ActivityV2Spec::AgentLoop(AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: instruction.to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Codex,
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
-    })
+    ActivityV2Spec::AgentLoop(AgentLoopSpec::for_provider(
+        instruction.to_string(),
+        Provider::Codex,
+        30,
+    ))
 }
 
 /// An audit writer for `run_id` whose blobs land in `sink` under `blobs`.
