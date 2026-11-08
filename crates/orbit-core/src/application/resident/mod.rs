@@ -8,7 +8,9 @@
 //! [`crate::OrbitRuntime::grant_resident_authority`] applies an operator's widening,
 //! turns anyone else's into a `resident_authority` decision request, and
 //! applies any task writer's narrowing; the decision answer path applies a
-//! human's `grant` through `OrbitRuntime::apply_resident_grant_answer`.
+//! human's `grant` through `OrbitRuntime::apply_resident_grant_answer`, which
+//! task reaches only through the task-owned `TaskResidentPort` that
+//! `task_port` implements, as it does resident comment admission.
 //! A cycle fires through the `resident_due` state trigger (`due`), runs
 //! as `resident_cycle_pipeline` (`steps`) and reaches tools only through
 //! the cycle guard (`guard`). The manager pauses, stops, wakes or takes a
@@ -27,6 +29,7 @@ mod guard;
 mod mandate_reads;
 mod metrics;
 mod steps;
+mod task_port;
 mod view;
 
 #[cfg(feature = "test-support")]
