@@ -262,6 +262,7 @@
   width: 40px; min-width: 0; padding: 0; border: 0;
   background: transparent; color: var(--fg-strong); font-size: 14px; text-align: center; appearance: textfield; -moz-appearance: textfield;
 }
+#auto-drain-concurrency { width: 72px; }
 .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .drain-stepper-value::placeholder { color: var(--fg-dim); }
 #auto-drain-concurrency-problem, #auto-drain-duration-problem { margin-top: -10px; }

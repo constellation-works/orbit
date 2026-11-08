@@ -399,6 +399,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
             "approve_proposed": approve_proposed,
             "auto_fix": auto_fix,
         });
+        started["max_active_leaf_runs"] = recorded_drain_limit(&runtime, &invoke.run_id)?;
         started["allowed_crews"] = recorded_allowed_crews(&runtime, &invoke.run_id)?;
         started["auto_concurrency"] = runtime.run_auto_concurrency(&invoke.run_id)?;
         started["review"] = runtime.run_review_layer(&invoke.run_id)?;
@@ -456,6 +457,7 @@ fn pull_drain_start(
         "state": if invoke.queued { "queued" } else { "submitted" },
         "submitted_at": invoke.submitted_at,
     });
+    started["max_active_leaf_runs"] = recorded_drain_limit(runtime, &invoke.run_id)?;
     started["allowed_crews"] = recorded_allowed_crews(runtime, &invoke.run_id)?;
     let notices = runtime.submission_notices(SubmissionKind::PullDrain);
     notices.insert_into(&mut started);
@@ -467,6 +469,26 @@ fn pull_drain_start(
         started["warning"] = json!(warning);
     }
     Ok(started)
+}
+
+/// The submitted run's configured ceiling, including its job default.
+fn recorded_drain_limit(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<Value, orbit_core::OrbitError> {
+    let run = runtime.show_job_run(run_id)?;
+    let default = runtime.job_default_input(&run.job_id)?;
+    Ok(run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("max_active_leaf_runs"))
+        .or_else(|| {
+            default
+                .as_ref()
+                .and_then(|input| input.get("max_active_leaf_runs"))
+        })
+        .cloned()
+        .unwrap_or_else(|| json!(5)))
 }
 
 /// The canonical crew names the submitted run recorded, `[]` when it admits

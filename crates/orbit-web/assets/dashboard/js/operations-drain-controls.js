@@ -27,7 +27,18 @@ function autoDrainHostForm() {
   const key = getHost() || "";
   let form = autoDrainFormsByHost.get(key);
   if (!form) {
-    form = { duration: "1h", concurrency: "", complete: false, approveProposed: false, autoFix: false, review: "" };
+    const defaults = { duration: "1h", concurrency: null, complete: false, approveProposed: false, autoFix: false, review: "" };
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(`orbit.drain.form.${key}`)) || {}; } catch (_) { /* storage unavailable */ }
+    const values = { ...defaults };
+    for (const name of Object.keys(defaults)) {
+      if (typeof saved[name] === typeof defaults[name] || (name === "concurrency" && typeof saved[name] === "string")) values[name] = saved[name];
+    }
+    form = new Proxy(values, { set(target, name, value) {
+      target[name] = value;
+      try { localStorage.setItem(`orbit.drain.form.${key}`, JSON.stringify(target)); } catch (_) { /* keep in memory */ }
+      return true;
+    } });
     autoDrainFormsByHost.set(key, form);
   }
   return form;
@@ -36,14 +47,14 @@ const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
 const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
 
 export function autoDrainConcurrencyValid() {
-  if (autoDrainHostForm().concurrency === "") return true;
+  if (!autoDrainHostForm().concurrency) return true;
   if (!/^\d+$/.test(autoDrainHostForm().concurrency)) return false;
   const value = Number(autoDrainHostForm().concurrency);
   return value >= 1 && value <= AUTO_DRAIN_CONCURRENCY_MAX;
 }
 
 export function autoDrainConcurrencyValue() {
-  return autoDrainHostForm().concurrency;
+  return autoDrainHostForm().concurrency || "";
 }
 
 function drainFieldHead(label, help, { warn = false, id = null } = {}) {
@@ -182,17 +193,25 @@ function autoDrainDurationControl(payload, form) {
 
 // Concurrency is the same blank-means-runtime-default number input as before,
 // with − / + around it; the stepper clamps at the input's own minimum of 1.
+function capacityDefault(payload) {
+  return payload.capacity?.default_max_active_leaf_runs ?? 5;
+}
+
 function autoDrainConcurrencyControl(payload, form) {
   const capacity = payload.capacity || {};
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
-  const fallback = Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
+  const fallback = Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "5";
+  const previous = autoDrainNumber(capacity.last_drain_max_active_leaf_runs);
+  if (autoDrainHostForm().concurrency === null && Number.isFinite(previous) && previous >= 1) {
+    autoDrainHostForm().concurrency = String(Math.trunc(previous));
+  }
   const label = el("label", { class: "drain-field-label", text: "Parallel tasks" });
   label.htmlFor = "auto-drain-concurrency";
   const input = el("input", { class: "drain-stepper-value mono", title: "Leaf-run concurrency (blank = runtime default)" });
   input.id = "auto-drain-concurrency";
   input.type = "number";
   input.min = "1";
-  input.placeholder = fallback || "auto";
+  input.placeholder = `auto (${capacity.default_max_active_leaf_runs ?? 5})`;
   input.value = autoDrainHostForm().concurrency;
   input.dataset.drainFocus = "concurrency";
   // The message sits under the whole settings row, not in this narrow column.
@@ -403,7 +422,7 @@ function autoDrainStartButton(payload, form) {
       checkout.replica
         ? `Start pulling from ${checkout.ownerHost} in workspace "${workspace?.name || workspace?.id}"?`
         : `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
-      `Duration: ${duration} · Concurrency: ${autoDrainHostForm().concurrency || "runtime default"}`,
+      `Duration: ${duration} · Concurrency: ${autoDrainHostForm().concurrency || `auto (${capacityDefault(payload)})`} parallel`,
       `Review before landing: ${checkout.replica ? "owner policy" : review ? `add ${review} review` : "workspace policy"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
@@ -426,9 +445,10 @@ function autoDrainStartButton(payload, form) {
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
+      const parallel = result?.max_active_leaf_runs ?? "unknown";
       const receipt = checkout.replica
-        ? `Run ${runId ?? "(no run id)"} ${state}: pulling from ${result?.selector || checkout.pullSelector || checkout.ownerHost}.`
-        : `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`;
+        ? `Run ${runId ?? "(no run id)"} ${state} (${parallel} parallel): pulling from ${result?.selector || checkout.pullSelector || checkout.ownerHost}.`
+        : `Run ${runId ?? "(no run id)"} ${state} (${parallel} parallel, completion: ${completion}).`;
       feedback("auto-drain-operation-feedback", "success", [`${receipt}${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`, ...(result?.auto_fix === true ? ["Auto-fix PR blockers enabled."] : []), ...(result?.auto_concurrency?.mode ? [`Auto-concurrency: ${result.auto_concurrency.mode} (${result.auto_concurrency.source}).`] : []), ...(result?.review?.timing ? [`Review before landing: ${reviewLayerText(result.review)}.`] : []), ...submissionNoticeLines(result)].join("\n"));
       await refreshDrainAfterAction();
     } catch (error) {
