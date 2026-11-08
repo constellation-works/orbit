@@ -270,12 +270,14 @@ Bounded multi-state recency pages select at most the requested limit from
 each distinct state through the workspace/state recency index, then merge
 those candidates by recency and run ID before applying the final limit.
 Active and failed page selection does not scan unrelated success history.
-Per-job bounded recency pages that include finished states, including failure
-streaks, seek the per-job creation index and sort only that job's run IDs and
+Per-job bounded recency pages that name the success state, as failure streaks
+do, seek the per-job creation index and sort only that job's run IDs and
 recency values, then hydrate the bounded page. Old inputs stay outside the
 sort. Forcing the workspace/state recency index there would walk unrelated
-jobs once per state and catalogue entry, including jobs with no matching runs. Live-only
-pages continue to seek the sparse state index.
+jobs once per state and catalogue entry, including jobs with no matching runs.
+Other per-job pages keep their existing selection, so a failed-only or
+cancelled-only page does not walk that job's success history. Live-only pages
+continue to seek the sparse state index.
 Other filters apply inside each selection; counts retain the complete
 matching set. Workspace HTTP lists reconcile stale runs once per request,
 while aggregate lists read the stored rows observationally.
