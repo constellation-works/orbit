@@ -38,6 +38,7 @@
 //! archives one Orbit automation filed once its cited commits are proven on
 //! the base branch; the read-only readiness view only reports it.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -55,18 +56,14 @@ use crate::runtime::engine::crew::normalized_task_crew;
 
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, approval_disqualification,
-    classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
-    promote_reusable_assessment, task_pilot_warnings,
+    ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
+    approval_disqualification, classify_explicit_assessment_reuse, held_classification,
+    live_execution_claim_tasks, promote_reusable_assessment, task_pilot_warnings,
+    unresolved_pilot_run_id,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
 const MAX_CANDIDATES_PER_PASS: usize = 10;
-/// History event the drain records, by `system`, on a proposed task whose
-/// task-pilot run finished without deciding about it. Its note names the run.
-/// Later drains hold the task on it until a real change, whichever drain
-/// dispatched that pilot [ORB-19544].
-pub(super) const UNRESOLVED_PILOT_EVENT: &str = "task_pilot_unresolved";
 /// Bounded lists on the durable report; totals sit beside them.
 pub(super) const REPORTED_TASKS: usize = 20;
 pub(super) const PILOT_JOB: &str = "task_pilot_pipeline";
@@ -329,7 +326,7 @@ pub(super) fn approval_snapshot(
                 "pilot_unresolved",
                 Some(format!(
                     "task-pilot run {} left no decision; edit the task or approve it to retry",
-                    unresolved_run_id(entry).unwrap_or_else(|| "unknown".to_string())
+                    unresolved_pilot_run_id(entry).unwrap_or(Cow::Borrowed("unknown"))
                 )),
                 Vec::new(),
             ));
@@ -522,6 +519,6 @@ pub(super) fn readiness_approvals(
 
 use super::pilot_coordination::{
     PilotChild, is_decision_neutral, live_pilot_run, pilot_children, read_pilots, record_report,
-    reusable_explicit_promotion, unresolved_pilot_failed_independently, unresolved_run_id,
+    reusable_explicit_promotion, unresolved_pilot_failed_independently,
 };
 pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed_approvals};

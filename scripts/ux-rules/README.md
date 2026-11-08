@@ -2,6 +2,8 @@
 
 Runner for the CLI and UI rule sets. It is a hand-run QA and development tool, not a repository test and not a merge gate. The `ux-rules` routine that ran it on a schedule and filed tasks from its results was removed [ORB-22844], with its `step.mjs` script adapter and the rule-findings filer; the QA full sweep's `ux-measurement-browser` scenario still runs the rule tests.
 
+A workspace that set up the routine still holds its script manifest, `.orbit/resources/scripts/ux_rules_runner.yaml`, whose entry, the deleted `step.mjs` adapter, no longer exists. Every job dispatch loads that directory, so while the manifest stays, every job in the workspace refuses. Delete the manifest, then run `orbit script revoke ux_rules_runner` to drop its grant. `orbit doctor` reports a leftover manifest under `retired-scripts`.
+
 ## Run
 
 ```sh

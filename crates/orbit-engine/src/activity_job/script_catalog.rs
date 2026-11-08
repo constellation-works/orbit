@@ -88,6 +88,22 @@ pub enum ScriptLoadError {
     },
 }
 
+impl ScriptLoadError {
+    /// The one manifest file this refusal is about, or `None` when it is
+    /// about the scripts directory or a name two manifests share.
+    pub fn manifest_path(&self) -> Option<&Path> {
+        match self {
+            Self::ReadManifest { path, .. }
+            | Self::Parse { path, .. }
+            | Self::Validation { path, .. }
+            | Self::NameMismatch { path, .. }
+            | Self::EntryEscapes { path, .. }
+            | Self::ReadEntry { path, .. } => Some(path),
+            Self::ReadDir { .. } | Self::DuplicateName { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct ScriptEnvelopeYaml {
     #[serde(rename = "schemaVersion")]

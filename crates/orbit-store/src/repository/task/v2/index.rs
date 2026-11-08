@@ -52,6 +52,28 @@ const PARALLEL_STAMP_MIN_ROWS: usize = 256;
 const MAX_STAMP_THREADS: usize = 4;
 
 impl TaskV2Store {
+    /// Enumerate the authoritative registrations, retaining listing order
+    /// from the index only when it covers every registration. Bundle scans
+    /// supply their own freshness and validation, so no envelope probe is
+    /// needed here. An incomplete index keeps the normal repair fallback.
+    pub(crate) fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        self.ensure_recovered()?;
+        let snapshot = self.registry.task_index_snapshot(&self.workspace_id)?;
+        let Some(rows) = &snapshot.rows else {
+            return Ok(None);
+        };
+        let mut ordered = rows.iter().collect::<Vec<_>>();
+        ordered.sort_by(|a, b| {
+            b.indexed
+                .created_at
+                .cmp(&a.indexed.created_at)
+                .then(a.task_id.cmp(&b.task_id))
+        });
+        Ok(Some(
+            ordered.into_iter().map(|row| row.task_id.clone()).collect(),
+        ))
+    }
+
     pub(crate) fn task_status_index(
         &self,
     ) -> Result<std::collections::BTreeMap<String, TaskStatus>, OrbitError> {

@@ -1,5 +1,10 @@
 use super::*;
 
+/// Small scans avoid helper startup; large scans bound simultaneous probes
+/// just as envelope freshness does. Bundle reads never leave the caller.
+const PARALLEL_BUNDLE_STAMP_MIN_TASKS: usize = 256;
+const MAX_BUNDLE_STAMP_THREADS: usize = 16;
+
 impl TaskV2Store {
     /// A task's comments for a reader outside any boundary section.
     ///
@@ -153,7 +158,7 @@ impl TaskV2Store {
     }
 
     /// Filesystem evidence of the bundle a whole-bundle read opens, for each
-    /// of `ids`, taken without reading it: [`bundle_stamp`] over its
+    /// of `ids`, taken without reading it: whole-bundle stamps over its
     /// directories and logs.
     ///
     /// A store write that changes what a whole-bundle read returns, or
@@ -162,8 +167,8 @@ impl TaskV2Store {
     /// [`Self::task_history_stamp`] states: taken before a read it labels
     /// that read or something older, and it is evidence that the store
     /// wrote nothing, not proof the bytes are identical: an out-of-band
-    /// in-place edit of a renamed-into-place file (the envelope, a document,
-    /// the manifest or a blob), or a change inside a legacy nested artifact
+    /// in-place edit of a renamed-into-place document, manifest or blob,
+    /// or a change inside a legacy nested artifact
     /// directory, goes unseen until the bundle's next store write.
     ///
     /// The partition is checked once for a commit to recover; a task is
@@ -175,19 +180,58 @@ impl TaskV2Store {
         &self,
         ids: &[String],
     ) -> Result<BTreeMap<String, String>, OrbitError> {
-        let mut stamps = BTreeMap::new();
         let Some(boundary) = &self.coordination else {
-            return Ok(stamps);
+            return Ok(BTreeMap::new());
         };
         if !boundary.has_nothing_to_recover()? {
-            return Ok(stamps);
+            return Ok(BTreeMap::new());
         }
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(MAX_BUNDLE_STAMP_THREADS);
+        if ids.len() < PARALLEL_BUNDLE_STAMP_MIN_TASKS || threads < 2 {
+            return self.stamp_settled_task_bundles(ids);
+        }
+        // Only metadata and non-blocking commit-lease probes run on helpers:
+        // no boundary entry, recovery or bundle read with thread-local locks.
+        std::thread::scope(|scope| {
+            let chunks = ids
+                .chunks(ids.len().div_ceil(threads))
+                .map(|chunk| {
+                    let handle = std::thread::Builder::new()
+                        .spawn_scoped(scope, move || self.stamp_settled_task_bundles(chunk))
+                        .ok();
+                    (chunk, handle)
+                })
+                .collect::<Vec<_>>();
+            // Join every helper before propagating errors. A lost helper
+            // supplies no proof, so those tasks get strict bundle reads.
+            let batches = chunks
+                .into_iter()
+                .map(|(chunk, handle)| match handle {
+                    Some(handle) => handle.join().unwrap_or_else(|_| Ok(BTreeMap::new())),
+                    None => self.stamp_settled_task_bundles(chunk),
+                })
+                .collect::<Vec<_>>();
+            let mut stamps = BTreeMap::new();
+            for batch in batches {
+                stamps.extend(batch?);
+            }
+            Ok(stamps)
+        })
+    }
+
+    /// Stamp a slice after the caller checked partition settledness once.
+    fn stamp_settled_task_bundles(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut stamps = BTreeMap::new();
         for id in ids {
-            orbit_types::task::validate_orb_task_id(id)?;
             let Some(bundle_dir) = self.bundle_store.settled_bundle_dir(id)? else {
                 continue;
             };
-            if let Some(stamp) = bundle_stamp(&bundle_dir) {
+            if let Some(stamp) = bundle_stamp::task_bundle_freshness_stamp(&bundle_dir) {
                 stamps.insert(id.clone(), stamp);
             }
         }
@@ -258,39 +302,4 @@ pub(crate) fn task_comment_from_row(comment: TaskCommentRowV2) -> TaskComment {
         message: comment.body,
         operation_id: comment.operation_id,
     }
-}
-
-/// The bundle entries a whole-bundle stamp covers. Every store write but a
-/// log append publishes a file by renaming it into place, and new artifact
-/// blobs land flat in `artifacts/files`, so the stamps of the bundle and
-/// artifact directories move with each of those writes and each added or
-/// removed file; the two logs are stamped themselves, because an append or a
-/// truncation changes the file and not its directory.
-const BUNDLE_STAMP_ENTRIES: [&str; 5] = [
-    "",
-    TASK_ARTIFACTS_DIR_NAME,
-    TASK_BUNDLE_FILES_DIR,
-    orbit_types::task::TASK_EVENTS_FILE_NAME,
-    orbit_types::task::TASK_COMMENTS_FILE_NAME,
-];
-const TASK_BUNDLE_FILES_DIR: &str = "artifacts/files";
-
-/// One `entry=stamp` line per [`BUNDLE_STAMP_ENTRIES`] entry, hashed. An
-/// absent entry stamps as absent, so creating it moves the stamp; `None` when
-/// a present entry has no persisted stamp, so the bundle cannot be vouched
-/// for and the caller reads it instead.
-fn bundle_stamp(bundle_dir: &Path) -> Option<String> {
-    let mut lines = String::new();
-    for entry in BUNDLE_STAMP_ENTRIES {
-        let stamp = match fs::metadata(bundle_dir.join(entry)) {
-            Ok(metadata) => envelope_cache::persisted_metadata_stamp(&metadata)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_string(),
-            Err(_) => return None,
-        };
-        lines.push_str(entry);
-        lines.push('=');
-        lines.push_str(&stamp);
-        lines.push('\n');
-    }
-    Some(sha256_hex(lines.as_bytes()))
 }

@@ -898,8 +898,28 @@ fn an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_ch
     let next = ws.select(&later);
     assert_task_ids(&next, &[]);
     assert_held(&next, &ordinary, "pilot_unresolved");
+    assert_held_detail(
+        &next,
+        &ordinary,
+        &format!("task-pilot run {pilot} left no decision"),
+    );
     ws.rename(&ordinary);
     assert_task_ids(&ws.select(&later), &[&ordinary]);
+}
+/// A hold written before `task_pilot_unresolved` carried a typed decision
+/// names its run only in the JSON note; the held reason still names it.
+fn a_legacy_note_only_undecided_pilot_still_holds_with_its_run() {
+    let (ws, drain) = harness();
+    let ordinary = ws.readme_task("ordinary");
+    append_unresolved_pilot_entry(&ws, &ordinary, "jrun-legacy-undecided");
+    let selection = ws.select(&drain);
+    assert_task_ids(&selection, &[]);
+    assert_held(&selection, &ordinary, "pilot_unresolved");
+    assert_held_detail(
+        &selection,
+        &ordinary,
+        "task-pilot run jrun-legacy-undecided left no decision",
+    );
 }
 fn a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration() {
     let ws = Workspace::new();
@@ -1257,6 +1277,7 @@ fn append_pilot_entry(ws: &Workspace, task: &Task, at: &str, note: &str) {
         note.into(),
     );
 }
+/// The note-only shape `task_pilot_unresolved` had before its typed decision.
 fn append_unresolved_pilot_entry(ws: &Workspace, task: &Task, pilot_run_id: &str) {
     let note = json!({"pilot_run_id": pilot_run_id}).to_string();
     append_history(
@@ -1525,6 +1546,7 @@ crate::scenario_table!(
     a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes,
     an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
     an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_changes,
+    a_legacy_note_only_undecided_pilot_still_holds_with_its_run,
     a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration,
     proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred,
     candidates_with_no_crew_are_never_bundled_with_crewed_candidates,

@@ -22,13 +22,14 @@ use crate::application::task::{
 use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    ExplicitAssessmentReuse, approved_by_drain, classify_explicit_assessment_reuse,
-    held_classification,
+    ExplicitAssessmentReuse, UNRESOLVED_PILOT_EVENT, approved_by_drain,
+    classify_explicit_assessment_reuse, held_classification, unresolved_pilot_entry,
+    unresolved_pilot_run_id,
 };
 
 use super::approvals::{
     ApprovalSnapshot, MAX_PILOT_WAIT_SECONDS, PILOT_JOB, PILOT_WAIT_POLL, REPORTED_TASKS,
-    UNRESOLVED_PILOT_EVENT, approval_snapshot, held_json, proposed_tasks,
+    approval_snapshot, held_json, proposed_tasks,
 };
 
 /// A live task-pilot run that names `task_id` in its input, or whose
@@ -156,22 +157,13 @@ pub(super) fn is_decision_neutral(entry: &TaskHistoryEntry) -> bool {
         || entry.event == UNRESOLVED_PILOT_EVENT
 }
 
-/// The run an undecided-pilot record names.
-pub(super) fn unresolved_run_id(entry: &TaskHistoryEntry) -> Option<String> {
-    entry
-        .note
-        .as_deref()
-        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-        .and_then(|note| note["pilot_run_id"].as_str().map(str::to_string))
-}
-
 /// Whether an earlier unresolved-pilot marker names a failure the task could
 /// not affect, so configuration can release the hold without a task edit.
 pub(super) fn unresolved_pilot_failed_independently(
     runtime: &OrbitRuntime,
     entry: &TaskHistoryEntry,
 ) -> Result<bool, OrbitError> {
-    let Some(run_id) = unresolved_run_id(entry) else {
+    let Some(run_id) = unresolved_pilot_run_id(entry) else {
         return Ok(false);
     };
     let Some(run) = runtime.stores().jobs().get_job_run(&run_id)? else {
@@ -262,21 +254,11 @@ fn record_unresolved_pilot(
             return Ok(());
         }
     }
-    let now = Utc::now();
     runtime.stores().task_records().update(
         task_id,
         TaskRecordUpdateParams {
             actor: SYSTEM_ACTOR_LABEL.to_string(),
-            append_history: vec![TaskHistoryEntry {
-                at: now,
-                by: SYSTEM_ACTOR_LABEL.to_string(),
-                event: UNRESOLVED_PILOT_EVENT.to_string(),
-                note: Some(json!({ "pilot_run_id": pilot.run_id }).to_string()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
+            append_history: vec![unresolved_pilot_entry(&pilot.run_id, Utc::now())],
             // Only a task still proposed takes the record: a write that moved
             // it on wins, and the pilot is then no longer this drain's concern.
             expected_status: Some(vec![TaskStatus::Proposed]),

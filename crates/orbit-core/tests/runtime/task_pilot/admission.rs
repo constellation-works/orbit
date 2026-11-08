@@ -1232,7 +1232,7 @@ fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, messag
     );
 }
 
-fn append_history(workspace: &Workspace, task: &Task, entry: TaskHistoryEntry) {
+pub(super) fn append_history(workspace: &Workspace, task: &Task, entry: TaskHistoryEntry) {
     let actor = entry.by.clone();
     update_task_history(
         workspace,
