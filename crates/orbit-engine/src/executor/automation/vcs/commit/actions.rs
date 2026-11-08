@@ -19,8 +19,6 @@ use super::super::handoff::{
     claimed_attempt_summary, reject_failed_attempt, reject_failed_delivery,
 };
 use super::super::pr::meaningful_execution_summary;
-use super::already_landed;
-use super::already_resolved;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
     PinnedHead, head_descends_from_pin, head_matches_final_recovery, validate_pinned_head,
@@ -33,7 +31,6 @@ use super::git_ops::{
     git_commit_with_identity, stage_paths, staged_changed_files,
 };
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
-use super::no_diff;
 use super::published_replay::final_recovery_published_candidate;
 use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
 use super::regression::resolve_regression_landed_commits;
@@ -460,33 +457,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            match verify_clean_tree(host, &task, &workspace_path, run_id, base_sha) {
+            match verify_clean_tree(host, &task, &workspace_path, run_id, base_sha, input) {
                 Ok(checkpoint) => return Ok(checkpoint),
                 Err(error) => {
-                    // ORB-22407: a claimed leaf whose implementer found the
-                    // base already resolves the task may carry its evidence
-                    // in its output instead of a clean-tree report. Settle
-                    // through the NoDiff route with that evidence named,
-                    // rather than an empty-stage failure whose only triage
-                    // answer requeues the same empty run. Artifact-backed
-                    // evidence, when present, stays the authority: a report
-                    // that failed verification is refused as before.
-                    if claimed
-                        && matches!(
-                            host.get_task_artifact(&task.id, no_diff::ARTIFACT),
-                            Ok(None)
-                        )
-                        && matches!(
-                            host.get_task_artifact(&task.id, already_landed::ARTIFACT),
-                            Ok(None)
-                        )
-                        && let Some(evidence) =
-                            already_resolved::evidence_from_implementation(input)?
-                    {
-                        return Ok(already_resolved::checkpoint(
-                            &task.id, run_id, base_sha, evidence,
-                        ));
-                    }
                     return Err(
                         match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
                             Ok(OrbitError::Execution(observed)) => {

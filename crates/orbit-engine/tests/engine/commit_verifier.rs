@@ -29,6 +29,7 @@ struct VerifierHost {
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
     worker: Option<orbit_types::tool::WorkerInvocation>,
+    state: Mutex<Option<orbit_types::workflow::PipelineState>>,
     unknown_artifact_read: Mutex<Option<(String, usize)>>,
     bulk_reads: Mutex<usize>,
     pr_config: Mutex<orbit_engine::PrConfig>,
@@ -43,6 +44,7 @@ impl VerifierHost {
             comments: Mutex::default(),
             artifacts: Mutex::default(),
             worker: None,
+            state: Mutex::default(),
             unknown_artifact_read: Mutex::default(),
             bulk_reads: Mutex::default(),
             pr_config: Mutex::default(),
@@ -146,6 +148,19 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
             .get(task_id)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn read_run_state(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|state| state.run_id == run_id)
+            .cloned())
     }
 
     fn get_job_run(
@@ -811,7 +826,13 @@ fn commit_verifier_refuses_required_evidence_and_unknown_reads() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
     let head = git_head(temp.path());
-    let input = commit_input(temp.path(), &head);
+    let mut input = commit_input(temp.path(), &head);
+    // Implementation evidence cannot override invalid reports or unknown reads.
+    input["implementation"] = json!({
+        "already_resolved": {
+            "selectors": ["cargo test -p orbit-engine --test engine commit_verifier::"]
+        }
+    });
     let valid = valid_already_landed_artifacts(&head);
 
     for (case, artifacts) in [
@@ -1572,13 +1593,10 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
     );
 }
 
-/// A claimed leaf whose implementer found the base already resolves the
-/// task, and carried that evidence in its output instead of a clean-tree
-/// report, settles through both claimed pipelines' commit steps instead of
-/// failing with an empty stage [ORB-22407]. The settled outcome names the
-/// implementer's evidence. A claimed leaf with no implementer evidence at
-/// all is still refused.
-fn claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved() {
+/// An owner or claimed task whose implementer found the base already resolves
+/// the task settles its empty commit stage using the evidence in step input
+/// [ORB-23169, ORB-22407]. Missing selectors still refuse the empty stage.
+fn owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path();
     init_git_repo(repo);
@@ -1601,20 +1619,26 @@ fn claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved
         host
     };
 
-    for pipeline_asset in [
-        "task_claimed_local_pipeline.yaml",
-        "task_claimed_pr_pipeline.yaml",
+    for (pipeline_asset, claimed) in [
+        ("task_local_pipeline.yaml", false),
+        ("task_pr_pipeline.yaml", false),
+        ("task_claimed_local_pipeline.yaml", true),
+        ("task_claimed_pr_pipeline.yaml", true),
     ] {
-        let host = claimed_host(repo);
+        let host = if claimed {
+            claimed_host(repo)
+        } else {
+            VerifierHost::new(repo, fixture_task())
+        };
         let mut input = pipeline_commit_step_input(pipeline_asset, repo, &head);
         input["implementation"] = json!({
             "execution_summary": "Outcome: success\n\nThe defect is already fixed on the pinned base; no change is required.",
             "already_resolved": {
-                "selectors": ["cargo test -p orbit-engine --test commit_verifier"]
+                "selectors": ["cargo test -p orbit-engine --test engine commit_verifier::"]
             },
         });
         let result = action(&host, &input).unwrap_or_else(|error| {
-            panic!("{pipeline_asset} claimed empty candidate must settle, got: {error}")
+            panic!("{pipeline_asset} empty candidate must settle, got: {error}")
         });
         assert_eq!(result["decision"], "verified_already_resolved", "{result}");
         assert_eq!(result["committed"], false, "{result}");
@@ -1623,7 +1647,7 @@ fn claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved
         assert_eq!(result["base_sha"], head, "{result}");
         assert_eq!(
             result["already_resolved_evidence"]["selectors"],
-            json!(["cargo test -p orbit-engine --test commit_verifier"]),
+            json!(["cargo test -p orbit-engine --test engine commit_verifier::"]),
             "{result}"
         );
         assert!(
@@ -1634,32 +1658,48 @@ fn claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved
         );
         assert_eq!(git_head(repo), head);
         assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
+
+        if !claimed {
+            // Owner pipelines checkpoint the implementation instead of passing
+            // it as step input, and may skip that step when resuming.
+            let mut state = orbit_types::workflow::PipelineState::new(
+                RUN_ID.into(),
+                "task_pr_pipeline".into(),
+                json!({}),
+            );
+            state.record_pipeline_output("implement_one", input["implementation"].clone());
+            *host.state.lock().unwrap() = Some(state);
+            let mut checkpoint_input = input.clone();
+            checkpoint_input
+                .as_object_mut()
+                .unwrap()
+                .remove("implementation");
+            assert_eq!(
+                action(&host, &checkpoint_input).expect("owner checkpoint evidence must settle"),
+                result
+            );
+            *host.state.lock().unwrap() = None;
+        }
+
+        // A summary alone names no check that could show the base resolves
+        // the task. No implementation output also keeps the empty-stage error.
+        for implementation in [
+            json!({
+                "execution_summary": "Outcome: success\n\nVerified the change already exists on the base.",
+            }),
+            Value::Null,
+        ] {
+            input["implementation"] = implementation;
+            let error = action(&host, &input)
+                .expect_err("an empty candidate without selectors must be refused");
+            assert!(
+                error.to_string().contains("nothing to commit"),
+                "{pipeline_asset} expected empty stage refusal, got: {error}"
+            );
+        }
+        assert_eq!(git_head(repo), head);
+        assert!(git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty());
     }
-
-    // A summary alone names no check that could show the base resolves the
-    // task, so it is not evidence: the empty stage is still refused.
-    let host = claimed_host(repo);
-    let mut input = pipeline_commit_step_input("task_claimed_local_pipeline.yaml", repo, &head);
-    input["implementation"] = json!({
-        "execution_summary": "Outcome: success\n\nVerified the change already exists on the base.",
-    });
-    let error =
-        action(&host, &input).expect_err("a claimed summary without selectors must be refused");
-    assert!(
-        error.to_string().contains("nothing to commit"),
-        "expected empty stage refusal, got: {error}"
-    );
-
-    // No implementer evidence at all: the empty stage is still refused.
-    let host = claimed_host(repo);
-    let input = pipeline_commit_step_input("task_claimed_local_pipeline.yaml", repo, &head);
-    let error = action(&host, &input)
-        .expect_err("a claimed empty candidate without implementer evidence must be refused");
-    assert!(
-        error.to_string().contains("nothing to commit"),
-        "expected empty stage refusal, got: {error}"
-    );
-    assert_eq!(git_head(repo), head);
 }
 
 /// Plant a nested repository at `sub/` whose own config runs a clean filter
@@ -1865,8 +1905,8 @@ fn commit_evidence_contracts_3() {
                 clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
             ),
             (
-                "claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved",
-                claimed_empty_candidate_with_implementer_evidence_settles_as_already_resolved,
+                "owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence",
+                owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence,
             ),
         ]);
     });
