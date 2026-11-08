@@ -336,7 +336,43 @@ impl PluginBackendSpec {
             Some(parent) => allowlisted_child_env_from(parent, env_pass, &[]),
             None => allowlisted_child_env(env_pass, &[]),
         };
+        // Granted declared programs are discoverable by name whatever the
+        // caller's `PATH`: prepend each still-granted program's parent
+        // directory (deduplicated). A program whose recorded path is no
+        // longer granted adds nothing.
+        let mut granted_dirs: Vec<PathBuf> = Vec::new();
+        for status in self.program_statuses() {
+            if status.granted()
+                && let Some(parent) = status.path.as_deref().and_then(Path::parent)
+                && !parent.as_os_str().is_empty()
+                && !granted_dirs.iter().any(|dir| dir == parent)
+            {
+                granted_dirs.push(parent.to_path_buf());
+            }
+        }
+        let path_override = if granted_dirs.is_empty() {
+            None
+        } else {
+            let mut path_dirs = granted_dirs;
+            if let Some(existing) = env_pairs
+                .iter()
+                .find(|(key, _)| key == "PATH")
+                .map(|(_, value)| value.clone())
+            {
+                for dir in std::env::split_paths(&existing) {
+                    if !dir.as_os_str().is_empty() && !path_dirs.contains(&dir) {
+                        path_dirs.push(dir);
+                    }
+                }
+            }
+            std::env::join_paths(&path_dirs)
+                .ok()
+                .map(|joined| joined.to_string_lossy().into_owned())
+        };
         let mut set = |key: &str, value: String| upsert_env(&mut env_pairs, key, value);
+        if let Some(path) = path_override {
+            set("PATH", path);
+        }
         set("ORBIT_HOST_API", PLUGIN_HOST_API.to_string());
         set("ORBIT_VERSION", env!("CARGO_PKG_VERSION").to_string());
         set("ORBIT_PLUGIN", self.provenance.name.clone());
