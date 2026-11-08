@@ -454,7 +454,7 @@ pub(super) fn redact_json_with(value: Value, redact: fn(&str) -> String) -> Valu
             map.into_iter()
                 .map(|(key, value)| {
                     let redacted = if is_credential_json_key(&key) {
-                        redact_credential_json_value(value)
+                        redact_credential_json_value(value, redact)
                     } else {
                         redact_json_with(value, redact)
                     };
@@ -466,14 +466,17 @@ pub(super) fn redact_json_with(value: Value, redact: fn(&str) -> String) -> Valu
     }
 }
 
-/// Mask every string leaf under a credential-labelled key.
+/// Mask the string value of a credential-labelled key.
 ///
 /// The key-context patterns in `redact_all` need the key and value in one
 /// string, so a bare leaf value (a `Basic …` token, a 20-char key) matches
 /// nothing on its own. Masking by key keeps the placeholder the
-/// whole-document pass would have produced. Empty strings carry no secret
-/// and stay empty; non-string scalars keep their type.
-fn redact_credential_json_value(value: Value) -> Value {
+/// whole-document pass would have produced. Those patterns match only a
+/// string value, so an object under the key (a plugin secret record of
+/// `value` and `version`) is redacted field by field as usual rather than
+/// masked whole. Empty strings carry no secret and stay empty; non-string
+/// scalars keep their type.
+fn redact_credential_json_value(value: Value, redact: fn(&str) -> String) -> Value {
     match value {
         Value::String(raw) => {
             if raw.is_empty() {
@@ -485,14 +488,10 @@ fn redact_credential_json_value(value: Value) -> Value {
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(redact_credential_json_value)
+                .map(|item| redact_credential_json_value(item, redact))
                 .collect(),
         ),
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| (key, redact_credential_json_value(value)))
-                .collect(),
-        ),
+        object @ Value::Object(_) => redact_json_with(object, redact),
         other => other,
     }
 }
