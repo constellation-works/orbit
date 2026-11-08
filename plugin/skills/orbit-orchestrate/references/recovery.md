@@ -196,6 +196,13 @@ same files does not refuse it. History records it as `external_merge_settled`, w
 landing note naming the PR and merge commit
 ([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
 
+Settling to `done` also closes the task's other open Orbit-authored delivery
+and preservation PRs. Each gets a `superseded by #N` comment naming the landing
+PR and a `pull_request_closed` task-history entry. The branches are kept;
+human PRs and other tasks' PRs stay open. Closure is best effort: if the forge
+fails, settlement still stands and a warning is recorded. Inspect the task
+history and any closure warnings before closing a remaining stale PR by hand.
+
 If a follower's handoff was refused before its PR was recorded, and an operator
 rebased and merged that PR, recover the stopped claim to `blocked` first. Then,
 in the owning checkout, use one audited settlement command:

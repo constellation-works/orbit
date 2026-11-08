@@ -47,7 +47,8 @@
 //! or, when the note names no landing and the task leaves `review`, the PR it
 //! was reviewed through. The whole pass
 //! is best effort: the transition has already been written, so a forge error is
-//! a warning (log plus session event), never a failure. Branches are kept.
+//! a warning (log plus session event), never a failure. Each successful close
+//! is recorded in the task's history with its comment. Branches are kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -56,13 +57,14 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInspection, JobRunQuery};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus,
+    CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskHistoryEntry, TaskStatus,
     names_task_delivery_pull_request,
 };
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::handoff::HandoffDelivery;
 
 use crate::OrbitRuntime;
+use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
 use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 use crate::runtime::task_pr_forge::TaskPrForge;
 
@@ -239,6 +241,28 @@ impl OrbitRuntime {
                         task_id: task.id.clone(),
                         pr_number: pr.number,
                     });
+                    if let Err(error) = self.append_system_history(
+                        &task.id,
+                        vec![TaskHistoryEntry {
+                            at: chrono::Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: "pull_request_closed".to_string(),
+                            note: Some(format!("Closed pull request #{}: {comment}", pr.number)),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                    ) {
+                        self.warn_pr_closure(
+                            &task.id,
+                            Some(pr.number),
+                            &OrbitError::Execution(format!(
+                                "pull request was closed, but recording its task history failed: {error}"
+                            )),
+                        );
+                        settled = false;
+                    }
                 }
                 Err(error) => {
                     self.warn_pr_closure(&task.id, Some(pr.number), &error);
@@ -502,7 +526,18 @@ fn closure_comment(task: &Task, note: Option<&str>) -> String {
     let note = note.map(str::trim).filter(|note| !note.is_empty());
     let decision = match (task.status, note) {
         (TaskStatus::Done, Some(landing)) => {
-            format!("Task {} landed: {landing}", task.id)
+            let prs = referenced_pr_numbers(landing);
+            let supersession = if prs.is_empty() {
+                String::new()
+            } else {
+                let prs = prs
+                    .iter()
+                    .map(|number| format!("#{number}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("\n\nThis pull request is superseded by {prs}.")
+            };
+            format!("Task {} landed: {landing}{supersession}", task.id)
         }
         (TaskStatus::Done, None) => format!("Task {} is done.", task.id),
         (status, Some(reason)) => format!("Task {} was {status}: {reason}", task.id),
