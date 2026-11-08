@@ -2499,7 +2499,7 @@ An operator's or agent's move from active work back to `backlog` or `someday` (`
 
 The blocked and final-recovery exceptions hold however often the task moves between `backlog` and `someday` afterwards. `--discard-candidate` with the move drops every exception except a live run or claim. Moving from `someday` to `backlog`, or out of `done`, `rejected` or `archived` (including `--force`), closes nothing. Automation's own requeues and holds close nothing. Merged PRs are never touched.
 
-A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
+A terminal or requeue closure records each successfully closed PR as a `pull_request_closed` task-history entry, including its closing comment. When the done note names a landing PR, the comment says `superseded by #N`. A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
 
 ### `[commit]` and `[branch]` — commit messages and branch names
 

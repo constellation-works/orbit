@@ -53,6 +53,8 @@ const COMPLETION_POLICY: &str = "workspace-config:workflow.distributed_completio
 /// The branch a claimed handoff lands on, unlike the workspace base branch.
 const LANDING: &str = "release-landing";
 
+mod pr_supersession;
+
 /// How far a claimed handoff's completion authority got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Authority {
@@ -88,6 +90,8 @@ struct ForgeState {
     /// Open and closed-unmerged PRs return no merge from the forge.
     unmerged: BTreeMap<u64, &'static str>,
     closed: Vec<u64>,
+    open: BTreeMap<u64, ForgePullRequest>,
+    closure_comments: BTreeMap<u64, String>,
 }
 
 #[derive(Default, Clone)]
@@ -128,7 +132,7 @@ impl FakeForge {
 
 impl TaskPrForge for FakeForge {
     fn open_pull_requests(&self, _repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        Ok(Vec::new())
+        Ok(self.0.lock().unwrap().open.values().cloned().collect())
     }
 
     fn merged_pull_requests(
@@ -170,9 +174,12 @@ impl TaskPrForge for FakeForge {
         &self,
         _repo_root: &Path,
         number: u64,
-        _comment: &str,
+        comment: &str,
     ) -> Result<(), OrbitError> {
-        self.0.lock().unwrap().closed.push(number);
+        let mut state = self.0.lock().unwrap();
+        state.open.remove(&number);
+        state.closed.push(number);
+        state.closure_comments.insert(number, comment.to_string());
         Ok(())
     }
 }
