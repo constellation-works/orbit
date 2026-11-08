@@ -442,8 +442,9 @@ posts `queued_only: true`: a window that started after the card rendered is
 refused with 409 and keeps running, and the card says so and refreshes
 [ORB-20120].
 
-**Start a window** posts `POST /api/workflows/auto` after confirmation. Its
-six durations are 1h, 2h, 4h, 8h, 12h and 24h (default 1h); parallel tasks is
+**Start a window** posts `POST /api/workflows/auto` after confirmation. The
+window-length stepper selects whole hours from 1 to 24 (default `1h`), shown
+as `<n>h` and submitted as `for_duration: <n>h`; parallel tasks is
 blank for the runtime default or a positive whole number. Invalid input is
 flagged, omitted from readiness queries and blocks Start. Owner windows can
 mark shipped tasks done, approve qualifying proposals, repair PR blockers and
