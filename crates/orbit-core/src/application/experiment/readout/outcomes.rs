@@ -677,26 +677,6 @@ impl OrbitRuntime {
         Ok(ExplorerObservations { found, unobserved })
     }
 
-    /// Lines added plus deleted over every landed delivery, per task.
-    pub(crate) fn landed_task_lines_changed(
-        &self,
-        ids: &BTreeSet<String>,
-        since: DateTime<Utc>,
-    ) -> Result<BTreeMap<String, u64>, OrbitError> {
-        let mut lines: BTreeMap<String, u64> = BTreeMap::new();
-        for row in self.landed_diff_stats(Some(since))? {
-            if !ids.contains(&row.task_id) {
-                continue;
-            }
-            let changed: u64 = [row.code, row.tests, row.other]
-                .iter()
-                .map(|class| class.added + class.deleted)
-                .sum();
-            *lines.entry(row.task_id).or_default() += changed;
-        }
-        Ok(lines)
-    }
-
     /// Reviewable added plus deleted lines per task. `None` means at least
     /// one row in the window has an unavailable denominator, so the task is
     /// left out of per-line metrics rather than filled in from a shared range.

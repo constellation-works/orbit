@@ -933,6 +933,18 @@ if dependency_matches -n 'crate::application::experiment\b' \
   fail=1
 fi
 
+# Experiment readout consumes agent facts; agents must not reach back into
+# experiment by path or by an inherent OrbitRuntime method it owns.
+if dependency_matches -n 'crate::application::experiment\b' \
+  "$app_src/agents" -g '*.rs' -g '!**/tests/**' ||
+  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
+    "$app_src/agents" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" agents experiment '' '' ||
+  ! super_chains_into "$app_src" agents experiment; then
+  echo "orbit-core agents must not name experiment or call its inherent methods"
+  fail=1
+fi
+
 # [ORB-23019] `experiment` sits above `tag_instructions`: its overlays read
 # `LazyRevision`, `TagInstructionFailure` and `read_blob_at`, and call
 # `claim_base_revision`. Tag instructions reach overlay policy only through

@@ -43,6 +43,8 @@ class RelativeImportTests(unittest.TestCase):
                         GUARD_TEST_METADATA=str(metadata))
         self.app = self.root / "crates/orbit-core/src/application"
         for directory in (
+            "crates/orbit-core/src/application/agents",
+            "crates/orbit-core/src/application/experiment",
             "crates/orbit-core/src/application/contracts",
             "crates/orbit-core/src/application/task",
             "crates/orbit-core/src/application/job",
@@ -828,6 +830,26 @@ class RelativeImportTests(unittest.TestCase):
                 "pub use crate::application::contracts::{ClockSettings, load_clock_settings};\n",
             "routines/status/mod.rs":
                 "pub use crate::application::contracts::ScheduleDisplayState;\n",
+        }, rejected=False)
+
+    def test_agents_cannot_reach_experiment(self):
+        for relative, source in (
+            ("agents/facts/scan.rs", "use crate::application::experiment::Probe;"),
+            ("agents/facts/scan.rs", "use crate::application::{experiment::Probe};"),
+            ("agents/facts/scan.rs", "use super::super::super::experiment::Probe;"),
+            ("agents/facts/scan.rs", "use super::super::super::{experiment::Probe};"),
+            ("agents/mod.rs", "use super::experiment::Probe;"),
+        ):
+            with self.subTest(source=source):
+                self.check_files({relative: source + "\n"}, rejected=True)
+        self.check_files({
+            "experiment/readout.rs": "impl OrbitRuntime {\n    pub(crate) fn experiment_probe(&self) {}\n}\n",
+            "agents/facts/scan.rs": "fn scan(runtime: &OrbitRuntime) { runtime.experiment_probe(); }\n",
+        }, rejected=True)
+        self.check_files({
+            "experiment/readout.rs": "use crate::application::agents::Probe;\n",
+            "codebase/diff_stats.rs": "impl OrbitRuntime {\n    pub(crate) fn landed_task_lines_changed(&self) {}\n}\n",
+            "agents/facts/scan.rs": "fn scan(runtime: &OrbitRuntime) { runtime.landed_task_lines_changed(); }\n",
         }, rejected=False)
 
     def test_forecast_cannot_reach_sweep_filing(self):
