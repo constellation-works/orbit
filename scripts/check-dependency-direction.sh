@@ -900,14 +900,17 @@ done
 # The clock settings and schedule display state those two read live in
 # `contracts`. A path, a grouped tree, a `super::` chain into `routines`, or a
 # call to an inherent method it defines (names derived) is a reintroduced edge.
-for lower_module in automation auto_tasks; do
+# Resident reads the selected-checkout cycle switch through its own
+# ResidentRoutineStatusPort, implemented by routines [ORB-22956], so the
+# routines -> automation -> resident path has no back-edge into routines.
+for lower_module in automation auto_tasks resident; do
   if rg -n 'crate::application::routines\b' \
     "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
     rg -n -U 'crate::application::\{[^}]*\broutines\b' \
       "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
     ! inherent_calls_into "$app_src" "$lower_module" routines '' '' ||
     ! super_chains_into "$app_src" "$lower_module" routines; then
-    echo "orbit-core ${lower_module} must not name routines or call its inherent methods; read clock settings and schedule display state from application::contracts"
+    echo "orbit-core ${lower_module} must not name routines or call its inherent methods; use lower-owned contracts or resident::ResidentRoutineStatusPort"
     fail=1
   fi
 done

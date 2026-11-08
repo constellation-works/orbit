@@ -292,8 +292,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   and reused reads wrap, when `contracts` imports any of the ten modules,
   `routines` or `auto_tasks`, when
   `distributed` names `experiment` or calls its inherent methods [ORB-22416],
-  when `automation` or `auto_tasks` names `routines` or calls its inherent
-  methods [ORB-22623],
+  when `automation`, `auto_tasks` or `resident` names `routines` or calls its
+  inherent methods [ORB-22623, ORB-22956],
   when `task`, `job`, `review` or `distributed` names `landing` or calls its
   inherent methods [ORB-22708],
   or when a shared contract is defined or imported anywhere but
@@ -355,10 +355,16 @@ Core [ORB-22688] and named through `contracts`, the one contract that reads and
 writes a file, under a root its caller names. The
 `ScheduleDisplayState` `auto_tasks` projects is in `contracts::schedule_display`.
 `routines::clock` and `routines::status` re-export them for outer consumers, a
-compatibility shim whose retirement is a follow-up. The guard checks direct
-references only, so it cannot see `automation -> resident -> routines`:
-`automation/members/member_host/resident.rs` reads `resident`, and
-`resident_cycle_routine_disabled` reads routine statuses. That path remains.
+compatibility shim whose retirement is a follow-up. Resident owns
+`resident::ResidentRoutineStatusPort`, whose `disabled_resident_cycle_routine_name`
+returns only `Option<String>`; `routines/resident_port.rs` implements it on
+`OrbitRuntime` [ORB-22956]. The existing `resident_cycle_routine_disabled`
+delegates to it without changing callers. The implementation keeps the selected
+checkout status read, silent lookup failures, canonical source-directory and
+resident-cycle target matching, and the versioned `!enabled` switch. The guard
+refuses resident paths, grouped trees, `super::` chains and calls to routines-owned
+inherent methods. Thus automation still reads resident, but resident no longer
+names routines, cutting `routines -> automation -> resident -> routines`.
 
 `tag_instructions` sits outside the order but above `task` [ORB-22289]. Task
 reads commit-pinned repository files through its own `task::base_revision`
@@ -427,6 +433,7 @@ cut the lower modules’ direct edges into `landing`.
 - [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
 - [ORB-22708] — placed `landing` above `distributed` beside `visual_delivery`, moved its pure handoff claim resolution into `task`, routed review dispatch through `ReviewLandingDispatchPort`, and guarded the direction.
 - [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
+- [ORB-22956] — cut resident's cycle status back-edge through `resident::ResidentRoutineStatusPort`, implemented by `routines`, and guarded resident references and inherent calls into routines.
 - [ORB-22955] — cut task's grant-answer and resident-comment calls into `resident` through `task::TaskResidentPort`, implemented by `resident`, and added `resident` to the guarded `task` upper modules.
 - [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.

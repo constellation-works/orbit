@@ -28,6 +28,7 @@ mod grant;
 mod guard;
 mod mandate_reads;
 mod metrics;
+mod routine_status_port;
 mod steps;
 mod task_port;
 mod view;
@@ -52,6 +53,7 @@ pub use grant::{
     ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams,
 };
 pub(crate) use guard::{ResidentCallAdmission, ResidentCallClass};
+pub(in crate::application) use routine_status_port::ResidentRoutineStatusPort;
 pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 
 pub(crate) use view::{ResidentView, resident_mandate_from_artifact};
