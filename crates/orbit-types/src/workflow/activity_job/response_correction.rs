@@ -3,7 +3,10 @@
 //! A correction is one more invocation of the whole activity. Only the prompt
 //! asks it to change nothing but its reply. Admission therefore requires the
 //! read-only filesystem profile and denies the built-in Orbit mutation tools
-//! below, including coordination writes outside the worktree.
+//! below, including coordination writes outside the worktree. That denial
+//! also covers a task's `required_tools` at run time: the runtime grant path
+//! drops a mutating requirement with an omitted-requirement note instead of
+//! adding it to the effective grant of a correction activity.
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 use super::tool_allowlist::tool_allowed;
@@ -15,7 +18,7 @@ const READ_ONLY_FS_PROFILE: &str = "reviewer";
 /// to coordination state outside the worktree. Keep this table and the shipped
 /// correction activities' disallow lists in sync with the tool registry.
 /// File and process access is separately confined by the filesystem profile.
-const MUTATING_TOOLS: &[&str] = &[
+pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.auto_task.add",
     "orbit.auto_task.mint",
     "orbit.auto_task.update",
@@ -70,6 +73,12 @@ const MUTATING_TOOLS: &[&str] = &[
     "orbit.workflow.run.resume",
     "orbit.workflow.ship",
 ];
+
+/// Whether `tool` is a built-in Orbit mutation a `response_correction`
+/// activity must never be granted, however the grant was composed.
+pub fn is_response_correction_mutating_tool(tool: &str) -> bool {
+    MUTATING_TOOLS.contains(&tool)
+}
 
 /// Why an activity may not declare `response_correction`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
