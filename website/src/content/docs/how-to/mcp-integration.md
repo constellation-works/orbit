@@ -234,7 +234,11 @@ Replace `ws_example` with an unchanged selector from `orbit_workspace_list`
 (host-qualified in a federated session), and replace paths, job names and run
 IDs with values from that workspace. Public command execution and job
 submission require an operator session, such as `orbit mcp serve --operator`.
-The `model` field records provenance; it grants no authority.
+Requests take no `model` or `agent` argument. Attribution comes from the
+session, not the request: a managed run's own identity, or the crew named by
+`--orchestrator` when the server starts (see
+[Attribute tasks to an orchestrator](#attribute-tasks-to-an-orchestrator)).
+Attribution grants no authority.
 
 ### Execute a bounded command
 
@@ -251,8 +255,7 @@ quoting around an argument containing spaces.
     "workspace": "ws_example",
     "argv": ["git", "status", "--short"],
     "working_directory": "/home/operator/example",
-    "timeout_ms": 30000,
-    "model": "codex"
+    "timeout_ms": 30000
   }
 }
 ```
@@ -301,8 +304,7 @@ registering a job named `example_check` that accepts `directory`:
     "workspace": "ws_example",
     "job_name": "example_check",
     "input": { "directory": "src" },
-    "priority": "low",
-    "model": "codex"
+    "priority": "low"
   }
 }
 ```
@@ -342,18 +344,16 @@ After selecting an eligible job, submit it with its defaults. Here
   "arguments": {
     "workspace": "ws_example",
     "job_name": "example_check",
-    "default_input": true,
-    "model": "codex"
+    "default_input": true
   }
 }
 ```
 
-This variant accepts only `workspace`, `job_name`, `default_input` and the
-optional `model`. Omit both `input` and `priority`. It requires trusted
-operator authority and always refuses managed runs, including child
-admissions. Not every registered job is eligible: subroutines, disabled jobs
-and task-delivery jobs do not belong on this route. Use the delivery tools
-for task shipping.
+This variant accepts only `workspace`, `job_name` and `default_input`. Omit
+both `input` and `priority`. It requires trusted operator authority and always
+refuses managed runs, including child admissions. Not every registered job is
+eligible: subroutines, disabled jobs and task-delivery jobs do not belong on
+this route. Use the delivery tools for task shipping.
 
 ### Observe the run
 
