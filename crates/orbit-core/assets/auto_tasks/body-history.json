@@ -614,6 +614,36 @@
         "## Rules and command surfaces",
         "## What other work owns"
       ],
+      "digest": "dc018ff39050a925e1dac6ebed4be16ae98a034a043cef8d28f8b73d9335d3fe",
+      "revision": "df97a2829956088eb65e52cf37b1e7bb94b1c229",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
       "digest": "fd506956a6824ee5150e15609030632cff3d86a4df3d584bb33ed3febf7e16d9",
       "revision": "22b2f6c270e63191a2da67346d18a7655d59b595",
       "settings": {
@@ -2237,6 +2267,32 @@
       ],
       "digest": "0fc7a08853984f36af3c639abe78d12236b06724ce5108dd2a81f1bdb5a16e79",
       "revision": "c9ebc0bc60791950c7c6b4bec42d6eb8b4a3aabb",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# Preparation keeps these selectors. It does not replace them with the",
+        "# The executing worker selects the batch at run time inside this bound.",
+        "# batch or with a document the brief excludes. A dir:. lock starves on a",
+        "# busy drain, so the minted task locks just this scope.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "3f9e9aa4e595095656f8463a940aec374ac41f51f6ddf8f34e2efc377b3cc52b",
+      "revision": "7bda492bb41f982a9a34d9c379d4dfa48115396a",
       "settings": {
         "complexity": "low",
         "dedupe": "skip_if_open",
@@ -4016,6 +4072,32 @@
     },
     {
       "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "d1d22071aad9c07a2d910584634328f7297da7193b3054e7f772a2131cbcfdb8",
+      "revision": "7078505c9afdf6f3962410df25bcdc251d798f7c",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# The portable system lane is seeded per machine and compatibility-aliased",
         "# for configs written before that crew existed.",
         "## File one surface-QA task per area",
@@ -4685,6 +4767,32 @@
       ],
       "digest": "48ac649ca64ecaad5e89de9587f1dc57e46a89f9f4a4ef20c0f1e0615b4639ca",
       "revision": "9ab7579b0e805f1eb058f11c2f1ffc1efcccf036",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "5d546f6f40c0da0872af6589fd1bf1973aefac25e1e4c71e07614125a992a977",
+      "revision": "d2f0c13b735cb63c073125a887a521bca25b350d",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
