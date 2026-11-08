@@ -76,9 +76,9 @@ created_at, updated_at, comments, history, artifacts
 or `null`. `fault` says whose fault the failed run was: `implementer`,
 `specification`, `review`, `infrastructure`, `orbit`, `external` or `unknown`
 (also how a decision recorded before faults reads). `fault_judged_by` is the
-model, or else the provider, of the agent that judged it, as Orbit observed
-it; it is `null` when Orbit decided without an agent. The field has no
-member for the implementer's crew or model.
+provider of the agent that judged it, as Orbit observed it; it is `null`
+when Orbit decided without an agent or did not observe a provider. Older
+decisions may retain a model name. The field does not name the implementer's crew or model.
 
 Show without a projection returns the full task. A projection returns only
 the requested fields as JSON: a single field returns its value, and multiple

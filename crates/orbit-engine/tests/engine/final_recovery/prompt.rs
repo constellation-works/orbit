@@ -68,6 +68,7 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
         panic!("final recovery must dispatch an agent");
     };
     spec.provider = Provider::Claude;
+    spec.model = Some("fixture-model".to_string());
     spec.tools = Vec::new();
     spec.tool_disallow_list = None;
     spec.wall_clock_timeout_seconds = 30;
@@ -81,6 +82,10 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
         run.result,
         run.details,
         host.applications()
+    );
+    assert_eq!(
+        host.applications()[0].fault.judged_by.as_deref(),
+        Some("claude")
     );
     let prompt = std::fs::read_to_string(assigned.join("envelope.json")).unwrap();
     let envelope: Value = serde_json::from_str(prompt.lines().last().unwrap()).unwrap();

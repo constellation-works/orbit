@@ -11,8 +11,7 @@ pub(super) struct RecoveryDispatch {
     pub(super) payload: Value,
     /// The dispatched spec's resolved model [ORB-16768].
     pub(super) model: Option<String>,
-    /// Who judged the fault: that model, or the provider the dispatch ran
-    /// on when the spec named no model. Observed, never the agent's claim.
+    /// The provider observed running the judge, never the agent's claim.
     pub(super) judge: Option<String>,
 }
 
@@ -76,13 +75,11 @@ pub(super) fn dispatch_final_recovery(
                 )
                 .map_err(|error| format!("persist final recovery evidence: {error}"))?;
         }
-        let judge = recovery_model.clone().or_else(|| {
-            dispatch
-                .output
-                .get("provider")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
+        let judge = dispatch
+            .output
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         Ok(RecoveryDispatch {
             payload,
             model: recovery_model,
