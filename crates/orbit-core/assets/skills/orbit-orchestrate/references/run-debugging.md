@@ -433,8 +433,9 @@ history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
 `failed_checks`, plus a `classification` and `detail` that use the classes in
 the table above. A watch whose job listing read is rate-limited by the provider
 records classification `deferred`; a non-throttle listing failure or no
-deciding job after log reads records `inconclusive`. An individual unreadable
-failed-job log does not void a readable job's classification. The watch only observes. To repair a red or conflicting pull
+deciding job after log reads records `inconclusive`. An individual non-throttle unreadable
+failed-job log does not void a readable job's classification; a rate-limited failed-job
+log read records `deferred` with the provider's reset evidence. The watch only observes. To repair a red or conflicting pull
 request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
 [auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
 resumes the succeeded leaf at its completion step under the leaf's own
