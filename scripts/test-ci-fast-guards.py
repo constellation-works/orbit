@@ -1349,6 +1349,11 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
+        # The guard scans this single-file module and fails closed when it is
+        # absent [ORB-23019]; the stubbed rg finds no matches in the empty file.
+        app = self.root / "crates/orbit-core/src/application"
+        app.mkdir(parents=True, exist_ok=True)
+        (app / "tag_instructions.rs").write_text("")
         config = self.root / "crates/orbit-config/src"
         for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
                          "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
