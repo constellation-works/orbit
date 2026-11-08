@@ -350,7 +350,7 @@ fn git_commit_neutralizes_forge_mentions_in_subjects_and_bodies() {
             "README.md",
             "codex",
         );
-        task.description = "@auto @astrojs/core dev@example.com\n\n`@kept`\n\n~~~text\n@fenced\n~~~\n\nSee https://medium.com/@someone/post\n\nCo-authored-by: @author <author@example.com>".into();
+        task.description = "@auto @astrojs/core dev@example.com\n\n`@kept`\n\n~~~text\n@fenced\n~~~\n\nSee https://medium.com/@someone/post\n\n[docs](https://example.com)@auto ://@auto ](@auto)\n\nCo-authored-by: @author <author@example.com>".into();
         let mut config = orbit_engine::PrConfig::default();
         config.conventions.commit_body = Some(
             orbit_types::workflow::ConventionTemplate::parse(
@@ -377,6 +377,12 @@ fn git_commit_neutralizes_forge_mentions_in_subjects_and_bodies() {
         );
         assert!(
             message.contains("See https://medium.com/@someone/post\n"),
+            "{scope}: {message}"
+        );
+        assert!(
+            message.contains(
+                "[docs](https://example.com)@\u{200d}auto ://@\u{200d}auto ](@\u{200d}auto)\n"
+            ),
             "{scope}: {message}"
         );
         assert!(

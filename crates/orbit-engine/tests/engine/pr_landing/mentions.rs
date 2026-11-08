@@ -96,6 +96,36 @@ fn pr_open_neutralizes_forge_mentions_in_a_refreshed_draft_and_truncated_body() 
 }
 
 #[test]
+fn pr_open_neutralizes_mentions_at_url_and_link_boundaries() {
+    isolated(
+        "mentions::pr_open_neutralizes_mentions_at_url_and_link_boundaries",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["title"] =
+                json!("[docs](https://example.com)@auto ://@auto ](@auto) https://x.io/a?b=c@d");
+            input["body"] = json!(
+                "[pkg](https://www.npmjs.com/package/@orbit-tools/cli)@auto and [docs](https://example.com)@auto"
+            );
+            action_ok(&host, "pr_open", &input);
+            assert_eq!(
+                fx.forge_state("pr-title").as_deref(),
+                Some(
+                    "[docs](https://example.com)@\u{200d}auto ://@\u{200d}auto ](@\u{200d}auto) https://x.io/a?b=c@d"
+                )
+            );
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(
+                body.contains(
+                    "[pkg](https://www.npmjs.com/package/@orbit-tools/cli)@\u{200d}auto and [docs](https://example.com)@\u{200d}auto"
+                ),
+                "{body}"
+            );
+        },
+    );
+}
+
+#[test]
 fn pr_open_leaves_at_signs_inside_urls_unchanged() {
     isolated(
         "mentions::pr_open_leaves_at_signs_inside_urls_unchanged",
