@@ -5603,6 +5603,7 @@ struct DeliveryHost {
     os: Mutex<Option<EvidenceHostOs>>,
     /// The workspace's PR settings and delivery conventions.
     pr_config: Mutex<orbit_engine::PrConfig>,
+    completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
 type StatusEvent = (
@@ -5700,6 +5701,9 @@ impl DeliveryHost {
     fn releases(&self) -> Vec<ReviewReleaseRequest> {
         locked(&self.releases).clone()
     }
+    fn set_completion_hold_rules(&self, rules: Vec<orbit_types::workflow::CompletionHoldRule>) {
+        *locked(&self.completion_hold_rules) = rules;
+    }
     fn set_context_files(&self, id: &str, selectors: &[&str]) {
         locked(&self.tasks).get_mut(id).unwrap().context_files =
             selectors.iter().map(ToString::to_string).collect();
@@ -5784,6 +5788,9 @@ impl DeliveryHost {
 impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn pr_config(&self) -> orbit_engine::PrConfig {
         locked(&self.pr_config).clone()
+    }
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        locked(&self.completion_hold_rules).clone()
     }
     fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
         Ok(locked(&self.runs).get(run_id).cloned())

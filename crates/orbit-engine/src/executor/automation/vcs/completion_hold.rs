@@ -33,6 +33,32 @@ pub(crate) enum ChangedPaths {
     NoDiff,
 }
 
+/// A completion-authorized run's hold policy, carried into the merge
+/// driver so the candidate that can actually reach a merge request is
+/// evaluated, not only the originally published head [ORB-23445].
+#[derive(Clone)]
+pub(crate) struct CompletionHoldCheck {
+    pub(crate) rules: Vec<CompletionHoldRule>,
+    pub(crate) tasks: Vec<Task>,
+    pub(crate) run_id: String,
+}
+
+impl CompletionHoldCheck {
+    /// Evaluate the rules against the diff of `candidate` into the input's
+    /// base. `None` candidate fails closed through [`ChangedPaths::Unreadable`]
+    /// when a `paths` rule is configured, mirroring the pre-drive check.
+    pub(crate) fn evaluate(
+        &self,
+        workspace: &Path,
+        base: Option<&str>,
+        base_sync_local: bool,
+        candidate: Option<&str>,
+    ) -> Result<Option<CompletionHold>, OrbitError> {
+        let changed = pull_request_changed_paths(workspace, base, base_sync_local, candidate);
+        evaluate_completion_hold(&self.rules, &self.tasks, &changed, &self.run_id)
+    }
+}
+
 /// The first rule, in configured order, that holds any task of the bundle:
 /// within a rule, `paths`, then `complexity_at_least`, `types` and `tags`.
 pub(crate) fn evaluate_completion_hold(

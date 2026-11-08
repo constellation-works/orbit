@@ -5,8 +5,11 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
+use orbit_types::workflow::CompletionHold;
+
 use super::super::super::super::ci::bounded_u64;
 use super::super::super::super::input::input_string_field;
+use super::super::super::completion_hold::CompletionHoldCheck;
 use super::super::auto_fix::{
     AutoFix, LocalRepair, adopt_published_repairs, publish_local_repair, stopped,
 };
@@ -44,6 +47,10 @@ pub(super) enum Delivery {
     /// An auto-fix watch without merge authority ended: the pull request is
     /// mergeable, or was merged by someone else.
     Watched(Value),
+    /// The actual candidate that would reach a merge (an adopted or
+    /// published repair, or a refreshed head) matches a `completion.hold`
+    /// rule; no merge or auto-merge was requested for it [ORB-23445].
+    Held(CompletionHold),
 }
 
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
@@ -54,6 +61,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
     auto_fix: Option<&AutoFix>,
+    hold_check: Option<&CompletionHoldCheck>,
 ) -> Result<Delivery, OrbitError> {
     let mut diagnostic = None;
     let result = drive_pr_to_merged_observed(
@@ -62,6 +70,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         workspace_path,
         pr_number,
         auto_fix,
+        hold_check,
         &mut diagnostic,
     );
     let result = result.map_err(|error| {
@@ -87,6 +96,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
     auto_fix: Option<&AutoFix>,
+    hold_check: Option<&CompletionHoldCheck>,
     diagnostic: &mut Option<
         super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
     >,
@@ -213,6 +223,8 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         base_modified_refusals,
         base_race,
         mutated: false,
+        hold_check: hold_check.cloned(),
+        hold_cleared_candidate: None,
     }
     .run()
 }
