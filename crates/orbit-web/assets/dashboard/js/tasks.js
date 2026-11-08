@@ -142,24 +142,68 @@ function splitTitlePrefix(title) {
 // Where a running or blocked task's run is and what it holds: the host, the
 // time since the run started (known for runs this host records), and the files
 // the task has locked, each file in the tooltip.
+//
+// A machine id is the execution identity. The display name is optional metadata.
+// A linked run with no machine id is unknown. The host selected in the dashboard
+// is not a substitute: historical links and machine-id-only records used to
+// render as that host.
+function executionIdentity(machine) {
+  const machineId = machine && typeof machine.machine_id === "string" ? machine.machine_id.trim() : "";
+  if (!machineId) return { known: false, machine_id: "", machine_name: "" };
+  const machineName = typeof machine.machine_name === "string" ? machine.machine_name.trim() : "";
+  return { known: true, machine_id: machineId, machine_name: machineName };
+}
+
+function selectedExecutionHost() {
+  const selectedName = getHost() || getServingHost()?.name || "";
+  const row = selectedName
+    ? findRegisteredHost(selectedName)
+    : getRegisteredHosts().find((host) => host.local);
+  return { name: row?.name || selectedName, machine_id: row?.machine_id || "" };
+}
+
 function runCellParts(task) {
-  const machine = task.job_run_machine && task.job_run_machine.machine_name;
-  const host = machine || (task.job_run_id ? getHost() || getServingHost()?.name || "this host" : "");
+  const identity = executionIdentity(task.job_run_machine);
+  let host = "";
+  let provenance = "none";
+  if (identity.known && identity.machine_name) {
+    host = identity.machine_name;
+    provenance = "named";
+  } else if (identity.known) {
+    host = identity.machine_id;
+    provenance = "machine_id";
+  } else if (task.job_run_id) {
+    host = "unknown";
+    provenance = "unknown";
+  }
+  const selected = selectedExecutionHost();
+  const sameMachine = identity.known && (
+    (selected.machine_id && identity.machine_id === selected.machine_id)
+    || (identity.machine_name && selected.name && identity.machine_name === selected.name)
+  );
   const started = task.status === "in-progress" ? runStartedAt(task.job_run_id) : null;
   const files = taskLockFiles(task.id);
   return {
     host,
-    remote: Boolean(machine) && machine !== (getHost() || getServingHost()?.name),
+    provenance,
+    remote: identity.known && !sameMachine,
     elapsed: started != null ? elapsedLabel(Date.now() - started) : "",
     files,
   };
 }
 
+function runLocationLead(host, provenance) {
+  if (provenance === "named") return `Run on ${host}`;
+  if (provenance === "machine_id") return `Execution machine id: ${host}`;
+  if (provenance === "unknown") return "Execution location unknown";
+  return "No run recorded";
+}
+
 function buildRunCell(task) {
-  const { host, elapsed, files } = runCellParts(task);
+  const { host, provenance, elapsed, files } = runCellParts(task);
   const sub = [elapsed, files.length ? plural(files.length, "file") : ""].filter(Boolean);
   const title = [
-    host ? `Run on ${host}` : "No run recorded",
+    runLocationLead(host, provenance),
     elapsed ? `running for ${elapsed}` : "",
     ...files,
   ].filter(Boolean).join("\n");
@@ -170,8 +214,8 @@ function buildRunCell(task) {
 }
 
 function runCellSignature(task) {
-  const { host, elapsed, files } = runCellParts(task);
-  return JSON.stringify([host, elapsed, files]);
+  const { provenance, host, elapsed, files } = runCellParts(task);
+  return JSON.stringify([provenance, host, elapsed, files]);
 }
 /* ORB-10444: one-click Ship. The dispatch carries only the task id — the
    pipeline resolves the crew from the task's own record and the mode from the
