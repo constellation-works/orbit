@@ -1639,6 +1639,12 @@ configurable. The seeded baseline covers `HOME`, `PATH`, `TMPDIR`, `USER`, and
 the provider home directories. Credentials are opt-in: add `GITHUB_TOKEN` or a
 provider API key explicitly if agents need them.
 
+The shipped default includes none of `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY` or `CODEX_API_KEY`. Choose shared `pass` or a global
+per-crew `env` mapping for the intended authentication route; see
+[Provider credentials](providers.md#provider-credentials) for variable names,
+Codex API-key examples, unset-name warnings and service verification.
+
 ```toml
 [execution.env]
 pass = ["HOME", "PATH", "TMPDIR", "USER", "GITHUB_TOKEN"]

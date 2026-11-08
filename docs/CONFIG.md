@@ -2331,7 +2331,50 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 - `pass` is a [security key](#where-config-lives): a workspace file that omits it gets the built-in default, not the global value.
 - Inheriting the full environment is not configurable; a stale `execution.env.inherit` is ignored. The internal inherit seam still removes privilege-bearing `ORBIT_*` names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`, and any other `ORBIT_*` name outside the execution envelope) before a child starts.
 
-**Unset names.** A `pass` name the launching process lacks reaches no agent, and the provider falls back to another login (a missing `CLAUDE_CODE_OAUTH_TOKEN` falls back to the desktop login). Start drains from a login shell, or export the variable in the service's environment. A drain or ship start (`orbit run auto`, `--pull` included, and `orbit run ship`; MCP `orbit.workflow.auto` start and `orbit.workflow.ship`; the dashboard) reports them in its `warning` (a `Warning:` line in CLI text), and `orbit run job` warns once on stderr, for each unset or empty name you added; all of them record the names on the run (`Unset env:` in `orbit run show`, `run.env_pass_unset` in JSON, the dashboard run detail). Built-in defaults are not reported (`CODEX_HOME` and macOS's `__CF_USER_TEXT_ENCODING` can legitimately be absent). `orbit doctor`'s `env-pass` row checks its own environment for `pass` names and also checks [crew sources](#per-crew-credentials-env) against installed managed services. These are warnings only; the start proceeds and no value is printed.
+**Unset names.** A `pass` name the launching process lacks reaches no agent, and the provider may use another login; this warning alone does not force API-key authentication or refuse the start. Start drains from a login shell, or export the variable in the service's environment. A drain or ship start (`orbit run auto`, `--pull` included, and `orbit run ship`; MCP `orbit.workflow.auto` start and `orbit.workflow.ship`; the dashboard) reports them in its `warning` (a `Warning:` line in CLI text), and `orbit run job` warns once on stderr, for each unset or empty name you added; all of them record the names on the run (`Unset env:` in `orbit run show`, `run.env_pass_unset` in JSON, the dashboard run detail). Built-in defaults are not reported (`CODEX_HOME` and macOS's `__CF_USER_TEXT_ENCODING` can legitimately be absent). `orbit doctor`'s `env-pass` row checks its own environment for `pass` names and also checks [crew sources](#per-crew-credentials-env) against installed managed services. These are warnings only; the start proceeds and no value is printed. A missing per-crew source instead excludes that crew and refuses its activities; see [per-crew credentials](#per-crew-credentials-env). The separate [Claude-on-macOS check](#executionenv--the-agent-subprocess-environment) below can also refuse an activity without a credential.
+
+### Provider credentials
+
+Provider credentials are opt-in: neither the shipped config nor the built-in
+`pass` default includes `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or
+`CODEX_API_KEY`. Add only the names needed for the authentication route you
+intend to use.
+
+| Authentication route | Agent variable |
+|---|---|
+| Claude dedicated worker token (`claude setup-token`) | `CLAUDE_CODE_OAUTH_TOKEN` |
+| Claude API key | `ANTHROPIC_API_KEY` |
+| Codex noninteractive API-key override (`codex exec`) | `CODEX_API_KEY` |
+
+For Codex, `CODEX_API_KEY` is the documented per-run API-key override;
+`OPENAI_API_KEY` alone is not that override. See
+[OpenAI's noninteractive authentication guidance](https://developers.openai.com/codex/noninteractive#use-api-key-auth).
+To share the key through `pass`, add `CODEX_API_KEY` to the effective list,
+preserving existing entries. That list replaces the default and applies to
+every crew. A workspace file that omits it gets the built-in default rather
+than the global list.
+
+To use the key for one crew, add this to the existing crew in global config:
+
+```toml
+# ~/.orbit/config.toml
+[crews.sol]
+env = ["CODEX_API_KEY=CODEX_CREDITS_API_KEY_1"]
+```
+
+The right-hand side is a variable name whose value comes from the launching
+process, not a literal key. Neither name needs adding to `pass`. Other crews
+do not receive this mapping. Use an owner-only [`file:` source](#per-crew-credentials-env)
+when the credential should be read directly from a file at agent start.
+
+Check `orbit config get execution.env.pass`, `orbit config get crews.sol.env`
+and `orbit doctor --check env-pass --json` on the execution host. A successful
+SSH login-shell check does not prove the web service holds the source. Even
+when the service starts through `bash -lc`, later profile edits require a
+service restart before new runs inherit them. Inspect the effective unit and
+start time, then verify names only in the live service or worker; never print
+key values. Codex's stored `login status` alone does not prove which credential
+a worker uses with a per-run override.
 
 **Worker scope.** The same admitted names are given to a detached pipeline worker. On Linux, containment forwards them with name-only `systemd-run --setenv=NAME`, so the values stay in the child environment and never appear in `systemd-run` or worker argv. An explicit worker edit, such as a toolchain `PATH` or removing `ORBIT_ROOT`, wins over the admitted snapshot. See [worker containment](#worker-containment).
 

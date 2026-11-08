@@ -21,6 +21,7 @@ shared workspace. Preserve the user's installation method and existing config.
 |---|---|
 | First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
 | Add a Copilot, Antigravity or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
+| Pass Claude or Codex credentials, choose a per-crew API key, or diagnose a stale service environment | [Provider credentials](references/providers.md#provider-credentials) |
 | Every `orbit` command fails to load configuration because a crew name contains `:`; repair the defining file by hand | [Configuration — Crew names containing a colon](references/configuration.md#crew-names-containing-a-colon) |
 | Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
 | Configure automatic per-draw effort (`<crew>@auto` bands, `workflow.auto_effort.*`), check which pools accept it, or verify a resolved effort without dispatching work | [Configuration — Automatic effort selection](references/configuration.md#automatic-effort-selection-crewauto) |
