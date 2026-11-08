@@ -291,10 +291,13 @@ fn rows(
             continue;
         }
         let runner = &attempt.runner;
+        // The filing task itself ran as a task executor, so its filing
+        // unit counts under that executor invocation; a gate review in
+        // the same run is an independent reviewer's work.
         let effort = main_invocation_effort(
             facts,
             runner.run_id.as_deref(),
-            MainActivity::Review,
+            MainActivity::ReviewJob,
             Some(filer),
         );
         let row = rows
@@ -371,10 +374,16 @@ fn rows(
         let Some(task) = by_id.get(charge.task_id.as_str()) else {
             continue;
         };
+        // A rejected finding's penalty shares the filing unit's executor
+        // population; every other charge is a gate reviewer's own work.
+        let activity = match charge.problem {
+            Problem::RejectedFinding => MainActivity::ReviewJob,
+            _ => MainActivity::Review,
+        };
         let effort = main_invocation_effort(
             facts,
             charge.run_id.as_deref(),
-            MainActivity::Review,
+            activity,
             Some(&charge.task_id),
         );
         let row = rows

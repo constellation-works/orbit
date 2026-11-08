@@ -9,8 +9,13 @@
 //!
 //! Effort is attributed per unit of work from that unit's own invocations:
 //! the invocations of the unit's job run whose activity matches the role
-//! (implementing, reviewing or piloting). When those invocations ran at
-//! more than one effort, the unit counts under the effort of its main
+//! (implementing, reviewing or piloting). A review job is the exception:
+//! the task that files findings itself runs as a task executor
+//! (`implement_one` / `agent_implement`), so its filing units count under
+//! that executor invocation, never under an independent gate review in
+//! the same run; gate settlements keep their own reviewer invocation.
+//! When those invocations ran at more than one effort, the unit counts
+//! under the effort of its main
 //! invocation — the matching invocation with the longest recorded
 //! duration, ties broken by the latest end time then the highest
 //! invocation id. A unit with no matching invocation is `unknown` and is
@@ -34,12 +39,17 @@ pub(super) enum MainActivity {
     Implement,
     Review,
     Pilot,
+    /// The executor invocation of a review-job task: the filing task runs
+    /// under `implement_one` / `agent_implement` regardless of its review
+    /// tag, so that invocation — not a gate review in the same run —
+    /// performed the filing.
+    ReviewJob,
 }
 
 impl MainActivity {
     fn matches(self, activity_id: Option<&str>) -> bool {
         match self {
-            MainActivity::Implement => {
+            MainActivity::Implement | MainActivity::ReviewJob => {
                 matches!(activity_id, Some("implement_one" | "agent_implement"))
             }
             MainActivity::Review => activity_id.is_some_and(|id| id.contains("review")),

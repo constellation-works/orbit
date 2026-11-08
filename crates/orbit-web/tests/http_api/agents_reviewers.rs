@@ -268,6 +268,55 @@ fn review_job(fixture: &Fixture, crew: &str) -> String {
     job
 }
 
+/// One recorded invocation in `run_id` under `activity`, with dispatch
+/// identity `crew` at `effort`, as the pipeline's telemetry records it.
+#[allow(clippy::too_many_arguments)]
+fn recorded_invocation(
+    fixture: &Fixture,
+    run_id: &str,
+    task_id: &str,
+    activity: &str,
+    crew: &str,
+    model: &str,
+    effort: orbit_types::identity::ReasoningEffort,
+    duration_ms: u64,
+) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+            agent_execution_id: Some(
+                fixture
+                    .runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .begin_agent_execution(
+                        fixture.runtime.stores().jobs().workspace_id(),
+                        run_id,
+                        activity,
+                        "codex",
+                        Some(model),
+                        &orbit_types::telemetry::AgentExecutionIdentity {
+                            crew: Some(crew.into()),
+                            reasoning_effort: Some(effort),
+                        },
+                    )
+                    .unwrap(),
+            ),
+            job_run_id: run_id.into(),
+            account: None,
+            activity_id: activity.into(),
+            agent: "codex".into(),
+            provider: None,
+            model: Some(model.into()),
+            task_ids: vec![task_id.into()],
+            trace: orbit_types::telemetry::InvocationTrace {
+                duration_ms,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+}
+
 fn reviewers(facts: &AgentFacts, window: &str) -> Value {
     agent_scorecard(
         facts,
@@ -964,6 +1013,147 @@ fn reviewer_scorecard_judges_unverified_job_findings_by_task_outcome() {
                 (&detail["row"]["unjudged"], &detail["row"]["score"]),
                 (&json!(true), &Value::Null),
                 "{detail}"
+            );
+        },
+    );
+}
+
+/// A review job's filing unit counts under the effort of the executor
+/// invocation that performed the filing (`implement_one` at high), not
+/// under a longer gate review in the same run (at medium). Its confirmed
+/// finding's credit and its rejected finding's penalty land in that same
+/// model @ high row, while the gate settlement keeps its own medium row.
+#[test]
+fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
+    isolated(
+        "agents_reviewers::reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort",
+        || {
+            use orbit_core::application::agents::agent_attribution;
+            use orbit_types::identity::ReasoningEffort::{High, Medium};
+
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let hours = Duration::hours;
+
+            // orion's review job ran under implement_one at high effort;
+            // the same run's independent gate review ran longer at medium.
+            let review_job = task(&fixture, "delivery code review");
+            implementation_run(
+                &fixture,
+                "jrun-orion",
+                &review_job,
+                "orion",
+                Some("gpt-orion"),
+                now - hours(3),
+                now - hours(1),
+            );
+            append(
+                &fixture,
+                &review_job,
+                now - hours(3) + Duration::seconds(1),
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            recorded_invocation(
+                &fixture,
+                "jrun-orion",
+                &review_job,
+                "implement_one",
+                "orion",
+                "gpt-orion",
+                High,
+                60_000,
+            );
+            recorded_invocation(
+                &fixture,
+                "jrun-orion",
+                &review_job,
+                "review",
+                "vega",
+                "gpt-vega",
+                Medium,
+                120_000,
+            );
+            // The gate settlement on the review job's own candidate: its
+            // reviewer is vega, judged by the gate invocation above.
+            settle(
+                &fixture,
+                &review_job,
+                "rv-gate-1",
+                now - hours(2),
+                "accept",
+                "vega",
+                &[],
+                "abc1234",
+            );
+            filed_finding(&fixture, &review_job, "CONFIRMED", Some("high"));
+            filed_finding(&fixture, &review_job, "REJECTED", None);
+
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let scorecard = reviewers(&facts, "90d");
+            assert_eq!(scorecard["status"], "ok", "{scorecard}");
+            let by_label = |label: &str| {
+                scorecard["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["label"] == label)
+            };
+            let filing = by_label("gpt-orion @ high").unwrap_or_else(|| {
+                panic!("the filing unit is in its executor's high row: {scorecard}")
+            });
+            assert_eq!(
+                (
+                    &filing["units"],
+                    &filing["counts"]["findings_held"],
+                    &filing["counts"]["rejected_findings"],
+                    &filing["reasoning_effort"],
+                ),
+                (&json!(1), &json!(4), &json!(1), &json!("high")),
+                "confirmed credit (high severity, 4) and rejected penalty share \
+                 the filing executor's row: {filing}"
+            );
+            assert!(
+                by_label("gpt-orion @ medium").is_none()
+                    && by_label("gpt-orion @ effort unknown").is_none(),
+                "the gate review's medium effort must not move the filing unit: {scorecard}"
+            );
+            let gate = by_label("gpt-vega @ medium").unwrap_or_else(|| {
+                panic!("the gate settlement keeps its own reviewer row: {scorecard}")
+            });
+            assert_eq!(gate["units"], json!(1), "{gate}");
+
+            // The attribution strip charges the rejected finding to the
+            // same executor population as the scorecard row.
+            let strip = agent_attribution(
+                &facts,
+                &AgentQuery::parse(Some("90d"), Some(1)).unwrap(),
+                std::time::Duration::ZERO,
+            );
+            let charged = strip["charged"]["reviewers"].as_array().unwrap();
+            assert_eq!(
+                charged
+                    .iter()
+                    .map(|row| (row["label"].as_str().unwrap(), row["problems"].clone()))
+                    .collect::<Vec<_>>(),
+                vec![("gpt-orion @ high", json!(1))],
+                "credit and penalty share the filing executor population: {strip}"
+            );
+
+            // The HTTP route serves the same filing row.
+            let server = fixture.counted_task_server();
+            let payload = json_ok(server.get(&format!(
+                "/api/agents/reviewers/scorecard?{WS}&window=90d&min_support=1"
+            )));
+            assert!(
+                payload["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["label"] == "gpt-orion @ high"
+                        && row["counts"]["findings_held"] == json!(4)),
+                "{payload}"
             );
         },
     );
