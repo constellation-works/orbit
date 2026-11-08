@@ -607,6 +607,57 @@ completed `pull_request` `ci.yml` runs under the
 That measurement is the operator's, not an acceptance gate of this leaf, and no local
 figure here claims the 400-second budget is restored.
 
+An eighteenth pass (ORB-23406) follows the 2026-11-08 watch (ORB-23395: 17 executed PR
+Check jobs in the latest 20 completed PR runs, 3 skipped, none cancelled, nearest-rank
+p90 514 s, median 422 s, maximum 542 s). Job timings for 18 fetched runs of that cohort
+(16 executed, 2 skipped) split into two strata by whether the PR diff made the
+guardrails job run its fixture self-tests (`CI_SELF_TESTS=changed`). With self-tests
+off, CI guardrails ended 104–144 s after the Check job started and the slowest test
+partition bound the run. With self-tests on, CI guardrails ended at 460–783 s and was
+the last awaited job in four of the five slowest successes, 33–300 s after the slowest
+partition (run 42526696384: guardrails +760 s, slowest partition +460 s, Check 767 s).
+Parallel job times are compared by their ends, never summed.
+
+Step timings of the watch's three slowest runs (42524629248, 42525119185, 42525236912;
+affected selections of 19 and 8 crates, rust-cache hits, 4-vCPU runners) decompose the
+non-guardrails path: Check's own checks took 131 s and never bound. The folded build
+took 210–293 s (list-build 200–282 s, archive 8–9 s), the repack 12.5 s and the four
+serial uploads about 16 s; the slowest partition then spent about 16 s on transfer and
+155–165 s in nextest at 95% CPU busy. The guard pool's wall was 451–611 s, and its
+longest member in every run was `test-check-dependency-direction.py` at 380–486 s,
+ahead of `test-qa-full-sweep.py` at 165–261 s. The fifteenth pass had batched that
+self-test from 266 to 63 guard launches; tables added since (the landing, routines,
+contracts, experiment and auto_tasks ports) again launched the whole guard once per
+row. This pass batches those tables with the same `check_rows` helper — one guard run
+per detector in each chain, each row in its own file at the same module depth, the
+guard required to report that row's own path — and launches the self-test first in
+the guard pool (longest-processing-time-first), instead of after the repository
+scans. Rows whose identity is an exact file (the two `task/mod.rs` shim lines, the
+config leaves, `tag_instructions.rs`, the exact-line store-read allowances) keep
+their own runs and files, and `contracts/mod.rs` rows stay unrenamed because renaming
+changes the depth a `super::` chain resolves against. The guard itself is unchanged,
+and no row, assertion or check is removed. Two guard mutations (a neutered
+super-chain detector and a neutered inherent-call detector) fail the batched tests
+that exercise them.
+
+Local evidence: base `d3519c28`, one shared 32-logical-CPU Linux host at load average
+39–52, Python 3.14.4, each arm pinned with `taskset -c 0-3` in sequence. A counting
+`bash` shim recorded the self-test's guard launches deterministically: **223 → 149
+guard runs**. The pinned walls of one run per arm were 647.8 s before and 443.6 s
+after; on this oversubscribed host those walls are indicative only, and the launch
+count is the robust figure. This host is not a hosted 4-vCPU runner, and setup and
+transfer are not measured. The folded build plus the slowest partition still sets a
+floor above 400 s on the widest selections in this cohort, so no local figure here
+claims the budget is restored.
+
+Operator handoff: after merge, once runs carry this revision, measure the latest 20
+completed `pull_request` `ci.yml` runs under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Report executed, failed,
+skipped, cancelled and missing runs separately, the nearest-rank p90 against 400 s,
+which runs executed the self-tests, and the cache, scope and CPU strata. That
+measurement is the operator's, not an acceptance gate of this leaf.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ### Build-runner partition delay (2026-10-31)

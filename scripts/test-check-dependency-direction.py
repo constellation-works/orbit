@@ -378,14 +378,19 @@ class RelativeImportTests(unittest.TestCase):
         shim = ("pub use crate::application::backlog_forecast::BacklogForecastHistory;\n"
                 "pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV;\n")
         self.check_files({"task/mod.rs": shim}, rejected=False)
-        for relative, source in (
+        # One batch per detector in the task chain (direct paths, grouped
+        # trees, super chains): the guard stops at the first detector with a
+        # hit, so a mixed batch could hide a row behind an earlier detector.
+        self.check_rows([
             ("task/mod.rs", "pub use crate::application::backlog_forecast::Options;\n"),
             ("task/worker.rs", shim),
+        ], rejected=True)
+        self.check_rows([
             ("task/mod.rs", "use crate::application::{backlog_forecast::BacklogForecastHistory};\n"),
+        ], rejected=True)
+        self.check_rows([
             ("task/mod.rs", "pub use super::backlog_forecast::BacklogForecastHistory;\n"),
-        ):
-            with self.subTest(relative=relative, source=source):
-                self.check_files({relative: source}, rejected=True)
+        ], rejected=True)
 
     def test_forecast_codebase_edge_is_exactly_the_authorized_call(self):
         codebase = "impl OrbitRuntime {\n    pub fn task_riskiness_model(&self) {}\n    pub fn other_codebase_method(&self) {}\n}\n"
@@ -459,15 +464,18 @@ class RelativeImportTests(unittest.TestCase):
                 "impl OrbitRuntime {\n    fn admit(&self) {\n"
                 "        self.fresh_capture_method();\n    }\n}\n",
         }, rejected=True)
-        for relative, source in (
+        # One batch per detector, as in the forecast shim rows above.
+        self.check_rows([
             ("distributed/serve/admission.rs", "use crate::application::experiment::Probe;\n"),
+        ], rejected=True)
+        self.check_rows([
             ("distributed/serve/admission.rs", "use crate::application::{experiment::Probe};\n"),
+        ], rejected=True)
+        self.check_rows([
             ("distributed/worker.rs", "use super::super::experiment::Probe;\n"),
             ("distributed/worker.rs", "use super::super::{experiment::Probe};\n"),
             ("distributed/serve/admission.rs", "use super::super::super::{experiment::Probe};\n"),
-        ):
-            with self.subTest(relative=relative, source=source):
-                self.check_files({relative: source}, rejected=True)
+        ], rejected=True)
         self.check_files({
             **method,
             "distributed/experiment_port.rs":
@@ -504,21 +512,24 @@ class RelativeImportTests(unittest.TestCase):
                 "Self::fresh_listing_method(self)",
             )],
             rejected=True, shared=owner)
-        for relative, source in (
+        # One batch per detector, as in the forecast shim rows above.
+        self.check_rows([
             ("automation/task.rs",
              "fn mint(runtime: &OrbitRuntime) {\n"
              "    crate::application::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
             ("automation/task.rs", "use crate::application::auto_tasks::Probe;\n"),
+        ], rejected=True, shared=owner)
+        self.check_rows([
             ("automation/task.rs", "use crate::application::{auto_tasks::Probe};\n"),
             ("automation/task.rs", "use crate::application::{\n    task, auto_tasks::Probe,\n};\n"),
+        ], rejected=True, shared=owner)
+        self.check_rows([
             ("automation/task.rs", "use super::super::auto_tasks::Probe;\n"),
             ("automation/condition/host.rs", "use super::super::super::{auto_tasks::Probe};\n"),
             ("automation/condition/host.rs",
              "fn mint(runtime: &OrbitRuntime) {\n"
              "    super::super::super::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
-        ):
-            with self.subTest(relative=relative, source=source):
-                self.check_files({**owner, relative: source}, rejected=True)
+        ], rejected=True, shared=owner)
         # A distinct port method name passes, and auto_tasks keeps its
         # downward edges into automation.
         self.check_files({
@@ -607,16 +618,23 @@ class RelativeImportTests(unittest.TestCase):
              "impl OrbitRuntime {\n    fn admit(&self) {\n"
              "        self.fresh_pool_method();\n    }\n}\n"),
         ], rejected=True, shared=method)
-        for module in ("task", "job"):
-            for relative, source in (
-                (f"{module}/claimed.rs", "use crate::application::experiment::Probe;\n"),
-                (f"{module}/claimed.rs", "use crate::application::{experiment::Probe};\n"),
+        # One batch per detector across both modules' chains, as in the
+        # forecast shim rows above.
+        self.check_rows([
+            (f"{module}/claimed.rs", "use crate::application::experiment::Probe;\n")
+            for module in ("task", "job")
+        ], rejected=True)
+        self.check_rows([
+            (f"{module}/claimed.rs", "use crate::application::{experiment::Probe};\n")
+            for module in ("task", "job")
+        ], rejected=True)
+        self.check_rows([
+            row for module in ("task", "job") for row in (
                 (f"{module}/claimed.rs", "use super::super::experiment::Probe;\n"),
                 (f"{module}/crew_pools/claims.rs",
                  "use super::super::super::{experiment::Probe};\n"),
-            ):
-                with self.subTest(relative=relative, source=source):
-                    self.check_files({relative: source}, rejected=True)
+            )
+        ], rejected=True)
         self.check_files({
             **method,
             "task/experiment_port.rs":
@@ -652,26 +670,35 @@ class RelativeImportTests(unittest.TestCase):
             "landing/handoff.rs":
                 "impl OrbitRuntime {\n    pub(crate) fn fresh_landing_method(&self) {}\n}\n",
         }
-        for module in ("task", "job", "review", "distributed"):
-            self.check_files({
-                **method,
-                f"{module}/probe.rs":
-                    "impl OrbitRuntime {\n    fn probe(&self) {\n"
-                    "        self.fresh_landing_method();\n    }\n}\n",
-            }, rejected=True)
-            for relative, source in (
+        # One batch per detector across the four modules' landing chains,
+        # as in the forecast shim rows above.
+        modules = ("task", "job", "review", "distributed")
+        self.check_rows([
+            (f"{module}/probe.rs",
+             "impl OrbitRuntime {\n    fn probe(&self) {\n"
+             "        self.fresh_landing_method();\n    }\n}\n")
+            for module in modules
+        ], rejected=True, shared=method)
+        self.check_rows([
+            row for module in modules for row in (
                 (f"{module}/probe.rs", "use crate::application::landing::Probe;\n"),
                 (f"{module}/deep/probe.rs",
                  "fn probe() { crate::application::landing::step(); }\n"),
-                (f"{module}/probe.rs",
-                 "use crate::application::{\n    landing::Probe,\n};\n"),
+            )
+        ], rejected=True)
+        self.check_rows([
+            (f"{module}/probe.rs",
+             "use crate::application::{\n    landing::Probe,\n};\n")
+            for module in modules
+        ], rejected=True)
+        self.check_rows([
+            row for module in modules for row in (
                 (f"{module}/mod.rs", "use super::landing::Probe;\n"),
                 (f"{module}/probe.rs", "use super::super::landing::Probe;\n"),
                 (f"{module}/probe.rs", "use super::super::{landing::Probe};\n"),
                 (f"{module}/deep/probe.rs", "use super::super::super::{landing::Probe};\n"),
-            ):
-                with self.subTest(relative=relative, source=source):
-                    self.check_files({relative: source}, rejected=True)
+            )
+        ], rejected=True)
         self.check_files({
             **method,
             "task/handoff_claim.rs":
@@ -726,25 +753,34 @@ class RelativeImportTests(unittest.TestCase):
             "routines/status/report.rs":
                 "impl OrbitRuntime {\n    pub(crate) fn fresh_routine_method(&self) {}\n}\n",
         }
-        for module in ("automation", "auto_tasks"):
-            self.check_files({
-                **method,
-                f"{module}/probe.rs":
-                    "impl OrbitRuntime {\n    fn probe(&self) {\n"
-                    "        self.fresh_routine_method();\n    }\n}\n",
-            }, rejected=True)
-            for relative, source in (
+        # One batch per detector across both modules' routines chains, as
+        # in the forecast shim rows above.
+        modules = ("automation", "auto_tasks")
+        self.check_rows([
+            (f"{module}/probe.rs",
+             "impl OrbitRuntime {\n    fn probe(&self) {\n"
+             "        self.fresh_routine_method();\n    }\n}\n")
+            for module in modules
+        ], rejected=True, shared=method)
+        self.check_rows([
+            row for module in modules for row in (
                 (f"{module}/probe.rs", "use crate::application::routines::Probe;\n"),
                 (f"{module}/deep/probe.rs",
                  "fn probe(root: &Path) { crate::application::routines::clock::load(root); }\n"),
-                (f"{module}/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n"),
+            )
+        ], rejected=True)
+        self.check_rows([
+            (f"{module}/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n")
+            for module in modules
+        ], rejected=True)
+        self.check_rows([
+            row for module in modules for row in (
                 (f"{module}/mod.rs", "use super::routines::Probe;\n"),
                 (f"{module}/probe.rs", "use super::super::routines::Probe;\n"),
                 (f"{module}/probe.rs", "use super::super::{routines::Probe};\n"),
                 (f"{module}/deep/probe.rs", "use super::super::super::{routines::Probe};\n"),
-            ):
-                with self.subTest(relative=relative, source=source):
-                    self.check_files({relative: source}, rejected=True)
+            )
+        ], rejected=True)
         self.check_files({
             **method,
             "automation/condition/evaluate.rs":
@@ -807,19 +843,34 @@ class RelativeImportTests(unittest.TestCase):
         # [ORB-22623] The moved leaves stay below the modules that read them.
         # Grouped relative imports escaped the guard; each super chain must
         # reach application from the fixture's actual module depth.
-        for target in ("routines::clock::set_clock_cadence", "auto_tasks::AutoTaskListingRow"):
-            for relative, source in (
-                ("contracts/clock_settings.rs", f"use crate::application::{target};\n"),
-                ("contracts/clock_settings.rs", f"use crate::application::{{{target}}};\n"),
-                ("contracts/mod.rs", f"use super::{target};\n"),
-                ("contracts/mod.rs", f"use super::{{{target}}};\n"),
-                ("contracts/mod.rs", f"use super::{{\n    {target},\n}};\n"),
+        targets = ("routines::clock::set_clock_cadence", "auto_tasks::AutoTaskListingRow")
+        # One batch per detector in the contracts chain, as in the forecast
+        # shim rows above. The mod.rs rows keep their own runs: check_rows
+        # cannot rename mod.rs without changing the module depth a super
+        # chain resolves against, and one directory holds only one mod.rs.
+        self.check_rows([
+            ("contracts/clock_settings.rs", f"use crate::application::{target};\n")
+            for target in targets
+        ], rejected=True)
+        self.check_rows([
+            ("contracts/clock_settings.rs", f"use crate::application::{{{target}}};\n")
+            for target in targets
+        ], rejected=True)
+        self.check_rows([
+            row for target in targets for row in (
                 ("contracts/clock_settings.rs", f"use super::super::{{{target}}};\n"),
                 ("contracts/clock_settings/nested.rs",
                  f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
+            )
+        ], rejected=True)
+        for target in targets:
+            for source in (
+                f"use super::{target};\n",
+                f"use super::{{{target}}};\n",
+                f"use super::{{\n    {target},\n}};\n",
             ):
-                with self.subTest(relative=relative, source=source):
-                    self.check_files({relative: source}, rejected=True)
+                with self.subTest(source=source):
+                    self.check_files({"contracts/mod.rs": source}, rejected=True)
         self.check_files({
             "contracts/mod.rs": "pub use self::clock_settings::ClockSettings;\n",
             "contracts/clock_settings.rs": "use super::{ScheduleDisplayState};\n",
@@ -829,10 +880,9 @@ class RelativeImportTests(unittest.TestCase):
         # [ORB-22674] A chain that climbs one step past application, to the crate
         # root, and then descends `application::<higher>` names the same module
         # as a chain that lands on application, so it is refused at each depth.
-        for relative, source in (
-            ("contracts/mod.rs", "use super::super::application::routines::Probe;\n"),
-            ("contracts/mod.rs", "use super::super::{application::routines::Probe};\n"),
-            ("contracts/mod.rs", "use super::super::{\n    application::routines::Probe,\n};\n"),
+        # All of these reach only the super-chain detector; the mod.rs rows
+        # keep their own runs for the depth reason above.
+        self.check_rows([
             ("contracts/clock_settings.rs",
              "use super::super::super::application::routines::Probe;\n"),
             ("contracts/clock_settings.rs",
@@ -847,19 +897,26 @@ class RelativeImportTests(unittest.TestCase):
              "use super::super::super::super::{application::routines::Probe};\n"),
             ("contracts/clock_settings/nested.rs",
              "use super::super::super::super::{\n    application::auto_tasks::Probe,\n};\n"),
+        ], rejected=True)
+        for source in (
+            "use super::super::application::routines::Probe;\n",
+            "use super::super::{application::routines::Probe};\n",
+            "use super::super::{\n    application::routines::Probe,\n};\n",
         ):
-            with self.subTest(relative=relative, source=source):
-                self.check_files({relative: source}, rejected=True)
+            with self.subTest(source=source):
+                self.check_files({"contracts/mod.rs": source}, rejected=True)
 
     def test_moved_clock_and_display_contracts_stay_in_contracts(self):
         # [ORB-22623] A second definition would bring the back-edge's owner back.
-        for source in (
-            "pub struct ClockSettings;\n",
-            "pub fn load_clock_settings() {}\n",
-            "pub enum ScheduleDisplayState {}\n",
-        ):
-            with self.subTest(source=source):
-                self.check_files({"routines/clock/settings.rs": source}, rejected=True)
+        # Every row hits the same definitions scan over orbit-core/src, so
+        # they share one guard run (check_rows asserts each row's own path).
+        self.check_rows([
+            ("routines/clock/settings.rs", source) for source in (
+                "pub struct ClockSettings;\n",
+                "pub fn load_clock_settings() {}\n",
+                "pub enum ScheduleDisplayState {}\n",
+            )
+        ], rejected=True)
         self.check_files({
             "routines/clock/settings.rs":
                 "pub use crate::application::contracts::{ClockSettings, load_clock_settings};\n",
@@ -868,15 +925,18 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_agents_cannot_reach_experiment(self):
-        for relative, source in (
-            ("agents/facts/scan.rs", "use crate::application::experiment::Probe;"),
-            ("agents/facts/scan.rs", "use crate::application::{experiment::Probe};"),
-            ("agents/facts/scan.rs", "use super::super::super::experiment::Probe;"),
-            ("agents/facts/scan.rs", "use super::super::super::{experiment::Probe};"),
-            ("agents/mod.rs", "use super::experiment::Probe;"),
-        ):
-            with self.subTest(source=source):
-                self.check_files({relative: source + "\n"}, rejected=True)
+        # One batch per detector, as in the forecast shim rows above.
+        self.check_rows([
+            ("agents/facts/scan.rs", "use crate::application::experiment::Probe;\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("agents/facts/scan.rs", "use crate::application::{experiment::Probe};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("agents/facts/scan.rs", "use super::super::super::experiment::Probe;\n"),
+            ("agents/facts/scan.rs", "use super::super::super::{experiment::Probe};\n"),
+            ("agents/mod.rs", "use super::experiment::Probe;\n"),
+        ], rejected=True)
         self.check_files({
             "experiment/readout.rs": "impl OrbitRuntime {\n    pub(crate) fn experiment_probe(&self) {}\n}\n",
             "agents/facts/scan.rs": "fn scan(runtime: &OrbitRuntime) { runtime.experiment_probe(); }\n",
@@ -943,32 +1003,37 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=True)
 
     def test_inherent_calls_into_bootstrap_and_composition_rejected(self):
+        # One guard run per owner, with both callers present: check_rows
+        # requires the guard to report each caller's own path.
         for owner in ("../composition/runtime.rs", "../bootstrap/init.rs"):
-            for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
-                with self.subTest(owner=owner, caller=caller):
-                    self.check_files({
-                        owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_joiner(&self) {}\n}\n",
-                        caller: "impl Probe {\n    fn drive(&self, runtime: &OrbitRuntime) {\n"
-                                "        runtime.fresh_joiner();\n    }\n}\n",
-                    }, rejected=True)
+            with self.subTest(owner=owner):
+                self.check_rows([
+                    (caller, "impl Probe {\n    fn drive(&self, runtime: &OrbitRuntime) {\n"
+                             "        runtime.fresh_joiner();\n    }\n}\n")
+                    for caller in ("task_quality/runtime.rs",
+                                   "../adapter/engine_host/dispatch.rs")
+                ], rejected=True, shared={
+                    owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_joiner(&self) {}\n}\n"})
 
     def test_joiner_ports_and_their_mentions_accepted(self):
-        for caller in ("task_quality/runtime.rs", "../adapter/engine_host/dispatch.rs"):
-            with self.subTest(caller=caller):
-                self.check_files({
-                    "../composition/runtime.rs":
-                        "impl OrbitRuntime {\n    fn private_joiner(&self) {}\n"
-                        "    pub(in crate::bootstrap) fn narrow_joiner(&self) {}\n}\n"
-                        "impl AssistanceServicePort for OrbitRuntime {\n"
-                        "    fn ported_service(&self) {}\n}\n",
-                    caller: "// crate::bootstrap::init is only named here.\n"
-                            'const NOTE: &str = "crate::composition::x";\n'
-                            "fn drive(runtime: &OrbitRuntime) {\n"
-                            "    runtime.ported_service();\n    runtime.private_joiner();\n"
-                            "    runtime.narrow_joiner();\n}\n",
-                    "../adapter/tests/fixture.rs": "use crate::bootstrap::init::Probe;\n",
-                    "task/tests/fixture.rs": "use crate::composition::Probe;\n",
-                }, rejected=False)
+        # Both callers present in one run: acceptance must hold for each
+        # beside the other, which is at least as strong as one at a time.
+        caller_source = ("// crate::bootstrap::init is only named here.\n"
+                         'const NOTE: &str = "crate::composition::x";\n'
+                         "fn drive(runtime: &OrbitRuntime) {\n"
+                         "    runtime.ported_service();\n    runtime.private_joiner();\n"
+                         "    runtime.narrow_joiner();\n}\n")
+        self.check_files({
+            "../composition/runtime.rs":
+                "impl OrbitRuntime {\n    fn private_joiner(&self) {}\n"
+                "    pub(in crate::bootstrap) fn narrow_joiner(&self) {}\n}\n"
+                "impl AssistanceServicePort for OrbitRuntime {\n"
+                "    fn ported_service(&self) {}\n}\n",
+            "task_quality/runtime.rs": caller_source,
+            "../adapter/engine_host/dispatch.rs": caller_source,
+            "../adapter/tests/fixture.rs": "use crate::bootstrap::init::Probe;\n",
+            "task/tests/fixture.rs": "use crate::composition::Probe;\n",
+        }, rejected=False)
 
     def test_task_port_and_task_owned_calls_accepted(self):
         self.check_files({
@@ -1000,11 +1065,15 @@ class RelativeImportTests(unittest.TestCase):
             )], rejected=True)
 
     def test_existing_direct_imports_rejected(self):
-        for module in ("distributed", "pull_drain"):
-            for prefix in ("crate::application", "super::super"):
-                with self.subTest(module=module, prefix=prefix):
-                    self.check_import("job/worker.rs", f"use {prefix}::{module}::Probe;",
-                                      rejected=True)
+        # One batch per detector, as in the forecast shim rows above.
+        self.check_rows([
+            ("job/worker.rs", f"use crate::application::{module}::Probe;\n")
+            for module in ("distributed", "pull_drain")
+        ], rejected=True)
+        self.check_rows([
+            ("job/worker.rs", f"use super::super::{module}::Probe;\n")
+            for module in ("distributed", "pull_drain")
+        ], rejected=True)
 
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
@@ -1041,13 +1110,14 @@ class RelativeImportTests(unittest.TestCase):
         self.check_rows(rows, rejected=False)
 
     def test_within_job_imports_accepted(self):
-        for relative, tree in (
-            ("job/pr_repair/adoption.rs", "super::super::{RunOwnerLiveness, run_owner_liveness}"),
-            ("job/worker.rs", "super::{distributed::Probe, pull_drain::Other}"),
-            ("job/pr_repair/adoption.rs", "super::super::{distributed::Probe}"),
-        ):
-            with self.subTest(relative=relative, tree=tree):
-                self.check_import(relative, f"use {tree};", rejected=False)
+        # Accepted rows share one run: any false hit on any row fails it.
+        self.check_rows([
+            (relative, f"use {tree};\n") for relative, tree in (
+                ("job/pr_repair/adoption.rs", "super::super::{RunOwnerLiveness, run_owner_liveness}"),
+                ("job/worker.rs", "super::{distributed::Probe, pull_drain::Other}"),
+                ("job/pr_repair/adoption.rs", "super::super::{distributed::Probe}"),
+            )
+        ], rejected=False)
 
     def test_test_fixtures_accepted(self):
         for relative in ("job/tests/worker.rs", "job/tests.rs"):
