@@ -10,23 +10,18 @@ pub(in crate::activity_job::job_executor) fn inject_recovery_evidence(
     ctx: &ExecCtx<'_>,
     input: &mut Value,
 ) -> Result<(), String> {
-    inject_run_recovery_evidence(ctx, input, false)
+    inject_run_recovery_evidence(ctx, input)
 }
 
-/// Final recovery retains recent details and failure signatures when the
-/// complete attempt history cannot fit; step recovery still refuses overflow.
+/// Final recovery receives the same bounded run evidence as step recovery.
 pub(in crate::activity_job::job_executor) fn inject_final_recovery_evidence(
     ctx: &ExecCtx<'_>,
     input: &mut Value,
 ) -> Result<(), String> {
-    inject_run_recovery_evidence(ctx, input, true)
+    inject_run_recovery_evidence(ctx, input)
 }
 
-fn inject_run_recovery_evidence(
-    ctx: &ExecCtx<'_>,
-    input: &mut Value,
-    retain_latest: bool,
-) -> Result<(), String> {
+fn inject_run_recovery_evidence(ctx: &ExecCtx<'_>, input: &mut Value) -> Result<(), String> {
     let log_tail = ctx
         .host
         .final_recovery_log_tail(&ctx.run_id)
@@ -38,7 +33,7 @@ fn inject_run_recovery_evidence(
             .len()
             .saturating_sub(MAX_RECOVERY_ERROR_MESSAGE_BYTES),
     )..];
-    input["step_recovery_attempts"] = Value::Array(step_recovery_attempts(ctx, retain_latest)?);
+    input["step_recovery_attempts"] = Value::Array(step_recovery_attempts(ctx)?);
     input["log_tail"] = Value::String(bounded_recovery_text(
         "log_tail",
         &ctx.run_id,
@@ -52,7 +47,7 @@ fn inject_run_recovery_evidence(
 /// diagnostics, dispatch output and the read-back recovery decision. Filter
 /// the run even when a host's audit sink returns a broader snapshot.
 /// Historical records have no output or decision.
-fn step_recovery_attempts(ctx: &ExecCtx<'_>, retain_latest: bool) -> Result<Vec<Value>, String> {
+fn step_recovery_attempts(ctx: &ExecCtx<'_>) -> Result<Vec<Value>, String> {
     let mut events = ctx
         .audit
         .events_snapshot()
@@ -131,23 +126,21 @@ fn step_recovery_attempts(ctx: &ExecCtx<'_>, retain_latest: bool) -> Result<Vec<
         .cloned()
         .map(|attempt| bounded_recovery_input(&ctx.run_id, attempt))
         .collect::<Vec<_>>();
-    // Preserve the existing under-budget representation and step-recovery
-    // refusal contract. Only final recovery may summarize overflowing history.
+    // Preserve the existing under-budget representation; summarize only overflow.
     match bounded_recovery_input(&ctx.run_id, Value::Array(bounded_attempts.clone())) {
         Value::Array(attempts) => Ok(attempts),
-        _ if retain_latest => Ok(retain_final_recovery_attempts(
+        _ => Ok(retain_recent_recovery_attempts(
             &ctx.run_id,
             &attempts,
             bounded_attempts,
         )),
-        _ => Err("step-recovery evidence exceeds the bounded recovery input; an operator must inspect the full audit trail".to_string()),
     }
 }
 
 /// Keep signatures separate from detail retention so dropping old outputs does
 /// not conceal repeated failures. Both projections are ordered newest first
 /// while selecting, then the detailed suffix is emitted chronologically.
-fn retain_final_recovery_attempts(
+fn retain_recent_recovery_attempts(
     run_id: &str,
     original: &[Value],
     mut attempts: Vec<Value>,

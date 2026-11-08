@@ -265,24 +265,42 @@ fn both_recovery_dispatches_distinguish_missing_logs_from_unreadable_or_oversize
             } else {
                 Vec::new()
             };
-            let (_, attempt) = run(&host, events);
+            let (schema, attempt) = run(&host, events);
             let inputs = host.inputs.lock().unwrap();
-            if case == "missing" {
-                assert_eq!(inputs.len(), 1, "an absent log still permits recovery");
-                assert_eq!(inputs[0]["log_tail"], "");
-                assert_eq!(inputs[0]["step_recovery_attempts"], json!([]));
-            } else {
-                assert!(
-                    inputs.is_empty(),
-                    "never dispatch incomplete or unreadable evidence"
-                );
+            if case == "unreadable" {
+                assert!(inputs.is_empty(), "never dispatch unreadable evidence");
                 assert_eq!(attempt["failure_phase"], "input");
-                let message = attempt["error_message"].as_str().unwrap();
-                assert!(message.contains(if case == "unreadable" {
-                    "log read refused"
+                assert!(
+                    attempt["error_message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("log read refused")
+                );
+            } else {
+                assert_eq!(inputs.len(), 1, "recovery must dispatch: {attempt}");
+                assert_eq!(inputs[0]["log_tail"], "");
+                let attempts = &inputs[0]["step_recovery_attempts"];
+                if case == "missing" {
+                    assert_eq!(attempts, &json!([]));
                 } else {
-                    "step-recovery evidence exceeds"
-                }));
+                    assert!(
+                        jsonschema::JSONSchema::compile(&schema)
+                            .unwrap()
+                            .is_valid(&inputs[0])
+                    );
+                    let records = attempts.as_array().unwrap();
+                    assert_eq!(records[0]["truncated"], true);
+                    assert_eq!(records[0]["audit_reference"]["run_id"], RUN);
+                    assert!(
+                        !records[0]["failure_signatures"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty()
+                    );
+                    assert!(records[0]["omitted_attempts"].as_u64().unwrap() > 0);
+                    assert_eq!(records.last().unwrap()["output"]["marker"], 499);
+                    assert!(serde_json::to_vec(attempts).unwrap().len() <= 64 * 1024);
+                }
             }
         }
     }
