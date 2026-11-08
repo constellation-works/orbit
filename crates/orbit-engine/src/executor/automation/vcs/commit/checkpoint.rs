@@ -258,7 +258,10 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
         return Ok(false);
     };
     if checkpoint.task_id != task_id
-        || checkpoint.outcome.as_deref() != Some("resume")
+        || !matches!(
+            checkpoint.outcome,
+            Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
+        )
         || !matches!(
             checkpoint.decision,
             Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })

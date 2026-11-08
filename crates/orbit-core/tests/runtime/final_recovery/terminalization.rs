@@ -19,7 +19,9 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, JobTargetType};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, JobTargetType,
+};
 use serde_json::{Value, json};
 
 use super::{Fixture, fixture};
@@ -640,7 +642,14 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
         "the refusal comment must be recorded: {comments:?}"
     );
     let outcome = fixture.state(&run).final_recovery.unwrap().outcome.unwrap();
-    assert!(outcome.starts_with("settled: refused:"), "{outcome}");
+    assert!(
+        matches!(
+            &outcome,
+            FinalRecoveryCheckpointOutcome::Settled { detail }
+                if detail.starts_with("refused:")
+        ),
+        "{outcome}"
+    );
     let replayed = fixture.apply(
         &run,
         &task_id,

@@ -22,8 +22,8 @@ use orbit_engine::{
     FinalRecoveryApplied,
 };
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, FinalRecoveryObservedTask,
-    JobRunState, RunStateUpdate,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
+    FinalRecoveryKey, FinalRecoveryObservedTask, JobRunState, RunStateUpdate,
 };
 
 use crate::OrbitRuntime;
@@ -323,9 +323,13 @@ fn record_decision(
     applied: Option<&FinalRecoveryApplied>,
 ) -> Result<(), OrbitError> {
     let outcome = applied.map(|applied| match applied {
-        FinalRecoveryApplied::Resume => "resume".to_string(),
-        FinalRecoveryApplied::Settled { outcome } => format!("settled: {outcome}"),
-        FinalRecoveryApplied::Escalated { outcome } => format!("escalated: {outcome}"),
+        FinalRecoveryApplied::Resume => FinalRecoveryCheckpointOutcome::Resume,
+        FinalRecoveryApplied::Settled { outcome } => FinalRecoveryCheckpointOutcome::Settled {
+            detail: outcome.clone(),
+        },
+        FinalRecoveryApplied::Escalated { outcome } => FinalRecoveryCheckpointOutcome::Escalated {
+            detail: outcome.clone(),
+        },
     });
     let update = runtime
         .stores()

@@ -5,8 +5,8 @@ use super::inline_publication::{refused_without_effects, reload, rework};
 use super::published_owner::{move_published_branch, publication, record_auto_fix_push, save_run};
 use super::*;
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, FinalRecoveryRepairCommit,
-    PR_AUTO_FIX_ADMITTED_EVENT,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
+    FinalRecoveryKey, FinalRecoveryRepairCommit, PR_AUTO_FIX_ADMITTED_EVENT,
 };
 use std::path::Path;
 
@@ -29,7 +29,7 @@ fn resume_receipt(f: &Fixture) -> FinalRecoveryCheckpoint {
         }),
         repair_commit: None,
         resume_context: None,
-        outcome: Some("resume".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Resume),
     }
 }
 
@@ -253,7 +253,9 @@ fn resumed_in_place_publication_refuses_unproven_shapes_without_effects() {
                 receipt.decision = Some(FinalRecoveryDecision::Requeue {
                     reason: "retry".into(),
                 });
-                receipt.outcome = Some("requeued".into());
+                receipt.outcome = Some(FinalRecoveryCheckpointOutcome::Settled {
+                    detail: "requeued".into(),
+                });
             }
             "repair commit" => {
                 receipt.repair_commit = Some(FinalRecoveryRepairCommit {

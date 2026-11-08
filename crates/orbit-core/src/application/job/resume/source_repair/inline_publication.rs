@@ -41,7 +41,10 @@ pub(super) fn resumed_in_place_publication(
         && state.final_recovery.as_ref().is_some_and(|checkpoint| {
             checkpoint.task_id == task_id
                 && checkpoint.key.run_id == source.run_id
-                && checkpoint.outcome.as_deref() == Some("resume")
+                && matches!(
+                    checkpoint.outcome,
+                    Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
+                )
                 && checkpoint.repair_commit.is_none()
                 && matches!(
                     checkpoint.decision,

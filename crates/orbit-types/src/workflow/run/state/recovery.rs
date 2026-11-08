@@ -1,5 +1,7 @@
 //! Failure-activity and final-recovery checkpoints.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -145,8 +147,87 @@ pub struct FinalRecoveryCheckpoint {
     /// Repair context captured before the resumed steps lose their outputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_context: Option<FinalRecoveryResume>,
-    /// What applying the decision did (`resume`, `settled: …` or
-    /// `escalated: …`); absent while the decision is only intended.
+    /// What applying the decision did; absent while the decision is only
+    /// intended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
+    pub outcome: Option<FinalRecoveryCheckpointOutcome>,
+}
+
+/// What applying a final-recovery decision did, recorded on its checkpoint.
+///
+/// Persisted run states written before this type existed hold the outcome as
+/// the string `resume`, `settled: <detail>` or `escalated: <detail>`. Those
+/// legacy strings deserialize into this enum (the `settled:`/`escalated:`
+/// prefix is split once, here and nowhere else); a string in none of those
+/// forms is a deserialization error. New writes use the tagged form.
+/// [`fmt::Display`] reproduces the legacy text, so `run show` output is
+/// unchanged.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FinalRecoveryCheckpointOutcome {
+    /// Recorded; the engine reruns from the decision's step.
+    Resume,
+    /// The task was settled; `detail` says how.
+    Settled { detail: String },
+    /// The task is parked for a human; `detail` says why.
+    Escalated { detail: String },
+}
+
+impl fmt::Display for FinalRecoveryCheckpointOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resume => formatter.write_str("resume"),
+            Self::Settled { detail } => write!(formatter, "settled: {detail}"),
+            Self::Escalated { detail } => write!(formatter, "escalated: {detail}"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FinalRecoveryCheckpointOutcome {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum TypedOutcome {
+            Resume,
+            Settled { detail: String },
+            Escalated { detail: String },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StoredOutcome {
+            Legacy(String),
+            Typed(TypedOutcome),
+        }
+
+        fn legacy_detail<'a>(stored: &'a str, prefix: &str) -> Option<&'a str> {
+            stored
+                .strip_prefix(prefix)
+                .map(|detail| detail.strip_prefix(' ').unwrap_or(detail))
+        }
+
+        match StoredOutcome::deserialize(deserializer)? {
+            StoredOutcome::Typed(TypedOutcome::Resume) => Ok(Self::Resume),
+            StoredOutcome::Typed(TypedOutcome::Settled { detail }) => Ok(Self::Settled { detail }),
+            StoredOutcome::Typed(TypedOutcome::Escalated { detail }) => {
+                Ok(Self::Escalated { detail })
+            }
+            StoredOutcome::Legacy(stored) if stored == "resume" => Ok(Self::Resume),
+            StoredOutcome::Legacy(stored) => {
+                if let Some(detail) = legacy_detail(&stored, "settled:") {
+                    Ok(Self::Settled {
+                        detail: detail.to_string(),
+                    })
+                } else if let Some(detail) = legacy_detail(&stored, "escalated:") {
+                    Ok(Self::Escalated {
+                        detail: detail.to_string(),
+                    })
+                } else {
+                    Err(serde::de::Error::custom(format!(
+                        "unknown final-recovery checkpoint outcome '{stored}'"
+                    )))
+                }
+            }
+        }
+    }
 }

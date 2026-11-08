@@ -10,7 +10,10 @@
 //! chain the repair sits on.
 use super::observation::authenticated_checkpoint;
 use super::*;
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryRepairCommit, SourceRepairOwner};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, FinalRecoveryRepairCommit,
+    SourceRepairOwner,
+};
 
 /// Same bound the generic resume planner applies to `retry_source_run_id`.
 const MAX_OWNER_HOPS: usize = 64;
@@ -67,7 +70,10 @@ impl OrbitRuntime {
         let repair = match (&checkpoint.decision, &checkpoint.repair_commit) {
             (Some(FinalRecoveryDecision::Resume { .. }), Some(repair))
                 if checkpoint.task_id == task_id
-                    && checkpoint.outcome.as_deref() == Some("resume") =>
+                    && matches!(
+                        checkpoint.outcome,
+                        Some(FinalRecoveryCheckpointOutcome::Resume)
+                    ) =>
             {
                 repair.clone()
             }
