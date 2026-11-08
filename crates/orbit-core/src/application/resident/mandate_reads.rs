@@ -6,7 +6,7 @@ use orbit_types::workflow::{RESIDENT_TAG, ResidentAuthority, ResidentComment, Re
 use serde_json::{Value, json};
 
 use super::{
-    RESIDENT_CYCLE_ROUTINE_TARGET, ResidentMandateState, ResidentView, control, cycle, due,
+    ResidentMandateState, ResidentRoutineStatusPort, ResidentView, control, cycle, due,
     resident_cycle_routine_disabled_reason, resident_mandate_ended, resident_mandate_from_artifact,
     view,
 };
@@ -41,19 +41,7 @@ impl OrbitRuntime {
     /// enabled, missing, or its status cannot be read (a failed lookup
     /// never fails the caller's read).
     pub(crate) fn resident_cycle_routine_disabled(&self) -> Option<String> {
-        let report = crate::application::routines::status::checkout_routine_statuses(self).ok()?;
-        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
-        let orbit_dir = canonical(&self.paths().orbit_dir)?;
-        report
-            .statuses
-            .iter()
-            .find(|status| {
-                canonical(&status.routine.source_orbit_dir).as_ref() == Some(&orbit_dir)
-                    && status.routine.definition.target.as_ref_string()
-                        == RESIDENT_CYCLE_ROUTINE_TARGET
-                    && !status.routine.definition.enabled
-            })
-            .map(|status| status.routine.definition.name.clone())
+        self.disabled_resident_cycle_routine_name()
     }
 
     /// Why an active mandate is stalled, as attention and the reads report

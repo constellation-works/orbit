@@ -24,6 +24,7 @@ pub use orbit_automation::routines::due;
 pub mod edit_contract;
 pub mod loader;
 pub(crate) mod materialize;
+mod resident_port;
 pub(crate) mod seed;
 pub mod status;
 pub mod sweep;
