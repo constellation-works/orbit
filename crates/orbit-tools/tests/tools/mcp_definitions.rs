@@ -58,6 +58,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .map(|definition| definition.schema.name.as_str())
             .collect::<Vec<_>>(),
         [
+            "orbit.agents.ci_failures",
             "orbit.agents.scorecard",
             "orbit.agents.show",
             "orbit.attention",

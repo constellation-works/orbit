@@ -87,6 +87,8 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     dependency_auth: BTreeMap<(u64, u64), Option<Vec<u64>>>,
     /// Latest required-check read during failure classification; diagnostics only.
     pub(in crate::executor::automation::vcs) required_observation: Option<Value>,
+    /// [model ranking §5.1] The task's recorded failures by cause.
+    pub(in crate::executor::automation::vcs) failures: super::failure_ledger::FailureLedger,
 }
 
 impl CheckRecovery {
@@ -262,6 +264,19 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         .filter(|check| failed_jobs.iter().any(|job| answers(job, check)))
         .cloned()
         .collect::<BTreeSet<_>>();
+    // [model ranking §5.1] Evidence that a job's failure is the head's own,
+    // by job id, and the task history it is read from (once per pass).
+    let mut code: BTreeMap<u64, String> = BTreeMap::new();
+    let history = std::cell::OnceCell::new();
+    let history = || {
+        history.get_or_init(|| {
+            host.get_task_history(&context.task_id)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(task = %context.task_id, %error, "CI failure ledger: task history unreadable");
+                    Vec::new()
+                })
+        })
+    };
     for job in failed_jobs {
         let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Ok(unclassified(
@@ -354,6 +369,11 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         {
             class = CheckFailureClass::Candidate;
             why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
+            code.insert(
+                job_id,
+                "the unchanged head failed the same check with the same signature again on its rerun"
+                    .into(),
+            );
         }
         if class == CheckFailureClass::Flaky
             && !(job.event.value() == Some(&CiJobEvent::PullRequest)
@@ -382,6 +402,28 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 Some(&context.handoff_id),
             )?;
         }
+        if !matches!(
+            class,
+            CheckFailureClass::Transient | CheckFailureClass::Inherited
+        ) && !code.contains_key(&job_id)
+        {
+            if matches!(
+                class,
+                CheckFailureClass::Candidate | CheckFailureClass::Inconclusive
+            ) && super::suspect::cites_changed_candidate(workspace, head, base, &log)
+                .unwrap_or(false)
+            {
+                code.insert(
+                    job_id,
+                    format!("the failure of '{label}' cites a file the head changed"),
+                );
+            } else if super::failure_ledger::failed_again_on_rerun(history(), head, job, &label) {
+                code.insert(
+                    job_id,
+                    format!("'{label}' failed again on the rerun of unchanged head {head}"),
+                );
+            }
+        }
         jobs.push(FailedJob {
             run_id: Some(run_id),
             job_id,
@@ -408,7 +450,21 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         );
     }
     let has_aggregates = !aggregates.is_empty();
+    for aggregate in &aggregates {
+        if aggregate.class == CheckFailureClass::Candidate {
+            code.insert(
+                aggregate.job_id,
+                format!(
+                    "the failure annotations of '{}' name only files the head changed",
+                    aggregate.label
+                ),
+            );
+        }
+    }
     jobs.extend(aggregates);
+    recovery
+        .failures
+        .record(host, context, head, pr, &jobs, &code);
     // No readable job decided. An unknown log is not itself a class.
     if jobs.is_empty()
         || jobs
@@ -527,6 +583,54 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 return Ok(CheckRecoveryStep::Stop(evidence(&format!(
                     "its CI retry evidence could not be read after {cycles} observation cycles (limit {limit}): {read_failure}; nothing is rerun, updated or repaired and the candidate stays in review"
                 ))));
+            }
+        }
+    }
+
+    // [model ranking §5.1] A candidate set routed to repair with no evidence
+    // of its cause (no job cites a changed file, none is the base's or the
+    // infrastructure's, every log was read), on a head that has had no
+    // rerun, is rerun once first: the second result classes it as flaky or
+    // the head's own. Unreadable evidence keeps its stop and spends nothing.
+    if class == CheckFailureClass::Candidate
+        && !has_aggregates
+        && !jobs.iter().any(|job| {
+            code.contains_key(&job.job_id)
+                || matches!(
+                    job.class,
+                    CheckFailureClass::Transient
+                        | CheckFailureClass::Inherited
+                        | CheckFailureClass::Unknown
+                        | CheckFailureClass::Inconclusive
+                )
+        })
+        && !super::failure_ledger::head_was_rerun(history(), head)
+    {
+        match super::rerun::request_classification_rerun(
+            host,
+            workspace,
+            std::slice::from_ref(&context.task_id),
+            Some(&context.handoff_id),
+            status,
+            &context.candidate.base.commit,
+            &context.candidate.base_branch,
+            recovery.deadline_ms,
+            &jobs,
+        ) {
+            Ok(Some(plan)) => {
+                recovery.rerun = true;
+                recovery
+                    .handled_checks
+                    .extend(answered_checks.iter().cloned());
+                recovery.actions.push(format!(
+                    "reran run {} attempt {} on the unchanged head to establish the failure's cause: {classified}",
+                    plan.run_id, plan.run_attempt
+                ));
+                return Ok(CheckRecoveryStep::Acted);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, head, "CI failure ledger: the classification rerun was not sent; the landing keeps its route");
             }
         }
     }

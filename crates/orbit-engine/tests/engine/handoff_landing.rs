@@ -107,6 +107,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             handoff_id: "handoff-1".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-1".into(),
+            producing_run_id: "run-1".into(),
             candidate,
             unresolved_merge_intent: None,
             workspace_path: repo.to_path_buf(),
@@ -230,6 +231,14 @@ fn assert_not_sent(forge: &FakeForge, ops: &[&str], label: &str) {
 
 fn assert_steps(steps: &[HandoffLandingStep], expected: &[HandoffLandingStep], label: &str) {
     assert_eq!(steps, expected, "{label}");
+}
+
+/// [model ranking §5.1] The current class of each recorded check failure.
+fn ledger_classes(forge: &FakeForge) -> Vec<orbit_types::workflow::CiFailureClass> {
+    orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap())
+        .into_iter()
+        .map(|entry| entry.class)
+        .collect()
 }
 
 fn assert_sent_len(forge: &FakeForge, op: &str, expected: usize, label: &str) {
@@ -954,6 +963,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     | "ci_base_suspect"
                     | "ci_infrastructure_retry_backoff"
                     | "ci_infrastructure_retry_exhausted"
+                    | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
+                    | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
             )
         {
             return Err(OrbitError::InvalidInput(
@@ -2323,6 +2334,11 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
     assert_eq!(landed["phase"], "landed", "{landed}");
     assert_sent_len(&forge, "pr.update_branch", 1, "inherited");
     assert_not_sent(&forge, &["ci.rerun_failed"], "inherited");
+    // The base fails the same check: infrastructure, never the head's.
+    assert_eq!(
+        ledger_classes(&forge),
+        [orbit_types::workflow::CiFailureClass::Infrastructure]
+    );
     let head = head_of(&forge);
     assert_eq!(
         git(
@@ -2573,7 +2589,10 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
 /// and log excerpt. The repair's own landing failing again stops, classified,
 /// for a backlog requeue instead of asking for a second repair [ORB-16890].
 /// A base whose job query succeeds with no jobs ran nothing to fail, which is
-/// not a failed read.
+/// not a failed read. [model ranking §5.1] A failure that cites no file the
+/// head changed is first rerun once on the unchanged head; failing again
+/// there records it as the head's own (`code`), upgraded from `unknown` with
+/// an audited reclassification.
 #[test]
 fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
     for (repair_spent, base_ran, step) in [
@@ -2583,6 +2602,7 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
     ] {
         let (_sandbox, forge, candidate, base) = forge_fixture(false, repair_spent);
         forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
+        forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, CANDIDATE_ERROR));
         if base_ran {
             forge.job(&base, passed(2, 21));
         }
@@ -2609,9 +2629,28 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         );
         assert_not_sent(
             &forge,
-            &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
+            &["pr.merge", "pr.update_branch"],
             "candidate failure",
         );
+        assert_sent_len(&forge, "ci.rerun_failed", 1, "candidate failure");
+        let ledger = orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap());
+        let [entry] = ledger.as_slice() else {
+            panic!("candidate failure: one recorded failure, got {ledger:?}");
+        };
+        assert_eq!(
+            (
+                entry.record.class,
+                entry.class,
+                entry.record.head_sha.as_str()
+            ),
+            (
+                orbit_types::workflow::CiFailureClass::Unknown,
+                orbit_types::workflow::CiFailureClass::Code,
+                candidate.as_str(),
+            ),
+            "candidate failure: {entry:?}"
+        );
+        assert_eq!(entry.changes.len(), 1, "candidate failure: {entry:?}");
     }
 }
 
@@ -2723,6 +2762,12 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
                 "landed"
             );
             assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+            // The same head passed the same check on its rerun: flaky.
+            assert_eq!(
+                ledger_classes(&forge),
+                [orbit_types::workflow::CiFailureClass::Flaky],
+                "{case}"
+            );
             continue;
         }
         let error = outcome.expect_err(case);
@@ -3090,6 +3135,11 @@ fn a_transient_check_failure_respects_the_configured_retry_limit() {
         assert_eq!(sent[0]["plan"]["head_sha"], candidate);
         assert_eq!(sent[0]["plan"]["failed_jobs"][0]["id"], 11);
         assert_not_sent(&forge, &["pr.update_branch"], "transient");
+        // A network failure is infrastructure whether or not the rerun passes.
+        assert_eq!(
+            ledger_classes(&forge),
+            [orbit_types::workflow::CiFailureClass::Infrastructure]
+        );
         if lands {
             assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
         } else {
@@ -3238,6 +3288,12 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
             &forge,
             &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
             case,
+        );
+        // Evidence that decides nothing establishes no cause either.
+        assert_eq!(
+            ledger_classes(&forge),
+            [orbit_types::workflow::CiFailureClass::Unknown],
+            "{case}"
         );
     }
 }

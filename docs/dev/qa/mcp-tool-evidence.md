@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-11-03
+last_updated: 2026-11-08
 last_validated: 2026-10-23
 ---
 
@@ -13,6 +13,7 @@ This matrix records behavior of agent-visible and operator-only MCP tools. The `
 
 | Tool | Function | Refusal | Persistence | Workspace / authority | Limit |
 | --- | --- | --- | --- | --- | --- |
+| orbit_agents_ci_failures | — | — | — | — | Manual QA only (ORB-23300 delivery): `orbit tool run` and the CLI over a disposable store print the record payload filtered by window, task and class; invalid class and window and an unknown task are refused. The landing that writes the records is covered by the engine's handoff-landing tests |
 | orbit_agents_scorecard | I-agents | I-agents | — | — | Tool and CLI success plus unknown-role refusal; dashboard API prints the same payload; no stdio proof |
 | orbit_agents_show | I-agents | I-agents | — | — | Tool detail, ambiguous-crew `row_model` selection and refusal; CLI prints the same payload; no stdio proof |
 | orbit_attention | — | — | — | — | No named behavior evidence mapped in this matrix |

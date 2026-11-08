@@ -31,8 +31,10 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     if roots.is_empty()
         || roots.len() > 100
         || roots.iter().any(|root| {
-            !matches!(root.classification.as_str(), "flaky" | "transient")
-                || root.signature.is_empty()
+            !matches!(
+                root.classification.as_str(),
+                "flaky" | "transient" | "unattributed"
+            ) || root.signature.is_empty()
         })
     {
         return Err(unreadable("ineligible retry roots"));

@@ -2,5 +2,6 @@
   {"argv": ["agents"], "golden": "agents/root.txt"},
   {"argv": ["agents", "scorecard"], "golden": "agents/scorecard.txt"},
   {"argv": ["agents", "show"], "golden": "agents/show.txt"},
+  {"argv": ["agents", "ci-failures"], "golden": "agents/ci-failures.txt"},
   {"argv": ["agents", "vision-probe"], "golden": "agents/vision-probe.txt"}
 ]

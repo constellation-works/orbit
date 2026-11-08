@@ -2,6 +2,7 @@
 
 mod auto_fix;
 mod base_update;
+mod ci_failure;
 mod ci_rerun;
 mod completion;
 mod infrastructure;
@@ -24,6 +25,11 @@ pub use infrastructure::{
     pr_infrastructure_reservations,
 };
 
+pub use ci_failure::{
+    CI_FAILURE_RECLASSIFIED_EVENT, CI_FAILURE_RECORDED_EVENT, CI_FAILURE_SCHEMA_VERSION,
+    CiFailureClass, CiFailureClassChange, CiFailureLedgerEntry, CiFailureReclassification,
+    CiFailureRecord, ci_failure_ledger,
+};
 pub use ci_rerun::{
     CI_RERUN_RESERVED_EVENT, CiInfrastructureRetryPolicy, CiRerunAdmission, CiRerunPlan,
     CiRerunRoot, ci_rerun_is_infrastructure, decide_ci_rerun, decide_ci_rerun_with_policy,

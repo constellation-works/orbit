@@ -498,6 +498,7 @@ fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
             handoff_id: "handoff-retry".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-retry".into(),
+            producing_run_id: "run-1".into(),
             candidate,
             unresolved_merge_intent: None,
             workspace_path: fx.repo.clone(),

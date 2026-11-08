@@ -161,7 +161,8 @@ macro_rules! review_methods {
         /// Append a permitted CI observation owned by a live landing
         /// attempt. `event` is restricted by the owner store to
         /// `ci_check_rerun`, `ci_base_suspect`, `ci_check_rerun_reserved`,
-        /// `ci_infrastructure_retry_backoff` or `ci_infrastructure_retry_exhausted`.
+        /// `ci_infrastructure_retry_backoff`, `ci_infrastructure_retry_exhausted`,
+        /// `ci_failure_recorded` or `ci_failure_reclassified`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,

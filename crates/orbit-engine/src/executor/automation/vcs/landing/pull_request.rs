@@ -78,6 +78,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
         };
         let has_failures = !failed_checks(&status).is_empty();
+        // [model ranking §5.1] A check recorded failing with no known cause
+        // that now passes on the same head was flaky.
+        recovery.failures.observe_passes(host, context, &status);
         super::checks::rerun_diagnostic::observe_ci_rerun_head(
             host,
             std::slice::from_ref(&context.task_id),

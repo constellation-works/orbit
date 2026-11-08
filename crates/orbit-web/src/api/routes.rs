@@ -326,6 +326,9 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(agents::agent_size_curves),
         )
         .route("/agents/attribution", get(agents::agent_attribution))
+        // Required-check failures on candidate heads by cause, read live
+        // (model ranking §5.1).
+        .route("/agents/ci-failures", get(agents::agent_ci_failures))
         .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
         .route("/agents/{role}/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and

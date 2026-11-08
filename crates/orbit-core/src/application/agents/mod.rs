@@ -24,6 +24,7 @@ use orbit_common::OrbitError;
 mod api;
 mod attribution;
 mod candidates;
+mod ci_failures;
 mod facts;
 mod hands;
 pub(crate) mod memory_evidence;
@@ -37,6 +38,7 @@ mod tests;
 
 pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};
+pub use ci_failures::CiFailureQuery;
 pub(crate) use facts::review_gate_verdicts;
 pub(crate) use facts::task_execution_modes;
 pub use facts::{AgentFacts, ExecutionMode, Problem};
