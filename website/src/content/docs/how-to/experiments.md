@@ -29,10 +29,12 @@ CLI command only.
 ## Before you start
 
 - Set `experiments.enabled` to `true` in the workspace. Its built-in default
-  is `false`, but `orbit init` seeds `true` in a new install's global config;
-  check yours with `orbit config get experiments.enabled`. While it is `false` you can still define, edit, show, and abandon
-  drafts, but `orbit experiment start` is refused with an error naming the
-  key, and forced assignment is refused too:
+  is `false`, but a new install's global config sets it to `true`, and a
+  workspace inherits that value unless it overrides it (see [What `orbit init`
+  seeds](../../reference/config/#what-orbit-init-seeds)). Check yours with
+  `orbit config get experiments.enabled`. While it is `false` you can still
+  define, edit, show, and abandon drafts, but `orbit experiment start` is
+  refused with an error naming the key, and forced assignment is refused too:
 
   ```bash
   orbit config set experiments.enabled true
