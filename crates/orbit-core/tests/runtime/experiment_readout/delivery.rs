@@ -144,6 +144,7 @@ fn expired_instruction_experiment(root: &std::path::Path, step_outcome: &str) ->
                     tools_added: Vec::new(),
                     tools_removed: Vec::new(),
                     skills: Default::default(),
+                    memory: None,
                     digest: "sha256:treatment".into(),
                 }],
             },

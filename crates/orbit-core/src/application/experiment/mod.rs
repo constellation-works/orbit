@@ -7,7 +7,7 @@ mod capture;
 mod definition;
 mod distributed_port;
 mod job_port;
-pub(crate) use capture::validate_experiment_capture;
+pub(crate) use capture::validate_claimed_experiment_capture;
 pub use definition::{
     EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS, STEP_LOCAL_METRICS,
     experiment_metric_is_step_local,

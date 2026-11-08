@@ -120,6 +120,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         _run_id: &str,
         _activity_name: &str,
         _input: &serde_json::Value,
+        _model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
         Ok(self.experiment_overlays.clone())
     }

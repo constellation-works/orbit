@@ -84,6 +84,12 @@ pub(in super::super) fn dispatch_prepared_provider(
         subprocess_cwd,
         subprocess_cwd_string,
     } = source_checkout;
+    // At most one live arm delivers memory: the memory surface is one
+    // experiment's per task (`surface_conflict`).
+    let crew_memory = experiment_overlays
+        .iter()
+        .find_map(|overlay| overlay.memory.as_ref())
+        .map(|delivery| &delivery.block);
     let envelope_input = pinned_recovery_input
         .as_ref()
         .or(inspection_input.as_ref())
@@ -136,6 +142,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
         &activity_tools.requested_tools,
         &activity_tools.effective_tools,
+        crew_memory,
     )?;
 
     let agent_req = AgentRequest {
@@ -468,6 +475,7 @@ pub(in super::super) fn dispatch_prepared_provider(
             inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
             &activity_tools.requested_tools,
             &activity_tools.effective_tools,
+            crew_memory,
         )?;
         let (fallback_invocation, _trace) = agent
             .invoke(AgentRequest {

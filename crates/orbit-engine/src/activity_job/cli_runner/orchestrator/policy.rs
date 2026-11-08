@@ -391,7 +391,8 @@ pub(super) fn apply_experiment_tool_overlays(
             || !overlay.skills.is_empty()
             || !removed.is_empty()
             || overlay.instruction.is_some()
-            || overlay.suppress_default_instructions;
+            || overlay.suppress_default_instructions
+            || overlay.memory.is_some();
         if has_effect {
             records.push(ExperimentOverlayRecord::received(overlay, added, removed));
         }

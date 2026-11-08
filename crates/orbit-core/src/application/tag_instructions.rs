@@ -71,7 +71,7 @@ impl OrbitRuntime {
             }
         }
         .map_err(TagInstructionFailure::Refused)?;
-        let overlays = self.experiment_overlays_for_activity(run_id, activity_name, input)?;
+        let overlays = self.experiment_overlays_for_activity(run_id, activity_name, input, None)?;
         with_experiment_instructions(selected, &overlays, role)
     }
 

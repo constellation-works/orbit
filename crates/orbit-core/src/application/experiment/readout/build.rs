@@ -18,9 +18,9 @@ use crate::application::experiment::readout::outcomes::{
 
 use super::model::{
     ArmDelivery, CrewCount, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout, GuardrailReadout,
-    Lagging, PerProtocolReadout, PrimaryObservation, ReadoutArm, ReadoutEnrollment,
-    ReadoutExperiment, ReadoutMetric, ReadoutWarning, SAMPLE_RATIO_ALPHA, SampleRatio,
-    SampleRatioSegment, SegmentCount,
+    Lagging, MemoryRevisionStratum, PerProtocolReadout, PrimaryObservation, ReadoutArm,
+    ReadoutEnrollment, ReadoutExperiment, ReadoutMetric, ReadoutWarning, SAMPLE_RATIO_ALPHA,
+    SampleRatio, SampleRatioSegment, SegmentCount,
 };
 use super::{metrics, stats, verdict};
 
@@ -379,6 +379,7 @@ fn arm_readout(
         }
     });
     ReadoutArm {
+        memory_strata: memory_strata(&mine),
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
         control: arm.control,
@@ -397,6 +398,27 @@ fn arm_readout(
         run_digests,
         delivery,
     }
+}
+
+/// An arm's tasks by the week of the crew memory revision they first
+/// received; empty for an arm whose tasks received no memory.
+fn memory_strata(tasks: &[&TaskOutcome]) -> Vec<MemoryRevisionStratum> {
+    let mut strata: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
+    for memory in tasks.iter().filter_map(|task| task.memory.as_ref()) {
+        let stratum = strata
+            .entry(memory.week.clone().unwrap_or_else(|| "empty".into()))
+            .or_default();
+        stratum.0 += 1;
+        stratum.1.insert(memory.digest.clone());
+    }
+    strata
+        .into_iter()
+        .map(|(week, (tasks, digests))| MemoryRevisionStratum {
+            week,
+            tasks,
+            digests: digests.into_iter().collect(),
+        })
+        .collect()
 }
 
 /// Each segment's active-arm weights, from the start and reweight events.

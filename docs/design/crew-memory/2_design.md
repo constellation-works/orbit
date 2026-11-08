@@ -11,12 +11,12 @@ summary: "Proposed design for crew memory: per-model spaces in the owner store, 
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
-related_artifacts: [ORB-23105, ORB-23113, ORB-23066, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23066, ORB-10736]
 ---
 
 # Crew Memory — Design
 
-This doc is the accepted design. Slice M1 (§10) is built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`. Nothing delivers memory to a prompt yet. It covers:
+This doc is the accepted design. Slices M1 and M2 (§10) are built: the store (§3), the write rules (§4), the memory key (§2) and the operator CLI (§9), behind `crew_memory.enabled`, and the `memory` overlay surface (§5) with its capture, envelope field and readout strata (§7). Memory reaches a prompt only in a `live` memory arm. It covers:
 - the experimental gate (§1);
 - how memory is keyed (§2) and stored (§3);
 - what a space may hold (§4);
@@ -87,6 +87,8 @@ The `instructions` surface can't express this. It names one repository file per 
 2. **Resolution comes after the crew draw.** For a run whose task is in a memory arm and whose activity's role is in `roles`, the owner takes the drawn crew's model key. It reads that key's newest revision and, if `global`, the global's newest revision, renders the block (§5.3) and computes its digest. A review run in a memory arm with `review` in `roles` resolves the *reviewer* crew's key, not the implementer's.
 3. **Capture.** The rendered block, both revision numbers and the digest go into the admission receipt's `experiments: CapturedExperiments` (`crates/orbit-store/src/contracts/task/coordination/admission.rs`), next to the captured instruction and skill overlays, under the same byte-budget rule. A follower applies what the claim carries. A claim in a memory arm without the capture is refused, as with other experiment captures. The followers hold no memory tables.
 4. **Record.** Each run's `ExperimentOverlayRecord` and its `activity.experiment_overlay_applied` audit row carry the memory digest and revision numbers.
+
+As built (M2): the owner captures memory for every role in `roles` with the drawn crew's model, for live and shadow arms alike, so a shadow run records the digest it would have delivered. A dispatch receives the captured delivery that matches its own role and model. On the owner, a dispatch whose model has no captured delivery (a reviewer or recovery crew the admission did not draw) is rendered at dispatch from the store. A claimed leaf never renders: a dispatch there whose model differs from the captured one, such as after a follower usage-pressure redraw, receives no memory. With `crew_memory.enabled` off, nothing is captured or delivered. The overlay record's `digest` covers the renderer version and the `global` flag but not the memory content, so revision changes don't drift it; the content digest and revisions are on its `memory` field.
 
 A key with no revision yet renders an empty block. That is still a delivery, so it is recorded, and the readout can count arm tasks that received no memory.
 
@@ -183,7 +185,7 @@ Open proposals expire after 4 weeks. The global memory is subject to the 3 KiB c
 Each slice is one task, filed only after this design is accepted:
 
 - **M1. Store, write rules, CLI.** Tables, the §4 validation, `orbit memory show|history|export|reset|copy`, and the `[crew_memory] enabled` key. No delivery. Built by [ORB-23113], which adds `orbit memory write` as the operator seed path; every M1 verb is operator CLI only (no MCP scope), and the `orbit.memory.write` agent tool arrives with M3.
-- **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`.
+- **M2. Overlay surface.** `ExperimentOverlay::memory`, resolution after the crew draw, receipt capture, the envelope field and instruction sentence, the overlay record, and the readout's revision-week strata. Ships and is verified in `shadow`. Built by [ORB-23114].
 - **M3. Dreaming.** The `crew_memory_dream` routine, the evidence pack, key-scoped write and propose tools, and dreaming cost attribution.
 - **M4. Global review.** Proposals and accept/reject.
 - **M5. Run the experiment.** A one-week shadow, then live until the sample or the 6-week cap, then conclude. Then either the promotion design change or the removal task.
@@ -204,6 +206,7 @@ Each slice is one task, filed only after this design is accepted:
 
 - [ORB-23105] — designs crew memory (this folder)
 - [ORB-23113] — builds slice M1: store, write rules, operator CLI
+- [ORB-23114] — builds slice M2: the `memory` overlay surface, capture, envelope field and readout strata
 - [ORB-23066] — adds `--until` to the scorecards, used for the settled reviewer window
 - [ORB-10736] — retired the native project-learning subsystem
 

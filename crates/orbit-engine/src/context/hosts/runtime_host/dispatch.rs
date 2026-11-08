@@ -200,14 +200,17 @@ macro_rules! dispatch_methods {
         /// task its `input` names: each arm's instruction for the activity's
         /// role (already part of [`Self::tag_instructions_for_activity`]) and
         /// its tool delta, which the dispatch applies after the activity's
-        /// tool grant. A shadow experiment, an activity no role addresses, or
-        /// input naming no single task applies none. A claimed leaf's host
-        /// answers from the owner's claim capture and refuses without one.
+        /// tool grant. A memory arm's crew memory is resolved for `model`,
+        /// the dispatch's own model; without one no memory is delivered. A
+        /// shadow experiment, an activity no role addresses, or input naming
+        /// no single task applies none. A claimed leaf's host answers from
+        /// the owner's claim capture and refuses without one.
         fn experiment_overlays_for_activity(
             &self,
             run_id: &str,
             activity_name: &str,
             input: &Value,
+            model: Option<&str>,
         ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError>;
 
         /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.

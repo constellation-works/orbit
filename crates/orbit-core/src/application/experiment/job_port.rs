@@ -27,6 +27,19 @@ impl JobExperimentPort for OrbitRuntime {
         self.install_experiment_capture(input)
     }
 
+    fn install_job_experiment_memory(&self, input: &mut Value) -> Result<(), OrbitError> {
+        let model = input
+            .get("crew")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|crew| !crew.is_empty())
+            .and_then(|crew| {
+                orbit_types::identity::resolve_crew(crew, self.context.settings().crews()).ok()
+            })
+            .map(|crew| crew.assignment.model);
+        self.install_experiment_memory_capture(input, model.as_deref())
+    }
+
     fn install_job_claimed_experiment_crew(&self, input: &mut Value) -> Result<(), OrbitError> {
         self.install_claimed_experiment_crew(input)
     }
@@ -36,6 +49,6 @@ impl JobExperimentPort for OrbitRuntime {
         capture: Option<&CapturedExperiments>,
         task_id: &str,
     ) -> Result<(), OrbitError> {
-        super::validate_experiment_capture(capture, task_id)
+        super::validate_claimed_experiment_capture(capture, task_id)
     }
 }

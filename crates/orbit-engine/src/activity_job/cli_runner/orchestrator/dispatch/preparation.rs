@@ -203,7 +203,7 @@ pub(crate) fn dispatch_cli_invocation(
     // A live experiment arm's tool delta applies after the grant, so the
     // audit row below and the child's policy envelope carry the treatment.
     let experiment_overlays =
-        host.experiment_overlays_for_activity(run_id, activity_name, input)?;
+        host.experiment_overlays_for_activity(run_id, activity_name, input, spec.model.as_deref())?;
     let experiment_records = apply_experiment_tool_overlays(
         host,
         &mut grant,

@@ -119,6 +119,24 @@ pub struct ReadoutArm {
     /// and for an arm whose overlay changes no dispatch (crew or config
     /// only).
     pub delivery: Option<ArmDelivery>,
+    /// A memory arm's tasks by the week of the crew memory revision their
+    /// first dispatch received. A memory arm's notes change weekly by
+    /// design, so a revision change is a stratum here, never drift; only a
+    /// renderer change (part of every run digest) drifts the arm.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_strata: Vec<MemoryRevisionStratum>,
+}
+
+/// The memory-arm tasks whose first delivered crew memory revision was
+/// written in one ISO week.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryRevisionStratum {
+    /// ISO week of the delivered revision (`2026-W45`), or `empty` for tasks
+    /// that received an empty block because their model had no revision.
+    pub week: String,
+    pub tasks: usize,
+    /// Distinct memory content digests the stratum's tasks received.
+    pub digests: Vec<String>,
 }
 
 /// How many of an arm's analysed tasks received its treatment: every
@@ -519,12 +537,22 @@ pub(super) struct TaskOutcome {
     /// run audit trail (`experiment_overlay_applied` joined to the same
     /// run's `step_finished`).
     pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
+    /// The crew memory the task's first memory-bearing dispatch received.
+    pub(super) memory: Option<TaskMemoryDelivery>,
     /// Present only for settled tasks with complete invocation cost coverage.
     pub(super) cost_source: Option<CostSource>,
     /// Reviewable lines recorded for this task. Per-line metrics read this
     /// instead of a per-task ratio in `values`.
     pub(super) reviewable: ReviewableDenominator,
     pub(super) values: BTreeMap<&'static str, Outcome>,
+}
+
+/// The crew memory one task's first memory-bearing dispatch received.
+#[derive(Clone)]
+pub(super) struct TaskMemoryDelivery {
+    /// ISO week of the delivered revision, or `None` for an empty block.
+    pub(super) week: Option<String>,
+    pub(super) digest: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

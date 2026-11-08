@@ -10,7 +10,9 @@ use crate::activity_job::dispatcher::DispatchError;
 use orbit_agent::{Agent, AgentConfig};
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
-use orbit_types::workflow::{V2AuditEventKind, render_tag_instructions};
+use orbit_types::workflow::{
+    CREW_MEMORY_PRECEDENCE_SENTENCE, V2AuditEventKind, render_tag_instructions,
+};
 use serde_json::Value;
 
 pub(super) struct ProviderEnvelope {
@@ -40,6 +42,7 @@ pub(super) fn prepare_provider_envelope<'a>(
         notice_instruction,
         notice_posting_instruction,
         source_checkout,
+        experiment_overlays,
         ..
     } = prepared;
     let crate::activity_job::cli_runner::orchestrator::prepare::SourceCheckout {
@@ -118,6 +121,17 @@ pub(super) fn prepare_provider_envelope<'a>(
                 .map(|instruction| instruction.record())
                 .collect(),
         });
+    }
+    // A memory arm's `crew_memory` field is data; this fixed sentence, after
+    // the tag and experiment instructions, says what it is and what wins.
+    if experiment_overlays
+        .iter()
+        .any(|overlay| overlay.memory.is_some())
+    {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec
+            .instruction
+            .push_str(CREW_MEMORY_PRECEDENCE_SENTENCE);
     }
     if let Some(corpus) = host.agent_corpus_for_activity(run_id, activity_name)? {
         envelope_spec.instruction.push_str("\n\n");

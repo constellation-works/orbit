@@ -101,6 +101,23 @@ impl RunTagInstructions {
                 for (name, digest) in &overlay.skills {
                     line.push_str(&format!(", skill {name} {digest}"));
                 }
+                if let Some(memory) = &overlay.memory {
+                    let revision = |number: Option<u32>| {
+                        number.map_or_else(|| "none".to_string(), |number| number.to_string())
+                    };
+                    line.push_str(&format!(
+                        ", crew memory {} revision {}",
+                        memory.model,
+                        revision(memory.model_revision)
+                    ));
+                    if memory.global {
+                        line.push_str(&format!(
+                            " global revision {}",
+                            revision(memory.global_revision)
+                        ));
+                    }
+                    line.push_str(&format!(" {}", memory.digest));
+                }
                 line
             })
         });

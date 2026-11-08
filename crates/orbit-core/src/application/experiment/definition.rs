@@ -145,6 +145,17 @@ pub struct ConfigOverlay {
     pub roles: Vec<OverlayRole>,
 }
 
+/// Crew memory delivery: the drawn crew's model space (and, with `global`,
+/// the reviewed global memory) reaches each dispatch in `roles` as data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryOverlay {
+    #[serde(default = "implement_only")]
+    pub roles: Vec<OverlayRole>,
+    #[serde(default)]
+    pub global: bool,
+}
+
 /// What an arm changes, per surface. The control's is usually empty.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +170,8 @@ pub struct ExperimentOverlay {
     pub crew: Option<CrewOverlay>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigOverlay>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryOverlay>,
 }
 
 impl ExperimentOverlay {
@@ -249,6 +262,10 @@ impl ExperimentOverlay {
             normalize_roles(&mut config.roles)
                 .map_err(|detail| invalid(format!("config.{detail}")))?;
         }
+        if let Some(memory) = &mut self.memory {
+            normalize_roles(&mut memory.roles)
+                .map_err(|detail| invalid(format!("memory.{detail}")))?;
+        }
         Ok(())
     }
 
@@ -260,7 +277,7 @@ impl ExperimentOverlay {
     }
 
     /// The activity roles whose dispatches receive this overlay: the roles
-    /// of its instructions, skills and tools. Crew and config surfaces act
+    /// of its instructions, skills, tools and memory. Crew and config surfaces act
     /// at admission or through workflow settings, not on a dispatch, so
     /// they name none.
     pub(crate) fn dispatch_roles(&self) -> BTreeSet<OverlayRole> {
@@ -275,7 +292,19 @@ impl ExperimentOverlay {
                 .iter()
                 .flat_map(|tools| tools.roles.iter().copied()),
         );
+        roles.extend(
+            self.memory
+                .iter()
+                .flat_map(|memory| memory.roles.iter().copied()),
+        );
         roles
+    }
+
+    /// Whether this overlay delivers crew memory to dispatches in `role`.
+    pub(crate) fn memory_for_role(&self, role: OverlayRole) -> Option<&MemoryOverlay> {
+        self.memory
+            .as_ref()
+            .filter(|memory| memory.roles.contains(&role))
     }
 
     /// The config keys this overlay sets.

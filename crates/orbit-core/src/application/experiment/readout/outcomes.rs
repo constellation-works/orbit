@@ -97,6 +97,18 @@ fn captured_pool_for_tier(pools: Option<&Value>, tier: &str) -> BTreeSet<String>
     crew_names_from_entries(pool.get("crews").or_else(|| pool.as_array().map(|_| pool)))
 }
 
+/// What a readout reads from its tasks' run audit trails.
+struct RunAudit {
+    /// Recoveries and conflicts per task.
+    events: BTreeMap<String, RunEvents>,
+    /// Each arm's overlay digests as its dispatches received them.
+    digests: BTreeMap<String, BTreeSet<String>>,
+    /// Roles in which each task's arm overlay reached a step that succeeded.
+    delivered: BTreeMap<String, BTreeSet<TagInstructionRole>>,
+    /// The crew memory each task's first memory-bearing dispatch received.
+    memory: BTreeMap<String, TaskMemoryDelivery>,
+}
+
 impl OrbitRuntime {
     /// The crew pool a task's latest delivery was admitted against
     /// [ORB-19487]: its run's frozen `crew_selection.eligible_pool` for an
@@ -229,8 +241,12 @@ impl OrbitRuntime {
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
         let reviewable_rows = self.landed_task_reviewable_lines(&ids, since)?;
-        let (run_events, run_digests, delivered_roles) =
-            self.run_audit(experiment_id, &ids, since)?;
+        let RunAudit {
+            events: run_events,
+            digests: run_digests,
+            delivered: delivered_roles,
+            memory: task_memory,
+        } = self.run_audit(experiment_id, &ids, since)?;
         let first_edits = self.first_implement_edits(Some(since))?;
 
         let mut landed_at = BTreeMap::new();
@@ -425,6 +441,7 @@ impl OrbitRuntime {
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
                 delivered_roles: delivered_roles.get(id).cloned().unwrap_or_default(),
+                memory: task_memory.get(id).cloned(),
                 cost_source,
                 reviewable,
                 values,
@@ -582,25 +599,15 @@ impl OrbitRuntime {
     }
 
     /// Recoveries and conflicts per task from its runs' audit trails, the
-    /// overlay digests each arm's dispatches received, and the roles in
-    /// which each task's arm overlay reached a step that then succeeded.
-    #[allow(
-        clippy::type_complexity,
-        reason = "the single caller splits run events, overlay digests and instruction roles, which are three independent maps"
-    )]
+    /// overlay digests each arm's dispatches received, the roles in which
+    /// each task's arm overlay reached a step that then succeeded, and the
+    /// crew memory each task first received.
     fn run_audit(
         &self,
         experiment_id: &str,
         ids: &BTreeSet<String>,
         since: DateTime<Utc>,
-    ) -> Result<
-        (
-            BTreeMap<String, RunEvents>,
-            BTreeMap<String, BTreeSet<String>>,
-            BTreeMap<String, BTreeSet<TagInstructionRole>>,
-        ),
-        OrbitError,
-    > {
+    ) -> Result<RunAudit, OrbitError> {
         let mut run_tasks: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for id in ids {
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
@@ -617,6 +624,7 @@ impl OrbitRuntime {
         }
         let mut events: BTreeMap<String, RunEvents> = BTreeMap::new();
         let mut digests: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut memory: BTreeMap<String, TaskMemoryDelivery> = BTreeMap::new();
         // (run, step) -> (task, role) of each dispatch that received an arm
         // overlay of this experiment.
         let mut dispatches: BTreeMap<(String, String), BTreeSet<(String, TagInstructionRole)>> =
@@ -690,6 +698,22 @@ impl OrbitRuntime {
                                     .entry((row.run_id.clone(), step_id.clone()))
                                     .or_default()
                                     .insert((task_id.clone(), overlay.role));
+                                // Oldest first: the first memory delivery
+                                // names the task's revision stratum.
+                                if let Some(received) = &overlay.memory {
+                                    memory.entry(task_id.clone()).or_insert_with(|| {
+                                        TaskMemoryDelivery {
+                                            week: received
+                                                .revised_at
+                                                .as_deref()
+                                                .and_then(|at| {
+                                                    DateTime::parse_from_rfc3339(at).ok()
+                                                })
+                                                .map(|at| at.format("%G-W%V").to_string()),
+                                            digest: received.digest.clone(),
+                                        }
+                                    });
+                                }
                                 digests
                                     .entry(overlay.arm)
                                     .or_default()
@@ -720,7 +744,12 @@ impl OrbitRuntime {
                 }
             }
         }
-        Ok((events, digests, delivered))
+        Ok(RunAudit {
+            events,
+            digests,
+            delivered,
+            memory,
+        })
     }
 
     /// Each step's last `step_finished` outcome in `run`'s audit trail.
@@ -761,5 +790,5 @@ impl OrbitRuntime {
 use super::metrics::{failed_check_heads, landing, regressions};
 pub(super) use super::model::{
     CostSource, Kind, METRIC_SPECS, MetricSpec, Observed, Outcome, ReviewableDenominator,
-    TaskOutcome, metric_spec,
+    TaskMemoryDelivery, TaskOutcome, metric_spec,
 };
