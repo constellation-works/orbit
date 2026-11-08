@@ -528,15 +528,12 @@ spec:
       that could change the batch to a worker whose footprint is already locked.
       Missing, unreadable, truncated or deliberately unreconciled required
       history leaves the footprint unestablished, even when some dates and
-      selectors are known. Keep an assessed complexity for identifiable work;
-      name the unread or unreconciled sources and remaining lookup in
-      `evidence_gaps` and a `utility_warnings` object with
-      `holds_promotion: true`. Describe it explicitly as unread footprint
-      evidence, with the source IDs or artifact paths and the reconciliation
-      needed before re-piloting. Do not present provisional selectors as a
-      verified batch. This grants no unrelated-task reads, task or definition
-      writes, worker footprint widening, or exception to existing source,
-      workspace and stale-assessment checks.
+      selectors are known: follow the unestablished-footprint rule in
+      Assessment, naming the source IDs or artifact paths and the
+      reconciliation needed before re-piloting. Do not present provisional
+      selectors as a verified batch. This grants no unrelated-task reads,
+      task or definition writes, worker footprint widening, or exception to
+      existing source, workspace and stale-assessment checks.
     - Granularity: declare `symbol:<path>#<name>:<kind>` for each existing
       source symbol the change modifies or deletes, so Orbit can learn which
       symbols changes and regressions concentrate in; a `symbol:` still locks
@@ -901,8 +898,9 @@ spec:
     obtain; an explicit comment-led duplicate reference whose current scope,
     criteria or status cannot be verified; a required contract absent from the
     base, uncovered by a dependency and outside this task's permitted scope to
-    add; or a target that does not exist. Set it to false, or omit the finding,
-    for:
+    add; a lock footprint the task directs that you could not establish
+    (Assessment); or a target that does not exist. Set it to false, or omit
+    the finding, for:
 
     - an empty or missing plan (the implementer fills plans; they are not a
       filing or promotion requirement);
