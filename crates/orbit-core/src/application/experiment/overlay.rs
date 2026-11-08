@@ -10,8 +10,11 @@
 //! provider's invocation-local discovery root. A memory arm's crew memory is
 //! resolved for the dispatch's own model: from the admission capture when it
 //! holds that model's delivery, otherwise (on the owner only) from the
-//! store. A claimed leaf applies only its receipt's deliveries. A shadow
-//! experiment applies nothing.
+//! store. A claimed leaf delivers only its receipt's bytes, and only while
+//! the owner still reports crew memory enabled. It asks the owner at
+//! dispatch, never reads its own memory tables or config, and delivers
+//! nothing when that observation is missing. The receipt is left unchanged.
+//! A shadow experiment applies nothing.
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::AdmissionShipContract;
@@ -165,6 +168,79 @@ impl OrbitRuntime {
             .map(Some)
     }
 
+    /// Crew memory a claimed dispatch receives from one live memory arm.
+    ///
+    /// The receipt's captured delivery is the only block this leaf may
+    /// send. Whether it sends that block follows the owner's current
+    /// `crew_memory.enabled`, observed once through the host-owned worker
+    /// channel. `observed` caches that answer for the rest of this
+    /// resolution. A disable, or an owner that cannot be observed, delivers
+    /// nothing and leaves the receipt unchanged.
+    fn claimed_memory_delivery(
+        &self,
+        entry: &CapturedExperiment,
+        overlay: &ExperimentOverlay,
+        role: TagInstructionRole,
+        model: Option<&str>,
+        observed: &mut Option<Option<bool>>,
+    ) -> Option<CrewMemoryDelivery> {
+        overlay.memory_for_role(overlay_role(role))?;
+        let Some(key) = memory_key(model) else {
+            warn_claimed_memory_absent(entry, role, model);
+            return None;
+        };
+        let Some(captured) = captured_memory_delivery(entry, role, key.as_str()) else {
+            warn_claimed_memory_absent(entry, role, model);
+            return None;
+        };
+        let enabled = *observed.get_or_insert_with(|| self.observe_owner_crew_memory_enabled());
+        match enabled {
+            Some(true) => Some(captured.clone()),
+            Some(false) => {
+                tracing::warn!(
+                    experiment = %entry.experiment,
+                    arm = %entry.arm,
+                    role = role.as_str(),
+                    model = key.as_str(),
+                    "claimed leaf receives no crew memory: the owner has crew memory disabled"
+                );
+                None
+            }
+            None => {
+                tracing::warn!(
+                    experiment = %entry.experiment,
+                    arm = %entry.arm,
+                    role = role.as_str(),
+                    model = key.as_str(),
+                    "claimed leaf receives no crew memory: the owner's current crew memory policy was not observed"
+                );
+                None
+            }
+        }
+    }
+
+    /// The owner's current `crew_memory.enabled`, or `None` when this leaf
+    /// cannot observe it. This is never the follower's own config.
+    fn observe_owner_crew_memory_enabled(&self) -> Option<bool> {
+        #[derive(serde::Deserialize)]
+        struct OwnerCrewMemoryPolicy {
+            enabled: bool,
+        }
+        match self.read_owner_tool_request::<OwnerCrewMemoryPolicy>(
+            "orbit.task.show",
+            serde_json::json!({ "_worker_read": "crew_memory_policy" }),
+        ) {
+            Ok(policy) => Some(policy.enabled),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "claimed leaf could not observe the owner's crew memory policy"
+                );
+                None
+            }
+        }
+    }
+
     /// The live arms a claimed leaf applies, from the owner's capture alone.
     fn claimed_experiment_overlays(
         &self,
@@ -186,6 +262,9 @@ impl OrbitRuntime {
         validate_claimed_experiment_capture(capture.as_ref(), task_id)
             .map_err(|error| refused(error.to_string()))?;
         let mut overlays = Vec::new();
+        // One observation covers every arm of this resolution. A later
+        // dispatch asks again, so a disable between prompts takes effect.
+        let mut owner_memory_enabled = None;
         for entry in capture
             .iter()
             .flat_map(|capture| &capture.assignments)
@@ -245,22 +324,15 @@ impl OrbitRuntime {
             // The owner resolved memory for the crew it drew. A dispatch
             // running another model (a follower redraw, or a reviewer crew
             // the owner did not draw) has no delivery and receives none.
-            let memory = overlay
-                .memory_for_role(overlay_role(role))
-                .and_then(|_| memory_key(model))
-                .and_then(|key| captured_memory_delivery(entry, role, key.as_str()).cloned());
-            if overlay.memory_for_role(overlay_role(role)).is_some()
-                && memory.is_none()
-                && let Some(model) = model
-            {
-                tracing::warn!(
-                    experiment = %entry.experiment,
-                    arm = %entry.arm,
-                    role = role.as_str(),
-                    model,
-                    "claimed leaf receives no crew memory: the owner capture holds no delivery for this role and model"
-                );
-            }
+            // The owner's current kill switch still applies to a matching
+            // captured delivery.
+            let memory = self.claimed_memory_delivery(
+                entry,
+                &overlay,
+                role,
+                model,
+                &mut owner_memory_enabled,
+            );
             overlays.extend(activity_overlay(
                 &entry.experiment,
                 &entry.arm,
@@ -486,6 +558,22 @@ fn activity_overlay(
         skills,
         memory,
     })
+}
+
+fn warn_claimed_memory_absent(
+    entry: &CapturedExperiment,
+    role: TagInstructionRole,
+    model: Option<&str>,
+) {
+    if let Some(model) = model {
+        tracing::warn!(
+            experiment = %entry.experiment,
+            arm = %entry.arm,
+            role = role.as_str(),
+            model,
+            "claimed leaf receives no crew memory: the owner capture holds no delivery for this role and model"
+        );
+    }
 }
 
 /// The captured crew memory delivery for `role` and memory key `model`.
