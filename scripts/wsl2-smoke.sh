@@ -27,8 +27,30 @@ scratch=$(mktemp -d "${ORBIT_SMOKE_PARENT:-${TMPDIR:-/tmp}}/orbit-wsl2-smoke.XXX
 }
 cleanup() {
   python3 - "$scratch" <<'PY'
-import shutil, sys
-shutil.rmtree(sys.argv[1])
+import os, shutil, signal, sys, time
+scratch = sys.argv[1]
+# If the dashboard checker was itself interrupted before its finally block
+# could reap the server, kill the recorded process group here so no process
+# started by this script survives its exit.
+try:
+    with open(os.path.join(scratch, "dashboard.pgid"), encoding="utf-8") as handle:
+        pgid = int(handle.read().strip())
+except (OSError, ValueError):
+    pgid = None
+if pgid is not None:
+    for sig, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.0)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            break
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                break
+            time.sleep(0.05)
+shutil.rmtree(scratch)
 PY
 }
 trap cleanup EXIT
@@ -107,8 +129,22 @@ import json, pathlib, subprocess, sys
 if len(sys.argv) > 1 and sys.argv[1] == "login":
     print("Logged in")
     sys.exit(0)
-envelope = json.load(sys.stdin)
-task_id = envelope["input"]["task_id"]
+# The codex executor sends the prompt on stdin as response-contract prose, a
+# line "Execution envelope:", then the envelope JSON (providers/common.rs).
+# Parse the JSON after the marker; stdin never starts with the envelope.
+raw = sys.stdin.read()
+marker = "Execution envelope:"
+if marker not in raw:
+    print("stub codex: no Execution envelope marker on stdin", file=sys.stderr)
+    sys.exit(1)
+envelope = json.loads(raw.split(marker, 1)[1].strip())
+task_id = (envelope.get("input", {}).get("task_id")
+           or envelope.get("task", {}).get("id")
+           or envelope.get("input", {}).get("task", {}).get("id")
+           or envelope.get("task_id"))
+if not task_id:
+    print("stub codex: envelope carries no task id", file=sys.stderr)
+    sys.exit(1)
 pathlib.Path("smoke-result.txt").write_text("Smoke implementation\n", encoding="utf-8")
 update = {"id": task_id, "model": "codex", "execution_summary":
           "Outcome: success. Created smoke-result.txt for the disposable smoke task; "
@@ -250,11 +286,18 @@ PYSHIP
           fi
         fi
         if python3 - "$scratch/repo" "$is_wsl" "$ORBIT_SMOKE_POWERSHELL" >"$scratch/dashboard.log" 2>&1 <<'PYWEB'
-import socket, subprocess, sys, time, urllib.request
+import os, pathlib, signal, socket, subprocess, sys, time, urllib.request
 with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-process = subprocess.Popen(["orbit", "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"], cwd=sys.argv[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# `orbit` on PATH is an npm shim that spawns the native server as a child and
+# does not forward signals. Start it in its own session so the finally block
+# can signal the whole process group; terminating only the shim would orphan
+# the native server past this script's exit.
+process = subprocess.Popen(["orbit", "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"], cwd=sys.argv[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+# Record the group for the script's EXIT trap in case this checker is killed
+# before its finally block runs. start_new_session makes pgid == pid.
+pathlib.Path(sys.argv[1]).parent.joinpath("dashboard.pgid").write_text(str(process.pid), encoding="utf-8")
 try:
     for _ in range(100):
         if process.poll() is not None:
@@ -280,12 +323,20 @@ try:
                 raise RuntimeError(f"dashboard returned HTTP {response.status}")
         print(f"Linux fetched http://127.0.0.1:{port}/ (HTTP 200); Windows forwarding skipped")
 finally:
-    process.terminate()
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+    # Reap the whole process group (shim plus its native child), not just the
+    # shim, so no server survives this script on pass, fail or interrupt.
+    def signal_group(sig):
+        try:
+            os.killpg(process.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if process.poll() is None:
+        signal_group(signal.SIGTERM)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            signal_group(signal.SIGKILL)
+            process.wait()
 PYWEB
           then
             record dashboard pass "$(cat "$scratch/dashboard.log")"
