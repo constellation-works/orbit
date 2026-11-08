@@ -676,6 +676,7 @@
         "log_format/tests/scan.rs::rejected_lines_build_no_value",
         "log_format/tests/scan.rs::segments_last_written_before_the_window_are_not_opened",
         "tests/dashboard_assets.rs::dashboard_markdown_call_sites_use_sanitizing_wrapper",
+        "tests/dashboard_assets.rs::dashboard_task_create_keeps_uncertain_submission_on_retry_authorization_refusal",
         "tests/host_tunnels.rs::a_dead_child_is_replaced_by_the_next_request",
         "tests/host_tunnels.rs::a_paced_identity_body_cannot_outlive_its_deadline",
         "tests/host_tunnels.rs::an_idle_tunnel_is_torn_down_but_not_under_an_open_lease",

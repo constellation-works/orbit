@@ -128,3 +128,29 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
         "plugin source must not be assigned as raw innerHTML"
     );
 }
+
+#[test]
+fn dashboard_task_create_keeps_uncertain_submission_on_retry_authorization_refusal() {
+    let sources = first_party_dashboard_sources();
+    let source = sources
+        .iter()
+        .find(|(name, _)| name == "js/task-create.js")
+        .unwrap_or_else(|| panic!("dashboard test cannot find js/task-create.js"))
+        .1
+        .as_str();
+    // Structural safety guard for the idempotent-recovery path: discarding
+    // an uncertain submission on a retry-time 401/403/404 loses its only
+    // request_id copy and a fresh submission then creates a duplicate.
+    assert!(
+        source.contains("const wasUncertain = submission.uncertain;"),
+        "task-create must snapshot whether the submission was already uncertain before marking it uncertain for this attempt"
+    );
+    assert!(
+        source.contains("!(wasUncertain && [401, 403, 404].includes(response.status))"),
+        "task-create must keep an uncertain submission on a retry-time 401/403/404 refusal (the server authorizes before the idempotent request_id lookup, so the refusal proves nothing about an earlier commit)"
+    );
+    assert!(
+        source.contains("[400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)"),
+        "task-create must still clear the saved submission for a first-attempt or body-definitive refusal (e.g. 413/415), as intended by the plain-text framework-refusal handling"
+    );
+}

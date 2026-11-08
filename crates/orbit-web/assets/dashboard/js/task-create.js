@@ -136,7 +136,10 @@ export function initTaskCreate({ getWorkspaces }) {
     const visit = captureWorkspaceVisit();
     pending = true; feedback('Creating proposed task…'); paint();
     // Mark uncertainty durably BEFORE sending, so a reload during the request
-    // keeps the frozen submission until a definitive answer clears it.
+    // keeps the frozen submission until a definitive answer clears it. An
+    // authorization refusal on a retry is never proof of no commit: the
+    // server checks authorization before the idempotent request_id lookup.
+    const wasUncertain = submission.uncertain;
     try {
       persist({ ...submission, uncertain: true });
       const response = await fetch(submission.path, {
@@ -151,9 +154,14 @@ export function initTaskCreate({ getWorkspaces }) {
       let receipt = null;
       try { receipt = rawBody ? JSON.parse(rawBody) : null; } catch { receipt = null; }
       if (!response.ok) {
-        // A definitive refusal proves this submission created nothing, on a
-        // first attempt and on a retry alike, so the frozen copy goes.
-        if ([400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) persist(null);
+        // A body-definitive refusal is a pure function of the frozen bytes,
+        // so it proves this submission created nothing, on a first attempt
+        // and on a retry alike, and the frozen copy goes. An environmental
+        // refusal (401/403/404) on a retry of an uncertain submission says
+        // nothing about the earlier attempt, so the frozen copy stays.
+        const clears = [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)
+          && !(wasUncertain && [401, 403, 404].includes(response.status));
+        if (clears) persist(null);
         throw new Error((receipt && receipt.error) || rawBody.trim() || `Request refused (HTTP ${response.status}).`);
       }
       if (!receipt) throw new Error('The creation receipt is incomplete. Retry the saved submission.');
