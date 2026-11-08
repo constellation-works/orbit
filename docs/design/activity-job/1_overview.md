@@ -115,7 +115,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | Auto-task schema / parked execution (done) | `crates/orbit-engine/src/activity_job/job_executor/auto_task.rs`, `crates/orbit-core/src/application/auto_tasks/job_step.rs` | [ORB-20157], [ORB-20237], [ORB-20158] |
 | Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/1_scope.md) | [ORB-19983], [ORB-19985] |
 | Completion contracts / accepted history, historical reuse and condition facts (shipped); release-readiness example (disabled, nonseeded) | [Auto-task step specification](./specs/auto-task-step.md) | [ORB-20165], [ORB-22649], [ORB-20397] (shipped), [ORB-20166] (disabled example) |
-| Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog.rs` | [T20260418-2019] |
+| Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog/resolve.rs` | [T20260418-2019] |
 | v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host/implementation.rs` | [T20260418-2143], [T20260418-2210] |
 | Retired-declaration rejection | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs`, `crates/orbit-types/src/workflow/activity_job/retired.rs` | [ORB-10801] |
 | v2 DAG executor | `crates/orbit-engine/src/activity_job/job_executor/` | [T20260418-2018], [T20260509-2] |

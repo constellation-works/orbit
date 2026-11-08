@@ -36,7 +36,7 @@ recovery. What is missing is a step that binds an auto-task and waits for its
 accepted completion, plus durable conditional waiting. Source checked at
 `8217460c0`: `JobV2StepBody` is in
 `crates/orbit-types/src/workflow/activity_job/job_v2.rs`; named targets resolve in
-`crates/orbit-engine/src/activity_job/catalog.rs`; `run_step` in
+`crates/orbit-engine/src/activity_job/catalog/resolve.rs`; `run_step` in
 `crates/orbit-engine/src/activity_job/job_executor/step.rs` evaluates `when` once
 and treats false as a successful skip. Waiting cannot reuse that meaning.
 
