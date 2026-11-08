@@ -637,11 +637,14 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
-    // Crew memory writes and export are operator CLI only (no MCP scope).
+    // Crew memory copy, export and reset are operator CLI only (no MCP
+    // scope). Write and propose are listed by a server serving the
+    // `experiments` toolset, which a dreaming run's dispatch stamps.
     ("orbit.memory.copy", Placement::Unadvertised),
     ("orbit.memory.export", Placement::Unadvertised),
+    ("orbit.memory.propose", Placement::Advertised),
     ("orbit.memory.reset", Placement::Unadvertised),
-    ("orbit.memory.write", Placement::Unadvertised),
+    ("orbit.memory.write", Placement::Advertised),
     // Listed only by a server that enables the opt-in `notice` toolset.
     ("orbit.notice.close", Placement::Advertised),
     ("orbit.notice.post", Placement::Advertised),
@@ -755,13 +758,18 @@ fn authorization_matrix_matches_live_registry() {
         if operation.id.starts_with("orbit.notice.")
             || operation.id.starts_with("orbit.resident.")
             || operation.id == "orbit.attention"
+            || operation.id == "orbit.memory.write"
+            || operation.id == "orbit.memory.propose"
         {
             // Interactive agents post their own notices and relay or narrow
             // a resident's authority. That governance is an identity floor,
             // while owner placement, the poster class and the operator-only
             // widening rule core derives constrain their requests. Attention similarly uses
             // Agent/Operator as an identity floor; its bound-session scope and
-            // source rights constrain the read (operations-as-data decisions).
+            // source rights constrain the read. Crew memory write and propose
+            // are likewise a floor: core admits an agent only from a
+            // dreaming task's run, for that task's key (operations-as-data
+            // decisions).
             let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
             assert!(
                 authorize(operation, &unidentified).is_err(),

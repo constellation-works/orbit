@@ -7,22 +7,32 @@ use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::crew_memory::CREW_MEMORY_DREAM_TAG;
 use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };
 use crate::application::experiment::definition::{ExperimentOverlay, validate_metric};
+use crate::application::experiment::memory_arm_names;
 use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
     Kind, METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
 };
 
 use super::model::{
-    ArmDelivery, CrewCount, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout, GuardrailReadout,
-    Lagging, MemoryRevisionStratum, PerProtocolReadout, PrimaryObservation, ReadoutArm,
-    ReadoutEnrollment, ReadoutExperiment, ReadoutMetric, ReadoutWarning, SAMPLE_RATIO_ALPHA,
-    SampleRatio, SampleRatioSegment, SegmentCount,
+    ArmDelivery, CrewCount, DreamingOverhead, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout,
+    GuardrailReadout, Lagging, MemoryRevisionStratum, PerProtocolReadout, PrimaryObservation,
+    ReadoutArm, ReadoutEnrollment, ReadoutExperiment, ReadoutMetric, ReadoutWarning,
+    SAMPLE_RATIO_ALPHA, SampleRatio, SampleRatioSegment, SegmentCount,
 };
 use super::{metrics, stats, verdict};
+
+/// The dreaming cost a readout added, and where.
+struct DreamingAttribution {
+    arms: BTreeSet<String>,
+    /// The memory-arm tasks whose `cost_usd` carries a share.
+    measured: BTreeSet<String>,
+    summary: DreamingOverhead,
+}
 
 /// The label of the per-protocol view.
 const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
@@ -380,6 +390,7 @@ fn arm_readout(
     });
     ReadoutArm {
         memory_strata: memory_strata(&mine),
+        dreaming_overhead: None,
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
         control: arm.control,
@@ -516,12 +527,13 @@ impl OrbitRuntime {
             .iter()
             .filter(|row| row.arm.is_some() && !row.forced)
             .collect();
-        let observed = self.experiment_outcomes(
+        let mut observed = self.experiment_outcomes(
             &record.experiment.id,
             record.experiment.created_at,
             &enrolled,
             now,
         )?;
+        let dreaming = self.attribute_dreaming_cost(&record, &mut observed.tasks, now)?;
         let excluded = |reason: &str| {
             rows.iter()
                 .filter(|row| row.arm.is_none() && row.exclusion_reason.as_deref() == Some(reason))
@@ -551,6 +563,42 @@ impl OrbitRuntime {
                 until: now,
             },
         )?;
+        if let Some(overhead) = &dreaming {
+            for arm in readout
+                .arms
+                .iter_mut()
+                .filter(|arm| overhead.arms.contains(&arm.name))
+            {
+                arm.dreaming_overhead = Some(DreamingOverhead {
+                    spread_over: observed
+                        .tasks
+                        .iter()
+                        .filter(|task| {
+                            task.arm == arm.name && overhead.measured.contains(&task.task_id)
+                        })
+                        .count(),
+                    ..overhead.summary.clone()
+                });
+            }
+            if overhead.summary.cost_usd > 0.0 && overhead.summary.per_task_usd.is_none() {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unattributed",
+                    message: format!(
+                        "crew memory dreaming cost ${:.4} could not be added to the memory arm's cost_usd yet: none of its tasks has a measured cost",
+                        overhead.summary.cost_usd
+                    ),
+                });
+            }
+            if overhead.summary.unpriced_tasks > 0 {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unpriced",
+                    message: format!(
+                        "{} crew memory dreaming task(s) have an unpriced invocation, so the dreaming cost added to the memory arm's cost_usd is a lower bound",
+                        overhead.summary.unpriced_tasks
+                    ),
+                });
+            }
+        }
         for arm in &mut readout.arms {
             let assigned = observed
                 .tasks
@@ -571,6 +619,71 @@ impl OrbitRuntime {
             .warnings
             .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);
         Ok(readout)
+    }
+
+    /// Add the crew memory dreaming cost (design §6.4) to the memory arms'
+    /// `cost_usd`: every task tagged `crew-memory-dream` created between the
+    /// experiment's start and its end (or now), its complete cost spread
+    /// evenly over the memory arms' tasks with a measured cost. `None` for an
+    /// experiment without a memory arm, which carries no dreaming cost.
+    fn attribute_dreaming_cost(
+        &self,
+        record: &ExperimentRecord,
+        tasks: &mut [TaskOutcome],
+        now: DateTime<Utc>,
+    ) -> Result<Option<DreamingAttribution>, OrbitError> {
+        let arms = memory_arm_names(record)?;
+        if arms.is_empty() {
+            return Ok(None);
+        }
+        let started = record
+            .events
+            .iter()
+            .find(|event| event.kind == "started")
+            .map_or(record.experiment.created_at, |event| event.at);
+        let ended = record
+            .events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.kind.as_str(), "concluded" | "abandoned"))
+            .map_or(now, |event| event.at);
+        let ids: BTreeSet<String> = self
+            .list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?
+            .into_iter()
+            .filter(|task| task.created_at >= started && task.created_at < ended)
+            .map(|task| task.id)
+            .collect();
+        let (cost_usd, unpriced_tasks) = self.dreaming_spend(&ids, started)?;
+        let measured: BTreeSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                arms.contains(&task.arm)
+                    && matches!(task.values.get("cost_usd"), Some(Outcome::Value(_)))
+            })
+            .map(|task| task.task_id.clone())
+            .collect();
+        let per_task_usd = (!measured.is_empty()).then(|| cost_usd / measured.len() as f64);
+        if let Some(share) = per_task_usd {
+            for task in tasks
+                .iter_mut()
+                .filter(|task| measured.contains(&task.task_id))
+            {
+                if let Some(Outcome::Value(cost)) = task.values.get_mut("cost_usd") {
+                    *cost += share;
+                }
+            }
+        }
+        Ok(Some(DreamingAttribution {
+            arms,
+            measured,
+            summary: DreamingOverhead {
+                dreaming_tasks: ids.len(),
+                unpriced_tasks,
+                cost_usd,
+                spread_over: 0,
+                per_task_usd,
+            },
+        }))
     }
 
     /// One `crew_mismatch` warning per analysed task whose crew is outside

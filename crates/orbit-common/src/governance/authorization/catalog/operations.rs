@@ -452,15 +452,22 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "deleting an experiment removes its record and event log for good, so only an operator may do it",
     },
-    // Crew memory (experimental): every write, and export, which writes
-    // files on this host, is the operator's; show and history stay
-    // ungoverned reads. Dreaming runs get their own key-scoped write tool
-    // in a later slice, never these.
+    // Crew memory (experimental): reset, copy and export, which writes
+    // files on this host, are the operator's; show and history stay
+    // ungoverned reads. Write and propose admit the agent capability too,
+    // and core then admits an agent's call only from a dreaming task's run,
+    // with the key fixed to that task's key.
     GovernedOperation {
         id: "orbit.memory.write",
         surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "writing a crew memory space changes what a model will be told about its own past work, so only an operator may do it outside a dreaming run",
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "writing a crew memory space changes what a model will be told about its own past work, so only an operator or that model's own dreaming run may do it",
+    },
+    GovernedOperation {
+        id: "orbit.memory.propose",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent],
+        rationale: "a global-memory proposal comes from a dreaming run's evidence; core refuses every other caller, and only an operator decides it",
     },
     GovernedOperation {
         id: "orbit.memory.reset",

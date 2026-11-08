@@ -57,7 +57,10 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         _ if name.starts_with("orbit.resident.") || name.starts_with("orbit.evolution.") => {
             T::Resident
         }
-        _ if name.starts_with("orbit.experiment.") => T::Experiments,
+        // Crew memory is the memory experiment arm's surface.
+        _ if name.starts_with("orbit.experiment.") || name.starts_with("orbit.memory.") => {
+            T::Experiments
+        }
         _ if name.starts_with("orbit.agents.")
             || name.starts_with("orbit.crew.")
             || name.starts_with("orbit.orchestrator.") =>

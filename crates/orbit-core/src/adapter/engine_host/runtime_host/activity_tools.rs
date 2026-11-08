@@ -58,10 +58,15 @@ pub(super) fn resolve_activity_tools(
 ) -> Result<ResolvedActivityTools, DispatchError> {
     let tasks = load_tasks(runtime, task_ids)?;
     let (requested_tools, omitted_requirement_notes) = admit_required_tools(runtime, &tasks, None)?;
+    let memory_suppressed = crew_memory_suppressions(runtime, &tasks, None)?;
     if requested_tools.is_empty() {
         return Ok(ResolvedActivityTools {
             requested_tools,
-            effective_tools: baseline_tools.to_vec(),
+            effective_tools: baseline_tools
+                .iter()
+                .filter(|tool| !memory_suppressed.contains(tool))
+                .cloned()
+                .collect(),
             omitted_requirement_notes,
             granted_tools: Vec::new(),
             suppressed_tools: Vec::new(),
@@ -71,7 +76,7 @@ pub(super) fn resolve_activity_tools(
     let mut seen = std::collections::BTreeSet::new();
     let mut effective_tools = Vec::with_capacity(baseline_tools.len() + requested_tools.len());
     for tool in baseline_tools.iter().chain(requested_tools.iter()) {
-        if seen.insert(tool.clone()) {
+        if !memory_suppressed.contains(tool) && seen.insert(tool.clone()) {
             effective_tools.push(tool.clone());
         }
     }
@@ -142,13 +147,31 @@ pub(super) fn resolve_activity_tool_denials(
         registered_tools.iter().map(String::as_str),
     );
     apply_notice_agent_posting_baseline(activity, disallow_list, &mut effective_tools);
+    // Crew memory's agent tools reach only the runs core admits: the
+    // suppression also denies them to the child.
+    let suppressed_tools = crew_memory_suppressions(runtime, &tasks, Some(activity))?;
+    effective_tools.retain(|tool| !suppressed_tools.contains(tool));
     Ok(ResolvedActivityTools {
         requested_tools,
         effective_tools,
         omitted_requirement_notes,
         granted_tools: grants.lifted.into_iter().collect(),
-        suppressed_tools: Vec::new(),
+        suppressed_tools,
     })
+}
+
+/// The crew memory agent tools these tasks' run in `activity` must not
+/// list (core decides which runs may reach them).
+fn crew_memory_suppressions(
+    runtime: &OrbitRuntime,
+    tasks: &[Task],
+    activity: Option<&str>,
+) -> Result<Vec<String>, DispatchError> {
+    runtime
+        .crew_memory_tool_suppressions(tasks, activity)
+        .map_err(|error| {
+            DispatchError::CliInvocationFailed(format!("resolve crew memory tool scope: {error}"))
+        })
 }
 
 fn load_tasks(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Vec<Task>, DispatchError> {

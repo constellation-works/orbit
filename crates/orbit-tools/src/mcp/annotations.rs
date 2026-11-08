@@ -32,6 +32,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
+        | "orbit.memory.show"
         | "orbit.notice.list"
         | "orbit.notice.show"
         | "orbit.evolution.list"
@@ -55,6 +56,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.auto_task.mint"
         | "orbit.friction.add"
         | "orbit.evolution.add"
+        | "orbit.memory.propose"
         | "orbit.task.add" => A::additive(false),
 
         // Edits that set the fields given and touch nothing else.
@@ -82,6 +84,9 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // another history entry.
         "orbit.resident.control" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
+        // Replaces a memory space's files with a new revision; each call
+        // appends another revision.
+        "orbit.memory.write" => A::destructive(false),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also
         // closes the published pull request.

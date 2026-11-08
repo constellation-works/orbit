@@ -41,11 +41,12 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > the scheduler kernels, with Core supplying task facts, dispatch and status assembly.
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `resident_cycle`, `worktree_gc`, `store_gc` and
-`task_publication`) under
+`dependabot_alert_sweep`, `task_pilot`, `resident_cycle`, `worktree_gc`, `store_gc`,
+`task_publication` and `crew_memory_dream`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
-seeded enabled in a newly initialized workspace [ORB-22802]; a workspace seeded earlier keeps
+seeded enabled in a newly initialized workspace [ORB-22802], as is `crew_memory_dream`, whose action
+mints nothing while `crew_memory.enabled` is false [ORB-23115]; a workspace seeded earlier keeps
 its `enabled` value, because a template refresh never changes it. Other defaults are
 `enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
 with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited

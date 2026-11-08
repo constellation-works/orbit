@@ -242,8 +242,9 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
-        // Crew memory: a write's file text redacts as free text; every other
-        // verb carries only keys, revisions, a directory and a reason.
+        // Crew memory: a write's file text redacts as free text, as does a
+        // proposal's declared free-text note; every other verb carries only
+        // keys, revisions, a directory and a reason.
         OrbitBuiltinAction::Memory(verb) => match verb {
             MemoryVerb::Write => ActionPolicy {
                 declared: verb.spec().params,
@@ -254,7 +255,8 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | MemoryVerb::History
             | MemoryVerb::Export
             | MemoryVerb::Reset
-            | MemoryVerb::Copy => ActionPolicy {
+            | MemoryVerb::Copy
+            | MemoryVerb::Propose => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

@@ -38,6 +38,11 @@ impl Execute for MemoryCommand {
             MemoryVerb::Show => vec![Block::text(space_text(&value))],
             MemoryVerb::History => history_blocks(&value),
             MemoryVerb::Export => vec![Block::text(export_text(&value))],
+            // Tool-only: no CLI path reaches it.
+            MemoryVerb::Propose => vec![Block::text(format!(
+                "proposal `{}` opened",
+                text(&value["id"])
+            ))],
             MemoryVerb::Write | MemoryVerb::Reset | MemoryVerb::Copy => {
                 vec![Block::text(format!(
                     "{} `{}` revision {} ({} file(s), {} bytes, {})",
@@ -190,8 +195,13 @@ fn history_blocks(value: &Value) -> Vec<Block> {
     .empty_message("no events");
     for event in value["events"].as_array().into_iter().flatten() {
         let detail = &event["detail"];
-        let summary = if event["action"] == "write_refused" {
+        let summary = if matches!(
+            event["action"].as_str(),
+            Some("write_refused" | "propose_refused")
+        ) {
             format!("{}: {}", text(&detail["rule"]), text(&detail["message"]))
+        } else if detail["reason"].is_null() && !detail["task_id"].is_null() {
+            text(&detail["task_id"])
         } else {
             text(&detail["reason"])
         };

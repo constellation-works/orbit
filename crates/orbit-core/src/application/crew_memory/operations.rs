@@ -19,10 +19,18 @@ use super::{
 use crate::OrbitRuntime;
 
 /// The policy key that gates every crew memory write.
-const ENABLED_KEY: &str = "crew_memory.enabled";
+pub(super) const ENABLED_KEY: &str = "crew_memory.enabled";
+
+/// What a dreaming run's write is held to beyond the five rules: the task
+/// it writes for, recorded on the revision's event, and the evidence pack
+/// its citations must come from.
+pub(super) struct DreamingWrite<'a> {
+    pub(super) task_id: &'a str,
+    pub(super) evidence_pack: &'a BTreeSet<String>,
+}
 
 /// What a revision records about the change that wrote it.
-enum WriteAction {
+pub(super) enum WriteAction {
     Write,
     Reset,
     Copy { from: MemoryKey, from_revision: u32 },
@@ -85,7 +93,7 @@ impl OrbitRuntime {
     /// The score-blind lint's names for a write to `own` keys: every
     /// scorecard term, and every configured crew name and model except the
     /// ones of `own`.
-    fn crew_memory_vocabulary(&self, own: &[&MemoryKey]) -> MemoryLintVocabulary {
+    pub(super) fn crew_memory_vocabulary(&self, own: &[&MemoryKey]) -> MemoryLintVocabulary {
         let crews = self.context.settings().crews();
         let mut own_names = BTreeSet::new();
         let mut other_names = BTreeSet::new();
@@ -117,7 +125,7 @@ impl OrbitRuntime {
 
     /// Refuse `verb` on `key` while `crew_memory.enabled` is false, read
     /// from the current config so a disable takes effect at once.
-    fn ensure_crew_memory_writes_enabled(
+    pub(super) fn ensure_crew_memory_writes_enabled(
         &self,
         verb: &str,
         key: &MemoryKey,
@@ -132,14 +140,16 @@ impl OrbitRuntime {
 
     /// The one crew memory write path. Refused while `crew_memory.enabled`
     /// is false; otherwise runs [`validate_memory_write`] and appends a
-    /// revision, or records the refusal and refuses the whole write.
-    fn write_crew_memory_revision(
+    /// revision, or records the refusal and refuses the whole write. A
+    /// dreaming run's write also cites only its evidence pack.
+    pub(super) fn write_crew_memory_revision(
         &self,
         key: &MemoryKey,
         mut write: MemoryWrite,
         writer: &MemoryWriter,
         action: WriteAction,
         reason: Option<String>,
+        dreaming: Option<&DreamingWrite<'_>>,
     ) -> Result<Value, OrbitError> {
         self.ensure_crew_memory_writes_enabled(action.verb(), key)?;
         self.ensure_coordination_task_write_permitted()?;
@@ -154,7 +164,9 @@ impl OrbitRuntime {
             key,
             writer,
             vocabulary: &vocabulary,
+            evidence_pack: dreaming.map(|run| run.evidence_pack),
         };
+        let task_id = dreaming.map(|run| run.task_id);
         // Stored at microsecond precision; truncate so the reply matches a read.
         let now = Utc::now().trunc_subsecs(6);
         if let Err(refusal) = validate_memory_write(&write, &context) {
@@ -167,6 +179,7 @@ impl OrbitRuntime {
                 revision: None,
                 detail_json: json!({
                     "verb": action.verb(),
+                    "task_id": task_id,
                     "rule": refusal.rule,
                     "file": refusal.file,
                     "token": refusal.token,
@@ -196,6 +209,9 @@ impl OrbitRuntime {
             created_at: now,
         };
         let mut detail = json!({ "verb": action.verb(), "reason": reason });
+        if let Some(task_id) = task_id {
+            detail["task_id"] = json!(task_id);
+        }
         if let WriteAction::Copy {
             from,
             from_revision,
@@ -347,7 +363,7 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         let key = self.operator_memory_key(key)?;
         let writer = self.operator_memory_writer();
-        self.write_crew_memory_revision(&key, write, &writer, WriteAction::Write, reason)
+        self.write_crew_memory_revision(&key, write, &writer, WriteAction::Write, reason, None)
     }
 
     /// Empty a space with a new revision that holds no files.
@@ -364,6 +380,7 @@ impl OrbitRuntime {
             &writer,
             WriteAction::Reset,
             reason,
+            None,
         )
     }
 
@@ -411,11 +428,12 @@ impl OrbitRuntime {
                 from_revision: source.revision,
             },
             reason,
+            None,
         )
     }
 }
 
-fn json_text<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
+pub(super) fn json_text<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
     serde_json::to_string(value)
         .map_err(|error| OrbitError::Execution(format!("serialize crew memory: {error}")))
 }
@@ -458,7 +476,7 @@ fn byte_count(files: &[MemoryFile]) -> usize {
 
 /// A space's revision as the CLI and tools show it; an empty space when the
 /// key has no revision yet.
-fn revision_view(
+pub(super) fn revision_view(
     key: &MemoryKey,
     row: Option<&CrewMemoryRevisionRow>,
 ) -> Result<Value, OrbitError> {

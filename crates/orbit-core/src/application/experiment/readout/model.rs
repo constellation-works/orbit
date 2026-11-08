@@ -125,6 +125,30 @@ pub struct ReadoutArm {
     /// renderer change (part of every run digest) drifts the arm.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub memory_strata: Vec<MemoryRevisionStratum>,
+    /// A memory arm's crew memory dreaming cost (design §6.4), already
+    /// added to its tasks' `cost_usd`; absent for every other arm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dreaming_overhead: Option<DreamingOverhead>,
+}
+
+/// The crew memory dreaming cost a memory arm carries: every dreaming task
+/// created while the experiment ran, spread evenly over the memory arms'
+/// tasks with a measured `cost_usd`, so the arm's mean includes memory's
+/// overhead instead of hiding it in the control.
+#[derive(Debug, Clone, Serialize)]
+pub struct DreamingOverhead {
+    /// Dreaming tasks counted.
+    pub dreaming_tasks: usize,
+    /// Of those, tasks with an unpriced invocation; their cost is not
+    /// counted, so `cost_usd` is a lower bound while this is nonzero.
+    pub unpriced_tasks: usize,
+    /// The total dreaming cost counted.
+    pub cost_usd: f64,
+    /// This arm's tasks the cost was spread over.
+    pub spread_over: usize,
+    /// What each of those tasks' `cost_usd` was raised by; `None` while no
+    /// memory-arm task has a measured cost.
+    pub per_task_usd: Option<f64>,
 }
 
 /// The memory-arm tasks whose first delivered crew memory revision was

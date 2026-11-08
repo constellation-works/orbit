@@ -26,6 +26,7 @@ mod attribution;
 mod candidates;
 mod facts;
 mod hands;
+pub(crate) mod memory_evidence;
 mod query;
 mod records;
 mod roles;

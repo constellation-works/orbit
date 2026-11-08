@@ -1,19 +1,20 @@
 //! Crew memory (experimental): per-model memory spaces and the global
 //! memory, held as append-only revisions in the owner store.
 //!
-//! Every verb here is the operator's: none has an MCP scope and the noun
-//! registers its tools inactive, so no agent session lists them. The writes
-//! (write, reset, copy) and export, which writes files on this host, are
-//! governed operator-only operations, so an agent session reaching them
-//! through `orbit tool run` is refused at the capability chokepoint. Show
-//! and history are plain reads. Agent tools (`orbit.memory.write` for
-//! dreaming runs) arrive with a later slice under their own scope.
+//! History, export, reset and copy are the operator's: they have no MCP
+//! scope and register inactive, and export, reset and copy are governed
+//! operator-only operations, so an agent reaching them through
+//! `orbit tool run` is refused at the capability chokepoint. Show, write and
+//! propose (slice M3) are also agent tools: core admits an agent's call only
+//! from a crew memory dreaming task's run, with the key fixed to that task's
+//! key (show also from a run in a memory arm), and a run's activity lists
+//! them only then. Propose is tool-only.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only, operation_registry,
     required,
 };
-use orbit_types::tool::McpIdRouteDeclaration;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: MEMORY;
@@ -34,6 +35,8 @@ operation_registry! {
         Reset => RESET,
         /// Copy one model's space into another model's space (operator only).
         Copy => COPY,
+        /// Propose a note for the global memory (dreaming runs only).
+        Propose => PROPOSE,
     }
 }
 
@@ -86,7 +89,7 @@ const SHOW: OperationSpec<MemoryVerb> = OperationSpec {
     verb: MemoryVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.memory.show",
-    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. Operator CLI only.",
+    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a crew memory dreaming task's run or a run in a memory experiment arm, and reads only its own model's space (the default key) or `global`.",
     cli_about: "Show a memory space, or summarise every space",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -94,7 +97,7 @@ const SHOW: OperationSpec<MemoryVerb> = OperationSpec {
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
-    mcp_scope: None,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
@@ -139,7 +142,13 @@ const EXPORT: OperationSpec<MemoryVerb> = OperationSpec {
 };
 
 const WRITE_PARAMS: &[ParamSpec] = &[
-    KEY,
+    required(both(
+        "key",
+        ParamType::String,
+        "Memory key: the model id a space belongs to, as runs record it, or `global`. A dreaming run may name only its own task's key.",
+        CliArgKind::Positional,
+        "Model id, or `global`",
+    )),
     mcp_only(
         "files",
         ParamType::Array,
@@ -161,7 +170,7 @@ const WRITE_PARAMS: &[ParamSpec] = &[
     both(
         "evidence",
         ParamType::StringList,
-        "Evidence task ids the notes rest on. An operator write may cite none.",
+        "Evidence task ids the notes rest on. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
         CliArgKind::Flag {
             long: "evidence",
             delimiter: Some(','),
@@ -179,7 +188,7 @@ const WRITE: OperationSpec<MemoryVerb> = OperationSpec {
     verb: MemoryVerb::Write,
     cli_path: &["write"],
     tool_name: "orbit.memory.write",
-    tool_description: "Replace a crew memory space's files with a new revision. Refused while crew_memory.enabled is false. A write is refused whole, naming the rule, when it breaks caps (a model space at most 8 files and 6 KiB, global 1 file and 3 KiB, names [a-z0-9-]{1,40}.md), provenance, the score-blind lint (scorecard vocabulary or another crew's or model's name), the not-instructions lint (a URL, an Orbit tool name, a shell command block or an injection phrase) or rewrite-whole (each file once); a refusal is recorded in the space's history. Operator CLI only.",
+    tool_description: "Replace a crew memory space's files with a new revision. Refused while crew_memory.enabled is false. A write is refused whole, naming the rule, when it breaks caps (a model space at most 8 files and 6 KiB, global 1 file and 3 KiB, names [a-z0-9-]{1,40}.md), provenance (a dreaming run cites at least one evidence task id, each from its evidence pack), the score-blind lint (scorecard vocabulary or another crew's or model's name), the not-instructions lint (a URL, an Orbit tool name, a shell command block or an injection phrase) or rewrite-whole (each file once); a refusal is recorded in the space's history. An agent may write only from a crew memory dreaming task's run, and only that task's own key: another model's key and `global` are refused (propose a global note instead).",
     cli_about: "Replace a memory space's files with a new revision",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -187,7 +196,7 @@ const WRITE: OperationSpec<MemoryVerb> = OperationSpec {
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
-    mcp_scope: None,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
@@ -238,5 +247,34 @@ const COPY: OperationSpec<MemoryVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const PROPOSE_PARAMS: &[ParamSpec] = &[
+    required(free_text(mcp_only(
+        "text",
+        ParamType::String,
+        "The proposed global-memory note, at most 3 KiB of Markdown. It passes the same rules as a global-memory write.",
+    ))),
+    required(mcp_only(
+        "evidence",
+        ParamType::StringList,
+        "Evidence task ids the note rests on, at least one, each from this run's evidence pack.",
+    )),
+];
+
+const PROPOSE: OperationSpec<MemoryVerb> = OperationSpec {
+    verb: MemoryVerb::Propose,
+    cli_path: &[],
+    tool_name: "orbit.memory.propose",
+    tool_description: "Propose a note for the global memory every model receives, for an operator to accept or reject. Only a crew memory dreaming task's run may propose, at most 2 proposals per run. The note is refused, naming the rule, when it breaks the global memory's caps (3 KiB), provenance (at least one evidence task id, each from the run's evidence pack), the score-blind lint or the not-instructions lint. Refused while crew_memory.enabled is false.",
+    cli_about: "Propose a global-memory note",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[PROPOSE_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };

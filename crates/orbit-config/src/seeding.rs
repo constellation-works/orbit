@@ -35,6 +35,7 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "worktree_gc",
     "task_publication",
     "store_gc",
+    "crew_memory_dream",
 ];
 
 /// Default routines a prior release shipped and this one no longer seeds.

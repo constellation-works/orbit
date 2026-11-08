@@ -456,6 +456,29 @@ impl OrbitRuntime {
         })
     }
 
+    /// The summed complete cost of `ids` (crew memory dreaming tasks) and
+    /// how many of them have an unpriced invocation, which leave the sum.
+    pub(super) fn dreaming_spend(
+        &self,
+        ids: &BTreeSet<String>,
+        since: DateTime<Utc>,
+    ) -> Result<(f64, usize), OrbitError> {
+        if ids.is_empty() {
+            return Ok((0.0, 0));
+        }
+        let spend = self.task_spend(ids, since - READ_SLACK)?;
+        let mut total = 0.0;
+        let mut unpriced = 0;
+        for task in spend.values() {
+            match task.complete_cost() {
+                Some(cost) => total += cost,
+                None if task.unpriced => unpriced += 1,
+                None => {}
+            }
+        }
+        Ok((total, unpriced))
+    }
+
     /// Cost over every linked invocation (provider-reported first, then the
     /// shared table-derived estimate), and implement wall time, per task.
     /// Any unpriced invocation makes the task's cost unmeasured. An invocation

@@ -387,6 +387,10 @@ and `task_publication.yaml` with workspace-unique names and `enabled: false`.
 enabled hourly; [ORB-22804] retired it (template under `routines/retired/`, its
 `crew_performance_refresh_pipeline` job in `RETIRED_ROUTINE_JOBS`) with crew-performance
 weighting.
+[ORB-23115] added `crew_memory_dream.yaml`, seeded enabled: Monday 02:00 host-local,
+`missed_run: skip`, `overlap: forbid`, targeting `job:crew_memory_dream_pipeline`. Its action
+is its own gate and mints nothing while `crew_memory.enabled` is false or no memory
+experiment runs ([crew memory](../crew-memory/2_design.md) §6.1).
 [ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
 `missed_run: skip`, `overlap: forbid`, owner-only, and a successful
 `publication_unbound` skip when no publication target is configured.

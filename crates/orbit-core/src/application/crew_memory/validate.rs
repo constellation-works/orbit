@@ -127,6 +127,9 @@ pub struct MemoryWriteContext<'a> {
     pub key: &'a MemoryKey,
     pub writer: &'a MemoryWriter,
     pub vocabulary: &'a MemoryLintVocabulary,
+    /// The writing run's evidence pack task ids: a dreaming run may cite
+    /// only these. `None` for an operator write.
+    pub evidence_pack: Option<&'a BTreeSet<String>>,
 }
 
 /// Check `write` against every rule, in order: rewrite-whole, caps,
@@ -138,7 +141,7 @@ pub fn validate_memory_write(
 ) -> Result<(), MemoryWriteRefusal> {
     rewrite_whole(write)?;
     caps(write, context.key)?;
-    provenance(write, context.writer)?;
+    provenance(write, context.writer, context.evidence_pack)?;
     for file in &write.files {
         let text = normalized(&file.text);
         score_blind(&file.path, &text, context.vocabulary)?;
@@ -234,7 +237,11 @@ fn valid_file_name(name: &str) -> bool {
     })
 }
 
-fn provenance(write: &MemoryWrite, writer: &MemoryWriter) -> Result<(), MemoryWriteRefusal> {
+fn provenance(
+    write: &MemoryWrite,
+    writer: &MemoryWriter,
+    evidence_pack: Option<&BTreeSet<String>>,
+) -> Result<(), MemoryWriteRefusal> {
     if let Some(bad) = write.evidence.iter().find(|id| !valid_task_id(id)) {
         return Err(refusal(
             MemoryRule::Provenance,
@@ -249,6 +256,18 @@ fn provenance(write: &MemoryWrite, writer: &MemoryWriter) -> Result<(), MemoryWr
             None,
             None,
             "a run's write must cite at least one evidence task id".to_string(),
+        ));
+    }
+    if let Some(pack) = evidence_pack
+        && let Some(outside) = write.evidence.iter().find(|id| !pack.contains(*id))
+    {
+        return Err(refusal(
+            MemoryRule::Provenance,
+            None,
+            Some(outside),
+            format!(
+                "evidence `{outside}` is not in this run's evidence pack; cite only tasks the pack names"
+            ),
         ));
     }
     Ok(())
@@ -312,6 +331,101 @@ fn score_blind(
         ));
     }
     Ok(())
+}
+
+/// Replacement for a token [`strip_score_blind_tokens`] removes.
+const STRIPPED: &str = "[…]";
+
+/// `text` with every token the score-blind lint would refuse replaced by
+/// `[…]`: scorecard words (with any suffix for the stems), scorecard term
+/// keys and labels, and other crews' and models' names. Whitespace runs
+/// collapse to one space. The dreaming evidence pack passes its free text
+/// (titles, findings, occurrence details) through this, so the pack does not
+/// teach the vocabulary a write may not use. Matching is ASCII
+/// case-insensitive.
+pub(crate) fn strip_score_blind_tokens(text: &str, vocabulary: &MemoryLintVocabulary) -> String {
+    let mut text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let word_token = |token: String, allow_suffix: bool| StripToken {
+        token,
+        allow_suffix,
+        word: is_word_char,
+    };
+    let mut tokens: Vec<StripToken> = Vec::new();
+    tokens.extend(
+        SCORE_STEMS
+            .iter()
+            .map(|stem| word_token((*stem).to_string(), true)),
+    );
+    tokens.extend(
+        SCORE_PHRASES
+            .iter()
+            .map(|phrase| word_token((*phrase).to_string(), false)),
+    );
+    tokens.extend(
+        vocabulary
+            .scorecard_terms
+            .iter()
+            .map(|term| word_token(normalized(term), false)),
+    );
+    tokens.extend(vocabulary.other_names.iter().map(|name| StripToken {
+        token: name.to_ascii_lowercase(),
+        allow_suffix: false,
+        word: is_name_char,
+    }));
+    // Longer tokens first, so a label is stripped whole before a stem in it.
+    tokens.sort_by_key(|token| std::cmp::Reverse(token.token.len()));
+    for token in tokens {
+        if token.token.is_empty() {
+            continue;
+        }
+        text = strip_word(&text, &token.token, token.allow_suffix, token.word);
+    }
+    text
+}
+
+/// One token [`strip_score_blind_tokens`] removes: its ASCII-lowercase
+/// text, whether a match extends over a suffix, and what counts as a word
+/// character at its boundaries.
+struct StripToken {
+    token: String,
+    allow_suffix: bool,
+    word: fn(char) -> bool,
+}
+
+/// Replace each bounded occurrence of `token` (ASCII lowercase) in `text`,
+/// extending a suffix match to the end of its word.
+fn strip_word(text: &str, token: &str, allow_suffix: bool, word: fn(char) -> bool) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (at, _) in lower.match_indices(token) {
+        if at < cursor {
+            continue;
+        }
+        let before = text[..at].chars().next_back();
+        let after_at = at + token.len();
+        let after = text[after_at..].chars().next();
+        let first = token.chars().next().is_some_and(word);
+        let last = token.chars().next_back().is_some_and(word);
+        if first && before.is_some_and(word) {
+            continue;
+        }
+        let end = if allow_suffix {
+            text[after_at..]
+                .find(|c: char| !word(c))
+                .map_or(text.len(), |stop| after_at + stop)
+        } else {
+            if last && after.is_some_and(word) {
+                continue;
+            }
+            after_at
+        };
+        out.push_str(&text[cursor..at]);
+        out.push_str(STRIPPED);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 fn not_instructions(path: &str, raw: &str, text: &str) -> Result<(), MemoryWriteRefusal> {

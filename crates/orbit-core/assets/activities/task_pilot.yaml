@@ -1099,6 +1099,9 @@ spec:
     - orbit.experiment.reweight
     - orbit.experiment.start
     - orbit.experiment.update
+    - orbit.memory.propose
+    - orbit.memory.show
+    - orbit.memory.write
     - orbit.notice.close
     - orbit.notice.post
     - orbit.resident.checkpoint
