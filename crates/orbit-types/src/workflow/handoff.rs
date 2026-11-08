@@ -364,8 +364,9 @@ pub struct OwnerLandingRefusal {
     pub workflow_prerequisites: serde_json::Value,
     #[serde(default)]
     pub emission_proof: serde_json::Value,
-    /// Present, and `true`, only on a stop that returns the task to the
-    /// backlog.
+    /// The engine sets this to `true` for every `StopForRequeue`. If the
+    /// landing repair budget is spent, the task is blocked while this evidence
+    /// stays on the attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requeue: Option<bool>,
 }
