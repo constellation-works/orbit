@@ -100,7 +100,7 @@ pub fn prepare_remote_task_artifact_put(
         },
         ..ToolContext::default()
     };
-    crate::builtin::orbit::task::artifact_put::prepare_remote_payload(input, &ctx)
+    crate::artifact_materialize::prepare_remote_payload(input, &ctx)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
