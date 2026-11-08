@@ -431,9 +431,10 @@ leaf submits a detached `task_pr_watch_pipeline` (step `watch`, activity
 history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
 `blocked` or `pending`), `pr_number` and `head_sha`. A `failed` note adds
 `failed_checks`, plus a `classification` and `detail` that use the classes in
-the table above. A watch that cannot read the job listing, or has no deciding
-job after log reads, records `inconclusive`; an individual unreadable failed-job
-log does not void a readable job's classification. The watch only observes. To repair a red or conflicting pull
+the table above. A watch whose job listing read is rate-limited by the provider
+records classification `deferred`; a non-throttle listing failure or no
+deciding job after log reads records `inconclusive`. An individual unreadable
+failed-job log does not void a readable job's classification. The watch only observes. To repair a red or conflicting pull
 request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
 [auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
 resumes the succeeded leaf at its completion step under the leaf's own
