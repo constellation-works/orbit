@@ -240,8 +240,15 @@ pub(super) fn sibling_cluster_index(
     index
 }
 
-/// Resolve a dependency reference to its sibling cluster, by id, then by
-/// exact name, then by normalized name (the signature form).
+/// Resolve a dependency reference to its sibling cluster within the same run.
+///
+/// The name resolves first: exact name, then ASCII-lowercase name, then the
+/// normalized signature form. The normalized form applies only when the
+/// reference's name carries the `<n>` placeholder. A reference without a job
+/// id resolves to that name match. A reference carrying a job id resolves
+/// only when the id index names the same sibling as the name match. An id
+/// with no name match, a name with no id match, or two different siblings
+/// all resolve to `None`.
 pub(super) fn sibling_cluster_for(
     index: &BTreeMap<(String, String), usize>,
     reference: &DependencyRef,
@@ -261,7 +268,7 @@ pub(super) fn sibling_cluster_for(
                 .copied()
         })
         .or_else(|| {
-            // Only a record carrying the signature placeholder (`<n>`) may
+            // Only a reference carrying the signature placeholder (`<n>`) may
             // match across differing partition numbers; a concrete number
             // must match exactly.
             reference.job_name.contains("<n>").then(|| {
