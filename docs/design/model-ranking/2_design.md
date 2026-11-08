@@ -272,6 +272,39 @@ change starts a new season (§4.2).
   artifact. The weekly MVP note and the public analytics site read the frozen snapshot,
   never a live query.
 
+### 6.1 As built (R2)
+
+- **Rows and expectations.** The ranking reads the implementer scorecard's per-task
+  counts and expectations (tier rates with the conservative borrowing, and the
+  size-adjusted escaped-regression expectation) and sums them per model. A model's
+  expectation on a shared term is therefore the sum of its crews' scorecard rows. A task
+  two crews of one model both worked counts once per crew, as on the scorecard.
+- **Measures recorded today.** Escaped regressions, review outcome and crew-caused rework
+  are measured. CI failures, final recoveries and tool-call errors report `unmeasured`
+  with the reason, and their weight leaves every denominator until R1 records them. A
+  measure whose calibrated scale is zero reports `no_scale` and leaves the denominator too.
+- **Seasons.** `orbit agents rank calibrate [--window] [--until] [--settle-lag]
+  [--execution]` calibrates the settled window and appends a season to
+  `.orbit/state/agents/rank-seasons.json`: its number, the definition version, the
+  calibration window, `n_ref`, the draws, and each measure's scale, unfloored estimate,
+  floor and weekly estimates. The board uses the newest season of the current definition
+  version; a definition change bumps the version, so older seasons stay on file unused.
+  Before the first calibration the scales are estimated from the ranked window and the
+  payload says `scales_source: "window_estimate"`.
+- **Resampling** uses a fixed seed, so the same facts give the same scales, intervals and
+  bands. The interval and paired probabilities resample eligible models only; the
+  leave-one-out mean is recomputed in every draw.
+- **Cost** is the scorecard's recorded run cost (the provider's cost, else the cost derived
+  from list prices). Within a band, priced models come first by cost ratio, then
+  `cost unknown` models by score.
+- **Payload.** Per row: `score`, `raw_score`, `z`, `z_loo`, `z_shrunk`, `interval`
+  (`p10`, `p90`), `rank` and `rank_label` (`2=`), `cost` (`ratio`, `per_task`,
+  `expected_per_task`, `coverage`, `cost_unknown`), per-measure `actual`, `expected`,
+  `residual`, `units`, `contribution` (score points before shrinkage) and `status`,
+  eligibility, `crews` and `effort_split`. Per board: `measures` with their scales,
+  `season`, `scales_source`, `rules`, `qualified`, `unattributed` and
+  `paired_probabilities`. The dashboard Rank tab and the weekly snapshot are later work.
+
 ## 7. Validation and rollout
 
 | Phase | Work | Exit |
@@ -299,5 +332,6 @@ change starts a new season (§4.2).
 - [ORB-23277] — server-derived model on MCP tool audit events
 - [ORB-21789] — size-adjusted escaped regressions for implementers
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
+- [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

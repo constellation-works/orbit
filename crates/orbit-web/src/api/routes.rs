@@ -326,6 +326,8 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(agents::agent_size_curves),
         )
         .route("/agents/attribution", get(agents::agent_attribution))
+        // The implementer model ranking with tie bands [model-ranking §6].
+        .route("/agents/rank", get(agents::agent_rank))
         .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
         .route("/agents/{role}/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and

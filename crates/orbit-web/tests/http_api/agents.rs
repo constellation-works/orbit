@@ -1,5 +1,5 @@
-//! The agent scorecards (`/api/agents/*`) through the runtime API and the
-//! HTTP API, over fixture tasks where two crews implemented one task, a
+//! The agent scorecards (`/api/agents/*`) and the model ranking through the
+//! runtime API and the HTTP API, over fixture tasks where two crews implemented one task, a
 //! machine pulled another, a reviewer settled reviews and four regressions
 //! name their escapes.
 
@@ -1580,6 +1580,32 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             json_ok(server.get(&format!(
                 "/api/agents/orchestrators/scorecard?{WS}&window=7d&min_support=1"
             )));
+            // The model ranking slices the same scan. The fixture's work is
+            // hours old, so only the live board sees it; a run without a
+            // model is unattributed, and unrecorded measures are unmeasured.
+            let rank = json_ok(server.get(&format!("/api/agents/rank?{WS}&live=true")));
+            assert_eq!(
+                (&rank["live"], &rank["provisional"]),
+                (&json!(true), &json!(true))
+            );
+            assert!(
+                rank["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["model"] == "gpt-sol" && row["eligible"] == false),
+                "{rank}"
+            );
+            assert!(
+                rank["unattributed"]["tasks"].as_u64().unwrap() >= 1,
+                "{rank}"
+            );
+            assert_eq!(rank["qualified"], false, "{rank}");
+            assert!(rank["measures"].as_array().unwrap().iter().any(|measure| {
+                measure["key"] == "ci_failures" && measure["status"] == "unmeasured"
+            }));
+            let settled = json_ok(server.get(&format!("/api/agents/rank?{WS}")));
+            assert_eq!(settled["rows"], json!([]), "{settled}");
             let warm = server.task_query_trace()[warm_from..].to_vec();
             assert_eq!(
                 operations(&warm, "task_history_read"),
@@ -1595,6 +1621,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 format!("/api/agents/orchestrators/detail?{WS}&crew=nobody"),
                 format!("/api/agents/implementers/detail?{WS}&crew=nobody"),
                 format!("/api/agents/attribution?{WS}&window=1y"),
+                format!("/api/agents/rank?{WS}&settle_lag=soon"),
+                format!("/api/agents/rank?{WS}&window=last50"),
             ] {
                 let response = server.get(&refused);
                 assert_eq!(response.status().as_u16(), 400, "{refused}");

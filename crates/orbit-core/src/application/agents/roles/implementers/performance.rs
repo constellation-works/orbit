@@ -120,6 +120,31 @@ pub(super) fn implementer_rows(
     _min_support: usize,
     execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
+    evaluate_implementers(facts, window, execution).rows
+}
+
+/// One implemented task's expected count per scored term, as its row's
+/// expectation sums them: tier rates for every term but escaped
+/// regressions, which take the size-adjusted expectation. A review term's
+/// expectation is zero for a task without a review of the row's candidate.
+pub(super) struct TaskExpectation<'a> {
+    pub(super) task: &'a TaskFacts,
+    pub(super) reviewed: bool,
+    pub(super) expected: BTreeMap<&'static str, f64>,
+}
+
+/// The implementer rows and, per row in the same order, each task's
+/// expectations: the scorecard reads the rows, the model ranking the tasks.
+pub(super) struct Evaluated<'a> {
+    pub(super) rows: Vec<RowInput<'a>>,
+    pub(super) tasks: Vec<Vec<TaskExpectation<'a>>>,
+}
+
+pub(super) fn evaluate_implementers(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    execution: ExecutionScope,
+) -> Evaluated<'_> {
     let work = work_by_row(facts, window, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
@@ -156,6 +181,7 @@ pub(super) fn implementer_rows(
         }
     }
     let references = super::tier_reference::tier_references(&fleet);
+    let mut per_task = Vec::with_capacity(rows.len());
     for ((row, (key, tasks)), regressions) in rows.iter_mut().zip(&work).zip(&expected_regressions)
     {
         let tiers: BTreeSet<_> = tasks.iter().map(|task| tier(task)).collect();
@@ -169,29 +195,52 @@ pub(super) fn implementer_rows(
                     .collect::<Vec<_>>()
             ),
         });
+        let expectations: Vec<TaskExpectation<'_>> = tasks
+            .iter()
+            .zip(regressions)
+            .map(|(&task, &regressions)| {
+                let reviewed = first_implementer_review(task, key, window).is_some();
+                let expected = TERMS
+                    .iter()
+                    .map(|term| {
+                        // Regression risk follows change size, so escaped
+                        // regressions take the size-adjusted expectation.
+                        if term.key == ESCAPED_REGRESSIONS {
+                            return (term.key, regressions);
+                        }
+                        if is_implementer_review_term(term.key) && !reviewed {
+                            return (term.key, 0.0);
+                        }
+                        (term.key, references.rates[tier(task)][term.key])
+                    })
+                    .collect();
+                TaskExpectation {
+                    task,
+                    reviewed,
+                    expected,
+                }
+            })
+            .collect();
         row.expected = Some(
             TERMS
                 .iter()
                 .map(|term| {
-                    // Regression risk follows change size, so escaped
-                    // regressions take the size-adjusted expectation.
-                    if term.key == ESCAPED_REGRESSIONS {
-                        return (term.key, *regressions);
-                    }
                     let review_term = is_implementer_review_term(term.key);
-                    let expected = tasks
+                    let expected = expectations
                         .iter()
-                        .filter(|task| {
-                            !review_term || first_implementer_review(task, key, window).is_some()
-                        })
-                        .map(|task| references.rates[tier(task)][term.key])
+                        .filter(|task| !review_term || task.reviewed)
+                        .map(|task| task.expected[term.key])
                         .sum();
                     (term.key, expected)
                 })
                 .collect(),
         );
+        per_task.push(expectations);
     }
-    rows
+    Evaluated {
+        rows,
+        tasks: per_task,
+    }
 }
 
 /// The implementer header's `execution_split`: per row (crew and model) with

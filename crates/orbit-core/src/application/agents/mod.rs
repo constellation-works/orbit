@@ -28,6 +28,7 @@ mod facts;
 mod hands;
 pub(crate) mod memory_evidence;
 mod query;
+mod rank;
 mod records;
 mod roles;
 mod score;
@@ -189,3 +190,4 @@ pub use api::{
     agent_scorecard, agent_size_curves,
 };
 pub(crate) use query::WindowBounds;
+pub use rank::{RankQuery, RankSeasons, agent_rank, agent_rank_calibration};
