@@ -18,7 +18,7 @@ implemented; all host grants remain off by default. The [scope](../1_scope.md)
 records parked advisory rollout after both development screens failed, with
 the failure consumer and advisory surfaces archived/deferred. Code completion
 does not establish effectiveness or adoption. The
-[configuration reference](../../../../CONFIG.md#assistance--optional-bounded-model-annotations)
+configuration reference (former CONFIG.md section, removed in ORB-22808)
 describes the single host-only table, exact fields, defaults and off switch.
 
 ## Application and evaluation contracts

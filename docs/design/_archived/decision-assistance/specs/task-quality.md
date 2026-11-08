@@ -46,7 +46,7 @@ discovers missing markers even if the creation event was never published. This
 also catches semantic edits interrupted before their post-commit hook. Clock dry
 runs and replicas do not run the consumer. Off returns before scanning or writing
 work. Configuration is exclusively the existing host-owned
-[`assistance` setting](../../../../CONFIG.md#assistance--optional-bounded-model-annotations).
+`assistance` setting (former CONFIG.md section, removed in ORB-22808).
 No workspace setting or new outbound destination is introduced.
 
 Each tick examines at most 32 subjects through a durable rotating cursor and

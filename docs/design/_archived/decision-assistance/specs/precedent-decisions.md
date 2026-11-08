@@ -518,7 +518,7 @@ agent's flow changes.
 ## Configuration
 
 The implemented host configuration is documented in
-[CONFIG.md](../../../../CONFIG.md#precedent-decision-shadow-consumer). The
+CONFIG.md (former CONFIG.md section, removed in ORB-22808). The
 `precedent_decision` assistance policy defaults to `off`; only `shadow`
 assesses requests, while `off` and `advisory` neither enqueue assessments nor
 consult precedent providers. The policy digest binds the granted question

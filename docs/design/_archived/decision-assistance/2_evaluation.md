@@ -16,10 +16,10 @@ tags: [decision-assistance]
 Status: the offline evaluator is implemented ([ORB-19720]); nothing here enables a
 runtime service, live calls, or advisory display. The precedent-decision
 contract below is the same kind of offline addition: selecting it does not
-enable that consumer. Implementation:
-`scripts/evaluate-decision-assistance.py` (contract + scoring),
-`scripts/precedent_decision_eval.py` (`/4` only),
-`scripts/test-evaluate-decision-assistance.py` (public CLI verification for `/1` and `/2`).
+enable that consumer. Implementation (removed with the feature in ORB-22808, constellation-works/orbit PR 8540):
+the scripts evaluate-decision-assistance.py (contract + scoring),
+precedent_decision_eval.py (`/4` only) and
+test-evaluate-decision-assistance.py (public CLI verification for `/1` and `/2`).
 
 ## Frozen contracts (versions `decision-assistance-eval/1` and `/2`)
 
