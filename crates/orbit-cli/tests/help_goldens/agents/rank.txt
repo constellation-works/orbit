@@ -2,7 +2,7 @@ Rank implementer models by quality and reliability, in tie bands.
 
 One row per model, its crews and effort levels pooled. Each measure (escaped regressions, review outcome, implementer CI failures, implementer-fault final recoveries, crew-caused rework, tool-call errors) is compared with what the fleet achieves on the same task tiers, divided by the season's noise scale, weighted, and shrunk toward the other eligible models. Measures Orbit does not record yet are shown as unmeasured and leave the weights.
 
-The ranked window (--window, 30 days) ends --settle-lag (14 days) before --until, so late escaped regressions have arrived; --live ends it at --until instead and is provisional. A model needs 30 tasks across two assessed tiers to be ranked, and the board needs three such models. Models whose scores are not distinguishable share a band, cheapest first.
+The ranked window (--window, 30 days) ends --settle-lag (14 days) before --until, so late escaped regressions have arrived; --live ends it at --until instead and is provisional. A model needs at least 30 implemented tasks spanning at least two assessed tiers with at least 5 tasks each to be ranked, and the board needs three such models. Models whose scores are not distinguishable share a band, cheapest first.
 
 Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the workspace's state; until then the scales are estimated from the ranked window.
 
