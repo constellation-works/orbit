@@ -309,7 +309,12 @@ On a control failure, the namespace script prints the stage, participant names
 and stderr before removing its temporary files. Each stream is limited to
 4096 payload bytes: oversized logs retain the first and last 2048 bytes, with
 an explicit omitted-byte count. The labels include original byte counts;
-successful peers retain their output and cache statistics too. Diagnostics
+successful peers retain their output and cache statistics too. The two
+shared-TCP stages also start their daemon with a per-stage
+`SCCACHE_ERROR_LOG` under the stage's `logs/` directory and
+`SCCACHE_LOG=debug`; on failure the same report appends that server log as a
+`sccache-server-log` stream under the same 4096-byte bound, so an empty-log
+participant exit still names what the daemon saw. Diagnostics
 add no compilation or waits to a successful live run. The companion
 `scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
 entrypoint with transport fixtures; those checks cover diagnostic bounds and

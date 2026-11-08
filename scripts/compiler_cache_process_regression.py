@@ -82,8 +82,13 @@ def group_lifetime_regression(root, namespace_source=None, watchdog_source=None,
                             }
                             stage, participants = stages.get(scenario, (scenario, "CD"))
                             status = 143 if scenario == "failure-cleanup" else 124
+                            server = ""
+                            if stage in ("client-side-shared-tcp", "server-side-shared-tcp"):
+                                server = (f"stage={stage} sccache_server_log=/fixture/server.log\n"
+                                          f"sccache-server-log bytes=1 limit=4096\n"
+                                          f"sccache-server-{stage}-end\n")
                             (fixture / "err").write_text("stubborn transport ready\n" + "".join(
-                                f"stage={stage} participant={p} exit_status={status}\n" for p in participants))
+                                f"stage={stage} participant={p} exit_status={status}\n" for p in participants) + server)
                             (fixture / "events").write_text("")
                         processes.append(self)
 
