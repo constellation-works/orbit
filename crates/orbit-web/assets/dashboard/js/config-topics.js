@@ -164,10 +164,17 @@ export function cliCmd(row, scope, text) {
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
-  } else if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(text.trim()) || text.trim() === '') {
-    v = shellQuote(JSON.stringify(text.trim()));
+  } else if (row.allowed?.kind === 'enum' && !isTable(row) && !Array.isArray(row.value)) {
+    const trimmed = text.trim();
+    if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(trimmed) || trimmed === '') {
+      v = shellQuote(JSON.stringify(trimmed));
+    } else {
+      v = shellWord(trimmed);
+    }
   } else {
-    v = shellWord(text.trim());
+    // A free-form string keeps its whitespace: Save submits parseDraft's
+    // untrimmed text, so the CLI literal must quote that exact value.
+    v = shellQuote(JSON.stringify(text));
   }
   return `orbit config set ${row.key} ${v}${scope === 'global' ? ' --global' : ''}`;
 }
