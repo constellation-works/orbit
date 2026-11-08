@@ -28,6 +28,9 @@ struct RecordingHost {
     cli: ScriptHost,
     sandbox_requests: Mutex<Vec<(String, Option<String>)>>,
     superseded_traces: Mutex<Vec<orbit_engine::DispatchInvocationTrace>>,
+    /// Tools a task's `required_tools` would add to the baseline, as the
+    /// production host's `resolve_activity_tools` admits them.
+    required_tools: Vec<String>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
@@ -69,6 +72,26 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         )
     }
 
+    fn resolve_activity_tools(
+        &self,
+        _task_ids: &[String],
+        baseline_tools: &[String],
+    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+        let mut effective_tools = baseline_tools.to_vec();
+        for tool in &self.required_tools {
+            if !effective_tools.contains(tool) {
+                effective_tools.push(tool.clone());
+            }
+        }
+        Ok(orbit_engine::ResolvedActivityTools {
+            requested_tools: self.required_tools.clone(),
+            effective_tools,
+            omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
+        })
+    }
+
     fn resolve_executor_sandbox(
         &self,
         provider: &str,
@@ -92,6 +115,7 @@ struct Dispatched {
     outcome: orbit_engine::DispatchOutcome,
     sandbox_requests: Vec<(String, Option<String>)>,
     superseded_traces: Vec<orbit_engine::DispatchInvocationTrace>,
+    omitted_requirement_notes: Vec<String>,
 }
 
 impl Fixture {
@@ -106,6 +130,7 @@ impl Fixture {
              echo \"$n\" > \"$state/count\"\n\
              cat > \"$state/prompt-$n\"\n\
              printf '%s\\n' \"$@\" > \"$state/argv-$n\"\n\
+             printf '%s' \"$ORBIT_ACTIVITY_TOOLS\" > \"$state/tools-$n\"\n\
              if [ \"$n\" = 1 ]; then\n\
              {first}\n\
              else\n\
@@ -141,10 +166,24 @@ impl Fixture {
         fs::read_to_string(self.temp.path().join(format!("argv-{invocation}"))).unwrap()
     }
 
+    /// The `ORBIT_ACTIVITY_TOOLS` grant the invocation's child received.
+    fn tools(&self, invocation: usize) -> String {
+        fs::read_to_string(self.temp.path().join(format!("tools-{invocation}"))).unwrap()
+    }
+
     fn dispatch(
         &self,
         policy: Option<ResponseCorrectionPolicy>,
         wall_clock_timeout_seconds: u64,
+    ) -> Dispatched {
+        self.dispatch_with_required_tools(policy, wall_clock_timeout_seconds, Vec::new())
+    }
+
+    fn dispatch_with_required_tools(
+        &self,
+        policy: Option<ResponseCorrectionPolicy>,
+        wall_clock_timeout_seconds: u64,
+        required_tools: Vec<String>,
     ) -> Dispatched {
         let run_id = "response-correction";
         let (writer, _store) = build_writer(self.temp.path(), run_id).unwrap();
@@ -152,6 +191,7 @@ impl Fixture {
             cli: ScriptHost::new(self.fake.cli_path()),
             sandbox_requests: Mutex::new(Vec::new()),
             superseded_traces: Mutex::new(Vec::new()),
+            required_tools,
         };
         let mut spec = cli_agent_loop_spec(None);
         spec.require_response_envelope = true;
@@ -162,15 +202,28 @@ impl Fixture {
             spec: &ActivityV2Spec::AgentLoop(spec),
             fs_profile: Some("reviewer"),
             input: json!({ "question": "where is it?" }),
-            audit: writer,
+            audit: writer.clone(),
             run_id,
             host: Some(&host),
         })
         .expect("the dispatch returns an outcome");
+        let omitted_requirement_notes = writer
+            .events_snapshot()
+            .unwrap()
+            .into_iter()
+            .flat_map(|event| match event.kind {
+                orbit_types::workflow::activity_job::V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                    omitted_requirement_notes,
+                    ..
+                } => omitted_requirement_notes,
+                _ => Vec::new(),
+            })
+            .collect();
         Dispatched {
             outcome,
             sandbox_requests: host.sandbox_requests.into_inner().unwrap(),
             superseded_traces: host.superseded_traces.into_inner().unwrap(),
+            omitted_requirement_notes,
         }
     }
 
@@ -747,6 +800,66 @@ fn only_a_read_only_activity_may_declare_response_correction() {
     }
 }
 
+#[test]
+fn a_mutating_task_requirement_is_dropped_for_a_response_correction_activity() {
+    let fixture = Fixture::new(&reply(CONTRADICTORY), &reply(VALID));
+    let dispatched = fixture.dispatch_with_required_tools(
+        admitted(1),
+        30,
+        vec!["orbit.task.update".to_string(), "orbit.search".to_string()],
+    );
+
+    assert!(
+        dispatched.outcome.success,
+        "{:?}",
+        dispatched.outcome.message
+    );
+    assert_eq!(fixture.invocations(), 2, "exactly one correction");
+    for invocation in [1, 2] {
+        let tools = fixture.tools(invocation);
+        assert!(
+            !tools.split(',').any(|tool| tool == "orbit.task.update"),
+            "invocation {invocation} must not receive the mutating requirement: {tools}"
+        );
+        assert!(
+            tools.split(',').any(|tool| tool == "orbit.search"),
+            "invocation {invocation} keeps the non-mutating requirement: {tools}"
+        );
+    }
+    assert!(
+        dispatched
+            .omitted_requirement_notes
+            .iter()
+            .any(|note| note.contains("orbit.task.update") && note.contains("response_correction")),
+        "the drop is recorded as an omitted requirement: {:?}",
+        dispatched.omitted_requirement_notes
+    );
+}
+
+#[test]
+fn a_mutating_task_requirement_is_still_granted_without_response_correction() {
+    let fixture = Fixture::new(&reply(VALID), &reply(VALID));
+    let dispatched =
+        fixture.dispatch_with_required_tools(None, 30, vec!["orbit.task.update".to_string()]);
+
+    assert!(
+        dispatched.outcome.success,
+        "{:?}",
+        dispatched.outcome.message
+    );
+    assert_eq!(fixture.invocations(), 1);
+    let tools = fixture.tools(1);
+    assert!(
+        tools.split(',').any(|tool| tool == "orbit.task.update"),
+        "an activity without response_correction keeps today's grant: {tools}"
+    );
+    assert!(
+        dispatched.omitted_requirement_notes.is_empty(),
+        "{:?}",
+        dispatched.omitted_requirement_notes
+    );
+}
+
 // [ORB-22448] These coordination writes used to pass admission even though a
 // correction repeats the entire activity under the same tool grant.
 fn assert_coordination_mutations_refused(deny_mode: bool) {
@@ -838,6 +951,7 @@ fn structured_output_exhaustion_gets_a_fresh_reply_with_the_same_authority_and_b
         outcome,
         sandbox_requests,
         superseded_traces,
+        ..
     } = fixture.dispatch(admitted(1), 30);
 
     assert!(
