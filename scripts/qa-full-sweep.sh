@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-output="$repo_root/qa-full-sweep-report.json"
+output="$repo_root/.orbit/tmp/qa-full-sweep/qa-full-sweep-report.json"
 run_commands=0
 playwright_module=""
 playwright_browsers_path=""

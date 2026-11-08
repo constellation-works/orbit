@@ -8,8 +8,7 @@ MSRV ?= 1.89
 BUILD_BUDGET ?= ./scripts/build-budget.py
 BINARY := orbit
 BIN_CRATE := orbit-cli
-# Crate sources live under orbit/ (see root Cargo.toml workspace members).
-BIN_CRATE_PATH := crates/$(BIN_CRATE)
+# Crate sources live under crates/ (see root Cargo.toml workspace members).
 WORKSPACE := --workspace
 INSTALL_PROFILE ?= release
 # Same location as install.sh (ORBIT_INSTALL_DIR) so a source build and a

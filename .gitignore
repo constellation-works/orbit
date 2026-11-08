@@ -1,7 +1,7 @@
 /target
 
 # Agent / tool state directories (Claude Code, Codex, Gemini, Grok Build)
-.claude/
+.claude/*
 .codex/
 .gemini/
 .grok/
@@ -21,6 +21,7 @@
 .gemini/hooks/*
 !.gemini/hooks/orbit-learning-reminder
 !.grok/
+.grok/*
 !.grok/config.toml
 !.grok/hooks/
 # The distributable agent plugin is repository content, including its hidden
@@ -80,11 +81,11 @@ build/
 .gstack/
 .locks
 *.lock
+# Cargo lockfiles remain repository content at any workspace depth.
+!Cargo.lock
 # npm lockfiles are the Dependabot / GitHub security-alert manifest for JS pins.
 !package-lock.json
 # Plugin fixtures commit the uv.lock their `uv run --frozen` backend installs from.
 !crates/orbit-tools/tests/fixtures/plugins/*/uv.lock
 .vscode
-.grok
-.gemini
 .cowork-launch-env.txt

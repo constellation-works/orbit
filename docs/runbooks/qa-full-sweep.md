@@ -70,7 +70,11 @@ authorized delivery workflow. Do not enable the definition merely to perform a
 release check. `skip_if_open` prevents periodic duplicates if an operator later
 chooses to enable it.
 
-The executor runs the harness from the repository root:
+The executor runs the harness from the repository root. Both the shell wrapper
+and the Python entrypoint default to
+`.orbit/tmp/qa-full-sweep/qa-full-sweep-report.json` beneath the repository root
+and create its parent directory. Use `--output` to override that location; keep
+reports in ignored scratch storage and attach them as task artifacts:
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate \
