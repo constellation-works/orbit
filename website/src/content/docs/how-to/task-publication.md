@@ -62,12 +62,10 @@ and authentication failures fail the run with the publisher's error and a
 redacted remote URL. Configure credentials in the clock service environment
 using the unattended authentication instructions below.
 
-`publication.routine_attachments` defaults to `omit`, equivalent to manual
-`--attachments omit`. `fail` refuses snapshots with attachments. `include`
-keeps the 10 MiB per-file and 100 MiB total limits and sensitive path deny
-patterns. It fails closed without a scanner unless you explicitly set
-`publication.routine_allow_unscanned_attachments = true` to accept unchecked
-content. Manual publication keeps its separate flags and default `fail` policy.
+The routine always omits attachments, equivalent to manual
+`--attachments omit`. Publish attachments by hand with
+`--attachments include`. Manual publication keeps its separate flags and
+default `fail` policy.
 
 ## Publish
 

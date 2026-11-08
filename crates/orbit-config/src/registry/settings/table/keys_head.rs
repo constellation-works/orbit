@@ -4,21 +4,6 @@
 macro_rules! assemble_config_settings {
     () => {
         with_tail_keys! {
-    publication_routine_attachments: String => String {
-        key: "publication.routine_attachments", value_type: "string",
-        description: "Scheduled task publication attachment policy.",
-        section: ConfigSection::Housekeeping, order: 22,
-        allowed: one_of(&["omit", "fail", "include"]),
-        resolve: |raw: Option<String>| resolve_choice(raw, "omit", "publication.routine_attachments"),
-    },
-    publication_routine_allow_unscanned_attachments: bool => bool {
-        key: "publication.routine_allow_unscanned_attachments", value_type: "boolean",
-        description: "Allow scheduled included attachments without a sensitivity scanner.",
-        section: ConfigSection::Housekeeping, order: 23,
-        tier: ConfigKeyTier::Advanced,
-        detail: "Path and size checks still apply.",
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     ci_failure_operator_suppression_hours: u32 => u32 {
         key: "ci_failure.operator_suppression_hours", value_type: "integer",
         description: "Hours an archived or rejected CI sweep task suppresses re-filing.",

@@ -323,7 +323,24 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     // entries after 2026-12-08, when they become ordinary unknown settings.
     ("machine.web_terminal.enabled", WEB_TERMINAL_REMOVED_NOTE),
     ("machine.web_session.ttl", WEB_TERMINAL_REMOVED_NOTE),
+    // [ORB-22808] Attachments in scheduled task publication were removed on
+    // 2026-11-08. Each key loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when they become ordinary
+    // unknown settings.
+    (
+        "publication.routine_attachments",
+        ROUTINE_ATTACHMENTS_REMOVED_NOTE,
+    ),
+    (
+        "publication.routine_allow_unscanned_attachments",
+        ROUTINE_ATTACHMENTS_REMOVED_NOTE,
+    ),
 ];
+
+const ROUTINE_ATTACHMENTS_REMOVED_NOTE: &str = "ignored: the task-publication routine always \
+     omits attachments (the former `omit` default); publish them by hand with `orbit task \
+     publication publish --attachments`. Delete the key. This key stops being recognised after \
+     2026-12-08";
 
 const WEB_TERMINAL_REMOVED_NOTE: &str = "ignored: dashboard browser sessions and `orbit web \
      open` were removed; the dashboard opens its plain URL and operator capability still comes \

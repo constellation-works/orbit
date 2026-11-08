@@ -201,17 +201,13 @@ without a new commit. Authority conflicts and authentication failures fail
 the run with the publisher's error and a redacted remote URL.
 
 ```bash
-orbit config set publication.routine_attachments omit
 orbit run job task_publication_pipeline --wait
 ```
 
-`publication.routine_attachments` defaults to `omit`, equivalent to manual
-`--attachments omit`. `fail` refuses snapshots with attachments. `include`
-keeps the publisher's 10 MiB per-file and 100 MiB total limits and sensitive
-path deny patterns. Without a sensitivity scanner it fails closed unless
-you explicitly set `publication.routine_allow_unscanned_attachments = true`.
-That opt-in accepts unchecked content; path and size checks still apply.
-Manual publication keeps its separate CLI flags and default `fail` policy.
+The routine always omits attachments, equivalent to manual
+`--attachments omit`. To publish attachments, run `orbit task publication
+publish --attachments include` by hand. Manual publication keeps its separate
+CLI flags and default `fail` policy.
 For unattended credentials, configure the clock service environment as
 [described above](#authenticate-unattended-https-publication).
 

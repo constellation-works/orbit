@@ -3,8 +3,8 @@
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
-  Weekly publication of this workspace's task recovery snapshot, omitting
-  attachments by default under publication.routine_attachments.
+  Weekly publication of this workspace's task recovery snapshot, without
+  attachments.
 enabled: false
 trigger:
   cron: "47 4 * * 0"

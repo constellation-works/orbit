@@ -302,8 +302,7 @@ the remote quickly and, as Git history, durably
 ([task-publication §7](../task-publication/2_design.md#7-privacy-and-attached-artifact-policy)).
 The proposal adds:
 
-- **Attachments omitted by default** for the on-change job, using the existing
-  `publication.routine_attachments = omit`. Mirror attachment transfer (§2.4) does not depend on
+- **Attachments omitted** for the on-change job, as the weekly routine always omits them. Mirror attachment transfer (§2.4) does not depend on
   publication.
 - **Deny patterns over core prose** (description, plan, summary, comments and history
   messages), not only attachment paths. A match does not publish that task's new prose.
