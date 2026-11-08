@@ -5,6 +5,7 @@ pub(crate) mod admission;
 mod branch_observation;
 mod cancellation;
 mod cluster;
+mod dependency_fold;
 mod escalation;
 mod evidence;
 mod fields;

@@ -376,6 +376,175 @@ fn ci_checkout_identity_gaps_are_named_at_the_filing_boundary() {
         "{output}"
     );
 }
+fn named_failure(
+    log: &str,
+    index: usize,
+    checkout: &str,
+    run_id: u64,
+    job_name: &str,
+    step: &str,
+) -> Value {
+    let mut run = failure(log, index, checkout);
+    run["run_id"] = json!(run_id);
+    run["url"] = json!(format!(
+        "https://github.com/acme/orbit/actions/runs/{run_id}"
+    ));
+    run["failed_jobs"][0]["name"] = json!(job_name);
+    run["failed_jobs"][0]["failed_steps"][0]["name"] = json!(step);
+    run
+}
+
+fn dependency_record_log(dep: &str) -> String {
+    format!(
+        "orbit-dependency-evidence:{{\"dependencies\":[{{\"conclusion\":\"failure\",\"job_id\":911,\"job_name\":\"{dep}\",\"status\":\"completed\"}}],\"execution_contract\":\"isolated-source-v1\",\"kind\":\"dependency_failed\",\"schema_version\":1}}\nci-await: {dep} concluded failure: https://example.invalid/job\n##[error]Process completed with exit code 1."
+    )
+}
+
+const AGGREGATE_JOB: &str = "Check / Clippy / Test / Await the test build and nextest shards";
+const SIBLING_JOB: &str = "Test partition 2";
+
+#[test]
+fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
+    if !isolated("ci_dependency_only_aggregate_folds_into_failed_sibling") {
+        return;
+    }
+    // Only dependency evidence naming a failed sibling: exactly one task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log(SIBLING_JOB),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(1), "{output}");
+        assert_eq!(output["filed"][0]["job"], json!(SIBLING_JOB), "{output}");
+        assert_eq!(output["folded_count"], json!(1), "{output}");
+        assert_eq!(output["folded"][0]["job"], json!(AGGREGATE_JOB), "{output}");
+        assert_eq!(
+            output["folded"][0]["covered_by_task_id"], output["filed"][0]["task_id"],
+            "{output}"
+        );
+        let task_id = output["filed"][0]["task_id"].as_str().unwrap();
+        let task = runtime.get_task(task_id).unwrap();
+        assert!(
+            task.description.contains(AGGREGATE_JOB),
+            "sibling task carries the folded aggregate as context: {}",
+            task.description
+        );
+    }
+    // An aggregate with its own error anchor files its own task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let own = format!(
+            "{}\nerror: aggregate's own check broke\n##[error]Process completed with exit code 1.",
+            dependency_record_log(SIBLING_JOB).lines().next().unwrap()
+        );
+        let aggregate = named_failure(
+            &own,
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // Dependency evidence naming a job that did not fail files its own task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log("Test partition 9"),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // A sibling whose log the sweep could not read stays deferred, and the
+    // aggregate is filed rather than dropped with it.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log(SIBLING_JOB),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let mut sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        sibling["investigated"] = json!(false);
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(1), "{output}");
+        assert_eq!(output["filed"][0]["job"], json!(AGGREGATE_JOB), "{output}");
+        assert_eq!(output["deferred_count"], json!(1), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // Malformed or empty dependency evidence files its own task.
+    for log in [
+        "orbit-dependency-evidence:{not-json}\n##[error]Process completed with exit code 1."
+            .to_string(),
+        "orbit-dependency-evidence:{\"dependencies\":[]}\n##[error]Process completed with exit code 1."
+            .to_string(),
+        "orbit-dependency-evidence:{\"dependencies\":[{\"conclusion\":\"success\",\"job_name\":\"Test partition 2\"}]}\n##[error]Process completed with exit code 1."
+            .to_string(),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &log,
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let output = file(&runtime, vec![aggregate]);
+        assert_eq!(output["filed_count"], json!(1), "{log}: {output}");
+        assert_eq!(output["folded_count"], json!(0), "{log}: {output}");
+    }
+}
+
 fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
     format!("error[{code}]: {message}\n   --> {path}:{line}:{column}\n")
 }

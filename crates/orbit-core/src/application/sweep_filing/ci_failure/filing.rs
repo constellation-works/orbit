@@ -63,6 +63,9 @@ use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
 use super::cluster::FailureCluster;
+use super::dependency_fold::{
+    cluster_dependency_refs, folded_cluster_indices, sibling_cluster_for, sibling_cluster_index,
+};
 use super::evidence::{
     audit_summary, deferral_audit, deferral_is_bounded, deferred_errors, exclude_already_repaired,
     filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
@@ -637,13 +640,56 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    for ((((cluster, duplicate_match), duplicate_task), descendant_landing), operator) in clusters
+    // Dependency-only aggregates fold into the sibling they name, but only
+    // when that sibling is covered or will be filed within the cap.
+    let refs_by_cluster: Vec<_> = clusters.iter().map(cluster_dependency_refs).collect();
+    let covered_flags: Vec<bool> = duplicate_matches
+        .iter()
+        .map(|matched| matched.is_some())
+        .collect();
+    let blocked_flags: Vec<bool> = operator_assessments
+        .iter()
+        .zip(&descendant_landings)
+        .map(|(operator, landing)| operator.withheld.is_some() || landing.is_some())
+        .collect();
+    let folded_indices = folded_cluster_indices(
+        &clusters,
+        &refs_by_cluster,
+        &covered_flags,
+        &blocked_flags,
+        max_tasks,
+    );
+    let sibling_index = sibling_cluster_index(&clusters);
+    let mut folded_targets: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for &folded in &folded_indices {
+        if let Some(refs) = &refs_by_cluster[folded] {
+            for reference in refs {
+                if let Some(target) = sibling_cluster_for(&sibling_index, reference)
+                    && target != folded
+                    && !folded_targets.entry(target).or_default().contains(&folded)
+                {
+                    folded_targets.entry(target).or_default().push(folded);
+                }
+            }
+        }
+    }
+    let mut folded_clusters: Vec<usize> = Vec::new();
+
+    for (
+        cluster_index,
+        ((((cluster, duplicate_match), duplicate_task), descendant_landing), operator),
+    ) in clusters
         .iter()
         .zip(duplicate_matches)
         .zip(duplicate_tasks)
         .zip(descendant_landings)
         .zip(operator_assessments)
+        .enumerate()
     {
+        if folded_indices.contains(&cluster_index) {
+            folded_clusters.push(cluster_index);
+            continue;
+        }
         if let Some(entry) = operator.withheld {
             withheld.push(entry);
             continue;
@@ -743,6 +789,24 @@ where
         ];
         tags.extend(os_tags.iter().cloned());
         let mut description = cluster.description(evidence, &runners);
+        if let Some(folded) = folded_targets.get(&cluster_index) {
+            description.push_str("\n## Folded dependency-only failures\n\n");
+            description.push_str(
+                "These jobs failed only because this job failed; their only evidence was an \
+                 `orbit-dependency-evidence` record naming this job, so no separate task was filed for them:\n\n",
+            );
+            for &folded_index in folded {
+                let folded_cluster = &clusters[folded_index];
+                for run in &folded_cluster.runs {
+                    description.push_str(&format!(
+                        "- Aggregate job `{}` in run `{}` ({}) failed only on this job.\n",
+                        display(&folded_cluster.job),
+                        value_string(run, "run_id"),
+                        display(&value_string(run, "url")),
+                    ));
+                }
+            }
+        }
         if !operator.failed_covers.is_empty() {
             description.push_str("\n## Prior operator covers that did not hold\n\n");
             for cover in &operator.failed_covers {
@@ -815,6 +879,70 @@ where
         filed.push(filing);
     }
 
+    // Report every folded aggregate with the sibling task that covers it.
+    let folded: Vec<Value> = folded_clusters
+        .iter()
+        .map(|&folded_index| {
+            let cluster = &clusters[folded_index];
+            let refs = refs_by_cluster[folded_index].clone().unwrap_or_default();
+            let mut dependency_jobs: Vec<String> = Vec::new();
+            let mut folded_into_jobs: Vec<String> = Vec::new();
+            let mut folded_into_failure_keys: Vec<String> = Vec::new();
+            let mut covered_by_task_id = String::new();
+            for reference in &refs {
+                if !dependency_jobs.contains(&reference.job_name) {
+                    dependency_jobs.push(reference.job_name.clone());
+                }
+                if let Some(target) = sibling_cluster_for(&sibling_index, reference) {
+                    let sibling = &clusters[target];
+                    if !folded_into_jobs.contains(&sibling.job) {
+                        folded_into_jobs.push(sibling.job.clone());
+                    }
+                    if !folded_into_failure_keys.contains(&sibling.failure_key) {
+                        folded_into_failure_keys.push(sibling.failure_key.clone());
+                    }
+                    if covered_by_task_id.is_empty() {
+                        covered_by_task_id = filed
+                            .iter()
+                            .find(|entry| entry.failure_key == sibling.failure_key)
+                            .map(|entry| entry.task_id.clone())
+                            .or_else(|| {
+                                skipped_existing
+                                    .iter()
+                                    .find(|entry| {
+                                        entry.get("failure_key").and_then(Value::as_str)
+                                            == Some(sibling.failure_key.as_str())
+                                    })
+                                    .and_then(|entry| {
+                                        entry
+                                            .get("task_id")
+                                            .and_then(Value::as_str)
+                                            .map(ToOwned::to_owned)
+                                    })
+                            })
+                            .unwrap_or_default();
+                    }
+                }
+            }
+            json!({
+                "outcome": "folded",
+                "reason": "dependency_only_failure",
+                "match_kind": "dependency_fold",
+                "failure_key": cluster.failure_key,
+                "cluster_key": cluster.cluster_key,
+                "workflow": cluster.workflow,
+                "job": cluster.job,
+                "jobs": cluster.jobs.iter().cloned().collect::<Vec<_>>(),
+                "run_ids": cluster.run_ids(),
+                "run_urls": cluster.run_urls(),
+                "dependency_jobs": dependency_jobs,
+                "folded_into_jobs": folded_into_jobs,
+                "folded_into_failure_keys": folded_into_failure_keys,
+                "task_id": covered_by_task_id,
+                "covered_by_task_id": covered_by_task_id,
+            })
+        })
+        .collect();
     let mut final_audit = pending_audit(
         filing_audit(audit, &filed, &skipped_existing),
         &pending_supersession,
@@ -822,6 +950,8 @@ where
     final_audit["withheld_count"] = json!(withheld.len());
     final_audit["withheld"] = json!(withheld);
     final_audit["deferred_attribution"] = json!(deferred_attribution);
+    final_audit["folded_count"] = json!(folded.len());
+    final_audit["folded"] = json!(folded);
     Ok(json!({
         "outcome": OUTCOME_CURRENT_FAILURES,
         "capability": capability,
@@ -832,6 +962,8 @@ where
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
         "withheld": withheld,
+        "folded_count": folded.len(),
+        "folded": folded,
         "repair_assessments": repair_assessments,
         "attributed": retention.attributed,
         "deferred_attribution": deferred_attribution,
