@@ -869,6 +869,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         steering_instruction: None,
         notice_instruction: None,
         notice_posting_instruction: None,
+        fleet_notices: Default::default(),
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

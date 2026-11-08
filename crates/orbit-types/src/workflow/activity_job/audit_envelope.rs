@@ -274,8 +274,8 @@ pub enum V2AuditEventKind {
         brief: crate::workflow::ExploreBriefRecord,
     },
     /// The fleet notices one prompt build quoted as untrusted data, emitted
-    /// once per dispatch of an activity that declares a
-    /// `notice_instruction` whenever its prompt carries the block (the
+    /// once per dispatch of an activity that opts into `fleet_notices` or
+    /// declares a `notice_instruction` whenever its prompt carries the block (the
     /// `unavailable` marker included, with no notices). It records what
     /// the host wrote, never that the agent read it.
     NoticesDelivered {

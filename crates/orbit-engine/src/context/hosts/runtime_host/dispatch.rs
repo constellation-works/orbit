@@ -183,7 +183,8 @@ macro_rules! dispatch_methods {
         /// The `fleet_notices` brief `activity_name` of `run_id` adds to its
         /// task context: the bounded block marked `untrusted_data` and the
         /// `id@revision` of each notice it carries. The engine asks only
-        /// for an activity that declares a `notice_instruction`, at every
+        /// for an activity that opts into `fleet_notices` or declares a
+        /// `notice_instruction`, at every
         /// prompt build. `None` when the workspace switch is off or no
         /// notice is open in scope; a read that fails or times out answers
         /// the `unavailable` block instead, never an error, so dispatch
