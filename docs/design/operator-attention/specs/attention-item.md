@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention item kinds with their source of truth, the item and response schema, severity derivation and the next action"
-last_validated: 2026-11-04
+last_validated: 2026-11-08
 title: Spec — Attention item
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-04
+last_updated: 2026-11-08
 ---
 
 # Spec: Attention item
@@ -251,9 +251,11 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   `unreachable_destination`, `tool_not_on_this_host` (per host, the federated routing
   identities of [attention-federation](./attention-federation.md)).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
-  echoed filters. When `degraded` is non-empty the message is instead `No items found; N
-  sources could not be read`, so an empty list is never read as all clear while a source was
-  blind.
+  hosts and workspaces actually read (`hosts read: …`, `workspaces read: …`). When neither
+  was read it says `no host or workspace was read`. When `degraded` is non-empty the message
+  is instead `No items found; N sources could not be read` followed by that same scope, so an
+  empty list is never read as all clear while a source was blind. An accepted cursor with
+  nothing new uses `No new or changed items (N unchanged)` and the same scope.
 - Output follows the global `--format` / `--json` modes: `table` shows
   `SEVERITY KIND WORKSPACE REF AGE REASON`, with `next.command` on a second line under
   `--format plain` and `--verbose`; `json` and `ndjson` emit the envelope (ndjson emits one

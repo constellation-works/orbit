@@ -299,3 +299,153 @@ fn unreadable_destinations_become_items_within_the_budget() {
         "unreachable_destination"
     );
 }
+
+fn session_on_follower() -> ToolSessionContext {
+    ToolSessionContext {
+        workspace: Some(format!("{FOLLOWER_MACHINE}/ws_orbit")),
+        ..ToolSessionContext::default()
+    }
+}
+
+fn attention_as(mux: &FederatedMcpHost, input: Value, session: ToolSessionContext) -> Value {
+    mux.call_tool("orbit_attention", input, session)
+        .expect("the fan-out answers even when a host does not")
+}
+
+/// The 2026-11-08 federated read: a session bound to the follower's checkout,
+/// `host` plus `all`, and a workspace filter, all came back empty with nothing
+/// degraded. The owner must be read, and the workspace filter must survive.
+#[test]
+fn a_bound_session_host_filter_reads_the_owner() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    let warning = item("pilot_warning", OWNER_MACHINE, "ORB-23322", "fp_warn");
+    fleet.set(
+        OWNER_MACHINE,
+        Behaviour::Answer(candidate_read(vec![warning])),
+    );
+    let mux = mux(&fleet, Duration::from_secs(20));
+    let session = session_on_follower();
+
+    let response = attention_as(
+        &mux,
+        json!({
+            "host": "dk-server-2",
+            "kind": ["pilot_warning", "pilot_hold"],
+            "all": true,
+        }),
+        session.clone(),
+    );
+    assert!(
+        !(response["items"].as_array().unwrap().is_empty()
+            && response["degraded"].as_array().unwrap().is_empty()),
+        "an unread owner must not look all-clear: {response}"
+    );
+    assert_eq!(kinds(&response), ["pilot_warning"], "{response}");
+    assert_eq!(response["items"][0]["host"]["machine_id"], OWNER_MACHINE);
+    let hops = fleet.hops.lock().unwrap().clone();
+    assert!(
+        hops.iter().any(|(machine, hop)| {
+            machine == OWNER_MACHINE && hop["candidate_read"] == true && hop["all"] == true
+        }),
+        "the owner was not read: {hops:?}"
+    );
+
+    fleet.hops.lock().unwrap().clear();
+    let mut silent = candidate_read(vec![]);
+    silent["filters"] = json!({"workspace": []});
+    fleet.set(OWNER_MACHINE, Behaviour::Answer(silent));
+    let filtered = attention_as(
+        &mux,
+        json!({"workspace": "ws_orbit", "host": "dk-server-2"}),
+        session.clone(),
+    );
+    let echoed = filtered["filters"]["workspace"].as_array().unwrap();
+    assert!(
+        echoed
+            .iter()
+            .any(|workspace| { workspace["id"] == "ws_orbit" || workspace["name"] == "orbit" }),
+        "the workspace filter was dropped: {filtered}"
+    );
+    let message = filtered["message"].as_str().unwrap();
+    assert!(
+        message.contains("dk-server-2") && message.contains("orbit"),
+        "an empty result must name the hosts and workspaces read: {message}"
+    );
+    assert!(
+        !(filtered["items"].as_array().unwrap().is_empty()
+            && filtered["degraded"].as_array().unwrap().is_empty()
+            && !message.contains("dk-server-2")),
+        "{filtered}"
+    );
+
+    fleet.hops.lock().unwrap().clear();
+    fleet.set(
+        OWNER_MACHINE,
+        Behaviour::Answer(candidate_read(vec![item(
+            "pilot_warning",
+            OWNER_MACHINE,
+            "ORB-23322",
+            "fp_warn",
+        )])),
+    );
+    let qualified = attention_as(
+        &mux,
+        json!({
+            "workspace": format!("{FOLLOWER_MACHINE}/ws_orbit"),
+            "host": "dk-server-2",
+        }),
+        session,
+    );
+    assert_eq!(kinds(&qualified), ["pilot_warning"], "{qualified}");
+    let hops = fleet.hops.lock().unwrap().clone();
+    assert!(
+        hops.iter().any(|(machine, hop)| {
+            machine == OWNER_MACHINE
+                && hop["workspace"] == json!(["ws_orbit"])
+                && hop["candidate_read"] == true
+        }),
+        "a replica selector must still read the owner: {hops:?}"
+    );
+}
+
+/// A workspace whose owner is not among the destinations is a blind spot, not
+/// an empty page. The host filter is what kept the owner out.
+#[test]
+fn an_unread_owner_of_a_named_workspace_is_degraded() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    let mux = FederatedMcpHost::new(
+        vec![Destination::local(FOLLOWER_MACHINE, "mac")],
+        Arc::new(fleet.clone()),
+    )
+    .with_attention_fanout(AttentionFanout {
+        budget: Duration::from_secs(20),
+        host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+    });
+    let response = attention(
+        &mux,
+        json!({"workspace": "ws_orbit", "kind": ["pilot_warning"]}),
+    );
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded.iter().any(|entry| {
+            entry["code"] == "source_unavailable"
+                && entry["scope"] == "host:dk-server-2"
+                && entry["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("owns workspace 'orbit'")
+        }),
+        "the unread owner is missing from degraded: {response}"
+    );
+    let message = response["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("No items found; ") && message.contains("could not be read"),
+        "an empty list with an unread owner is not all-clear: {message}"
+    );
+}

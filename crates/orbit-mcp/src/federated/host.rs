@@ -528,8 +528,10 @@ impl crate::McpHost for FederatedMcpHost {
         {
             return self.route_task_call(name, &task_id, input, session_context);
         }
-        // The named fan-out read: a selector-less attention call reads every
-        // destination and merges explicitly instead of `unknown_selector`.
+        // The named fan-out read. `host`, `all`, and a workspace — including a
+        // host-qualified selector — read every in-scope destination. Only a
+        // bare call whose session is already bound to one host-qualified
+        // workspace is routed like any other workspace call.
         if let Some(aggregated) = self.aggregate_attention(name, &input, &session_context) {
             return aggregated;
         }
