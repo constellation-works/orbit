@@ -175,6 +175,62 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
     );
     assert_eq!(run["state"], "success", "provider job: {run}");
     check("job result", run.to_string().as_bytes(), &mut leaks);
+    // A failing step whose error text carries the seeded secrets: its
+    // StepFinished error must reach the v2 audit row and `job_run_steps`
+    // only in redacted form (ORB-23048).
+    let fail_provider = fixture.work.join("codex-fail");
+    let fail_envelope = json!({"schemaVersion": 1, "status": "failed",
+        "result": {}, "error": {"code": "fixture_step_failure", "message": payload}});
+    fs::write(
+        &fail_provider,
+        format!(
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{}'\n",
+            fail_envelope.to_string().replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fail_provider, fs::Permissions::from_mode(0o755)).unwrap();
+    // The provider enum names the executor, so repoint the existing
+    // `codex` executor at the failing script for this second run.
+    fs::write(global.join("resources/executors/codex.yaml"), format!(
+        "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: codex\nspec:\n  executor_type: direct_agent\n  command: '{}'\n  args: []\n  sandbox: off\n  env: {{}}\n", fail_provider.display()
+    )).unwrap();
+    fs::write(global.join("resources/jobs/secret_sinks_fail.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: secret_sinks_fail\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: probe_fail\n      spec:\n        type: agent_loop\n        description: Failing secret step probe\n        instruction: Return the fixture failure\n        provider: codex\n        backend: cli\n        wall_clock_timeout_seconds: 10\n").unwrap();
+    let fail_output = fixture.run(
+        &["job", "run", "secret_sinks_fail", "--wait", "--json"],
+        None,
+    );
+    let fail_run: Value = serde_json::from_slice(&fail_output.stdout).unwrap_or_else(|_| {
+        panic!(
+            "failing provider job output: {}; stderr: {}",
+            String::from_utf8_lossy(&fail_output.stdout),
+            String::from_utf8_lossy(&fail_output.stderr)
+        )
+    });
+    let fail_run_id = fail_run["run_id"]
+        .as_str()
+        .expect("failing run id")
+        .to_string();
+    assert_eq!(
+        fail_run["state"], "failed",
+        "failing provider job: {fail_run}"
+    );
+    check(
+        "failing step result",
+        fail_run.to_string().as_bytes(),
+        &mut leaks,
+    );
+    let fail_shown = fixture.json(&["run", "show", &fail_run_id, "--no-reconcile"]);
+    check(
+        "failing run steps",
+        fail_shown.to_string().as_bytes(),
+        &mut leaks,
+    );
+    assert!(
+        fail_shown.to_string().contains("seeded diagnostic"),
+        "failing run steps were exercised: {fail_shown}"
+    );
     let result = &run["pipeline"]["probe"];
     assert_eq!(
         result["provider_ran"], true,
@@ -274,6 +330,41 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
         }
         assert!(count > 0, "{sink} must be exercised");
     }
+    // ORB-23048: the failing step's rows are the registered sinks for step
+    // error text — assert they were exercised, not merely scanned.
+    let audit_payload: String = db
+        .query_row(
+            "SELECT payload_json FROM v2_audit_events WHERE run_id = ?1 AND event_type = 'step.finished'",
+            [&fail_run_id],
+            |row| row.get(0),
+        )
+        .expect("failing step audit row");
+    assert!(
+        audit_payload.contains("seeded diagnostic"),
+        "v2 audit step row exercised: {audit_payload}"
+    );
+    check(
+        "v2 audit step error row",
+        audit_payload.as_bytes(),
+        &mut leaks,
+    );
+    let step_error: String = db
+        .query_row(
+            "SELECT error_message FROM job_run_steps WHERE run_id = ?1",
+            [&fail_run_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .expect("failing job_run_steps row")
+        .expect("failing step error_message persisted");
+    assert!(
+        step_error.contains("seeded diagnostic"),
+        "job_run_steps error exercised: {step_error}"
+    );
+    check(
+        "job_run_steps step error",
+        step_error.as_bytes(),
+        &mut leaks,
+    );
 
     let log_path = global.join("state/logs/orbit.jsonl");
     check(

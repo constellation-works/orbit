@@ -87,6 +87,8 @@ pub(super) fn run_admitted_step(
         Err(error @ DispatchError::AutoTaskParked(_)) => ("parked", Some(error.to_string())),
         Err(err) => ("error", Some(err.to_string())),
     };
+    let error_message =
+        error_message.map(|message| orbit_common::security::redaction::redact_all(&message));
     emit_job_event_lossy(
         &ctx.audit,
         ctx.task_id(),
@@ -272,7 +274,7 @@ pub(super) fn emit_denied_if_applicable(
             task_id,
             V2AuditEventKind::StepDenied {
                 step_id: step_id.to_string(),
-                reason: err.to_string(),
+                reason: orbit_common::security::redaction::redact_all(&err.to_string()),
             },
         );
     }

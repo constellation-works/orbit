@@ -10,6 +10,7 @@ impl Store {
         &self,
         params: &V2AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
+        let payload_json = orbit_common::security::redaction::redact_all(&params.payload_json);
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
@@ -28,7 +29,7 @@ impl Store {
                 params.agent_identity,
                 params.parent_event_id,
                 params.workspace_path,
-                params.payload_json,
+                payload_json,
             ],
         )
         .map_err(sqlite_store_error)?;
