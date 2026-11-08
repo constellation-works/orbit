@@ -1,8 +1,8 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
 doc_role: design
@@ -809,5 +809,7 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21251] — slice 10: pilot
 - [ORB-21263] — MCP roles: the manager and resident surfaces
 - [ORB-21649] — the dashboard Residents view and how a dashboard widening is authorized
+- [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
+- [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

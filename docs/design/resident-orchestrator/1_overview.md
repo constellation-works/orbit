@@ -1,8 +1,8 @@
 ---
 title: Resident Orchestrator — Overview
 owner: claude
-last_updated: 2026-11-03
-last_validated: 2026-11-03
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 stage: building
 next: "Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready"
@@ -132,5 +132,6 @@ Planned code locations are in [2_design.md §12](./2_design.md#12-placement-in-t
 - [ORB-21249] — slice 8: evolution pass and manager digest
 - [ORB-21250] — slice 9: manager and resident skill references
 - [ORB-21251] — slice 10: the pilot mandate (archived 2026-11-03, not done; re-file once a bounded mandate with an operator authority grant and a manager session is ready)
+- [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

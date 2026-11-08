@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -189,7 +189,7 @@ other runtime-opening processes have restarted on the new build; rollback
 must restore the old concrete values before restarting old readers. The
 runbook specifies the staged rollout and authoritative-MCP verification order.
 
-The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true` (an `agent_explore` run instead takes the provider-read-only fallback described in §7.1). A `sandbox-exec` that exists but whose `sandbox_apply` is refused (exit 71) is not "missing": the availability check is an executable-file existence and mode check, not a profile-application probe, so the wrapper is kept and that failure is reported at completion instead. When the binary is missing, the error names the trusted location that was probed ([T20260509-30]).
+The macOS wrapper resolves `sandbox-exec` from trusted absolute locations only, currently `/usr/bin/sandbox-exec`; it does not consult `PATH` for either availability checks or process spawn. If the trusted binary is missing, the runner fails closed unless the executor declares `allow_fallback: true` (an `agent_explore` run instead takes the provider-read-only fallback described in §7.1) [ORB-20133]. A `sandbox-exec` that exists but whose `sandbox_apply` is refused (exit 71) is not "missing": the availability check is an executable-file existence and mode check, not a profile-application probe, so the wrapper is kept and that failure is reported at completion instead. When the binary is missing, the error names the trusted location that was probed ([T20260509-30]).
 
 Availability is resolved before provider argv construction. An allowed bare
 fallback retains provider-native sandbox flags, starts no plugin broker, and
