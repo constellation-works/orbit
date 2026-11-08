@@ -38,6 +38,7 @@ use orbit_types::workflow::automation::DirectLandingRequest;
 use serde::Serialize;
 
 use crate::OrbitRuntime;
+use crate::application::review::ReviewCandidateSizePort;
 use crate::application::task::TaskCodebasePort;
 
 /// Done tasks one backfill diffs and records at most.
@@ -407,6 +408,18 @@ impl OrbitRuntime {
             non_code: self.diff_non_code_paths(),
             non_reviewable: self.diff_non_reviewable_paths(),
         }
+    }
+}
+
+/// Candidate size for reviewer effort selection, through the review-owned port.
+impl ReviewCandidateSizePort for OrbitRuntime {
+    fn review_candidate_size(
+        &self,
+        repo_path: &std::path::Path,
+        base: &str,
+        head: &str,
+    ) -> Option<(u64, u64)> {
+        self.candidate_review_size(repo_path, base, head)
     }
 }
 

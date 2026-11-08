@@ -24,6 +24,7 @@ use orbit_common::OrbitError;
 
 mod admission;
 mod automation_port;
+mod candidate_size_port;
 mod coverage;
 pub(crate) mod crew;
 mod distributed_port;
@@ -48,6 +49,7 @@ pub(crate) use admission::{
     input_run_review_admission, local_route_before_landing_conflict,
     local_route_before_pr_conflict, local_route_run_option_refusal, run_review_admission,
 };
+pub(in crate::application) use candidate_size_port::ReviewCandidateSizePort;
 pub(in crate::application) use distributed_port::ReviewDistributedPort;
 pub(crate) use fulfilment::fulfil_review_evidence;
 pub use fulfilment::{

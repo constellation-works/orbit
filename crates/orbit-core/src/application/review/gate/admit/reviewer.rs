@@ -12,6 +12,7 @@ use super::super::context::GateContext;
 use crate::OrbitRuntime;
 use crate::application::contracts::AutoEffortSubject;
 use crate::application::job::crew_pools::seeded_crew_ticket;
+use crate::application::review::ReviewCandidateSizePort;
 use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
@@ -152,7 +153,7 @@ fn review_auto_effort_subject(
     base: &str,
     head: &str,
 ) -> AutoEffortSubject {
-    let size = runtime.candidate_review_size(&context.workspace_path, base, head);
+    let size = runtime.review_candidate_size(&context.workspace_path, base, head);
     let complexity = context
         .tasks
         .iter()
