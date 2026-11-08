@@ -2018,6 +2018,94 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
     assert_eq!(pair.owner_status(&task), "blocked");
 }
 
+/// Envelope loading goes through the same owner route: a claimed runtime
+/// whose owner is unreachable while `task_context_for_agent_input` loads the
+/// task fails typed as owner-route through the real `OrbitRuntime` adapter,
+/// not as an untyped CLI invocation failure, and settles as `owner_route`
+/// without blaming the candidate. A non-owner load failure keeps the
+/// existing untyped diagnostic.
+fn a_lost_owner_route_during_envelope_loading_fails_as_owner_route() {
+    struct Unreachable;
+    impl OwnerCoordinator for Unreachable {
+        fn call(
+            &self,
+            _name: &str,
+            _input: Value,
+            _session: ToolSessionContext,
+        ) -> Result<Value, OrbitError> {
+            Err(OrbitError::UnreachableDestination(
+                "ssh: connect to host owner port 22: Connection timed out".into(),
+            ))
+        }
+    }
+    struct Broken;
+    impl OwnerCoordinator for Broken {
+        fn call(
+            &self,
+            _name: &str,
+            _input: Value,
+            _session: ToolSessionContext,
+        ) -> Result<Value, OrbitError> {
+            Err(OrbitError::InvalidInput("owner store unavailable".into()))
+        }
+    }
+    let (pair, drain, leaf, task) = claimed_sol();
+    let bound = bound_to(&pair.follower, &pair, &leaf, Arc::new(Unreachable));
+
+    let error = RuntimeHost::task_context_for_agent_input(
+        &bound,
+        &leaf,
+        "implement_one",
+        &json!({"task_id": task}),
+    )
+    .expect_err("the owner is unreachable during envelope loading");
+    assert!(
+        matches!(
+            error,
+            orbit_engine::DispatchError::OwnerRouteUnavailable { .. }
+        ),
+        "envelope loading retains owner-route typing: {error:?}"
+    );
+    let code = error
+        .step_failure_code()
+        .expect("a typed step-failure code");
+    assert_eq!(
+        code,
+        orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable
+    );
+    assert_eq!(
+        error.failure_code(),
+        orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("load task `{task}`"))
+            && message.contains("Connection timed out")
+            && !message.contains("[owner_route_unavailable]"),
+        "the diagnostic is preserved without a stamped marker: {message}"
+    );
+
+    let broken = bound_to(&pair.follower, &pair, &leaf, Arc::new(Broken));
+    let untyped = RuntimeHost::task_context_for_agent_input(
+        &broken,
+        &leaf,
+        "implement_one",
+        &json!({"task_id": task}),
+    )
+    .expect_err("a non-owner load failure still fails the envelope");
+    assert!(
+        matches!(untyped, orbit_engine::DispatchError::CliInvocationFailed(_)),
+        "non-owner failures keep the untyped diagnostic: {untyped:?}"
+    );
+    assert_eq!(untyped.step_failure_code(), None, "{untyped}");
+
+    pair.leaf_fails_with_code(&leaf, &message, &code);
+    settle_only(&pair, &drain);
+    let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
+    assert_eq!(failure["class"], "owner_route", "{failure}");
+    assert_eq!(pair.owner_status(&task), "blocked");
+}
+
 /// [ORB-15088] An owner that times out waiting on a task lock answers
 /// `lock_busy`. A bound worker's owner read — the task load behind every agent
 /// envelope, a final recovery's included — retries it a bounded number of
@@ -2322,5 +2410,6 @@ crate::scenario_table!(
     a_base_conflict_keeps_the_candidate_and_the_next_claim_resumes_it,
     a_discarded_candidate_is_not_resumed,
     a_lost_owner_route_fails_the_step_as_owner_route,
+    a_lost_owner_route_during_envelope_loading_fails_as_owner_route,
     a_provider_limit_releases_the_claim_outside_the_release_budget
 );

@@ -73,6 +73,32 @@ pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
     task_ids
 }
 
+/// Adapt one envelope load failure into a [`DispatchError`], preserving the
+/// owner-route typing of the underlying error: a claimed runtime that lost
+/// its owner while loading the task, its history or its comments fails as
+/// [`DispatchError::OwnerRouteUnavailable`], so step and final recovery skip
+/// repair and the terminal failure classifies as `owner_route` instead of
+/// blaming the candidate. Every other failure keeps the existing untyped
+/// `CliInvocationFailed` diagnostic verbatim.
+fn envelope_load_error(
+    task_id: &str,
+    subject: &str,
+    err: orbit_common::OrbitError,
+) -> DispatchError {
+    let message = format!("load task `{task_id}`{subject} for agent envelope: {err}");
+    if err
+        .step_failure_code()
+        .is_some_and(|code| code.is_owner_route_unavailable())
+    {
+        DispatchError::OwnerRouteUnavailable {
+            action: "task_context_for_agent_input".to_string(),
+            message,
+        }
+    } else {
+        DispatchError::CliInvocationFailed(message)
+    }
+}
+
 pub(crate) fn task_context_for_agent_input(
     runtime: &OrbitRuntime,
     run_id: &str,
@@ -82,21 +108,15 @@ pub(crate) fn task_context_for_agent_input(
     let Some(task_id) = singular_task_id_from_input(input) else {
         return Ok(None);
     };
-    let task = runtime.get_task(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` for agent envelope: {err}"
-        ))
-    })?;
-    let task_history = runtime.get_task_history(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` history for agent envelope: {err}"
-        ))
-    })?;
-    let comments = runtime.get_task_comments(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` comments for agent envelope: {err}"
-        ))
-    })?;
+    let task = runtime
+        .get_task(task_id)
+        .map_err(|err| envelope_load_error(task_id, "", err))?;
+    let task_history = runtime
+        .get_task_history(task_id)
+        .map_err(|err| envelope_load_error(task_id, " history", err))?;
+    let comments = runtime
+        .get_task_comments(task_id)
+        .map_err(|err| envelope_load_error(task_id, " comments", err))?;
     let mut context = agent_task_context_json(
         &task,
         &task_history,
