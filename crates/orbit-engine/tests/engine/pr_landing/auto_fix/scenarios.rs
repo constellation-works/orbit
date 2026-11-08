@@ -168,6 +168,26 @@ fn run_unrouted_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
     )
 }
 
+/// Completion with no declared recovery at the step or job level: neither the
+/// `complete_pr` step nor the job names a `recovery_activity` [ORB-23232].
+fn undeclared_recovery_repair_job(input: Value) -> orbit_types::workflow::JobV2 {
+    job_asset(json!([
+        {"id":"commit","target":"activity:checkpoint"},
+        {"id":"complete_pr","target":"activity:pr_complete","default_input":input}
+    ]))
+}
+
+fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
+    run_job(
+        host,
+        undeclared_recovery_repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
 /// An admitted check-repair handoff at attempt 1 of budget 3, through the
 /// public job run. A configured check-repair activity receives it. With none
 /// configured, the in-budget handoff holds the run. An exhausted repair
@@ -276,6 +296,63 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                 }
                 other => panic!("unknown case {other}"),
             }
+        },
+    );
+}
+
+/// An admitted in-budget check-repair handoff on a completion step that
+/// declares no recovery, in a job with no job-level recovery, holds the run
+/// as `delivery_check_repair_activity_absent` with no repair agent run
+/// [ORB-23232].
+#[test]
+fn admitted_check_repair_handoff_without_declared_recovery_holds() {
+    const CASE: &str = "undeclared-recovery-hold";
+    isolated(
+        "auto_fix::admitted_check_repair_handoff_without_declared_recovery_holds",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = docs_only_pr(row);
+                host.script("test_ci_repair", json!({"mode":"repair"}));
+                host.script(
+                    "test_checkpoint",
+                    json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                );
+                host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+                fx.script_checks(&["source_contract"]);
+                let input = auto_fix_input(&fx);
+                let outcome = run_undeclared_recovery_repair_job(&host, input);
+                let error = outcome.expect_err("absent recovery holds the in-budget handoff");
+                assert_eq!(
+                    error.failure_code(),
+                    "delivery_check_repair_activity_absent",
+                    "{error}"
+                );
+                match error {
+                    DispatchError::DeliveryRefused {
+                        refusal, message, ..
+                    } => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                            "{message}"
+                        );
+                        assert!(
+                            message.contains("attempt 1 of 3"),
+                            "in-budget handoff must stay on the hold: {message}"
+                        );
+                        assert!(is_check_repair(&message), "{message}");
+                    }
+                    other => panic!("expected a typed hold, got {other}"),
+                }
+                assert!(
+                    !scripted_ran(&host, "test_ci_repair"),
+                    "no repair agent runs when the activity is absent"
+                );
+                assert_eq!(repair_attempts(&host).len(), 1, "{CASE}");
+                assert_eq!(fx.head(), fx.candidate, "{CASE}");
+                assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{CASE}");
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, CASE);
+            });
         },
     );
 }
@@ -3498,8 +3575,12 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
             // A fresh admission exercises final recovery's independent
             // observation of both failures. Reusing the earlier ledger
             // is now a typed repair-dispatched hold and cannot recover.
+            // The budget is spent, so the settled failures fail on the
+            // ordinary path to final recovery instead of holding as an
+            // admitted check repair [ORB-23232].
             let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
             host.publish_pr(TASK_ID);
+            seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
             host.script(
                 "test_checkpoint",
                 json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
