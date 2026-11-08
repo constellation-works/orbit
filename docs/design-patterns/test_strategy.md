@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-07
+last_validated: 2026-11-08
 ---
 # Boundary-First Testing
 
@@ -697,7 +697,7 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 
 `scripts/unit-test-inventory.py` inventories the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json) records sorted admitted identities as `<path relative to src>::<function name>` per crate (schema version 2). Repeated names in separate inline modules in one file retain their multiplicity. `make ci-fast` fails when a present test is not named in the baseline, even when the crate's total count stays the same. The change that adds or renames unit tests must update the baseline too, so each admission appears as a reviewed diff. Concurrent admissions then either merge with both identities recorded or conflict textually and require reconciliation; identical count bumps can no longer silently lose an admission.
 
-Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
+Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. A test attribute counts wherever it sits on a masked source line, so `#[cfg(test)]`, `#[allow(dead_code)]`, or another attribute before `#[test]`, `#[r#test]`, or `#[path::test]` does not hide the test. `#[cfg(test)]` by itself is not a test. The baseline stays the reviewed admission list: a scan that newly sees a real test is a missing admission, and the baseline is not rewritten only to conceal it. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
 
 Admitted unit tests:
 

@@ -149,7 +149,8 @@ def mcp_launch(payload: dict[str, Any] | None, label: str, name: str = "orbit") 
         errors.append(f"{label}.mcpServers.{name} must be an object")
         return None
     command = server.get("command")
-    args = server.get("args", [])
+    # Orbit args are required. Another server may omit them.
+    args = server.get("args") if name == "orbit" else server.get("args", [])
     if not isinstance(command, str) or not command.strip():
         errors.append(f"{label}.mcpServers.{name}.command must be a non-empty string")
         return None
@@ -334,19 +335,25 @@ if mcp is not None:
 
 agent_launch = mcp_launch(mcp, "plugin/mcp.json")
 claude_launch = mcp_launch(claude_mcp, "plugin/.mcp.json")
-codex_launch = mcp_launch(
-    codex_manifest if isinstance(codex_manifest, dict) else None,
-    "plugin/.codex-plugin/plugin.json",
-)
+codex_payload = codex_manifest if isinstance(codex_manifest, dict) else None
+codex_launch = mcp_launch(codex_payload, "plugin/.codex-plugin/plugin.json")
 expected = (
     (EXPECTED_MCP_COMMAND, expected_mcp_args) if expected_mcp_args is not None else None
 )
-for label, launch in (
-    ("plugin/mcp.json", agent_launch),
-    ("plugin/.mcp.json", claude_launch),
-    ("plugin/.codex-plugin/plugin.json", codex_launch),
+for label, launch, source in (
+    ("plugin/mcp.json", agent_launch, mcp),
+    ("plugin/.mcp.json", claude_launch, claude_mcp),
+    ("plugin/.codex-plugin/plugin.json", codex_launch, codex_payload),
 ):
-    if launch is None or expected is None:
+    if expected is None:
+        continue
+    if launch is None:
+        # A loaded manifest with no usable Orbit launch is a failure. A missing
+        # file was already reported by load_json and is not given a second error.
+        if source is not None:
+            errors.append(
+                f"{label} MCP launch must be {EXPECTED_MCP_COMMAND} {' '.join(expected_mcp_args)}"
+            )
         continue
     args = launch[1]
     if launch == expected:
