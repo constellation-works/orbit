@@ -5,7 +5,8 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, TaskDecision,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExternalRef,
+    TaskDecision,
 };
 use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, handoff::*};
 
@@ -185,6 +186,21 @@ impl TaskCommitBoundary {
             Some(&observation.known_red),
             &observation.light_delivery,
         )?;
+        // Publish the PR with acceptance, before landing can start. Reuse the
+        // worker update so footprint widening remains part of this same commit.
+        if let HandoffDelivery::PullRequest { number } = candidate.delivery {
+            effects
+                .worker_update
+                .get_or_insert_with(Default::default)
+                .external_refs
+                .push(ExternalRef::github_pr_with_url(
+                    number.to_string(),
+                    Some(&format!(
+                        "https://github.com/{}/pull/{number}",
+                        candidate.repository
+                    )),
+                )?);
+        }
         // [ORB-16855] A claimed leaf writes no owner history: the owner's own
         // light-delivery judgement of the candidate is recorded here.
         for decision in &observation.light_delivery {

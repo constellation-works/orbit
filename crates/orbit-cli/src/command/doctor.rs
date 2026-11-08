@@ -38,7 +38,7 @@ pub struct DoctorCommand {
         "problems", "fix_stale_locks", "fix_stale_task_locks",
         "fix_state_directory_permissions", "remove_graph", "fix_stale_artifacts",
         "fix_retired_activity_backends", "fix_orphan_task_stores",
-        "fix_automation_pins", "fix_retired_config_keys", "confirm"
+        "fix_automation_pins", "fix_retired_config_keys", "fix_missing_pr_refs", "confirm"
     ])]
     pub check: Option<String>,
 
@@ -77,6 +77,10 @@ pub struct DoctorCommand {
     /// Back up config.toml and remove retired, deprecated or unknown keys, preserving translated review settings. Refuses legacy after-landing policies until manually migrated.
     #[arg(long)]
     pub fix_retired_config_keys: bool,
+
+    /// Restore missing review-task pull request references from the owner's accepted follower handoffs, preserving claim and landing state.
+    #[arg(long)]
+    pub fix_missing_pr_refs: bool,
 
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
@@ -133,7 +137,8 @@ impl DoctorCommand {
             || self.fix_retired_activity_backends
             || self.fix_orphan_task_stores
             || self.fix_automation_pins
-            || self.fix_retired_config_keys;
+            || self.fix_retired_config_keys
+            || self.fix_missing_pr_refs;
         if self.command.is_some() || repairs {
             return None;
         }
@@ -191,6 +196,20 @@ impl Execute for DoctorCommand {
             ),
             remediation: None,
         }];
+        if self.fix_missing_pr_refs {
+            let started = std::time::Instant::now();
+            let repaired = runtime.repair_missing_handoff_pr_refs()?;
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-missing-pr-refs".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: format!(
+                    "Restored pull request references on {} review tasks.",
+                    repaired.len()
+                ),
+                remediation: None,
+            });
+        }
         if self.fix_state_directory_permissions {
             let started = std::time::Instant::now();
             let repaired = runtime.repair_state_directory_permissions()?;

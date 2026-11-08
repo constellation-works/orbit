@@ -4,7 +4,7 @@
 //! the claim and the accepted handoff but never the leaf's run, which lives in
 //! the follower's job store. Completion reads the owner-held evidence for that
 //! exact host and run, takes the pull request's identity from the handoff (the
-//! task carries no PR reference), and reads it from the provider by number.
+//! legacy task may carry no PR reference), and reads it from the provider by number.
 //!
 //! A pull request that merged at a head other than the handed-off candidate
 //! completes only on an accepted review reconciliation of exactly that head.
@@ -31,6 +31,112 @@ use orbit_types::workflow::{
 
 const PR_URL: &str = "https://github.com/owner/repository/pull/42";
 const RECONCILE: &str = "orbit.task.reconcile_review";
+
+#[test]
+fn a_follower_handoff_records_its_pull_request_once() {
+    if !isolated(
+        module_path!(),
+        "a_follower_handoff_records_its_pull_request_once",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    *pair.wire.accept_handoffs.lock().unwrap() = true;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let delivered = handoff(&pair.admission(&leaf));
+    pair.leaf_hands_off(&leaf);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    let expected = json!([{"system": "github-pr", "id": "42", "url": PR_URL}]);
+    assert_eq!(
+        pair.owner_task(&delivered.task_id)["external_refs"],
+        expected
+    );
+    pair.wire.accept(delivered.clone()).unwrap();
+    assert_eq!(
+        pair.owner_task(&delivered.task_id)["external_refs"],
+        expected
+    );
+}
+
+/// Model an older owner's isolated task bundle, before handoff acceptance
+/// recorded PR refs. Keep unrelated references for the repair to preserve.
+fn retain_legacy_missing_pr_ref(owner: &OrbitRuntime, task: &str) {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let registry = TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap();
+    let path = registry
+        .canonical_task_bundle_path(&owner.workspace_id().unwrap(), task)
+        .unwrap()
+        .join("task.yaml");
+    let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    envelope
+        .external_refs
+        .retain(|reference| reference.system != "github-pr");
+    std::fs::write(path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+}
+
+#[test]
+fn an_owner_repairs_a_legacy_missing_handoff_pr_ref_once() {
+    if !isolated(
+        module_path!(),
+        "an_owner_repairs_a_legacy_missing_handoff_pr_ref_once",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let owner = &pair.wire.owner;
+    let task = &pair.tasks[0];
+    let unrelated = orbit_types::task::ExternalRef::try_new(
+        "issue".into(),
+        "123".into(),
+        Some("https://example.com/issues/123".into()),
+    )
+    .unwrap();
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![unrelated.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    *pair.wire.accept_handoffs.lock().unwrap() = true;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    retain_legacy_missing_pr_ref(owner, task);
+    let claims = owner.inspect_execution_claims().unwrap();
+    let requests = owner.landing_start_requests().unwrap();
+    assert_eq!(
+        owner.repair_missing_handoff_pr_refs().unwrap(),
+        vec![task.clone()]
+    );
+    assert_eq!(
+        owner.get_task(task).unwrap().external_refs,
+        vec![
+            unrelated,
+            orbit_types::task::ExternalRef::github_pr_with_url("42", Some(PR_URL)).unwrap()
+        ]
+    );
+    assert_eq!(owner.get_task(task).unwrap().status, TaskStatus::Review);
+    assert!(owner.repair_missing_handoff_pr_refs().unwrap().is_empty());
+    assert_eq!(owner.inspect_execution_claims().unwrap(), claims);
+    assert_eq!(owner.landing_start_requests().unwrap(), requests);
+    assert_eq!(
+        owner
+            .get_task_history(task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "pull_request_ref_repaired")
+            .count(),
+        1
+    );
+}
 
 fn session(capability: McpCapability) -> ToolSessionContext {
     ToolSessionContext {
@@ -831,10 +937,11 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
         shown["job_run_machine"]["machine_id"], FOLLOWER,
         "{shown:#}"
     );
-    assert_eq!(shown["external_refs"], json!([]), "{shown:#}");
+    retain_legacy_missing_pr_ref(owner, task);
+    assert_eq!(delivery.pair.owner_task(task)["external_refs"], json!([]));
 
-    // Foreign handoff acceptance need not append a PR reference. Even with
-    // history alone, the exact accepted handoff selects #42.
+    // A legacy owner's task may have no PR reference. Even with history
+    // alone, the exact accepted handoff selects #42.
     let without_history = delivery.snapshot(McpCapability::Operator).reviewed_head;
     owner
         .apply_task_automation_update(
