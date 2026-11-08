@@ -4,7 +4,7 @@
     "orbit": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@orbit-tools/cli@0.46.0", "mcp", "serve"]
+      "args": ["-y", "@orbit-tools/cli@0.47.0", "mcp", "serve"]
     }
   }
 }
