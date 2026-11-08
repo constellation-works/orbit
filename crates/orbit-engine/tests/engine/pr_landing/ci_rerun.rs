@@ -455,8 +455,9 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
         tasks: &[String],
         handoff: Option<&str>,
         plan: &CiRerunPlan,
+        now_ms: u64,
     ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        RuntimeHost::admit_ci_rerun(self.inner, tasks, handoff, plan)
+        RuntimeHost::admit_ci_rerun(self.inner, tasks, handoff, plan, now_ms)
     }
     fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
         if operation == "pr.merge" {

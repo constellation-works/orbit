@@ -12,8 +12,10 @@ spec:
     inherited, flaky, candidate, base-suspect or inconclusive), and appends
     one `landing_checks_observed` entry to the task's history whose note is
     the JSON outcome: `passed`, `failed`, `conflicting`, `blocked` or
-    `pending`. Observation only: it never merges, reruns, updates the branch,
-    starts a repair or changes the task's status. A task that left review, or
+    `pending`. Authenticated transient failures use the configured bounded
+    infrastructure retry policy, then check observation resumes. Exhaustion
+    records a hold naming the classification and attempt count. It never
+    merges, updates the branch, starts a repair or changes the task's status. A task that left review, or
     a pull request that merged or closed, ends the watch without an entry.
   input_schema_json:
     type: object

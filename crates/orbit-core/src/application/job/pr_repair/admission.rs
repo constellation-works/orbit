@@ -341,8 +341,11 @@ impl OrbitRuntime {
         task_ids: &[String],
         handoff_id: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun};
+        use orbit_types::workflow::{
+            CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun_with_policy,
+        };
         self.ensure_coordination_task_write_permitted()?;
         if self.worker_invocation().is_some() {
             return Ok(CiRerunAdmission::Refused(
@@ -400,9 +403,13 @@ impl OrbitRuntime {
                 "owner-ci-retry".into(),
             )
             .with_handoff_observation(observation);
-            return self
-                .owner_commit_boundary()?
-                .reserve_handoff_ci_rerun(&auth, handoff_id, plan);
+            return self.owner_commit_boundary()?.reserve_handoff_ci_rerun(
+                &auth,
+                handoff_id,
+                plan,
+                self.pr_config().ci_infrastructure_retry,
+                now_ms,
+            );
         }
         let primary = task_ids
             .iter()
@@ -418,13 +425,25 @@ impl OrbitRuntime {
                     ));
                     return Ok(());
                 }
-                let admitted = decide_ci_rerun(&self.get_task_history(primary)?, plan);
+                let admitted = decide_ci_rerun_with_policy(
+                    &self.get_task_history(primary)?,
+                    plan,
+                    self.pr_config().ci_infrastructure_retry,
+                    now_ms,
+                );
                 if matches!(admitted, CiRerunAdmission::Reserved) {
                     self.apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
                             append_history: vec![TaskHistoryEntry {
-                                at: Utc::now(),
+                                at: chrono::DateTime::from_timestamp_millis(
+                                    i64::try_from(now_ms).map_err(|_| {
+                                        OrbitError::InvalidInput("invalid CI retry clock".into())
+                                    })?,
+                                )
+                                .ok_or_else(|| {
+                                    OrbitError::InvalidInput("invalid CI retry clock".into())
+                                })?,
                                 by: "system".into(),
                                 event: CI_RERUN_RESERVED_EVENT.into(),
                                 note: Some(

@@ -623,7 +623,11 @@ impl TaskCommitBoundary {
                     }
                     if !matches!(
                         event.as_str(),
-                        "ci_check_rerun" | "ci_base_suspect" | "ci_check_rerun_reserved"
+                        "ci_check_rerun"
+                            | "ci_base_suspect"
+                            | "ci_check_rerun_reserved"
+                            | "ci_infrastructure_retry_backoff"
+                            | "ci_infrastructure_retry_exhausted"
                     ) {
                         return Err(invalid("unsupported handoff landing history event"));
                     }

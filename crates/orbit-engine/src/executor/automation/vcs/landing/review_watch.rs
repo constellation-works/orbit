@@ -11,11 +11,11 @@
 //! It polls the pull request until its checks settle or its budget runs out,
 //! classifies failed checks exactly as the landing does
 //! ([`classify_watched_failures`]), and appends one
-//! [`LANDING_CHECKS_OBSERVED_EVENT`] to the task's history. It never merges,
-//! reruns, updates the branch or starts a repair, and it never changes the
-//! task's status: Fix PR, an `--auto-fix` drain or the operator acts on what
-//! it records. A task that left review, or a pull request that merged or
-//! closed, ends the watch without an entry.
+//! [`LANDING_CHECKS_OBSERVED_EVENT`] to the task's history. Logged transient
+//! failures use completion's durable, bounded rerun path before observation.
+//! It never merges, updates the branch, starts a repair or changes status.
+//! A task that left review, or a pull request that merged or closed, ends
+//! the watch without an entry.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -122,7 +122,28 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                 if failed.is_empty() {
                     observation(&status, &pr_number, "blocked", Some(block.to_string()))
                 } else {
-                    failed_observation(
+                    let mut retry_input = input.clone();
+                    retry_input["workspace_path"] = json!(workspace);
+                    let hold = if expired {
+                        None
+                    } else {
+                        match super::super::pr::recover_review_ci(
+                            host,
+                            &retry_input,
+                            &task_id,
+                            &pr_number,
+                            &status,
+                            deadline_ms,
+                        )? {
+                            super::super::pr::ReviewCiRetryStep::PollAgain => {
+                                fixed_wait(Duration::from_secs(poll_interval_seconds));
+                                continue;
+                            }
+                            super::super::pr::ReviewCiRetryStep::Hold(reason) => Some(reason),
+                            super::super::pr::ReviewCiRetryStep::Observe => None,
+                        }
+                    };
+                    let mut observed = failed_observation(
                         host,
                         input,
                         &workspace,
@@ -130,7 +151,11 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                         &pr_number,
                         &failed,
                         deadline_ms,
-                    )
+                    );
+                    if let Some(reason) = hold {
+                        observed["hold_reason"] = json!(reason);
+                    }
+                    observed
                 }
             }
         };

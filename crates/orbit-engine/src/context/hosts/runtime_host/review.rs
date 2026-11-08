@@ -75,6 +75,7 @@ macro_rules! review_methods {
             task_ids: &[String],
             handoff_id: Option<&str>,
             plan: &orbit_types::workflow::CiRerunPlan,
+            now_ms: u64,
         ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError>;
 
         /// Reserve the cumulative infrastructure rerun before mutation, under the

@@ -184,6 +184,14 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
     for (event, note) in [
         ("ci_check_rerun", r#"{"run_id":7}"#),
         ("ci_base_suspect", r#"{"check":"CI"}"#),
+        (
+            "ci_infrastructure_retry_backoff",
+            r#"{"classification":"transient","not_before_ms":123456}"#,
+        ),
+        (
+            "ci_infrastructure_retry_exhausted",
+            r#"{"classification":"transient","attempts":3}"#,
+        ),
     ] {
         RuntimeHost::record_handoff_landing_history(owner, &accepted.handoff_id, event, note)
             .unwrap();
@@ -192,6 +200,14 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
     for (event, note) in [
         ("ci_check_rerun", r#"{"run_id":7}"#),
         ("ci_base_suspect", r#"{"check":"CI"}"#),
+        (
+            "ci_infrastructure_retry_backoff",
+            r#"{"classification":"transient","not_before_ms":123456}"#,
+        ),
+        (
+            "ci_infrastructure_retry_exhausted",
+            r#"{"classification":"transient","attempts":3}"#,
+        ),
     ] {
         assert!(
             history
@@ -1014,6 +1030,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
                 std::slice::from_ref(&accepted.handoff.task_id),
                 Some(&accepted.handoff_id),
                 &retry,
+                chrono::Utc::now().timestamp_millis() as u64,
             )
             .unwrap()
         });
@@ -1024,6 +1041,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
                 std::slice::from_ref(&accepted.handoff.task_id),
                 Some(&accepted.handoff_id),
                 &retry,
+                chrono::Utc::now().timestamp_millis() as u64,
             )
             .unwrap()
         });
@@ -1056,7 +1074,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
             .with_automation_machine_identity(Some(OWNER.to_string())),
     );
     assert!(
-        matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
+        matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry,chrono::Utc::now().timestamp_millis() as u64).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
         "a fresh runtime re-observes the durable authorization after an unknown reply, without admitting another send"
     );
     assert_eq!(
@@ -1067,6 +1085,41 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
             .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
             .count(),
         1
+    );
+    let mut next = retry.clone();
+    next.run_attempt = 2;
+    next.roots[0].classification = "transient".into();
+    next.roots[0].job_id = 1010;
+    next.failed_jobs = vec![json!({"id":1010})];
+    let later = chrono::Utc::now().timestamp_millis() as u64 + 60_000;
+    assert!(
+        matches!(
+            RuntimeHost::admit_ci_rerun(
+                &reopened,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &next,
+                later
+            )
+            .unwrap(),
+            orbit_types::workflow::CiRerunAdmission::Reserved
+        ),
+        "a later infrastructure attempt gets its own durable claim receipt"
+    );
+    assert!(
+        matches!(RuntimeHost::admit_ci_rerun(&reopened,
+        std::slice::from_ref(&accepted.handoff.task_id), Some(&accepted.handoff_id), &next, later).unwrap(),
+        orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior == next),
+        "the second reservation is replayed, never sent twice"
+    );
+    assert_eq!(
+        reopened
+            .get_task_history(&accepted.handoff.task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+            .count(),
+        2
     );
     owner
         .revoke_handoff_as_operator(
@@ -1087,7 +1140,8 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
             owner,
             std::slice::from_ref(&accepted.handoff.task_id),
             Some(&accepted.handoff_id),
-            &retry
+            &retry,
+            chrono::Utc::now().timestamp_millis() as u64,
         )
         .is_err(),
         "a revoked source/PR lease cannot reauthorize a reserved CI action"

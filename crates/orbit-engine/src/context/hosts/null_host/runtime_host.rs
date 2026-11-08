@@ -323,8 +323,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         task_ids: &[String],
         handoff_id: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        NullRuntimeHost::admit_ci_rerun(self, task_ids, handoff_id, plan)
+        NullRuntimeHost::admit_ci_rerun(self, task_ids, handoff_id, plan, now_ms)
     }
     fn admit_pr_infrastructure(
         &self,

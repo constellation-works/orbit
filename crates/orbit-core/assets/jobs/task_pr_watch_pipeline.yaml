@@ -9,8 +9,9 @@
 #
 # The watch polls the pull request's checks and records one
 # `landing_checks_observed` history entry classifying them, the signal the
-# dashboard shows on the task and Fix PR acts on. It is observation only: it
-# never merges, reruns, updates the branch or starts a repair, and it holds no
+# dashboard shows on the task and Fix PR acts on. Logged transient failures
+# use completion's bounded infrastructure reruns before observation resumes.
+# It never merges, updates the branch or starts a repair, and it holds no
 # delivery slot or footprint lock, so a drain refills the slot as soon as the
 # delivery leaf ends.
 #

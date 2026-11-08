@@ -8,7 +8,8 @@ root = Path(sys.argv[1])
 args = sys.argv[2:]
 config = json.loads((root / "retry-config.json").read_text())
 applied = (root / "retry-applied").exists()
-phase = 2 if applied else 1
+phase = int((root / "retry-applied").read_text() or "2") if applied else 1
+recovered = applied and (not config.get("repeat") or phase > config.get("fail_attempts", 1000))
 merged = (root / "retry-merged").exists()
 repo = {"id": 500, "full_name": "orbit/test", "url": "https://api.github.com/repos/orbit/test"}
 app = {"id": 901 if config.get("wrong_app") else 900, "slug": "github-actions"}
@@ -25,7 +26,7 @@ def outcome(name, is_base=False):
     named = config.get("conclusions", {}).get(name)
     if isinstance(named, str):
         return named
-    return "success" if (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
+    return "success" if (name == "independent" and not config.get("candidate")) or (recovered) else "failure"
 
 def refuse_log(job):
     with (root / "retry-log-reads").open("a") as file:
@@ -59,7 +60,7 @@ def run(is_base=False):
               "head_branch": base_branch if is_base else branch,
               "event": "push" if is_base else "pull_request",
               "repository": repo, "head_repository": repo, "actor": {"id": 123},
-              "status": "completed", "conclusion": "success" if (applied and not config.get("repeat")) or is_base else "failure",
+              "status": "completed", "conclusion": "success" if (recovered) or is_base else "failure",
               "run_started_at": "2026-10-29T10:00:00Z",
               "pull_requests": [] if is_base else [{"number": 42, "head": {"sha": head}, "base": {"sha": base, "ref": base_branch, "repo": repo}}]}
     if is_base and config.get("base_unproven"):
@@ -74,7 +75,7 @@ def jobs(is_base=False, producing=False):
     for index, name in enumerate(names):
         step = "Wait" if name == "lint" else "Tests"
         conclusion = outcome(name, is_base)
-        rows.append({"id": (2000 if is_base else 1000) + index + (10 if applied else 0), "run_id": 701 if is_base else 700,
+        rows.append({"id": (2000 if is_base else 1000) + index + (10 * (phase - 1) if applied else 0), "run_id": 701 if is_base else 700,
                      "run_attempt": 1 if is_base else phase, "head_sha": sha, "name": name,
                      "status": "completed", "conclusion": conclusion,
                      "started_at": "2026-10-29T10:02:00Z" if applied else "2026-10-29T10:00:00Z", "completed_at": "2026-10-29T10:03:00Z" if applied else "2026-10-29T10:01:00Z",
@@ -108,7 +109,7 @@ if args[:2] == ["run", "rerun"]:
     with (root / "retry-sends").open("a") as file:
         file.write(" ".join(args) + "\n")
     if config.get("reply") != "unknown":
-        (root / "retry-applied").touch()
+        (root / "retry-applied").write_text(str(phase + 1))
     if config.get("reply") in ("lost", "unknown"):
         print("lost provider reply", file=sys.stderr)
         raise SystemExit(1)
@@ -128,7 +129,7 @@ if args[:2] == ["run", "view"]:
 if args[:2] == ["pr", "view"]:
     emit({"number": 42, "url": "https://github.com/orbit/test/pull/42", "state": "MERGED" if merged else "OPEN",
           "headRefName": branch, "baseRefName": base_branch, "headRefOid": head,
-          "mergeStateStatus": "CLEAN" if applied and not config.get("repeat") and all(outcome(name) == "success" for name in names) else "BLOCKED", "reviewDecision": "APPROVED",
+          "mergeStateStatus": "CLEAN" if recovered and all(outcome(name) == "success" for name in names) else "BLOCKED", "reviewDecision": "APPROVED",
           "isDraft": False, "mergedAt": "2026-10-29T10:02:00Z" if merged else None, "mergeCommit": {"oid": head} if merged else None,
           "statusCheckRollup": [{"__typename": "CheckRun", "name": name, "workflowName": "CI",
                                  "status": "COMPLETED", "conclusion": outcome(name).upper()} for name in names]})

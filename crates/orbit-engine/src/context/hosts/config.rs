@@ -43,6 +43,8 @@ pub struct PrConfig {
     /// `workflow.ci_infrastructure_signatures`: log-line prefixes that mark a
     /// failed CI job as an infrastructure failure. Empty declares none.
     pub ci_infrastructure_signatures: Vec<String>,
+    /// Owner policy for logged infrastructure failures; reservations survive runs.
+    pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
     /// `pr.*`, `commit.*` and `branch.*` templates and switches; the default
     /// is Orbit's built-in titles, bodies, messages and branch names.
     pub conventions: orbit_types::workflow::DeliveryConventions,
