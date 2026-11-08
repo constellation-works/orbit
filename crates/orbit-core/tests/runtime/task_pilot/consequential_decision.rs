@@ -188,6 +188,26 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
     assert_public_hold(&workspace, &upgraded, "the ownership policy");
 }
 
+#[test]
+fn unrelated_resolution_cue_does_not_clear_surface_hold() {
+    let workspace = Workspace::new();
+
+    // ORB-23275: "retains current" in a sentence that does not mention the
+    // unlisted surface must not suppress the hold on the omitted surface.
+    let unrelated = filed(
+        &workspace,
+        "Stop on any surface difference the difference table does not enumerate. \
+         The difference table omits bounded description text. \
+         The retry timeout retains current behavior.",
+    );
+    assert_holds(
+        &assess(&workspace, &unrelated, json!([])),
+        "bounded description text",
+        "ORB-23275: an unrelated resolution cue must not clear an unenumerated surface hold",
+    );
+    assert_public_hold(&workspace, &unrelated, "bounded description text");
+}
+
 fn filed(workspace: &Workspace, description: &str) -> Task {
     workspace
         .runtime

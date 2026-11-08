@@ -285,7 +285,7 @@ fn rank(name: &str) -> u8 {
 /// and no sentence that already resolves unnamed differences.
 fn surface_subject(description: &str) -> Option<String> {
     let lower = description.to_ascii_lowercase();
-    if RESOLUTION_CUES.iter().any(|cue| lower.contains(cue)) {
+    if surface_resolved(&lower) {
         return None;
     }
     if !stop_rule_reaches_unlisted_surface(&lower) {
@@ -293,6 +293,19 @@ fn surface_subject(description: &str) -> Option<String> {
     }
     let subject = first_omission(description)?;
     usable_subject(&subject).then_some(subject)
+}
+
+/// A resolution cue settles unnamed differences only in a sentence that also
+/// names the unlisted surface. "Any field the table does not name keeps its
+/// current behavior" does; "The retry timeout retains current behavior" is
+/// about something else and leaves the omitted surface open [ORB-23275].
+fn surface_resolved(lower: &str) -> bool {
+    sentences(lower).into_iter().any(|sentence| {
+        RESOLUTION_CUES.iter().any(|cue| sentence.contains(cue))
+            && (sentence.contains("unnamed")
+                || SURFACE_CUES.iter().any(|cue| sentence.contains(cue))
+                || UNLISTED_CUES.iter().any(|cue| sentence.contains(cue)))
+    })
 }
 
 fn stop_rule_reaches_unlisted_surface(lower: &str) -> bool {
