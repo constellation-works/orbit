@@ -149,7 +149,14 @@ impl fmt::Display for CompletionHold {
 }
 
 /// The hold the task is in now: the latest [`COMPLETION_HELD_EVENT`] record,
-/// while the task is still in `review` and has not entered it again since.
+/// while the task is still in `review` and has not left `review` since the
+/// hold was recorded.
+///
+/// A hold recorded just before the task enters `review` counts: local
+/// delivery decides the hold in `git_merge` while the task is still
+/// `in-progress`, and the pipeline's following `mark_review` transition is
+/// the entry into the review the hold kept it in. Leaving `review` for any
+/// other status after the hold (including a later re-entry) makes it stale.
 pub fn current_completion_hold(
     status: TaskStatus,
     history: &[TaskHistoryEntry],
@@ -157,20 +164,21 @@ pub fn current_completion_hold(
     if status != TaskStatus::Review {
         return None;
     }
-    let entered_review = history
-        .iter()
-        .rposition(|entry| entry.to_status == Some(TaskStatus::Review));
-    history
+    let (hold_index, hold) = history
         .iter()
         .enumerate()
         .rev()
         .find_map(|(index, entry)| match &entry.decision {
-            Some(TaskDecision::CompletionHeld(hold))
-                if entry.event == COMPLETION_HELD_EVENT
-                    && entered_review.is_none_or(|entered| index > entered) =>
-            {
-                Some(hold)
+            Some(TaskDecision::CompletionHeld(hold)) if entry.event == COMPLETION_HELD_EVENT => {
+                Some((index, hold))
             }
             _ => None,
-        })
+        })?;
+    let left_review_since_hold = history[hold_index + 1..]
+        .iter()
+        .any(|entry| matches!(entry.to_status, Some(status) if status != TaskStatus::Review));
+    if left_review_since_hold {
+        return None;
+    }
+    Some(hold)
 }
