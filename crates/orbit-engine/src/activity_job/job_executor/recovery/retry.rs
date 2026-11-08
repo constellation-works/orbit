@@ -228,7 +228,16 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
                 .and_then(|()| {
                     if check_repair {
-                        super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?;
+                        // A no-edit repair wrote no scope record: nothing
+                        // to commit. The retry below reruns completion on
+                        // the unchanged head, where the watcher reruns the
+                        // failed checks once (recorded by `bind`).
+                        if matches!(
+                            super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?,
+                            super::check_scope::CheckScopeBind::NoEdit
+                        ) {
+                            return Ok(());
+                        }
                     }
                     // A reviewed head's check repair is re-reviewed before
                     // the completion step publishes it.
