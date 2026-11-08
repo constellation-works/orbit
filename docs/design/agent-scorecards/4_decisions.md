@@ -52,6 +52,7 @@ Dollar cost, tokens and wall time never enter an agent score. They are shown nex
 
 - A score answers "how good is the work", and the cost panel answers "at what price"; the frontier of crews nothing beats on both makes the trade visible.
 - Cost: the ranking alone never recommends a crew. An operator has to read two views, and a reader who looks only at the ranking will prefer expensive crews.
+- Proposed amendment, for the [model ranking](../model-ranking/4_decisions.md#cost-orders-a-tie-band-and-is-never-scored) only ([ORB-23297]): cost stays out of the score but orders models within a statistical tie band. These boards are unchanged.
 
 ## Score accuracy, never the volume of objections
 
