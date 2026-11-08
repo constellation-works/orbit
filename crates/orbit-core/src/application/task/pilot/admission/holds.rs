@@ -1,12 +1,18 @@
 //! Typed pilot admission holds and their persisted finding identities.
 
 use orbit_types::task::{
-    DecisionAnswer, HostOs, PilotAdmissionVerdict, Task, TaskHistoryEntry, TaskOsRequirement,
+    DecisionAnswer, HostOs, PilotAdmissionVerdict, Task, TaskDecision, TaskHistoryEntry,
+    TaskOsRequirement,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::backlog::{criteria_digest, host_operational_material, validation_material};
+
+/// History events an operator handoff of a typed hold is recorded on, each
+/// carrying [`TaskDecision::PilotOperatorHandoff`].
+pub(super) const HOST_OPERATIONAL_HELD: &str = "host_operational_held";
+pub(super) const OPERATOR_VALIDATION_HELD: &str = "operator_validation_held";
 
 /// A finding in the latest applied assessment that requires an operator decision.
 pub(crate) enum PilotAdmissionHold {
@@ -50,7 +56,7 @@ impl HostOperationalHold {
         TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: "task-pilot".into(),
-            event: "host_operational_held".into(),
+            event: HOST_OPERATIONAL_HELD.into(),
             note: Some(
                 json!({
                     "operation_id": operation_id, "disposition": "host_operational", "hold": self,
@@ -60,7 +66,10 @@ impl HostOperationalHold {
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision: Some(TaskDecision::PilotOperatorHandoff {
+                operation_id: operation_id.into(),
+                hold: json!(self),
+            }),
         }
     }
 }
@@ -165,12 +174,15 @@ impl OperatorValidationHold {
         TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: "task-pilot".into(),
-            event: "operator_validation_held".into(),
+            event: OPERATOR_VALIDATION_HELD.into(),
             note: Some(json!({"operation_id": operation_id, "hold": self}).to_string()),
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision: Some(TaskDecision::PilotOperatorHandoff {
+                operation_id: operation_id.into(),
+                hold: json!(self),
+            }),
         }
     }
 }

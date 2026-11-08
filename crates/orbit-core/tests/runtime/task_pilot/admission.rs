@@ -628,6 +628,78 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
     assert_admission(&workspace, &task, None);
 }
 
+/// A `host_operational_held` entry an older binary wrote carries its hold
+/// only in its JSON note. Admission still recovers that hold, and the handoff
+/// it records is not posted a second time.
+fn legacy_note_only_host_operational_handoff_is_recovered_and_not_recorded_again() {
+    let criterion = "The owner-side repair is observable.";
+    let audit = json!({"assessment": {
+        "disposition": "host_operational", "evidence": "The operator must repair the owner-side definition.",
+        "duplicate_of": null, "already_landed": null,
+    }});
+    // A current binary records the handoff with a typed decision; the same
+    // task material in another store yields the same hold material.
+    let (typed, typed_task) = fresh_validation(criterion);
+    seed_legacy(&typed, &typed_task, &audit, "legacy-host-pilot");
+    assert_admission(&typed, &typed_task, Some("host_operational_handoff"));
+    let handoff = hist(&typed, &typed_task)
+        .into_iter()
+        .find(|entry| entry.event == "host_operational_held")
+        .unwrap();
+    let Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) = &handoff.decision else {
+        panic!("handoff must carry its typed decision: {handoff:?}");
+    };
+    assert_eq!(operation_id, "legacy-host-pilot");
+    let note: serde_json::Value = serde_json::from_str(handoff.note.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        note,
+        json!({"operation_id": "legacy-host-pilot", "disposition": "host_operational", "hold": hold})
+    );
+
+    let (workspace, task) = fresh_validation(criterion);
+    seed_legacy(&workspace, &task, &audit, "legacy-host-pilot");
+    let recorded_evidence = "The recorded hold names the owner-side definition repair.";
+    let legacy_note = json!({
+        "operation_id": "legacy-host-pilot", "disposition": "host_operational",
+        "hold": {"material": hold["material"], "evidence": recorded_evidence},
+    })
+    .to_string();
+    append_history(
+        &workspace,
+        &task,
+        TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: "system".into(),
+            event: "host_operational_held".into(),
+            note: Some(legacy_note.clone()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        },
+    );
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    assert_admission(&workspace, &task, Some("host_operational_handoff"));
+    let refused = workflow_refusal(&workspace, &task);
+    assert!(refused.contains(recorded_evidence), "{refused}");
+    let handoffs = hist(&workspace, &task)
+        .into_iter()
+        .filter(|entry| entry.event == "host_operational_held")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        handoffs.len(),
+        1,
+        "the legacy handoff must not be re-posted"
+    );
+    assert_eq!(handoffs[0].note.as_deref(), Some(legacy_note.as_str()));
+    assert!(
+        !task_comments(&workspace, &task)
+            .iter()
+            .any(|comment| comment.message.starts_with("host-operational-handoff\n")),
+        "no second handoff comment"
+    );
+}
+
 fn assert_admission(workspace: &Workspace, task: &Task, reason: Option<&str>) {
     for input in [json!({}), json!({"task_ids": [task.id]})] {
         let output = workspace.action("list_backlog_tasks", input);
@@ -2021,6 +2093,7 @@ crate::scenario_table!(
     host_operational_holds_human_approved_work_until_a_current_operator_decision,
     host_operational_material_and_newer_dispositions_control_admission,
     legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material,
+    legacy_note_only_host_operational_handoff_is_recovered_and_not_recorded_again,
     latest_pilot_finding_holds_backlog_until_a_clear_assessment,
     human_pilot_decisions_release_only_the_current_assessment
 );
