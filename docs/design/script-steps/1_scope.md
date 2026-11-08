@@ -49,7 +49,8 @@ bullet was rechecked at `d10fae79b`).
 
 - **Job steps name catalog targets by prefix.** A job step's `target:` is a
   namespace-prefixed reference. At that commit only `activity:<name>` resolved
-  (`ACTIVITY_REF_PREFIX` and `resolve_ref`, `crates/orbit-engine/src/activity_job/catalog.rs`),
+  (`ACTIVITY_REF_PREFIX` in `crates/orbit-engine/src/activity_job/catalog/mod.rs`
+  and `resolve_ref` in `crates/orbit-engine/src/activity_job/catalog/resolve.rs`),
   and any other prefix was a load error (`ResolveError::UnknownRefKind`); phase 1
   ([ORB-19983]) added `script:` resolution alongside it. `TargetRef`
   (`crates/orbit-types/src/workflow/activity_job/job_v2.rs`) was made prefixed so that
