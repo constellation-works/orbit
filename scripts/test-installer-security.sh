@@ -206,6 +206,73 @@ PUBLIC_KEY="$CURRENT_PUBLIC_KEY"
 TARGET="$(target_name)"
 
 good_release="$(prepare_release_dir good regular correct "$CURRENT_PRIVATE_KEY")"
+# Exercise the public installer against a release whose archive keeps moving for
+# more than 30 seconds. A retry receives 404 so a regression fails promptly.
+ROOT="$ROOT" RELEASE_DIR="$good_release" TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
+  INSTALL_DIR="$TMP_ROOT/install-slow" TARGET="$TARGET" node <<'NODE'
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const archive = `orbit-${process.env.TARGET}.tar.gz`;
+let archiveRequests = 0;
+let timer;
+const server = http.createServer((req, res) => {
+  const name = req.url.slice(1);
+  if (![archive, 'orbit-checksums.txt', 'orbit-checksums.txt.sig'].includes(name)) {
+    res.writeHead(404).end();
+    return;
+  }
+  const data = fs.readFileSync(path.join(process.env.RELEASE_DIR, name));
+  if (name !== archive) {
+    res.writeHead(200, { 'Content-Length': data.length }).end(data);
+    return;
+  }
+  if (++archiveRequests !== 1) {
+    res.writeHead(404).end();
+    return;
+  }
+  res.writeHead(200, { 'Content-Length': data.length });
+  let part = 0;
+  const send = () => {
+    const start = Math.floor(part * data.length / 33);
+    part += 1;
+    res.write(data.subarray(start, Math.floor(part * data.length / 33)));
+    if (part === 33) {
+      clearInterval(timer);
+      res.end();
+    }
+  };
+  send();
+  timer = setInterval(send, 1000);
+  res.on('close', () => clearInterval(timer));
+});
+server.listen(0, '127.0.0.1', () => {
+  const started = Date.now();
+  const child = spawn('sh', [path.join(process.env.ROOT, 'install.sh')], {
+    env: { ...process.env, ORBIT_INSTALL_BASE_URL: `http://127.0.0.1:${server.address().port}`,
+      ORBIT_INSTALL_DIR: process.env.INSTALL_DIR,
+      ORBIT_RELEASE_TRUSTED_KEYS_FILE: process.env.TRUSTED_KEYS_FILE,
+      ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { output += chunk; });
+  const deadline = setTimeout(() => child.kill(), 50000);
+  child.on('close', code => {
+    clearTimeout(deadline);
+    clearInterval(timer);
+    server.close();
+    if (code !== 0 || archiveRequests !== 1 || Date.now() - started <= 30000 ||
+        !fs.existsSync(path.join(process.env.INSTALL_DIR, 'orbit'))) {
+      console.error(`FAIL: slow progressing archive: exit=${code}, requests=${archiveRequests}\n${output}`);
+      process.exitCode = 1;
+    }
+  });
+});
+NODE
 bad_checksum_release="$(prepare_release_dir bad-checksum regular wrong "$CURRENT_PRIVATE_KEY")"
 expired_key_release="$(prepare_release_dir expired-key regular correct "$EXPIRED_PRIVATE_KEY")"
 revoked_key_release="$(prepare_release_dir revoked-key regular correct "$REVOKED_PRIVATE_KEY")"

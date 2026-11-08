@@ -43,7 +43,7 @@ download() (
     rc=0
     retry=false
     if [ "$downloader" = curl ]; then
-      status="$(curl -fsSL --connect-timeout 10 --max-time 30 \
+      status="$(curl -fsSL --connect-timeout 10 --speed-time 30 --speed-limit 1 \
         -w '%{http_code}' "$url" -o "$destination")" || rc=$?
       [ "$rc" -ne 0 ] || return 0
       case "$status" in
