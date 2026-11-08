@@ -20,9 +20,9 @@ use crate::application::experiment::readout::outcomes::{
 
 use super::model::{
     ArmDelivery, CrewCount, DreamingOverhead, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout,
-    GuardrailReadout, Lagging, MemoryRevisionStratum, PerProtocolReadout, PrimaryObservation,
-    ReadoutArm, ReadoutEnrollment, ReadoutExperiment, ReadoutMetric, ReadoutWarning,
-    SAMPLE_RATIO_ALPHA, SampleRatio, SampleRatioSegment, SegmentCount,
+    GuardrailReadout, Lagging, MemoryRevisionStratum, MemoryTaskCapture, PerProtocolReadout,
+    PrimaryObservation, ReadoutArm, ReadoutEnrollment, ReadoutExperiment, ReadoutMetric,
+    ReadoutWarning, SAMPLE_RATIO_ALPHA, SampleRatio, SampleRatioSegment, SegmentCount,
 };
 use super::{metrics, stats, verdict};
 
@@ -139,6 +139,7 @@ fn build_readout(
     }
 
     let dispatch_roles = arm_dispatch_roles(record)?;
+    let shadow = record.experiment.mode == "shadow";
     let arms: Vec<ReadoutArm> = record
         .arms
         .iter()
@@ -148,6 +149,7 @@ fn build_readout(
                 tasks,
                 observed.run_digests.get(&arm.name),
                 dispatch_roles.get(&arm.name),
+                shadow,
             )
         })
         .collect();
@@ -335,6 +337,7 @@ fn arm_readout(
     tasks: &[TaskOutcome],
     run_digests: Option<&BTreeSet<String>>,
     dispatch_roles: Option<&TreatmentRequirements>,
+    shadow: bool,
 ) -> ReadoutArm {
     let mine: Vec<&TaskOutcome> = tasks.iter().filter(|task| task.arm == arm.name).collect();
     let mut segments: BTreeMap<u32, usize> = BTreeMap::new();
@@ -388,8 +391,35 @@ fn arm_readout(
             rate: (settled > 0).then(|| delivered_count as f64 / settled as f64),
         }
     });
+    let memory_captures: Vec<MemoryTaskCapture> = if shadow {
+        mine.iter()
+            .filter_map(|task| {
+                task.captured_memory
+                    .as_ref()
+                    .map(|memory| MemoryTaskCapture {
+                        task_id: task.task_id.clone(),
+                        digest: memory.digest.clone(),
+                        model: memory.model.clone(),
+                        model_revision: memory.model_revision,
+                        global_revision: memory.global_revision,
+                        renderer_version: memory.renderer_version,
+                        week: memory.week.clone(),
+                    })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let memory_capture_strata = if shadow {
+        captured_memory_strata(&mine)
+    } else {
+        Vec::new()
+    };
     ReadoutArm {
         memory_strata: memory_strata(&mine),
+        memory_captures,
+        memory_capture_strata,
+        task_ids: mine.iter().map(|task| task.task_id.clone()).collect(),
         dreaming_overhead: None,
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
@@ -409,6 +439,30 @@ fn arm_readout(
         run_digests,
         delivery,
     }
+}
+
+/// An arm's captured tasks by revision week (shadow mode); distinct
+/// captured digests per week. Captured, not delivered.
+fn captured_memory_strata(tasks: &[&TaskOutcome]) -> Vec<MemoryRevisionStratum> {
+    let mut strata: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
+    for memory in tasks
+        .iter()
+        .filter_map(|task| task.captured_memory.as_ref())
+    {
+        let stratum = strata
+            .entry(memory.week.clone().unwrap_or_else(|| "empty".into()))
+            .or_default();
+        stratum.0 += 1;
+        stratum.1.insert(memory.digest.clone());
+    }
+    strata
+        .into_iter()
+        .map(|(week, (tasks, digests))| MemoryRevisionStratum {
+            week,
+            tasks,
+            digests: digests.into_iter().collect(),
+        })
+        .collect()
 }
 
 /// An arm's tasks by the week of the crew memory revision they first

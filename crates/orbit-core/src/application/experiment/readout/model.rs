@@ -129,6 +129,41 @@ pub struct ReadoutArm {
     /// added to its tasks' `cost_usd`; absent for every other arm.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dreaming_overhead: Option<DreamingOverhead>,
+    /// Analysed task ids enrolled in this arm, in assignment order by id.
+    pub task_ids: Vec<String>,
+    /// Shadow-mode memory captures per task: what the owner captured for
+    /// the task, not what any dispatch delivered. Empty in live mode,
+    /// where `memory_strata` reports deliveries instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_captures: Vec<MemoryTaskCapture>,
+    /// A shadow memory arm's captured tasks by revision week, with the
+    /// distinct captured digests in each week. Captured, not delivered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_capture_strata: Vec<MemoryRevisionStratum>,
+}
+
+/// One memory-arm task's captured crew memory in a shadow experiment:
+/// the delivery the owner resolved and recorded in the run's
+/// `experiment_capture` (or the admission receipt), labelled captured
+/// because a shadow assignment applies no overlay and delivers nothing.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTaskCapture {
+    pub task_id: String,
+    /// The captured delivery's content digest.
+    pub digest: String,
+    /// The memory key (model) the capture was rendered for.
+    pub model: String,
+    /// Model revision the block was rendered from; `None` when that
+    /// space had no revision yet.
+    pub model_revision: Option<u32>,
+    /// Global revision the block was rendered from; `None` when no
+    /// global revision was included.
+    pub global_revision: Option<u32>,
+    /// Crew memory renderer version covered by the digest.
+    pub renderer_version: u32,
+    /// ISO week of the captured revision, or `None` for an empty block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub week: Option<String>,
 }
 
 /// The crew memory dreaming cost a memory arm carries: every dreaming task
@@ -563,6 +598,9 @@ pub(super) struct TaskOutcome {
     pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
     /// The crew memory the task's first memory-bearing dispatch received.
     pub(super) memory: Option<TaskMemoryDelivery>,
+    /// The crew memory captured for this task (shadow arms), from its
+    /// run's `experiment_capture` or admission receipt; never a delivery.
+    pub(super) captured_memory: Option<TaskMemoryDelivery>,
     /// Present only for settled tasks with complete invocation cost coverage.
     pub(super) cost_source: Option<CostSource>,
     /// Reviewable lines recorded for this task. Per-line metrics read this
@@ -571,12 +609,16 @@ pub(super) struct TaskOutcome {
     pub(super) values: BTreeMap<&'static str, Outcome>,
 }
 
-/// The crew memory one task's first memory-bearing dispatch received.
+/// The crew memory one task received (delivered) or had captured for it.
 #[derive(Clone)]
 pub(super) struct TaskMemoryDelivery {
-    /// ISO week of the delivered revision, or `None` for an empty block.
+    /// ISO week of the revision, or `None` for an empty block.
     pub(super) week: Option<String>,
     pub(super) digest: String,
+    pub(super) model: String,
+    pub(super) model_revision: Option<u32>,
+    pub(super) global_revision: Option<u32>,
+    pub(super) renderer_version: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct ClaimTreatment {
     pub(super) at: DateTime<Utc>,
     delivered: Option<bool>,
+    pub(super) captured_memory: Option<super::model::TaskMemoryDelivery>,
 }
 
 impl OrbitRuntime {
@@ -58,6 +59,22 @@ impl OrbitRuntime {
                     .iter()
                     .find(|entry| entry.experiment == experiment)
             });
+            let captured_memory = entry
+                .and_then(|entry| entry.memory.as_ref())
+                .filter(|memory| memory.enabled)
+                .and_then(|memory| memory.deliveries.first())
+                .map(|delivery| super::model::TaskMemoryDelivery {
+                    week: delivery
+                        .revised_at
+                        .as_deref()
+                        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                        .map(|at| at.format("%G-W%V").to_string()),
+                    digest: delivery.digest.clone(),
+                    model: delivery.model.clone(),
+                    model_revision: delivery.block.revision.model,
+                    global_revision: delivery.block.revision.global,
+                    renderer_version: delivery.renderer_version,
+                });
             let delivered = match entry {
                 Some(entry) if !entry.live => Some(false),
                 Some(entry) => {
@@ -80,7 +97,14 @@ impl OrbitRuntime {
                 }
                 None => None,
             };
-            latest.insert(task, ClaimTreatment { at, delivered });
+            latest.insert(
+                task,
+                ClaimTreatment {
+                    at,
+                    delivered,
+                    captured_memory,
+                },
+            );
         }
         Ok(latest)
     }
