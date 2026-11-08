@@ -35,6 +35,7 @@ struct Fixture {
 }
 
 fn fixture(requests: &str, grant: ScriptGrantOptions) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("script_env_pass::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
@@ -180,6 +181,7 @@ fn granted_variables_alone_reach_the_script_and_their_values_are_redacted() {
         ])
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
+        .env("ORBIT_TEST_TASK_FIXTURE_CHILD", child)
         .current_dir(home.path())
         .env(PASSED, SECRET)
         .env(UNGRANTED, UNGRANTED_VALUE)

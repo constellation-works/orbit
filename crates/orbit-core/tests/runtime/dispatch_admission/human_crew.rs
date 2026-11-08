@@ -5,6 +5,11 @@ use super::*;
 /// crew, and readiness reports that reason rather than `crew_not_allowed`.
 #[test]
 fn a_human_crew_task_is_never_admitted_even_when_the_allowlist_names_it() {
+    if !isolated(
+        "dispatch_admission::human_crew::a_human_crew_task_is_never_admitted_even_when_the_allowlist_names_it",
+    ) {
+        return;
+    }
     let config = r#"
 [workflow]
 default_crew = "sol"

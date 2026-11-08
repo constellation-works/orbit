@@ -18,6 +18,11 @@ use orbit_types::workflow::activity_job::{
     ActivityV2Spec, AgentLoopSpec, OnDenial, Provider, V2AuditEventKind,
 };
 
+fn open_runtime(global: &Path, workspace: &Path) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("sandbox_off::open_runtime");
+    OrbitRuntime::from_roots(global, workspace).expect("runtime open")
+}
+
 fn seed_global(global: &Path) {
     init_workspace_at_root(
         global,
@@ -65,7 +70,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
 
     for _ in 0..2 {
         seed_global(&global);
-        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("fresh runtime open");
+        let runtime = open_runtime(&global, &workspace);
         assert_eq!(
             runtime
                 .get_executor_def("codex")
@@ -83,7 +88,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
         );
     }
 
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("dispatch runtime");
+    let runtime = open_runtime(&global, &workspace);
     let resolved = runtime
         .resolve_executor_sandbox("codex", Some("implementer"), None)
         .expect("resolve off")

@@ -252,6 +252,7 @@ fn build(
     mode: &str,
     extra: &str,
 ) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::gap_fit::build");
     // A horizon in `extra` replaces the fixtures' 10 minutes.
     let horizon = if extra.contains("horizon_cap_minutes") {
         ""

@@ -68,6 +68,7 @@ fn registered_fixture() -> Fixture {
 }
 
 fn fixture_with_config(config: &str) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("decision_channel::fixture");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");

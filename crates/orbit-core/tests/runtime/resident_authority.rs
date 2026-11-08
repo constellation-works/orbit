@@ -20,6 +20,7 @@ const CONFIG: &str =
 const QUOTE: &str = "you may dispatch in this workspace, not merge";
 
 fn runtime_at(root: &Path) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("resident_authority::runtime_at");
     let global = root.join("home/.orbit");
     let orbit = root.join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();

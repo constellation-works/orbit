@@ -36,6 +36,7 @@ pub(super) fn fixture_with_config(config: &str) -> Fixture {
 /// A fixture rooted under `parent`, so a test can nest the non-Git workspace
 /// inside a checkout it builds.
 fn fixture_in(parent: &Path, config: &str) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("recovery_fixture::fixture");
     let root = TempDir::new_in(parent).unwrap();
     // Git walks past a plain directory when looking for a repository, so a
     // fixture rooted under a checkout (a managed run's nested TMPDIR) would
