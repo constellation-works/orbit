@@ -395,8 +395,12 @@ fn named_failure(
 }
 
 fn dependency_record_log(dep: &str) -> String {
+    dependency_record_log_for(dep, 911)
+}
+
+fn dependency_record_log_for(dep: &str, job_id: u64) -> String {
     format!(
-        "orbit-dependency-evidence:{{\"dependencies\":[{{\"conclusion\":\"failure\",\"job_id\":911,\"job_name\":\"{dep}\",\"status\":\"completed\"}}],\"execution_contract\":\"isolated-source-v1\",\"kind\":\"dependency_failed\",\"schema_version\":1}}\nci-await: {dep} concluded failure: https://example.invalid/job\n##[error]Process completed with exit code 1."
+        "orbit-dependency-evidence:{{\"dependencies\":[{{\"conclusion\":\"failure\",\"job_id\":{job_id},\"job_name\":\"{dep}\",\"status\":\"completed\"}}],\"execution_contract\":\"isolated-source-v1\",\"kind\":\"dependency_failed\",\"schema_version\":1}}\nci-await: {dep} concluded failure: https://example.invalid/job\n##[error]Process completed with exit code 1."
     )
 }
 
@@ -542,6 +546,66 @@ fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
         let output = file(&runtime, vec![aggregate]);
         assert_eq!(output["filed_count"], json!(1), "{log}: {output}");
         assert_eq!(output["folded_count"], json!(0), "{log}: {output}");
+    }
+}
+
+const CHAIN_OUTER_JOB: &str = "Check / Clippy / Test / Await the outer aggregate";
+const CHAIN_MIDDLE_JOB: &str = "Check / Clippy / Test / Await the middle aggregate";
+const CHAIN_LEAF_JOB: &str = "Test partition 2";
+
+#[test]
+fn ci_dependency_only_chain_reports_the_covering_task() {
+    if !isolated("ci_dependency_only_chain_reports_the_covering_task") {
+        return;
+    }
+    // outer -> middle -> leaf: only the leaf files. The middle aggregate
+    // folds into it directly and the outer one folds through the middle, so
+    // both must name the leaf's task as their cover and the leaf's task must
+    // carry both as context.
+    let (_root, runtime, commits) = operator_fixture("");
+    let outer = named_failure(
+        &dependency_record_log_for(CHAIN_MIDDLE_JOB, 911),
+        0,
+        &commits[0],
+        4242,
+        CHAIN_OUTER_JOB,
+        "Await the outer aggregate",
+    );
+    let middle = named_failure(
+        &dependency_record_log_for(CHAIN_LEAF_JOB, 912),
+        1,
+        &commits[0],
+        4242,
+        CHAIN_MIDDLE_JOB,
+        "Await the middle aggregate",
+    );
+    let leaf = named_failure(
+        "error: leaf test exploded",
+        2,
+        &commits[0],
+        4242,
+        CHAIN_LEAF_JOB,
+        "Test",
+    );
+    let output = file(&runtime, vec![outer, middle, leaf]);
+    assert_eq!(output["filed_count"], json!(1), "{output}");
+    assert_eq!(output["filed"][0]["job"], json!(CHAIN_LEAF_JOB), "{output}");
+    assert_eq!(output["folded_count"], json!(2), "{output}");
+    let task_id = output["filed"][0]["task_id"].as_str().unwrap().to_string();
+    let task = runtime.get_task(&task_id).unwrap();
+    for job in [CHAIN_OUTER_JOB, CHAIN_MIDDLE_JOB] {
+        let folded = output["folded"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["job"].as_str() == Some(job))
+            .unwrap_or_else(|| panic!("{job} is reported as folded: {output}"));
+        assert_eq!(folded["covered_by_task_id"], json!(task_id), "{output}");
+        assert!(
+            task.description.contains(job),
+            "leaf task carries the folded aggregate {job} as context: {}",
+            task.description
+        );
     }
 }
 

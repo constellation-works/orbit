@@ -389,3 +389,55 @@ pub(super) fn folded_cluster_indices(
         }
     }
 }
+
+/// The non-folded clusters a folded cluster's dependency chain ends in,
+/// following edges through other folded clusters. For A -> B -> C with B
+/// and A folded, this is `[C]`: A's record names only B, but B folds into C,
+/// so C's task is the one that covers A. Empty for a cluster that is not
+/// folded.
+pub(super) fn fold_owner_indices(
+    siblings: &BTreeMap<(String, String), usize>,
+    refs_by_cluster: &[Option<Vec<DependencyRef>>],
+    folded: &BTreeSet<usize>,
+    position: usize,
+) -> Vec<usize> {
+    let mut owners = Vec::new();
+    let mut visited = BTreeSet::from([position]);
+    for reference in refs_by_cluster[position].iter().flatten() {
+        if let Some(target) = sibling_cluster_for(siblings, reference) {
+            collect_fold_owners(
+                siblings,
+                refs_by_cluster,
+                folded,
+                target,
+                &mut visited,
+                &mut owners,
+            );
+        }
+    }
+    owners
+}
+
+fn collect_fold_owners(
+    siblings: &BTreeMap<(String, String), usize>,
+    refs_by_cluster: &[Option<Vec<DependencyRef>>],
+    folded: &BTreeSet<usize>,
+    target: usize,
+    visited: &mut BTreeSet<usize>,
+    owners: &mut Vec<usize>,
+) {
+    if !folded.contains(&target) {
+        if !owners.contains(&target) {
+            owners.push(target);
+        }
+        return;
+    }
+    if !visited.insert(target) {
+        return;
+    }
+    for reference in refs_by_cluster[target].iter().flatten() {
+        if let Some(next) = sibling_cluster_for(siblings, reference) {
+            collect_fold_owners(siblings, refs_by_cluster, folded, next, visited, owners);
+        }
+    }
+}
