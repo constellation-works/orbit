@@ -21,16 +21,36 @@ use super::tagged_no_diff;
 /// covering delivery. A stale artifact of one kind never shadows valid
 /// evidence of the other, including a definite inline-size refusal. Unknown
 /// artifact-read outcomes still refuse; when both routes fail, both refusals
-/// are reported.
+/// are reported. Without either report, admitted implementation selectors may
+/// settle an owner or claimed task as already resolved at this pinned base.
 pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
     workspace_path: &Path,
     run_id: &str,
     base_sha: &str,
+    input: &Value,
 ) -> Result<Value, OrbitError> {
     let no_diff_error = match host.get_task_artifact(&task.id, no_diff::ARTIFACT) {
         Ok(None) => {
+            // Only definitely absent reports permit implementation evidence.
+            // An invalid report remains authoritative and an unknown read
+            // refuses without retrying it through the fallback.
+            match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
+                Ok(None) => {
+                    if let Some(output) =
+                        super::summary::commit_implementation_input(host, run_id, input)?
+                        && let Some(evidence) =
+                            already_resolved::evidence_from_implementation(&output)?
+                    {
+                        return Ok(already_resolved::checkpoint(
+                            &task.id, run_id, base_sha, evidence,
+                        ));
+                    }
+                }
+                Ok(Some(_)) | Err(OrbitError::InvalidInput(_)) => {}
+                Err(error) => return Err(error),
+            }
             return AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha);
         }
         Ok(Some(_)) => match NoDiff::verify(host, task, workspace_path, run_id, base_sha) {
