@@ -174,7 +174,9 @@ spec:
       # Claimed mode: the unchanged base already resolves the task, shown by
       # tests that run only outside the agent sandbox. The implement step
       # admits each selector; `claim_validate` replays them on the base on
-      # the claim host before the NoDiff handoff.
+      # the claim host before the NoDiff handoff. Owner runs instead attach
+      # no-diff.json or already-landed.json and their validation logs directly
+      # with orbit.task.artifact.put; selectors are refused on that route.
       already_resolved:
         type: [object, "null"]
         required: [selectors]

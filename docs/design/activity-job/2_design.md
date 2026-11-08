@@ -1108,9 +1108,12 @@ or tagged `no-diff-expected`, or it returns admitted `already_resolved` selector
 them as `verified_already_resolved` when neither clean-tree report artifact exists,
 and `claim_validate` replays them. A summary alone does not satisfy it. Missing references fail that step with
 `response_envelope_error`, before `git_commit` can run. Owner invocations attach
-their evidence directly to durable task state, and edited or already-committed
-candidates do not need these response fields. The check only requires the
-references; the deterministic commit verifier still imports and validates their
+their `no-diff.json` or `already-landed.json` and validation logs directly to
+durable task state. Both the implement and commit steps refuse owner
+`already_resolved` selectors: only claimed pipelines have the claim-host replay
+that can verify them. Artifact-backed owner no-ops still finish without a commit
+or PR. Edited or already-committed candidates do not need these response fields.
+The check only requires the references; the deterministic commit verifier still imports and validates their
 contents before delivery.
 
 **Failure semantics.** A missing or malformed frame, or a completed frame that

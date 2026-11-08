@@ -1593,10 +1593,10 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
     );
 }
 
-/// An owner or claimed task whose implementer found the base already resolves
-/// the task settles its empty commit stage using the evidence in step input
-/// [ORB-23169, ORB-22407]. Missing selectors still refuse the empty stage.
-fn owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence() {
+/// A claimed task's selectors settle its empty commit stage for host replay
+/// [ORB-22407]. Owner selectors refuse even when supplied directly or recovered
+/// from the implement checkpoint [ORB-23194]; missing evidence still refuses.
+fn owner_empty_candidates_require_reports_and_claimed_selectors_settle() {
     let temp = tempdir().expect("create tempdir");
     let repo = temp.path();
     init_git_repo(repo);
@@ -1637,31 +1637,36 @@ fn owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence() {
                 "selectors": ["cargo test -p orbit-engine --test engine commit_verifier::"]
             },
         });
-        let result = action(&host, &input).unwrap_or_else(|error| {
-            panic!("{pipeline_asset} empty candidate must settle, got: {error}")
-        });
-        assert_eq!(result["decision"], "verified_already_resolved", "{result}");
-        assert_eq!(result["committed"], false, "{result}");
-        assert_eq!(result["skipped_no_diff_expected"], true, "{result}");
-        assert_eq!(result["task_id"], TASK_ID, "{result}");
-        assert_eq!(result["base_sha"], head, "{result}");
-        assert_eq!(
-            result["already_resolved_evidence"]["selectors"],
-            json!(["cargo test -p orbit-engine --test engine commit_verifier::"]),
-            "{result}"
-        );
-        assert!(
-            result["already_resolved_evidence"]["execution_summary"]
-                .as_str()
-                .is_some_and(|summary| summary.contains("already fixed")),
-            "{result}"
-        );
-        assert_eq!(git_head(repo), head);
-        assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
-
-        if !claimed {
-            // Owner pipelines checkpoint the implementation instead of passing
-            // it as step input, and may skip that step when resuming.
+        if claimed {
+            let result = action(&host, &input).unwrap_or_else(|error| {
+                panic!("{pipeline_asset} empty candidate must settle, got: {error}")
+            });
+            assert_eq!(result["decision"], "verified_already_resolved", "{result}");
+            assert_eq!(result["committed"], false, "{result}");
+            assert_eq!(result["skipped_no_diff_expected"], true, "{result}");
+            assert_eq!(result["task_id"], TASK_ID, "{result}");
+            assert_eq!(result["base_sha"], head, "{result}");
+            assert_eq!(
+                result["already_resolved_evidence"]["selectors"],
+                json!(["cargo test -p orbit-engine --test engine commit_verifier::"]),
+                "{result}"
+            );
+            assert!(
+                result["already_resolved_evidence"]["execution_summary"]
+                    .as_str()
+                    .is_some_and(|summary| summary.contains("already fixed")),
+                "{result}"
+            );
+            assert_eq!(git_head(repo), head);
+            assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
+        } else {
+            let error = action(&host, &input).expect_err("owner selectors must refuse");
+            assert!(
+                error.to_string().contains("available only to claimed runs"),
+                "{error}"
+            );
+            // Owner pipelines checkpoint the implementer instead of passing
+            // its output directly; that path must enforce the same contract.
             let mut state = orbit_types::workflow::PipelineState::new(
                 RUN_ID.into(),
                 "task_pr_pipeline".into(),
@@ -1674,10 +1679,9 @@ fn owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence() {
                 .as_object_mut()
                 .unwrap()
                 .remove("implementation");
-            assert_eq!(
-                action(&host, &checkpoint_input).expect("owner checkpoint evidence must settle"),
-                result
-            );
+            let checkpoint_error = action(&host, &checkpoint_input)
+                .expect_err("checkpointed owner selectors must refuse");
+            assert_eq!(checkpoint_error.to_string(), error.to_string());
             *host.state.lock().unwrap() = None;
         }
 
@@ -1905,8 +1909,8 @@ fn commit_evidence_contracts_3() {
                 clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
             ),
             (
-                "owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence",
-                owner_and_claimed_empty_candidates_settle_only_with_implementer_evidence,
+                "owner_empty_candidates_require_reports_and_claimed_selectors_settle",
+                owner_empty_candidates_require_reports_and_claimed_selectors_settle,
             ),
         ]);
     });

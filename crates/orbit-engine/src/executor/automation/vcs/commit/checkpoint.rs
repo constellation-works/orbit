@@ -22,7 +22,8 @@ use super::tagged_no_diff;
 /// evidence of the other, including a definite inline-size refusal. Unknown
 /// artifact-read outcomes still refuse; when both routes fail, both refusals
 /// are reported. Without either report, admitted implementation selectors may
-/// settle an owner or claimed task as already resolved at this pinned base.
+/// settle a claimed task as already resolved at this pinned base; its host
+/// replays the selectors before handoff. Owner runs require a report.
 pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
@@ -40,6 +41,10 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
                 Ok(None) => {
                     if let Some(output) =
                         super::summary::commit_implementation_input(host, run_id, input)?
+                        && super::implementer::admit_implementer_already_resolved(
+                            &output["implementation"],
+                            host.worker_invocation().is_some(),
+                        )?
                         && let Some(evidence) =
                             already_resolved::evidence_from_implementation(&output)?
                     {
