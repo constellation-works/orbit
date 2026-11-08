@@ -14,6 +14,12 @@ template:
 
     ## Select a batch
 
+    The executing worker selects this batch at run time. The steps below are
+    the worker's, not preparation's. The lock footprint stays the minted
+    template selectors (`dir:docs`, `file:README.md` and `file:CONTRIBUTING.md`).
+    Preparation keeps that footprint: it does not replace those selectors with
+    this batch, and it does not name a document this section excludes.
+
     1. List tracked Markdown files under `docs/` and tracked top-level
        `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
        dependencies, generated trees and indexes, archives, and files the
@@ -124,9 +130,10 @@ template:
   - orbit.task.artifact.put
   - orbit.task.list
   - orbit.task.show
-  # A batch edits only docs/ and the tracked top-level README/CONTRIBUTING
-  # documents its brief validates, so the minted task locks just that scope
-  # instead of the whole tree (a dir:. lock starves on a busy drain).
+  # The executing worker selects the batch at run time inside this bound.
+  # Preparation keeps these selectors. It does not replace them with the
+  # batch or with a document the brief excludes. A dir:. lock starves on a
+  # busy drain, so the minted task locks just this scope.
   context_files:
   - 'dir:docs'
   - 'file:README.md'

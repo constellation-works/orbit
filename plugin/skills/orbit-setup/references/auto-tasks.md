@@ -522,7 +522,10 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   evidence. Its template declares `dir:docs` plus the tracked top-level
   `README.md` and `CONTRIBUTING.md` that its brief validates, so it doesn't
   lock the whole tree, and omits `no-diff-expected` so it holds a lock on
-  that scope while correcting drift.
+  that scope while correcting drift. The executing worker selects the batch
+  at run time. Task-pilot preparation keeps those template selectors: it
+  does not replace them with the selected batch or with a document the
+  brief excludes.
 - **`comment-hygiene`** (`low`) — daily. The code-comment counterpart of
   `doc-duties`: checks at most six tracked source files and about 1,500 lines
   against a generic comment standard stated in its body (comments say why,

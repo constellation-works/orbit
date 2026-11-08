@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-05
-last_validated: 2026-10-29
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Implemented
 stage: shipped
 next: "—"
@@ -251,7 +251,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
   solely for this task. Its template locks `dir:docs` plus the tracked
   top-level `README.md` and `CONTRIBUTING.md` documents its brief validates
   (never the whole tree, which starves on a busy drain) and does not carry
-  `no-diff-expected`, since verified drift corrections produce diffs. Clean
+  `no-diff-expected`, since verified drift corrections produce diffs. The
+  executing worker selects the batch at run time. The task pilot keeps that
+  template footprint: it does not narrow the lock to a guessed batch or to
+  a document the brief excludes (generated indexes, archives, and records
+  the repository identifies as historical, including its link-check or
+  doc-index exclusion list). Clean
   batches use validated no-diff evidence.
 - `comment-hygiene` — disabled-by-default daily check of code comments, the
   counterpart of `doc-duties` for source files. At most six files and about
