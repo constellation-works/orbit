@@ -581,16 +581,7 @@ fn dependency_waiter_folded_into_infrastructure_shard_files_no_sweep_task() {
         1,
     );
     let checkout = commits[0].clone();
-    let crafted = |job_id: u64, log: &str| {
-        let mut failure = super::failure(log, 0, &checkout);
-        failure["run_id"] = json!(8_200);
-        failure["job_id"] = json!(job_id);
-        failure["log_job_id"] = json!(job_id);
-        failure["checkout_identity"]["provenance"]["job_id"] = json!(job_id);
-        failure["failed_jobs"][0]["job_id"] = json!(job_id);
-        failure["url"] = json!("https://github.com/acme/orbit/actions/runs/8200");
-        failure
-    };
+    let crafted = |job_id: u64, log: &str| crafted_job_run(&checkout, job_id, log);
     let shard = crafted(
         9_300,
         "ci-download: outcome=failed class=transient attempts=9 total_seconds=57.1 budget_seconds=60.0\n",
@@ -626,6 +617,165 @@ fn dependency_waiter_folded_into_infrastructure_shard_files_no_sweep_task() {
         "{filed:#}"
     );
     assert!(open_sweep_tasks(&runtime).is_empty());
+}
+
+/// A failed run of `CI` at `checkout` whose failed job is `job_id`, with `log`
+/// as its stored diagnostic text.
+fn crafted_job_run(checkout: &str, job_id: u64, log: &str) -> Value {
+    let mut failure = super::failure(log, 0, checkout);
+    failure["run_id"] = json!(8_200);
+    failure["job_id"] = json!(job_id);
+    failure["log_job_id"] = json!(job_id);
+    failure["checkout_identity"]["provenance"]["job_id"] = json!(job_id);
+    failure["failed_jobs"][0]["job_id"] = json!(job_id);
+    failure["url"] = json!("https://github.com/acme/orbit/actions/runs/8200");
+    failure
+}
+
+/// The declared download shard (job 9300) and the dependency waiter (job 9301)
+/// that awaits it, as the two failures of run 8200. `waiter_unit` is the
+/// waiter's complete diagnostic when the collector stored one.
+fn shard_and_waiter_runs(
+    checkout: &str,
+    waiter_log: &str,
+    waiter_unit: Option<Value>,
+) -> Vec<Value> {
+    let shard = crafted_job_run(
+        checkout,
+        9_300,
+        "ci-download: outcome=failed class=transient attempts=9 total_seconds=57.1 budget_seconds=60.0\n",
+    );
+    let mut waiter = crafted_job_run(checkout, 9_301, waiter_log);
+    if let Some(unit) = waiter_unit {
+        waiter["diagnostic_unit"] = unit;
+    }
+    vec![shard, waiter]
+}
+
+/// The `dependency_failed` record the waiter prints for the shard it awaited.
+fn shard_dependency_record() -> String {
+    format!(
+        "orbit-dependency-evidence:{}",
+        json!({
+            "schema_version": 1, "kind": "dependency_failed", "run_id": 8_200,
+            "dependencies": [{"job_id": 9_300, "job_name": "Test shard 1/3", "status": "completed", "conclusion": "failure", "step": null}],
+        })
+    )
+}
+
+const DECLARED_DOWNLOAD_CONFIG: &str = "[workflow]\nci_infrastructure_signatures = \
+     [\"ci-download: outcome=failed class=transient\"]\n";
+
+/// The shard folds into infrastructure; the waiter keeps its own filed task.
+fn assert_waiter_filed_beside_infrastructure_shard(runtime: &OrbitRuntime, filed: &Value) {
+    assert_eq!(filed["filed_count"], json!(1), "{filed:#}");
+    assert_eq!(filed["folded_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["audit"]["infrastructure"], json!(1), "{filed:#}");
+    assert_eq!(
+        filed["infrastructure"][0]["job_id"],
+        json!(9_300),
+        "{filed:#}"
+    );
+    assert_eq!(open_sweep_tasks(runtime).len(), 1, "{filed:#}");
+}
+
+#[test]
+fn dependency_waiter_echoing_its_runner_command_folds_into_infrastructure() {
+    if !super::isolated(
+        "sweep::dependency_waiter_echoing_its_runner_command_folds_into_infrastructure",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits(DECLARED_DOWNLOAD_CONFIG, 1);
+    let record = shard_dependency_record();
+    // The collector's complete runner command: the echoed command with its
+    // `shell:` and `env:` parameters, the waiter's output, then the trailer.
+    let command = [
+        "##[group]Run python3 scripts/ci-await-jobs.py --run-id 8200 --jobs 'Test shard 1/3' 'Test shard 2/3'",
+        "python3 scripts/ci-await-jobs.py --run-id 8200 --jobs 'Test shard 1/3' 'Test shard 2/3'",
+        "shell: /bin/bash -e {0}",
+        "env:",
+        "  GITHUB_REPOSITORY: acme/orbit",
+        "##[endgroup]",
+        "ci-await: Test shard 2/3 succeeded started=2026-11-08T14:00:00Z completed=2026-11-08T14:05:00Z elapsed_s=300",
+        record.as_str(),
+        "ci-await: Test shard 1/3 concluded failure: https://github.com/acme/orbit/actions/runs/8200/job/9300",
+        "ci-await-api: listings=3 not_modified=1 paginated=false",
+        "##[error]Process completed with exit code 1.",
+    ]
+    .join("\n");
+    let waiter_unit = json!({
+        "kind": "runner_command", "complete": true, "job_id": 9_301,
+        "step": "Run CI", "text": command,
+    });
+    let filed = super::file(
+        &runtime,
+        shard_and_waiter_runs(&commits[0], &command, Some(waiter_unit)),
+    );
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["audit"]["infrastructure"], json!(2), "{filed:#}");
+    let waiter_entry = filed["infrastructure"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["job_id"] == json!(9_301))
+        .expect("the waiter is reported as folded infrastructure");
+    assert_eq!(
+        waiter_entry["signature"],
+        json!("ci-download: outcome=failed class=transient"),
+        "{filed:#}"
+    );
+    assert_eq!(
+        waiter_entry["dependency_job_ids"],
+        json!([9_300]),
+        "{filed:#}"
+    );
+    assert!(open_sweep_tasks(&runtime).is_empty());
+}
+
+#[test]
+fn dependency_waiter_with_a_specific_error_annotation_keeps_its_own_filing() {
+    if !super::isolated(
+        "sweep::dependency_waiter_with_a_specific_error_annotation_keeps_its_own_filing",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits(DECLARED_DOWNLOAD_CONFIG, 1);
+    let record = shard_dependency_record();
+    let waiter_log = [
+        record.as_str(),
+        "ci-await-api: listings=1 not_modified=0 paginated=false",
+        "##[error]Test shard 1/3 uploaded a digest that does not match its rerun",
+        "##[error]Process completed with exit code 1.",
+    ]
+    .join("\n");
+    let filed = super::file(
+        &runtime,
+        shard_and_waiter_runs(&commits[0], &waiter_log, None),
+    );
+    assert_waiter_filed_beside_infrastructure_shard(&runtime, &filed);
+}
+
+#[test]
+fn dependency_waiter_with_a_ci_await_timeout_keeps_its_own_filing() {
+    if !super::isolated("sweep::dependency_waiter_with_a_ci_await_timeout_keeps_its_own_filing") {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits(DECLARED_DOWNLOAD_CONFIG, 1);
+    let record = shard_dependency_record();
+    let waiter_log = [
+        record.as_str(),
+        "ci-await: timed out after 2400 s waiting for Test shard 1/3 (job listing still running at the deadline, killed)",
+        "ci-await-api: listings=9 not_modified=0 paginated=true",
+        "##[error]Process completed with exit code 1.",
+    ]
+    .join("\n");
+    let filed = super::file(
+        &runtime,
+        shard_and_waiter_runs(&commits[0], &waiter_log, None),
+    );
+    assert_waiter_filed_beside_infrastructure_shard(&runtime, &filed);
 }
 
 #[test]
