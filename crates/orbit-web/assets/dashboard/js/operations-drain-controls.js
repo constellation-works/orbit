@@ -133,14 +133,16 @@ function autoDrainDurationControl(payload, form) {
     minus.disabled = valid && hours <= AUTO_DRAIN_DURATION_MIN_HOURS;
     plus.disabled = valid && hours >= AUTO_DRAIN_DURATION_MAX_HOURS;
     if (form.start && !pendingOperations.has("auto-drain:start")) {
-      form.start.textContent = `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainHostForm().duration} window`;
+      const label = valid ? `${hours}h` : autoDrainHostForm().duration;
+      form.start.textContent = `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${label} window`;
     }
     if (form.start) form.start.disabled = autoDrainStartBlocked(payload);
   };
+  // Store the raw text so a readiness repaint between keystrokes restores
+  // what was typed ("1" on the way to "15"), not a normalized "<n>h" form.
+  // Normalization happens on change, stepper clicks and Start.
   input.addEventListener("input", () => {
     autoDrainHostForm().duration = input.value.trim();
-    const hours = autoDrainDurationHours();
-    if (hours !== null) autoDrainHostForm().duration = `${hours}h`;
     form.syncDuration();
   });
   // Leaving the field rewrites a bare but valid number to its "<n>h" form.
@@ -366,9 +368,11 @@ function autoDrainStartButton(payload, form) {
   const key = "auto-drain:start";
   const reasons = autoDrainReasons(payload);
   const pending = pendingOperations.has(key);
+  const startHours = autoDrainDurationHours();
+  const startLabel = startHours !== null ? `${startHours}h` : autoDrainHostForm().duration;
   const button = el("button", {
     class: "operation-button drain-start primary",
-    text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainHostForm().duration} window`,
+    text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${startLabel} window`,
     title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow.auto with this duration and concurrency",
   });
   button.type = "button";
@@ -383,7 +387,10 @@ function autoDrainStartButton(payload, form) {
     const workspace = selectedWorkspace();
     const checkout = drainCheckout(payload, workspace?.id);
     const counts = autoDrainCounts(payload);
-    const duration = autoDrainHostForm().duration;
+    // A bare valid number ("15" without blur) still submits "<n>h".
+    const durationHours = autoDrainDurationHours();
+    const duration = durationHours !== null ? `${durationHours}h` : autoDrainHostForm().duration;
+    if (durationHours !== null) autoDrainHostForm().duration = duration;
     const completeLine = checkout.replica
       ? "The owner decides completion and review for work this replica claims."
       : autoDrainHostForm().complete
