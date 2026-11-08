@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-11-05
-last_validated: 2026-11-05
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -128,7 +128,7 @@ One tool is a named exception to "a workspace-scoped call needs a host-qualified
 - Every merged item names its host, and the mux attaches the `selector` the destination lists for its workspace. Ordering, the delta cursor and the public limit are applied once, by the mux, after the merge.
 - Every failure is visible. A destination that does not answer, answers late, answers under another `machine_id` than its pin, or lacks the tool becomes a `host_unhealthy` item and a `degraded` entry carrying its routing identity (`unreachable_destination` or `tool_not_on_this_host`); a body whose counts show a truncated page is `degraded` `response_truncated`.
 
-This is a read, not a merge of state: nothing is written, nothing is cached between calls, no destination answers for another, and no item is presented without its host. A host-qualified selector still routes the call to that one destination as above. The exception covers exactly this tool; adding another is a change to this section. The contract is [operator-attention attention-federation](../operator-attention/specs/attention-federation.md).
+This is a read, not a merge of state: nothing is written, nothing is cached between calls, no destination answers for another, and no item is presented without its host. On this tool, `host`, `all`, and `workspace` — including a host-qualified selector — are fleet scope: the mux fans out to the destinations `host` keeps, and an owner of a named workspace who was not one of them is `degraded` (`source_unavailable`) rather than an empty undegraded page. A session bound to one host-qualified workspace, with none of those arguments, still routes to that one destination. The exception covers exactly this tool; adding another is a change to this section. The contract is [operator-attention attention-federation](../operator-attention/specs/attention-federation.md).
 
 ### Delivery budget and post-dispatch ambiguity
 

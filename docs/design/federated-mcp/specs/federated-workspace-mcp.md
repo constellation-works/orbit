@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_updated: 2026-11-02
-last_validated: 2026-11-05
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -117,7 +117,7 @@ Federated `orbit_workspace_list` is an aggregate of live descriptors, not an agg
 4. turns each destination it cannot read into a `host_unhealthy` item (severity `critical` when it owns an in-scope workspace, else `high`) plus a `degraded` entry whose code is its routing identity: `unreachable_destination` for no answer, an answer past the deadline or a `machine_id` that differs from the pin, `tool_not_on_this_host` for a binary without the tool;
 5. merges the remaining items, attributes each to its host, attaches the `selector` the destination lists, and applies ordering, the delta cursor and the public limit once.
 
-A host-qualified selector routes the call to that destination like any workspace-scoped call. The read writes nothing, caches nothing, and never substitutes one host's answer for another's, so it is consistent with the non-goals below. The full contract is [operator-attention attention-federation](../../operator-attention/specs/attention-federation.md).
+On this tool, `host`, `all`, and `workspace` — including a host-qualified selector — are fleet scope, narrowed by `host`. An owner of a named workspace who was not a destination is `degraded` (`source_unavailable`), not an empty undegraded page. A session bound to one host-qualified workspace, with none of those arguments, still routes to that one destination. The read writes nothing, caches nothing, and never substitutes one host's answer for another's, so it is consistent with the non-goals below. The full contract is [operator-attention attention-federation](../../operator-attention/specs/attention-federation.md).
 
 ## Single control-plane per repository is operator configuration
 

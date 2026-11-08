@@ -104,15 +104,16 @@ pub fn attention_public_page(
     }
     let cursor_truncated = next_seen.len() > CURSOR_SEEN_CAP;
     next_seen.truncate(CURSOR_SEEN_CAP);
+    let read_scope = empty_read_scope(&filters, &hosts);
     let message = if returned.is_empty() && !degraded.is_empty() {
         format!(
-            "No items found; {} sources could not be read",
+            "No items found; {} sources could not be read; {read_scope}",
             degraded.len()
         )
     } else if returned.is_empty() && status == AttentionCursorStatus::Accepted {
-        format!("No new or changed items ({unchanged} unchanged)")
+        format!("No new or changed items ({unchanged} unchanged); {read_scope}")
     } else if returned.is_empty() {
-        format!("Nothing needs attention; filters: {filters}")
+        format!("Nothing needs attention; {read_scope}")
     } else {
         format!("{} items need attention", returned.len())
     };
@@ -144,5 +145,47 @@ pub fn attention_public_page(
         hosts,
         degraded,
         message,
+    }
+}
+
+/// Hosts and workspaces this page actually read, for an empty result.
+///
+/// Unreachable hosts are omitted: they were not read. A workspace label is its
+/// name, else its id.
+fn empty_read_scope(filters: &Value, hosts: &[AttentionHostStatus]) -> String {
+    let mut host_names = Vec::new();
+    for host in hosts {
+        if host.reachability == "reachable"
+            && !host.name.is_empty()
+            && !host_names.iter().any(|name| name == &host.name)
+        {
+            host_names.push(host.name.clone());
+        }
+    }
+    let mut workspace_names = Vec::new();
+    if let Some(listed) = filters.get("workspace").and_then(Value::as_array) {
+        for workspace in listed {
+            let label = workspace
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .or_else(|| workspace.get("id").and_then(Value::as_str))
+                .or_else(|| workspace.as_str())
+                .unwrap_or("")
+                .trim();
+            if !label.is_empty() && !workspace_names.iter().any(|name| name == label) {
+                workspace_names.push(label.to_string());
+            }
+        }
+    }
+    match (host_names.is_empty(), workspace_names.is_empty()) {
+        (true, true) => "no host or workspace was read".to_string(),
+        (false, true) => format!("hosts read: {}", host_names.join(", ")),
+        (true, false) => format!("workspaces read: {}", workspace_names.join(", ")),
+        (false, false) => format!(
+            "hosts read: {}; workspaces read: {}",
+            host_names.join(", "),
+            workspace_names.join(", ")
+        ),
     }
 }

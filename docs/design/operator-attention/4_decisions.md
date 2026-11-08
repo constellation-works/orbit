@@ -1,8 +1,8 @@
 ---
 title: Operator Attention — Decisions
 owner: claude
-last_updated: 2026-11-01
-last_validated: 2026-11-01
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: operator-attention
 doc_role: decisions
@@ -212,6 +212,11 @@ Rejected:
 - Cost: the mux gains its first merging behaviour, so federated-mcp's "no aggregate" wording
   is amended with this exception; the exception must stay one named tool unless a new decision
   widens it.
+- A later repair keeps `host`, `all`, and `workspace` (including a host-qualified selector) on
+  that fleet read. A session binding routes to one checkout only when the call names none of
+  those. An owner of a named workspace who was not a destination is `degraded`, and an empty
+  message names the hosts and workspaces actually read. See
+  [attention-federation](./specs/attention-federation.md).
 
 ## An aggregate that cannot see a source says so
 

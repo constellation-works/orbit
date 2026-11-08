@@ -1,15 +1,18 @@
-//! `orbit.attention` without a host-qualified selector: the named fan-out
-//! read of the federated mux.
+//! `orbit.attention` fan-out read of the federated mux.
 //!
-//! Every in-scope destination (the implicit local one plus each host in the
-//! operator's host file, narrowed by `host`) gets one candidate read in
-//! parallel under one outer deadline. The hop carries `all: true` or the
-//! workspaces that destination itself lists, the item filters and
-//! `candidate_read: true`, never `since` or `limit`. Each destination reports
-//! only what it is authoritative for. A destination that cannot be read
-//! becomes a `host_unhealthy` item and a `degraded` entry, never a shorter
-//! list. Ordering, the cursor and the public limit then run once, here.
-//! Nothing is written and nothing is cached between calls.
+//! A call that names `host`, `all`, or a workspace — including a
+//! host-qualified selector — reads every in-scope destination (the implicit
+//! local one plus each host in the operator's host file, narrowed by
+//! `host`). A session binding is the default only when the call names none
+//! of those; it must not turn an explicit host or workspace into a
+//! local-only read. The hop carries `all: true` or the workspaces that
+//! destination itself lists, the item filters and `candidate_read: true`,
+//! never `since` or `limit`. Each destination reports only what it is
+//! authoritative for. A destination that cannot be read, and an owner of an
+//! in-scope workspace who was not a destination of this read, becomes a
+//! `degraded` entry, never a shorter all-clear list. Ordering, the cursor
+//! and the public limit then run once, here. Nothing is written and nothing
+//! is cached between calls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
@@ -85,8 +88,14 @@ enum HopOutcome {
 
 impl FederatedMcpHost {
     /// Answer `orbit.attention` by fanning out, or `None` when the call is
-    /// routed like any other: another tool, a worker-bound call, or a call
-    /// addressed to one host by a host-qualified selector.
+    /// routed like any other: another tool, a worker-bound call, or a bare
+    /// call whose only scope is a host-qualified session binding.
+    ///
+    /// `host`, `all`, and a workspace argument are fleet scope. Returning
+    /// `None` for those used to route the call to the bound checkout with
+    /// the host filter still attached, and that local read then dropped
+    /// every other host and reported an empty page with nothing degraded
+    /// [ORB-23333].
     pub(super) fn aggregate_attention(
         &self,
         name: &str,
@@ -102,15 +111,16 @@ impl FederatedMcpHost {
         if input.get("candidate_read").is_some() {
             return Some(Err(attention_candidate_read_refusal()));
         }
-        let qualified = |value: &str| value.trim().parse::<MachineQualifiedSelector>().is_ok();
-        match input.get("workspace") {
-            Some(Value::String(selector)) if qualified(selector) => return None,
-            None | Some(Value::Null)
-                if session_context.workspace.as_deref().is_some_and(qualified) =>
-            {
-                return None;
-            }
-            _ => {}
+        let named_scope = input.get("all") == Some(&Value::Bool(true))
+            || !attention_strings(input, "host").is_empty()
+            || !attention_strings(input, "workspace").is_empty();
+        let session_routes_one_host = !named_scope
+            && session_context
+                .workspace
+                .as_deref()
+                .is_some_and(qualified_selector);
+        if session_routes_one_host {
+            return None;
         }
         Some(self.fan_out_attention(input, session_context))
     }
@@ -170,11 +180,17 @@ impl FederatedMcpHost {
                 _ => None,
             });
 
+        let attempted = destinations
+            .iter()
+            .map(|destination| destination.machine_id.clone())
+            .collect::<BTreeSet<_>>();
         let mut items = Vec::new();
         let mut degraded = Vec::new();
         let mut hosts = Vec::new();
         let mut workspaces = Vec::new();
+        let mut read_workspaces = Vec::new();
         let mut matched_selectors = BTreeSet::new();
+        let mut noted_owners = BTreeSet::new();
         let mut every_destination_answered = true;
         for (destination, outcome) in destinations.iter().zip(outcomes) {
             let host = AttentionHost {
@@ -183,7 +199,11 @@ impl FederatedMcpHost {
             };
             let owns = owners.contains(&destination.machine_id);
             match outcome {
-                HopOutcome::Failed { cause, message, .. } => {
+                HopOutcome::Failed {
+                    cause,
+                    message,
+                    snapshot,
+                } => {
                     every_destination_answered = false;
                     hosts.push(host_status(&host, cause));
                     degraded.push(AttentionDegraded {
@@ -193,16 +213,52 @@ impl FederatedMcpHost {
                         message: message.clone(),
                     });
                     items.push(unhealthy_item(&host, cause, &message, owns));
+                    if let Some(snapshot) = snapshot.as_ref() {
+                        note_unread_owners(
+                            snapshot,
+                            &selectors,
+                            &attempted,
+                            &settings.host_names,
+                            &mut noted_owners,
+                            &mut degraded,
+                        );
+                    }
                 }
                 HopOutcome::OutOfScope { snapshot } => {
                     hosts.push(host_status(&host, "reachable"));
                     matched_selectors.extend(matched(&selectors, &snapshot));
                     items.extend(skew_item(&host, &snapshot, local_facts.as_ref(), owns));
+                    note_unread_owners(
+                        &snapshot,
+                        &selectors,
+                        &attempted,
+                        &settings.host_names,
+                        &mut noted_owners,
+                        &mut degraded,
+                    );
                 }
                 HopOutcome::Answered { snapshot, body } => {
                     hosts.push(host_status(&host, "reachable"));
                     matched_selectors.extend(matched(&selectors, &snapshot));
                     items.extend(skew_item(&host, &snapshot, local_facts.as_ref(), owns));
+                    for workspace in snapshot
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| in_scope(&selectors, &snapshot.machine_id, workspace))
+                    {
+                        remember_workspace(
+                            &mut read_workspaces,
+                            echoed_workspace(destination, workspace),
+                        );
+                    }
+                    note_unread_owners(
+                        &snapshot,
+                        &selectors,
+                        &attempted,
+                        &settings.host_names,
+                        &mut noted_owners,
+                        &mut degraded,
+                    );
                     let envelope = match serde_json::from_value::<AttentionEnvelope>(body) {
                         Ok(envelope) => envelope,
                         Err(error) => {
@@ -258,10 +314,15 @@ impl FederatedMcpHost {
                 }
             }
         }
+        if workspaces.is_empty() {
+            // A destination that answered without echoing its workspaces must
+            // not wipe the scope this read actually opened [ORB-23333].
+            workspaces = read_workspaces;
+        }
         if every_destination_answered
-            && let Some(unknown) = selectors.iter().find(|selector| {
-                !qualified_selector(selector) && !matched_selectors.contains(*selector)
-            })
+            && let Some(unknown) = selectors
+                .iter()
+                .find(|selector| !matched_selectors.contains(*selector))
         {
             return Err(OrbitError::InvalidInput(format!(
                 "unknown_workspace: no in-scope host lists workspace '{unknown}'"
@@ -506,6 +567,109 @@ fn qualified_selector(selector: &str) -> bool {
     MachineQualifiedSelector::from_str(selector.trim()).is_ok()
 }
 
+/// The workspace echo for one checkout this read opened.
+fn echoed_workspace(
+    destination: &Destination,
+    workspace: &orbit_types::workspace::Workspace,
+) -> Value {
+    let mut value = json!({
+        "id": workspace.id,
+        "name": workspace.name,
+    });
+    if let Some(selector) =
+        WorkspaceDescriptor::reachable(destination, workspace.clone()).selector()
+    {
+        value["selector"] = json!(selector);
+    }
+    value
+}
+
+fn workspace_echo_key(workspace: &Value) -> String {
+    workspace
+        .get("selector")
+        .and_then(Value::as_str)
+        .filter(|selector| !selector.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            workspace
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+fn remember_workspace(workspaces: &mut Vec<Value>, workspace: Value) {
+    let key = workspace_echo_key(&workspace);
+    if key.is_empty()
+        || workspaces
+            .iter()
+            .any(|existing| workspace_echo_key(existing) == key)
+    {
+        return;
+    }
+    workspaces.push(workspace);
+}
+
+/// Whether the caller asked for `workspace` (every workspace when none are named).
+fn caller_names_workspace(
+    selectors: &[String],
+    workspace: &orbit_types::workspace::Workspace,
+) -> bool {
+    selectors.is_empty()
+        || selectors.iter().any(|selector| {
+            let selector = selector.trim();
+            match MachineQualifiedSelector::from_str(selector) {
+                Ok(qualified) => qualified.workspace_id() == workspace.id,
+                Err(_) => selector == workspace.id || selector == workspace.name,
+            }
+        })
+}
+
+/// An owner of a caller-named workspace who was not a destination of this read.
+///
+/// The destination set is the host filter. Leaving that owner off `degraded`
+/// made a replica's empty candidate set look like nothing needed attention
+/// [ORB-23333].
+fn note_unread_owners(
+    snapshot: &DestinationSnapshot,
+    selectors: &[String],
+    attempted: &BTreeSet<String>,
+    host_names: &BTreeMap<String, String>,
+    noted: &mut BTreeSet<String>,
+    degraded: &mut Vec<AttentionDegraded>,
+) {
+    for workspace in &snapshot.workspaces {
+        if !caller_names_workspace(selectors, workspace) {
+            continue;
+        }
+        let Some(owner) = workspace.owner_machine_id.as_deref() else {
+            continue;
+        };
+        if attempted.contains(owner) || !noted.insert(owner.to_string()) {
+            continue;
+        }
+        let name = host_names
+            .get(owner)
+            .cloned()
+            .unwrap_or_else(|| owner.to_string());
+        let label = if workspace.name.is_empty() {
+            workspace.id.as_str()
+        } else {
+            workspace.name.as_str()
+        };
+        degraded.push(AttentionDegraded {
+            scope: format!("host:{name}"),
+            kind: AttentionKind::HostUnhealthy.as_str().into(),
+            code: "source_unavailable".into(),
+            message: format!(
+                "{name} owns workspace '{label}' and this read did not include that host"
+            ),
+        });
+    }
+}
+
 /// Whether `workspace` on `machine_id` is named by the caller's selectors
 /// (every workspace when none are given).
 fn in_scope(
@@ -518,7 +682,13 @@ fn in_scope(
             let selector = selector.trim();
             match MachineQualifiedSelector::from_str(selector) {
                 Ok(qualified) => {
-                    qualified.machine_id() == machine_id && qualified.workspace_id() == workspace.id
+                    // A selector copied from a replica still names the owner's
+                    // checkout of that workspace. Matching only the encoded
+                    // machine left the owner unread and the page empty
+                    // [ORB-23333].
+                    qualified.workspace_id() == workspace.id
+                        && (qualified.machine_id() == machine_id
+                            || workspace.owner_machine_id.as_deref() == Some(machine_id))
                 }
                 Err(_) => selector == workspace.id || selector == workspace.name,
             }

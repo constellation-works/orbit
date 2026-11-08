@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how orbit attention spans workspaces and hosts: authority per host, fan-out, unreachable hosts as items, and session binding"
-last_validated: 2026-11-04
+last_validated: 2026-11-08
 title: Spec — Attention federation
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164, ORB-21171]
-last_updated: 2026-11-04
+last_updated: 2026-11-08
 ---
 
 # Spec: Attention federation
@@ -80,10 +80,20 @@ receives `orbit.attention` **without** a workspace selector:
    ([attention-filters](./attention-filters.md#combination-semantics),
    [attention-cursor](./attention-cursor.md#delta-semantics)).
 
-A call that carries a host-qualified selector is routed to that one destination as any
-workspace-scoped federated call is. That destination is the outermost responder, so the
-public response limit applies on it and the hop is not a candidate read. The call still
-returns an envelope.
+`host`, `all`, and a `workspace` argument are fleet scope, including a host-qualified
+selector copied from a replica. The mux fans out to the destinations the `host` filter
+keeps (every configured destination when `host` is omitted). A selector that encodes a
+replica's machine still names that workspace's owner: the owner is in scope for the same
+workspace id, and the hop carries that destination's local `ws_*`. An owner of a named
+workspace who is not among those destinations is `degraded` with code `source_unavailable`
+and scope `host:<name>`. The call must not come back empty with an empty `degraded` list
+when that owner was not read. A workspace filter is echoed as the workspaces actually
+opened; a destination that answers without echoing them does not wipe it.
+
+A session already bound to one host-qualified workspace, whose call names neither `host`,
+`all`, nor `workspace`, is still routed to that one destination as any workspace-scoped
+call is. That destination is the outermost responder, so the public response limit applies
+on it and the hop is not a candidate read. The call still returns an envelope.
 
 Because the tool only reads, a lost answer after dispatch is safe to retry: it does not carry
 the `outcome_unknown` ambiguity of a mutation. The aggregator still does not retry within one
@@ -250,7 +260,7 @@ Each such failure is *also* a `degraded` entry on the envelope (code `unreachabl
 or `tool_not_on_this_host`, scope `host:<name>`). The item is filterable (`--kind`,
 `--exclude-kind host_unhealthy`), but `degraded` is not: an operator who excludes the kind
 still sees that part of the fleet was blind, and the empty-result message stays `No items
-found; N sources could not be read`.
+found; N sources could not be read`, followed by the hosts and workspaces actually read.
 
 A destination that answers but is under a different `machine_id` than its pin follows the same
 path with `detail.cause = unreachable_destination` and a reason naming the mismatch; it is not

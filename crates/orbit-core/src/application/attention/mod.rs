@@ -173,11 +173,19 @@ pub fn attention_query(
             "unknown_workspace: a registered workspace catalog is required for this scope".into(),
         ));
     };
-    let targets = if !hosts.is_empty()
-        && !hosts
-            .iter()
-            .any(|selector| selector == &host.name || selector == &host.machine_id)
-    {
+    // A host filter that names only other machines used to clear the targets
+    // and return an empty page. The caller then read that as all-clear
+    // [ORB-23333]. This process still cannot answer for another host; it says
+    // which hosts it did not read.
+    let names_local_host = hosts
+        .iter()
+        .any(|selector| selector == &host.name || selector == &host.machine_id);
+    let foreign_hosts = hosts
+        .iter()
+        .filter(|selector| *selector != &host.name && *selector != &host.machine_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let targets = if !hosts.is_empty() && !names_local_host {
         Vec::new()
     } else {
         targets
@@ -292,6 +300,17 @@ pub fn attention_query(
         }
         items.extend(candidates.items);
         degraded.extend(candidates.degraded);
+    }
+    for selector in &foreign_hosts {
+        degraded.push(AttentionDegraded {
+            scope: format!("host:{selector}"),
+            kind: AttentionKind::HostUnhealthy.as_str().into(),
+            code: "source_unavailable".into(),
+            message: format!(
+                "this read is local to {} ({}) and did not read host {selector}",
+                host.name, host.machine_id
+            ),
+        });
     }
     if filter.selected(AttentionKind::HostUnhealthy) && !reads_host_health {
         degraded.push(host::host_capability_degraded(&host));
