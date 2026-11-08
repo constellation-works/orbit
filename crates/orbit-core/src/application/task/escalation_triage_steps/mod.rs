@@ -4,11 +4,12 @@
 //!
 //! A `proposed` task whose latest applied task-pilot assessment holds
 //! promotion on warning findings ([`super::pilot::held_pilot_warnings`], the predicate
-//! every promotion authority shares) waits until someone notices it. The
-//! seeded `pilot_warning_triage` routine (`kind: pilot_warnings_held`)
-//! admits each such assessment once; `prepare_escalation_triage` draws a
-//! crew for it from `workflow.purpose_crews.pilot_warning_triage` (else the
-//! hard tier), and the `triage_escalation` agent records one
+//! every promotion authority shares) waits for an operator to submit triage.
+//! The dashboard's Triage action submits this lane on demand; the same
+//! submission is available as `orbit job run escalation_triage_pipeline`.
+//! `prepare_escalation_triage` draws a crew for it from
+//! `workflow.purpose_crews.pilot_warning_triage` (else the hard tier), and
+//! the `triage_escalation` agent records one
 //! disposition through [`OrbitRuntime::record_pilot_warning_triage`]:
 //!
 //! - **propose** (decision, the default whenever the operator resolves the
