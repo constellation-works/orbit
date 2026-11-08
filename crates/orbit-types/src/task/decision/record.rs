@@ -69,6 +69,12 @@ pub enum TaskDecision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         operation_id: Option<String>,
     },
+    /// A workflow admitted the task, recorded on the `started` event that
+    /// workflow admission writes with the status transition.
+    WorkflowAdmission {
+        /// The workflow that admitted the task.
+        workflow: String,
+    },
     /// An auto drain withheld approval of the task its pilot assessed.
     DrainApprovalHeld {
         /// Why the drain held it.

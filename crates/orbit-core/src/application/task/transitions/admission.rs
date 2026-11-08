@@ -155,6 +155,9 @@ impl OrbitRuntime {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     status_event: Some("started".to_string()),
                     status_note: note.clone(),
+                    status_decision: Some(TaskDecision::WorkflowAdmission {
+                        workflow: workflow.to_string(),
+                    }),
                     expected_status: Some(Self::workflow_admissible_statuses().to_vec()),
                     ..StoreTaskUpdateParams::from(TaskUpdateParams {
                         status: Some(TaskStatus::InProgress),

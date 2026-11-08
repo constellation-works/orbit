@@ -31,6 +31,12 @@
 //!   `system` and `task-pilot` write those events, so the note keeps the
 //!   rules it had: hold recovery trusts only those authors, and a recorded
 //!   handoff is not posted again.
+//! - a workflow admission's `started` event, a `system`-authored
+//!   transition to `in-progress` with a `workflow admission: <workflow>`
+//!   note, is read from that note only when the entry has no typed
+//!   decision. Admission records `WorkflowAdmission` since; only `system`
+//!   writes that transition through admission, so the note keeps the
+//!   presence rule the pilot supersession check had.
 //!
 //! The boundary is per store: the first writable open of a store by a binary
 //! that writes typed decisions records when that happened, beside the task
@@ -53,6 +59,8 @@
 //! handoff entry without a typed `PilotOperatorHandoff` decision.
 //! Retire the drain-approval note reader once no drain run still reports on
 //! a task approved without a typed `DrainApproved` decision.
+//! Retire the workflow-admission note reader once no in-flight pilot
+//! preparation predates its task's typed `WorkflowAdmission` decision.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
@@ -346,6 +354,21 @@ pub(crate) fn pilot_operator_handoff_note(entry: &TaskHistoryEntry) -> Option<(S
     let record: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
     let operation_id = record["operation_id"].as_str()?.to_string();
     Some((operation_id, record["hold"].clone()))
+}
+
+/// Whether a decision-less history entry is a workflow admission written
+/// before admission recorded [`TaskDecision::WorkflowAdmission`]: a
+/// `system`-authored transition to `in-progress` whose note names the
+/// workflow. Callers consult it only for an entry without a decision.
+///
+/// [`TaskDecision::WorkflowAdmission`]: orbit_types::task::TaskDecision::WorkflowAdmission
+pub(crate) fn workflow_admission_note(entry: &TaskHistoryEntry) -> bool {
+    entry.to_status == Some(TaskStatus::InProgress)
+        && entry.by == SYSTEM_ACTOR_LABEL
+        && entry
+            .note
+            .as_deref()
+            .is_some_and(|note| note.starts_with("workflow admission:"))
 }
 
 /// The `key=value` token in a comment header.
