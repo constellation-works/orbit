@@ -93,23 +93,27 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
             continue;
         }
         bump("tasks");
-        if rework.probabilities[index].is_none() {
-            bump("risk_unestimated");
-        } else if rework.prior_basis[index] != "estimate" {
-            bump("risk_prior_fallbacks");
-        }
-        if !rework.history_supported(index) {
-            bump("regression_history_missing");
-        } else if rework.pools[index].len() < model::MIN_CELL_SAMPLES {
-            bump("regression_history_thin");
-        }
-        match reasons[index] {
-            Some("return_unsupported") => bump("return_unsupported"),
-            Some(reason) => {
-                bump("dependency_unforecastable");
-                *unforecastable.entry(reason).or_default() += 1;
+        // Held work has standalone spend estimates, without simulated
+        // regression follow-up or a missing dependency-start diagnostic.
+        if item.drain_hold.is_none() {
+            if rework.probabilities[index].is_none() {
+                bump("risk_unestimated");
+            } else if rework.prior_basis[index] != "estimate" {
+                bump("risk_prior_fallbacks");
             }
-            None => {}
+            if !rework.history_supported(index) {
+                bump("regression_history_missing");
+            } else if rework.pools[index].len() < model::MIN_CELL_SAMPLES {
+                bump("regression_history_thin");
+            }
+            match reasons[index] {
+                Some("return_unsupported") => bump("return_unsupported"),
+                Some(reason) => {
+                    bump("dependency_unforecastable");
+                    *unforecastable.entry(reason).or_default() += 1;
+                }
+                None => {}
+            }
         }
         if item.blocked {
             bump("blocked");
@@ -291,6 +295,8 @@ pub(super) fn forecast_result(
         "inputs": inputs,
         "assumptions": {
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
+            "time_to_drain_scope": "startable_tasks",
+            "held_work": "standalone_spend_without_regression_followup",
             "excluded_statuses": ["review", "someday"],
             // A blocked task waits for a sampled return, conditioned on how
             // long it has been blocked; attempts sample episode outcomes.

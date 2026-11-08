@@ -11,11 +11,12 @@ use crate::OrbitRuntime;
 
 use super::cohorts::ForecastCohorts;
 use super::history::LoadedForecastHistory;
-use super::model::{Item, Resolved, Spent};
+use super::model::{DrainHold, Item, Resolved, Spent};
 use super::options::Options;
 use super::review_modes::ReviewEvidenceGap;
 use super::usage::ForecastRun;
 use super::{dependencies, model, outcomes, resource_fit, rework, usage};
+use crate::application::admission::backlog_exclusion;
 
 pub(super) struct ForecastSimulationInputs {
     pub(super) items: Vec<Item>,
@@ -172,6 +173,7 @@ pub(super) fn assemble_forecast_simulation(
             let (review_mode, review_mode_source, gap) = reviews.assumed_mode(runtime, task)?;
             Ok((
                 Item {
+                    drain_hold: None,
                     task_id: id,
                     title: task.title.clone(),
                     complexity,
@@ -268,22 +270,6 @@ pub(super) fn assemble_forecast_simulation(
         .collect();
     let done_recently = done_at.values().filter(|at| **at >= arrival_start).count() as u64;
 
-    let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
-    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-    // A blocked task with no return evidence has no start time to simulate.
-    let no_return_support: Vec<Option<&'static str>> = items
-        .iter()
-        .zip(&resolved)
-        .map(|(item, resolved)| {
-            (item.blocked && resolved.returns.support == 0).then_some("return_unsupported")
-        })
-        .collect();
-    let plan = dependencies::plan_forecast_dependencies(
-        &queued,
-        &status_by_id,
-        &reference_index,
-        &no_return_support,
-    );
     let workspace: BTreeMap<String, Task> = tasks
         .iter()
         .map(|(id, task)| (id.clone(), task.clone()))
@@ -312,6 +298,39 @@ pub(super) fn assemble_forecast_simulation(
     if let Some(evidence) = resource_fit.evidence {
         admission.fit_resources(evidence);
     }
+    for (index, (item, task)) in items.iter_mut().zip(&queued).enumerate() {
+        // Running work is already admitted. The frozen admission snapshot
+        // has resolved operator schedule overrides for pending work.
+        if !item.in_progress {
+            item.drain_hold = backlog_exclusion::no_drain_exclusion(task)
+                .map(DrainHold::Excluded)
+                .or_else(|| {
+                    admission
+                        .scheduled_deadline(index)
+                        .filter(|hours| *hours > 0.0)
+                        .and(task.not_before)
+                        .map(DrainHold::Scheduled)
+                });
+        }
+    }
+    let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
+    // Held work and blocked tasks without return evidence have no drain start.
+    let no_return_support: Vec<Option<&'static str>> = items
+        .iter()
+        .zip(&resolved)
+        .map(|(item, resolved)| {
+            item.drain_hold.as_ref().map(DrainHold::reason).or_else(|| {
+                (item.blocked && resolved.returns.support == 0).then_some("return_unsupported")
+            })
+        })
+        .collect();
+    let plan = dependencies::plan_forecast_dependencies(
+        &queued,
+        &status_by_id,
+        &reference_index,
+        &no_return_support,
+    );
     Ok(ForecastSimulationInputs {
         items,
         resolved,

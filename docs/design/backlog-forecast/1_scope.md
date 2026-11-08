@@ -1,8 +1,8 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-11-06
-last_validated: 2026-11-06
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 stage: building
 next: "Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed"
@@ -20,6 +20,22 @@ Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementa
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
 ## Shipped so far
+
+Model **19** separates drain completion from spending estimates. Pending tasks
+whose effective `not_before` is in the future and tasks admission excludes with
+`no-drain` stay outside the drain simulation. The admission exclusion rule is
+shared, and frozen schedule overrides still apply. Already-running work stays
+in the drain. Held tasks retain standalone full-script work-hour, token and
+USD estimates in task rows, complexity rows and spending totals; their future
+regression follow-up is outside this drain. `drain_tasks` counts the time-to-drain
+population; `tasks` still counts the spending population. `drain_hold` records
+each held task's scheduled start or admission exclusion reason and detail in
+predictions and stored task rows. The Forecast tab lists these holds separately
+and the drain card summarizes them. A dependency on held work remains
+unforecastable, so it cannot silently run before its prerequisite. Stored holds
+also exclude that work and its future regressions from drain-time actuals;
+its own spending remains in cost and token actuals. Earlier versions retain
+their original population and are calibrated separately.
 
 Riskiness estimator 2 [ORB-19361] is model version **12**: regression rework
 draws from the size-based estimate (below) with no other forecast change.
@@ -221,7 +237,8 @@ Scheduled starts [ORB-19215] are model version **11**, admission factor revision
 **2**. Each pending task waits until its `not_before` instant before entering
 an admission pass. The event loop advances to that instant even with no running
 work; dependency and capacity waits can delay it further. `wait_hours.scheduled`
-counts the hold. An operator override for that exact schedule removes the hold;
+counts the hold in models 11–18; model 19 instead reports future-scheduled
+initial tasks outside the drain as described above. An operator override for that exact schedule removes the hold;
 a task already running keeps its observed start. Synthetic arrivals and follow-ups
 do not inherit their historical donor's schedule. Calibration remains separate
 from earlier model versions.

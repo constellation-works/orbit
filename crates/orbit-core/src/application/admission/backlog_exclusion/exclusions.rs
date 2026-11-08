@@ -104,7 +104,7 @@ pub(super) fn browser_kit_exclusion(
 /// The exclusion for a task carrying the reserved `no-drain` tag. Automatic
 /// selection only: the explicit ship override in `listing.rs` deliberately
 /// does not apply it, so `orbit run ship <id>` still runs the task.
-pub(super) fn no_drain_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
+pub(crate) fn no_drain_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
     if !task.tags.iter().any(|tag| tag == NO_DRAIN_TAG) {
         return None;
     }

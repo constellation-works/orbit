@@ -580,42 +580,161 @@ fn historical_uncertainty_and_running_admission_remain_explicit() {
     assert_eq!(stored[0]["review_mode_source"], "captured:workspace");
 }
 
-fn scheduled_forecast_starts_at_or_after_not_before() {
+fn drain_scope_separates_scheduled_and_no_drain_work_from_completion() {
     let fixture = Fixture::new();
     let runtime = fixture.runtime("none");
-    for _ in 0..8 {
-        delivery(&runtime, ReviewTiming::None, 1);
-    }
-    let id = pending(&runtime, TaskComplexity::Medium, "sample");
-    let not_before = Utc::now() + Duration::hours(24);
-    runtime
-        .update_task_with_identity(
-            &id,
+    let delivered: Vec<_> = (0..8)
+        .map(|_| delivery(&runtime, ReviewTiming::None, 1))
+        .collect();
+    let ready = pending(&runtime, TaskComplexity::Medium, "sample");
+    let scheduled = pending(&runtime, TaskComplexity::Medium, "sample");
+    let excluded = pending(&runtime, TaskComplexity::Medium, "sample");
+    let not_before = Utc::now() + Duration::days(24);
+    for (id, params) in [
+        (
+            &scheduled,
             TaskUpdateParams {
                 not_before: Some(Some(not_before)),
+                ..Default::default()
+            },
+        ),
+        (
+            &excluded,
+            TaskUpdateParams {
+                tags: Some(vec!["no-drain".into()]),
+                ..Default::default()
+            },
+        ),
+    ] {
+        runtime
+            .update_task_with_identity(id, params, Some("codex".into()), None)
+            .unwrap();
+    }
+    let result = forecast(&runtime);
+    let source = &result["forecast"];
+    let predictions = source["task_predictions"].as_array().unwrap();
+    let prediction = |id: &str| predictions.iter().find(|task| task["id"] == id).unwrap();
+    for percentile in ["p50", "p90"] {
+        assert_eq!(
+            source["time_to_drain_hours"][percentile], 1.0,
+            "only the startable task's hour belongs to time to drain: {result}"
+        );
+        assert_eq!(
+            source["tokens"][percentile], 300.0,
+            "all three tasks still cost tokens"
+        );
+        assert_eq!(
+            source["usd"][percentile], 3.0,
+            "all three tasks still cost money"
+        );
+        assert_eq!(source["by_complexity"][0]["work_hours"][percentile], 3.0);
+        assert_eq!(source["wait_hours"]["scheduled"][percentile], 0.0);
+        assert_eq!(prediction(&ready)["predicted_start_hours"][percentile], 0.0);
+        for id in [&scheduled, &excluded] {
+            assert!(prediction(id)["predicted_start_hours"][percentile].is_null());
+            assert_eq!(prediction(id)["work_hours"][percentile], 1.0);
+        }
+    }
+    assert_eq!(source["drain_tasks"], 1);
+    assert!(
+        source["schedulable_subset"].is_null(),
+        "intentional exclusions are not missing coverage"
+    );
+    assert_eq!(prediction(&scheduled)["drain_hold"]["kind"], "scheduled");
+    assert_eq!(
+        prediction(&scheduled)["drain_hold"]["starts_at"],
+        not_before.to_rfc3339()
+    );
+    assert_eq!(prediction(&excluded)["drain_hold"]["kind"], "excluded");
+    assert_eq!(
+        prediction(&excluded)["drain_hold"]["reason"],
+        "no_drain_tag"
+    );
+    assert!(
+        prediction(&excluded)["drain_hold"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no automatic drain")
+    );
+    // A mature snapshot can finish its drain while held work remains open.
+    // Exercise the public scoring API with the same held population.
+    let mature_at = Utc::now() - Duration::days(90);
+    runtime.record_backlog_forecast(orbit_core::StoredBacklogForecast {
+        workspace_id: String::new(),
+        forecast_at: mature_at,
+        model_version: result["model_version"].as_u64().unwrap() as u32,
+        inputs_json: "{}".into(),
+        result_json: "{}".into(),
+        tasks_json: json!([
+            {"id": delivered[0], "complexity": "medium", "forecast": {}},
+            {"id": scheduled, "complexity": "medium", "drain_hold": prediction(&scheduled)["drain_hold"]},
+            {"id": excluded, "complexity": "medium", "drain_hold": prediction(&excluded)["drain_hold"]}
+        ]).to_string(),
+    }, Duration::zero()).unwrap();
+    let scored = runtime
+        .backlog_forecast(Default::default(), Some(1), None)
+        .unwrap();
+    let mature = scored["calibration"]["forecasts"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+    assert_eq!(
+        mature["actual"]["drained"], true,
+        "held work must not hold drain-time actuals open: {mature}"
+    );
+    assert!(mature["actual"]["time_to_drain_hours"].as_f64().unwrap() <= 2160.0);
+
+    // Canonical persistence must retain the drain population for later scoring.
+    runtime
+        .backlog_forecast(Default::default(), None, None)
+        .unwrap();
+    let stored: Value =
+        serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();
+    let stored_rows = stored.as_array().unwrap();
+    for id in [&scheduled, &excluded] {
+        let row = stored_rows.iter().find(|row| row["id"] == *id).unwrap();
+        assert_eq!(row["drain_hold"], prediction(id)["drain_hold"]);
+    }
+
+    // With no startable work left, held tasks still have spending estimates.
+    runtime
+        .update_task_with_identity(
+            &ready,
+            TaskUpdateParams {
+                tags: Some(vec!["no-drain".into()]),
                 ..Default::default()
             },
             Some("codex".into()),
             None,
         )
         .unwrap();
-    let before = Utc::now();
-    let result = forecast(&runtime);
-    let lower = (not_before - Utc::now()).num_seconds() as f64 / 3600.0;
-    let upper = (not_before - before).num_seconds() as f64 / 3600.0 + 0.01;
-    let predictions = result["forecast"]["task_predictions"].as_array().unwrap();
-    let task = predictions.iter().find(|task| task["id"] == id).unwrap();
+    let held = runtime
+        .backlog_forecast(Default::default(), Some(1), None)
+        .unwrap();
+    assert_eq!(held["forecast"]["drain_tasks"], 0);
     for percentile in ["p50", "p90"] {
-        let start = task["predicted_start_hours"][percentile].as_f64().unwrap();
-        assert!(start >= lower && start <= upper, "{result}");
-        assert!(
-            result["forecast"]["time_to_drain_hours"][percentile]
-                .as_f64()
-                .unwrap()
-                >= start + 1.0,
-            "the scheduled wait must precede the one-hour delivery: {result}"
-        );
+        assert_eq!(held["forecast"]["time_to_drain_hours"][percentile], 0.0);
+        assert_eq!(held["forecast"]["usd"][percentile], 3.0);
+        assert_eq!(held["forecast"]["tokens"][percentile], 300.0);
     }
+    assert_eq!(held["coverage"]["dependency_unforecastable"], 0);
+
+    // A schedule in the past returns the task to the drain population.
+    runtime
+        .update_task_with_identity(
+            &scheduled,
+            TaskUpdateParams {
+                not_before: Some(Some(Utc::now() - Duration::days(1))),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let due = forecast(&runtime);
+    assert_eq!(due["forecast"]["drain_tasks"], 1);
+    assert_eq!(due["forecast"]["time_to_drain_hours"]["p50"], 1.0);
 }
 
 fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
@@ -807,7 +926,7 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
 crate::scenario_table!(
     review_modes,
     forecast_riskiness_preserves_observation_timestamps,
-    scheduled_forecast_starts_at_or_after_not_before,
+    drain_scope_separates_scheduled_and_no_drain_work_from_completion,
     review_policy_selects_observed_delivery_distribution,
     thin_cells_preserve_mode_before_borrowing_pooled_history,
     historical_uncertainty_and_running_admission_remain_explicit,

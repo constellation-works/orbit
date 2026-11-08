@@ -373,3 +373,5 @@
 
 .drain-approval-summary { color: var(--fg-dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
+
+.drain-backlog-forecast-scope { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }

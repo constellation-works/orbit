@@ -92,13 +92,25 @@ host thresholds, or the worker ceiling. Settings and limits:
 ## Backlog forecast
 
 The drain card's **Backlog forecast** line estimates how long the workspace's
-backlog could take to drain and what it could cost. It resamples delivery
+startable backlog could take to drain and what the full backlog could cost. It resamples delivery
 history and simulates the drain's admission behavior: dependencies, file locks,
 dispatch order, CPU and memory fit, blocked, failed and retried runs, review
 modes, and expected regression rework. The line shows p50–p90 time to drain and
 estimated cost. Open **Analytics › Forecast** for token and exact-cost ranges,
 backlog and in-progress counts, assumptions, and how earlier forecasts scored
 against actual outcomes.
+
+Time to drain excludes tasks whose effective `not_before` is still in the
+future and tasks admission excludes with `no-drain`. The Forecast task table
+shows scheduled work as **starts YYYY-MM-DD**, and **Outside this drain** lists
+scheduled starts and exclusion reasons separately; the drain card summarizes
+those holds too. Their own work hours, tokens and cost remain in spending
+totals, without occupying simulated slots or extending time to drain. Their
+regression follow-up is outside this drain. Already-running tasks remain in
+the drain even if their tags or scheduled date later change. Operator schedule
+overrides are respected. A dependency on held work remains unforecastable
+until that work becomes startable or finishes. Model 19 separates these drain
+and spending populations; calibration keeps earlier model versions apart.
 
 This is separate from the `machine.auto_concurrency` forecast above. That
 admission forecast checks resource fit for the next admission and can affect
@@ -113,7 +125,8 @@ The Forecast view has three tabs, each with its own address. Switching tabs
 only shows another tab: it never refetches and changes nothing.
 
 - **Forecast** (`#analytics/forecast`): the totals, the scenario switch, the
-  task table in dispatch order, and the collapsed wait breakdown.
+  task table in dispatch order, scheduled and excluded work with its reasons,
+  and the collapsed wait breakdown.
 - **Accuracy** (`#analytics/forecast/accuracy`): how earlier forecasts scored.
   The calibration card compares actuals against p50 and p90 for task hours,
   task cost, task tokens, and the whole backlog (about half of actuals under

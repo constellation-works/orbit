@@ -530,6 +530,7 @@ pub(super) fn collect_forecast_donors(
                 )
             };
             let item = Item {
+                drain_hold: None,
                 task_id: task.id.clone(),
                 title: task.title.clone(),
                 complexity: delivery.complexity.clone(),

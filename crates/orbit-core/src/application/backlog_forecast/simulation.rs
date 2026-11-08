@@ -136,10 +136,11 @@ impl Outcome {
 
     fn record(
         &mut self,
-        scenario: &Scenario<'_>,
         run: &schedule::Run,
         state: &ScheduleState,
         totals: Draw,
+        items: &[Item],
+        members: &[usize],
     ) {
         self.drain.push(run.drained);
         for (buffer, draw) in [
@@ -161,10 +162,7 @@ impl Outcome {
         }
         self.return_waits.push(run.return_wait);
         self.truncated += u64::from(run.truncated);
-        for (index, included) in scenario.included.iter().take(self.usage.len()).enumerate() {
-            if !included {
-                continue;
-            }
+        for index in members.iter().copied() {
             // Spend is missing wherever the scenario's totals are.
             let used = if run.waits.is_some() {
                 state.charged[index]
@@ -191,10 +189,11 @@ impl Outcome {
         self.drained += u64::from(run.drained.is_some());
         self.complete += u64::from(run.unfinished == 0);
         self.unfinished += run.unfinished as u64;
-        for (index, included) in scenario.included.iter().take(self.starts.len()).enumerate() {
-            if !included {
-                continue;
-            }
+        for index in members
+            .iter()
+            .copied()
+            .filter(|index| items[*index].drain_hold.is_none())
+        {
             self.starts[index].push(state.start[index]);
             self.ranks[index].push(state.rank[index]);
             self.finished[index] += u64::from(state.finished[index]);
@@ -229,7 +228,7 @@ impl Outcome {
         let included: Vec<usize> = members
             .iter()
             .copied()
-            .filter(|index| scenario.included[*index])
+            .filter(|index| scenario.included[*index] || items[*index].drain_hold.is_some())
             .collect();
         let full = included.len() == members.len();
         let mut counts: BTreeMap<&str, (u64, BTreeMap<&str, u64>)> = BTreeMap::new();
@@ -329,7 +328,8 @@ impl Outcome {
                     "cost_samples": resolved[index].cost_sample_count(),
                     "thin_tokens": resolved[index].thin_tokens(),
                     "thin_cost": resolved[index].thin_cost(),
-                    "unforecastable": reasons[index],
+                    "unforecastable": if item.drain_hold.is_some() { None } else { reasons[index] },
+                    "drain_hold": item.drain_hold.as_ref().map(model::DrainHold::to_json),
                     "profile_source": scenario
                         .admission
                         .profile_source(index)
@@ -356,6 +356,7 @@ impl Outcome {
             .then(|| self.followups.iter().flatten().sum::<f64>() / self.available as f64);
         let mut result = json!({
             "tasks": members.len(),
+            "drain_tasks": members.iter().filter(|index| items[**index].drain_hold.is_none()).count(),
             "time_to_drain_hours": if full { drain.clone() } else { unknown.clone() },
             "tokens": if full { tokens.clone() } else { unknown.clone() },
             "usd": if full { usd.clone() } else { unknown },
@@ -414,9 +415,9 @@ impl Outcome {
                 result["pre_regression_baseline"] = baseline;
             }
             result["unavailable"] = json!({
-                "risk_unestimated": members.iter().any(|index| rework.probabilities[*index].is_none()),
-                "regression_history_missing": members.iter().any(|index| !rework.history_supported(*index)),
-                "regression_history_gaps": rework.member_gaps(members),
+                "risk_unestimated": members.iter().any(|index| scenario.included[*index] && rework.probabilities[*index].is_none()),
+                "regression_history_missing": members.iter().any(|index| scenario.included[*index] && !rework.history_supported(*index)),
+                "regression_history_gaps": rework.member_gaps(&members.iter().copied().filter(|index| scenario.included[*index]).collect::<Vec<_>>()),
                 "arrival_conflict_unknown": !arrivals_supported,
             });
             for metric in ["time_to_drain_hours", "tokens", "usd"] {
@@ -505,6 +506,19 @@ pub(super) fn simulate_backlog_forecast(
     };
     let backlog_scenario = scenario(false, &plan.backlog);
     let approved_scenario = has_proposed.then(|| scenario(true, &plan.approved));
+    // Spending includes held work; scheduling never does. Freeze both
+    // scenario populations once rather than rebuilding them every iteration.
+    let spending_members = [false, true].map(|proposed| {
+        let scenario = if proposed {
+            approved_scenario.as_ref().unwrap_or(&backlog_scenario)
+        } else {
+            &backlog_scenario
+        };
+        members(proposed)
+            .into_iter()
+            .filter(|index| scenario.included[*index] || items[*index].drain_hold.is_some())
+            .collect::<Vec<_>>()
+    });
     let mut outcomes = [Outcome::new(items.len()), Outcome::new(items.len())];
     let mut state = ScheduleState::new(admission);
     let mut hours = vec![None; items.len()];
@@ -544,7 +558,9 @@ pub(super) fn simulate_backlog_forecast(
             correction::apply_script(correction, &item.complexity, &mut scripts[index]);
         }
         let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
-        'scenarios: for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
+        'scenarios: for (scenario_index, (scenario, outcome)) in
+            scenarios.into_iter().zip(outcomes.iter_mut()).enumerate()
+        {
             let Some(scenario) = scenario else {
                 continue;
             };
@@ -663,14 +679,21 @@ pub(super) fn simulate_backlog_forecast(
                 run.rework = Draw::MISSING;
                 run.arrivals = Draw::MISSING;
             }
-            // Spend is what the attempts started by the horizon used.
-            let mut complexity: BTreeMap<&str, Draw> = BTreeMap::new();
-            for (index, item) in items.iter().enumerate() {
-                if !scenario.included[index] {
-                    continue;
+            // Held tasks retain standalone full-script estimates, without
+            // occupying drain slots or extending its completion time.
+            let scenario_members = &spending_members[scenario_index];
+            for index in scenario_members {
+                if items[*index].drain_hold.is_some() {
+                    state.charged[*index] = correction::script_spend(&scripts[*index]);
+                    totals.add(&state.charged[*index]);
                 }
+            }
+            // Spend is what the attempts started by the horizon used, plus
+            // the separately estimated held work.
+            let mut complexity: BTreeMap<&str, Draw> = BTreeMap::new();
+            for index in scenario_members.iter().copied() {
                 let cell = complexity
-                    .entry(item.complexity.as_str())
+                    .entry(items[index].complexity.as_str())
                     .or_insert(Draw::ZERO);
                 if run.waits.is_some() {
                     cell.add(&state.charged[index]);
@@ -681,7 +704,7 @@ pub(super) fn simulate_backlog_forecast(
             if run.waits.is_none() {
                 totals = Draw::MISSING;
             }
-            outcome.record(scenario, &run, state, totals);
+            outcome.record(&run, state, totals, items, scenario_members);
             for (key, cell) in complexity {
                 let entry = outcome.by_complexity.entry(key.to_string()).or_default();
                 entry[0].push(cell.hours);

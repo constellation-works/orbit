@@ -136,7 +136,8 @@ pub(super) fn persist_forecast(
                     "review_mode_source": item.review_mode_source,
                     "review_mode_fallback": resolved.review_mode_fallback,
                     // Every simulated attempt's use, not one delivery
-                    // draw [ORB-18859]: unknown when it was not scheduled.
+                    // draw [ORB-18859], or the standalone script estimate
+                    // for work held outside this drain.
                     "forecast": {
                         "work_hours": field("work_hours"),
                         "tokens": field("tokens"),
@@ -152,7 +153,8 @@ pub(super) fn persist_forecast(
                         .collect::<Vec<_>>(),
                     "footprint": admission.surface_hash(index),
                     "profile_source": admission.profile_source(index).map(|source| source.as_str()),
-                    "unforecastable": plan.backlog[index],
+                    "unforecastable": if item.drain_hold.is_some() { None } else { plan.backlog[index] },
+                    "drain_hold": item.drain_hold.as_ref().map(super::model::DrainHold::to_json),
                     "predicted_start_hours": field("predicted_start_hours"),
                     "predicted_start_rank": field("predicted_start_rank"),
                     "completion_probability": field("completion_probability"),
