@@ -90,7 +90,7 @@ fn child_stop_refusal_preserves_owner_candidate_reservation_and_lineage() {
                         actor: "fixture".into(),
                         ttl_seconds: 600,
                         owner_run_id: Some(child.into()),
-                        owner_metadata_json: None,
+                        owner_metadata: None,
                     })
                     .unwrap();
                 assert!(reserved.reserved);

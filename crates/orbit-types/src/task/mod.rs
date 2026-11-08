@@ -17,6 +17,7 @@ mod plan;
 mod readiness;
 mod receipt;
 mod regression;
+mod reservation_owner;
 mod resolves;
 mod schedule;
 mod severity;
@@ -142,6 +143,7 @@ pub use regression::{
     REGRESSION_RISK_MARKED_EVENT, RegressionClassification, RegressionEscape, RegressionNature,
     RegressionRiskMarks,
 };
+pub use reservation_owner::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 pub use severity::{DefectSeverity, SeveritySource};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,

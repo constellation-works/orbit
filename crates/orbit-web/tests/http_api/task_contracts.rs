@@ -1217,7 +1217,7 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                                 actor: "fixture".into(),
                                 ttl_seconds: 120,
                                 owner_run_id: None,
-                                owner_metadata_json: None,
+                                owner_metadata: None,
                             }
                         )
                         .unwrap()
@@ -1773,7 +1773,7 @@ fn task_locks_paced_history_probe() {
                 actor: "perf fixture".into(),
                 ttl_seconds: 120,
                 owner_run_id: None,
-                owner_metadata_json: None,
+                owner_metadata: None,
             })
             .unwrap();
         assert!(reserved.reserved);

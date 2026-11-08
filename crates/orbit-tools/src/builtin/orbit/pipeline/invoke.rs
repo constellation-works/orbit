@@ -12,13 +12,8 @@ pub struct OrbitPipelineInvokeTool;
 pub fn has_pipeline_child_admission(ctx: &ToolContext) -> bool {
     ctx.reservation_owner
         .as_ref()
-        .and_then(|owner| owner.owner_metadata_json.as_deref())
-        .and_then(|metadata| serde_json::from_str::<Value>(metadata).ok())
-        .is_some_and(|metadata| {
-            metadata
-                .get("pipeline_child_admission")
-                .is_some_and(Value::is_object)
-        })
+        .and_then(|owner| owner.owner_metadata.as_ref())
+        .is_some_and(|metadata| metadata.child_admission().is_some())
 }
 
 impl Tool for OrbitPipelineInvokeTool {

@@ -23,7 +23,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
 
 use super::TaskCommitBoundary;
@@ -280,7 +280,10 @@ impl TaskCommitBoundary {
                 actor: machine_id.clone(),
                 ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
                 owner_run_id: None,
-                owner_metadata_json: Some(encode(&serde_json::json!({"claim_id": claim_id}))?),
+                owner_metadata: Some(ReservationOwnerMetadata {
+                    claim_id: Some(claim_id.clone()),
+                    ..Default::default()
+                }),
             }),
             rows: vec![
                 row(RECEIPT_KIND, receipt_key, &())?,
