@@ -689,6 +689,277 @@ fn shipped_no_diff_completion_completes_without_a_match() {
     assert_eq!(host.task().status, orbit_types::task::TaskStatus::Done);
 }
 
+/// The shipped local pipeline's `merge` (`git_merge`, `completion: done`)
+/// decides a `completion.hold` while the task is still `in-progress`, and
+/// the following shipped `mark_review` step moves it to `review`: the hold
+/// must still be the task's current hold after that transition, so
+/// `orbit task show` surfaces it [ORB-23461].
+fn shipped_local_completion_hold_survives_mark_review() {
+    let (host, _workspace) = LocalCompletionHost::new();
+    let outcome = run_local_completion(&host);
+    assert!(outcome.success, "{outcome:?}");
+    let step = &outcome.pipeline["merge"];
+    assert_eq!(step["merged"], json!(false));
+    assert_eq!(step["reason"], "completion_held");
+    assert_eq!(step["held_task_ids"], json!(["FIXTURE"]));
+    assert_eq!(step["completion_hold"]["field"], "tags");
+    assert_eq!(step["completion_hold"]["matched"], "sensitive");
+
+    let task = host.task();
+    assert_eq!(task.status, orbit_types::task::TaskStatus::Review);
+    let history = host.history();
+    let hold = orbit_types::workflow::current_completion_hold(task.status, &history)
+        .expect("the pre-review local hold is current once the task is in review");
+    assert_eq!(hold.field, orbit_types::workflow::CompletionHoldField::Tags);
+    assert_eq!(hold.matched, "sensitive");
+    assert_eq!(hold.run_id, LOCAL_RUN);
+
+    // Leaving review and re-entering it without a new hold makes the hold
+    // stale again: it must not resurface in the new review stint.
+    let mut stale = history.clone();
+    let transition = |from, to| orbit_types::task::TaskHistoryEntry {
+        at: chrono::Utc::now(),
+        by: "system".to_string(),
+        event: "status_changed".to_string(),
+        note: None,
+        from_status: Some(from),
+        to_status: Some(to),
+        operation_id: None,
+        decision: None,
+    };
+    stale.push(transition(
+        orbit_types::task::TaskStatus::Review,
+        orbit_types::task::TaskStatus::InProgress,
+    ));
+    stale.push(transition(
+        orbit_types::task::TaskStatus::InProgress,
+        orbit_types::task::TaskStatus::Review,
+    ));
+    assert_eq!(
+        orbit_types::workflow::current_completion_hold(task.status, &stale),
+        None,
+        "a hold from an earlier review stint is not current"
+    );
+}
+
+fn run_local_completion(host: &LocalCompletionHost) -> JobOutcome {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), LOCAL_RUN);
+    execute_job_with_resume(
+        &shipped_local_completion_job(),
+        json!({
+            "task_ids": ["FIXTURE"],
+            "base_branch": "main",
+            "base_sync": "local",
+            "completion": "done",
+            "terminal_status": "review",
+        }),
+        LOCAL_RUN,
+        writer,
+        host,
+        None,
+    )
+    .expect("the local completion job runs")
+}
+
+/// The shipped local pipeline's `merge` and `mark_review` steps, resolved
+/// to the real `git_merge` and `update_task` actions; only `worktree` and
+/// `commit` are stubbed.
+fn shipped_local_completion_job() -> orbit_types::workflow::JobV2 {
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_local_pipeline.yaml"),
+    )
+    .expect("read the shipped local pipeline");
+    let shipped = load_job_asset(&shipped)
+        .expect("the shipped local pipeline loads")
+        .spec;
+    let find_step = |id: &str| {
+        shipped
+            .steps
+            .iter()
+            .find(|step| step.id == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("the shipped local pipeline has `{id}`"))
+    };
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([stub("worktree"), stub("commit")]));
+    job.default_input = shipped.default_input.clone();
+    job.steps.push(find_step("merge"));
+    job.steps.push(find_step("mark_review"));
+    let mut catalog = V2ActivityCatalog::new();
+    for (name, action) in [
+        ("git_merge", "git_merge"),
+        ("update_task", "update_task"),
+        (RECOVERY, "test_stub_step_failure_recovery"),
+    ] {
+        catalog.insert(
+            name.to_string(),
+            ActivityV2 {
+                description: format!("scripted `{name}`"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: action.to_string(),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        .expect("resolve the shipped merge and mark_review steps");
+    job
+}
+
+const LOCAL_RUN: &str = "complete-local-run";
+
+/// In-memory task store for the local completion route: one `in-progress`
+/// task, a `tags = ["sensitive"]` hold rule, a real git workspace on
+/// `main`, and the real `git_merge`/`update_task` actions.
+struct LocalCompletionHost {
+    task: Mutex<orbit_types::task::Task>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    workspace: std::path::PathBuf,
+}
+
+impl LocalCompletionHost {
+    fn new() -> (Self, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let repo = workspace.path();
+        crate::git_fixture::init(repo);
+        let git = |args: &[&str]| crate::git_fixture::run(repo, args);
+        git(&["config", "user.name", "Orbit Test"]);
+        git(&["config", "user.email", "orbit-test@example.invalid"]);
+        std::fs::write(repo.join("README.md"), "base\n").expect("write base file");
+        git(&["add", "README.md"]);
+        git(&["commit", "-m", "base"]);
+        git(&["branch", "-M", "main"]);
+        let task: orbit_types::task::Task = serde_json::from_value(json!({
+            "id": "FIXTURE",
+            "title": "Fixture",
+            "description": "Fixture",
+            "status": "in_progress",
+            "priority": "medium",
+            "task_type": "bug",
+            "tags": ["sensitive"],
+            "context_files": [],
+            "execution_summary": "Validated the fixture.",
+            "job_run_id": LOCAL_RUN,
+            "created_at": chrono::Utc::now(),
+            "updated_at": chrono::Utc::now(),
+        }))
+        .expect("fixture task");
+        let host = Self {
+            task: Mutex::new(task),
+            history: Mutex::default(),
+            workspace: repo.to_path_buf(),
+        };
+        (host, workspace)
+    }
+
+    fn task(&self) -> orbit_types::task::Task {
+        self.task.lock().expect("task").clone()
+    }
+
+    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
+        self.history.lock().expect("history").clone()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
+    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+        Ok(self.task())
+    }
+
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history())
+    }
+
+    fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+        Ok(vec![self.task()])
+    }
+
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .expect("history")
+            .extend(update.append_history);
+        Ok(())
+    }
+
+    fn update_task_from_activity(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskActivityUpdate,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
+        let mut task = self.task.lock().expect("task");
+        assert_eq!(task.status, update.expected_status);
+        let from_status = task.status;
+        task.status = update.status;
+        self.history
+            .lock()
+            .expect("history")
+            .push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "system".to_string(),
+                event: "status_changed".to_string(),
+                note: update.note,
+                from_status: Some(from_status),
+                to_status: Some(update.status),
+                operation_id: None,
+                decision: None,
+            });
+        Ok(task.clone())
+    }
+
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "test_stub_worktree" => Ok(json!({
+                "job_run_id": LOCAL_RUN,
+                "workspace_path": self.workspace,
+            })),
+            "test_stub_commit" => Ok(json!({
+                "skipped_no_diff_expected": false,
+                "decision": "committed",
+            })),
+            "test_stub_step_failure_recovery" => Ok(json!({})),
+            "git_merge" | "update_task" => orbit_engine::execute_deterministic_action(
+                self,
+                action,
+                config,
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+            .map_err(|error| DispatchError::JobExecution(error.to_string())),
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+}
+
 fn run_no_diff_completion(host: &NoDiffCompletionHost) -> JobOutcome {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), NO_DIFF_RUN);
@@ -908,6 +1179,10 @@ fn completion_review_contracts_1() {
             (
                 "shipped_no_diff_completion_completes_without_a_match",
                 shipped_no_diff_completion_completes_without_a_match,
+            ),
+            (
+                "shipped_local_completion_hold_survives_mark_review",
+                shipped_local_completion_hold_survives_mark_review,
             ),
         ]);
     });
