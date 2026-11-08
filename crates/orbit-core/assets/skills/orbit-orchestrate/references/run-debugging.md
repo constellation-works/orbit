@@ -370,7 +370,8 @@ alone does not establish a code defect or an abandoned run.
 | **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs once and waits again. A repeated transient failure stops in review, without a code repair. |
 | **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
 | **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. Landing stops for its one automatic repair, or the bounded backlog return when that repair is spent. |
-| **Inconclusive** | Job identity, listing, logs or diagnostic evidence is missing/unreadable; an empty log or signature containing only the step name proves no cause. Stop in review without rerunning, updating or repairing. |
+| **Unknown** | One failed job's log could not be read, including a truncated log without a selected diagnostic. The job is named in the evidence; it does not void the class decided by readable jobs. If no readable job decides, landing stays unclassified and stops in review without spending recovery. A cancelled or timed-out job is transient from its conclusion even without a log. |
+| **Inconclusive** | A read log contains no diagnostic, so its signature is only the step name, or a read classification rests on fails, such as the base jobs or a base log. Stop in review without rerunning, updating or repairing. |
 
 An unchanged-head rerun must be a verified `pull_request` execution for the
 same PR and head, the same workflow run with a later `run_attempt`, starting
@@ -415,8 +416,8 @@ A conclusive candidate failure stops for one automatic repair leaf with
 fresh validation and a new handoff. Once that repair is spent, the owner
 ends the claim and returns the task to `backlog`, preserving the candidate
 and failure evidence for its next run. Exhausting the task's landing repair
-budget blocks it for an operator. Unreadable evidence and unresolved base
-waits spend no candidate repair. Confirm the actual task and latest landing
+budget blocks it for an operator. Unresolved base waits and evidence that
+leaves classification undecided spend no candidate repair. Confirm the actual task and latest landing
 attempt state before recommending any action.
 
 ### Review deliveries without a handoff
@@ -430,8 +431,9 @@ leaf submits a detached `task_pr_watch_pipeline` (step `watch`, activity
 history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
 `blocked` or `pending`), `pr_number` and `head_sha`. A `failed` note adds
 `failed_checks`, plus a `classification` and `detail` that use the classes in
-the table above. A watch that cannot read jobs or logs records
-`inconclusive`. The watch only observes. To repair a red or conflicting pull
+the table above. A watch that cannot read the job listing, or has no deciding
+job after log reads, records `inconclusive`; an individual unreadable failed-job
+log does not void a readable job's classification. The watch only observes. To repair a red or conflicting pull
 request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
 [auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
 resumes the succeeded leaf at its completion step under the leaf's own
