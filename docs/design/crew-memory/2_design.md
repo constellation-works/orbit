@@ -100,7 +100,7 @@ The field is a JSON object `{ "model": [{path, text}], "global": text, "revision
 
 ### 5.4 Precedence and budget
 
-The memory block counts toward the activity's prompt budget. At its caps (6 KiB plus 3 KiB, about 2.5k tokens) it is smaller than the agent corpus limit of 8 KiB per activity (`crates/orbit-core/src/application/agent_corpus.rs`). Steering, task context, tag instructions and corpus are unchanged. Memory never removes or reorders them.
+The proposed memory block would count toward the activity's prompt budget. At its proposed caps (6 KiB of model content plus 3 KiB of global content, about 2.5k tokens), it totals 9 KiB (9216 bytes), which exceeds the existing 8 KiB (8192 bytes) agent corpus limit per activity (`crates/orbit-core/src/application/agent_corpus.rs`). Those 9 KiB are content bytes only and exclude the serialized-envelope framing overhead of the JSON object carrying paths, text, and revision (§5.3). Steering, task context, tag instructions and corpus are unchanged. Memory never removes or reorders them.
 
 ## 6. Dreaming Runs
 
