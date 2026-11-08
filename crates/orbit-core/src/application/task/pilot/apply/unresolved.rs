@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::ProviderFailureClass;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::application::contracts::INSPECTION_CREW_UNAVAILABLE;
 use crate::application::task::{
@@ -93,12 +93,8 @@ pub(super) fn record_failed_repilots(
                         .skip(snapshot.history_len.unwrap_or(0))
                         .any(|entry| {
                             entry.event == "task_pilot_applied"
-                                || (entry.event == "task_pilot_unresolved"
-                                    && entry
-                                        .note
-                                        .as_deref()
-                                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                                        .is_some_and(|note| note["pilot_run_id"] == run_id))
+                                || super::super::unresolved_pilot_run_id(entry)
+                                    .is_some_and(|recorded| recorded == run_id)
                         })
                     {
                         return Ok(());
@@ -122,16 +118,10 @@ pub(super) fn record_failed_repilots(
                         task_id,
                         TaskRecordUpdateParams {
                             actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: vec![TaskHistoryEntry {
-                                at: Utc::now(),
-                                by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: "task_pilot_unresolved".to_string(),
-                                note: Some(json!({"pilot_run_id": run_id}).to_string()),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: None,
-                            }],
+                            append_history: vec![super::super::unresolved_pilot_entry(
+                                run_id,
+                                Utc::now(),
+                            )],
                             expected_status: Some(vec![TaskStatus::Proposed, TaskStatus::Backlog]),
                             ..Default::default()
                         },

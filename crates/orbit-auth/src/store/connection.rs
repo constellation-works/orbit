@@ -53,10 +53,8 @@ impl LeaseTokenStore {
 
 fn no_store_here(path: &Path) -> OrbitError {
     OrbitError::PolicyDenied(format!(
-        "no lease token store at {}: lease token commands run as the lease listener user \
-         ({LISTENER_USER} by convention), whose Orbit home holds the store. Run them as that \
-         user, for example `sudo -H -u {LISTENER_USER} orbit lease token list`. Setting up the \
-         user and its store is described in the orbit-setup skill's remote-access reference.",
+        "no lease token store at {}: the lease token store belongs to the lease listener user \
+         ({LISTENER_USER} by convention), whose Orbit home holds it; run as that user.",
         PathBuf::from(path).display()
     ))
 }

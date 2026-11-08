@@ -236,9 +236,6 @@ fn execute_admitted(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::Lease(verb) => {
-            super::lease_tools::dispatch(runtime, verb, input, agent, model)
-        }
         OrbitBuiltinAction::WorkspaceClaim(verb) => {
             super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }

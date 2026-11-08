@@ -324,6 +324,64 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     ("ux_rules.file_at", UX_RULES_REMOVED_NOTE),
     ("ux_rules.disabled", UX_RULES_REMOVED_NOTE),
     ("review.verify_findings", VERIFY_FINDINGS_REMOVED_NOTE),
+    // [ORB-22808] Path leases: the lease.* keys were withdrawn on 2026-11-08;
+    // the machinery stays, disabled. Each key loads, warns and is ignored;
+    // code-health-sweep deletes these entries after 2026-12-08, when they
+    // become ordinary unknown settings.
+    ("lease.aging_minutes", LEASE_REMOVED_NOTE),
+    ("lease.default_mode", LEASE_REMOVED_NOTE),
+    ("lease.enabled", LEASE_REMOVED_NOTE),
+    ("lease.hard.agent", LEASE_REMOVED_NOTE),
+    ("lease.hard.human", LEASE_REMOVED_NOTE),
+    ("lease.intake.peer_user", LEASE_REMOVED_NOTE),
+    ("lease.listener.behind_proxy", LEASE_REMOVED_NOTE),
+    ("lease.listener.bind", LEASE_REMOVED_NOTE),
+    ("lease.listener.intake_socket", LEASE_REMOVED_NOTE),
+    (
+        "lease.listener.limits.address_per_minute",
+        LEASE_REMOVED_NOTE,
+    ),
+    ("lease.listener.limits.failed_auth", LEASE_REMOVED_NOTE),
+    (
+        "lease.listener.limits.failed_auth_window_seconds",
+        LEASE_REMOVED_NOTE,
+    ),
+    (
+        "lease.listener.limits.header_timeout_seconds",
+        LEASE_REMOVED_NOTE,
+    ),
+    ("lease.listener.limits.ipv6_prefix_len", LEASE_REMOVED_NOTE),
+    ("lease.listener.limits.max_body_bytes", LEASE_REMOVED_NOTE),
+    ("lease.listener.limits.max_connections", LEASE_REMOVED_NOTE),
+    (
+        "lease.listener.limits.max_in_flight_per_token",
+        LEASE_REMOVED_NOTE,
+    ),
+    (
+        "lease.listener.limits.max_in_flight_requests",
+        LEASE_REMOVED_NOTE,
+    ),
+    (
+        "lease.listener.limits.max_streams_per_token",
+        LEASE_REMOVED_NOTE,
+    ),
+    ("lease.listener.limits.max_tracked_keys", LEASE_REMOVED_NOTE),
+    (
+        "lease.listener.limits.request_timeout_seconds",
+        LEASE_REMOVED_NOTE,
+    ),
+    (
+        "lease.listener.limits.token_reads_per_minute",
+        LEASE_REMOVED_NOTE,
+    ),
+    (
+        "lease.listener.limits.token_writes_per_minute",
+        LEASE_REMOVED_NOTE,
+    ),
+    ("lease.listener.tls", LEASE_REMOVED_NOTE),
+    ("lease.listener.trusted_proxy", LEASE_REMOVED_NOTE),
+    ("lease.max_priority.agent", LEASE_REMOVED_NOTE),
+    ("lease.max_priority.human", LEASE_REMOVED_NOTE),
     // [ORB-22808] Decision assistance was removed on 2026-11-08. The
     // `[assistance]` table loads, warns and is ignored; code-health-sweep
     // deletes these entries after 2026-12-08, when it becomes an ordinary
@@ -489,6 +547,9 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         PARKED_RECLAIM_FIXED_NOTE,
     ),
 ];
+
+const LEASE_REMOVED_NOTE: &str = "ignored: path leases are not configurable and stay \
+     disabled; delete the [lease] table. This key stops being recognised after 2026-12-08";
 
 const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
      [assistance] table. This key stops being recognised after 2026-12-08";
@@ -700,24 +761,12 @@ pub(crate) fn is_machine_identity_key(key: &str) -> bool {
     matches!(key, "machine.id" | "machine.name" | "machine.task_prefix")
 }
 
-/// The OS user Orbit Web's lease intake socket accepts. Read only from the
-/// global `config.toml`: a checkout must not choose who may create leases.
-pub const LEASE_INTAKE_PEER_USER_KEY: &str = "lease.intake.peer_user";
-
-/// Dotted prefix of the lease listener's settings, read only from the
-/// listener user's global `config.toml`.
-pub const LEASE_LISTENER_KEY_PREFIX: &str = "lease.listener.";
-
 /// Whether `key` names a setting a workspace `config.toml` may not supply:
-/// the `[machine]` table, each crew's `env` list, which routes host
-/// variables into that crew's agents, the lease intake peer user and the
-/// lease listener's settings.
+/// the `[machine]` table and each crew's `env` list, which routes host
+/// variables into that crew's agents.
 pub fn is_global_only_key(key: &str) -> bool {
     key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
-        || key == LEASE_INTAKE_PEER_USER_KEY
-        || key == LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.')
-        || key.starts_with(LEASE_LISTENER_KEY_PREFIX)
         || matches!(
             parse_crew_field_key(key),
             Ok(Some(CrewFieldKey { field: "env", .. }))

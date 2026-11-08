@@ -13,7 +13,6 @@ use super::super::{
     CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues, DEFAULT_WORKFLOW_CREW,
     LEGACY_DEFAULT_WORKFLOW_CREW, describe,
 };
-use crate::config_document;
 use crate::memory_limit::MemoryLimit;
 
 /// Add the physical layer to value-admission errors while preserving other
@@ -371,28 +370,6 @@ pub(super) fn resolve_material_fields(
 
 pub(super) fn resolve_distributed_completion(raw: Option<String>) -> Result<String, OrbitError> {
     resolve_choice(raw, "review", "workflow.distributed_completion")
-}
-
-/// `lease.intake.peer_user`: unset, or a non-empty OS user name. Whether the
-/// user exists, and is neither root nor the operator, is decided when Orbit
-/// Web resolves it at startup.
-pub(super) fn resolve_lease_intake_peer_user(
-    raw: Option<String>,
-) -> Result<Option<String>, OrbitError> {
-    resolve_optional_non_empty(raw, crate::registry::LEASE_INTAKE_PEER_USER_KEY)
-}
-
-/// Admit `lease.intake.peer_user` alone from one `config.toml` document.
-pub(crate) fn admit_lease_intake_peer_user(
-    document: &toml::Value,
-    config_path: &Path,
-) -> Result<Option<String>, OrbitError> {
-    let raw = config_document::read_typed_config_value(
-        document,
-        crate::registry::LEASE_INTAKE_PEER_USER_KEY,
-        config_path,
-    )?;
-    resolve_at(resolve_lease_intake_peer_user(raw), config_path)
 }
 
 pub(super) fn resolve_optional_non_empty(

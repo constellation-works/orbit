@@ -3,7 +3,7 @@ title: Post and retire fleet notices
 description: Share scoped, expiring operational information with agents and operators.
 ---
 
-Fleet notices share short-lived incidents, planned maintenance, or other information with agents and operators. They inform readers; they do not grant authority or override policy. They are separate from [lease notices](../path-leases/), which are events on a path lease.
+Fleet notices share short-lived incidents, planned maintenance, or other information with agents and operators. They inform readers; they do not grant authority or override policy.
 
 ## Post, inspect and close
 
@@ -36,4 +36,4 @@ Orbit derives the poster class from the session, not a field in the post. An ope
 
 The MCP `notice` toolset exposes `orbit.notice.post`, `orbit.notice.list`, `orbit.notice.show`, and `orbit.notice.close`. It is opt-in on a server without a role; enable it with `orbit mcp serve --toolset notice`, or select a [role or toolset](../mcp-integration/#toolsets) that includes it. Toolset selection controls the MCP server surface; `orbit tool run` and activities can reach registered tools independently, subject to their own permissions.
 
-Brief delivery is separate. An `agent_loop` activity opts in by declaring `notice_instruction`; the host includes up to 5 open notices as untrusted data in its prompt. The instruction is appended only when a brief is delivered. `notice_posting_instruction` supplies posting guidance only when that dispatch may call `orbit.notice.post`, even if no brief is delivered. Neither instruction grants authority. See the [agent policy reference](../../reference/activity-job-yaml/#fleet-notice-instructions) for the fields and delivery conditions.
+Brief delivery is separate. An `agent_loop` activity asks for the brief in its catalog YAML by setting `fleet_notices: read` or `post`, or by declaring a non-empty `notice_instruction`. An activity with neither gets no notices in its prompt; for one that asks, the host includes up to 5 open notices as untrusted data. The reading text is appended only when a brief is delivered. Posting guidance, from `fleet_notices: post` or a declared `notice_posting_instruction`, applies whenever that dispatch may call `orbit.notice.post`, even if no brief is delivered. Neither the built-in texts nor the declared instructions grant authority. See the [agent policy reference](../../reference/activity-job-yaml/#fleet-notice-instructions) for each `fleet_notices` level, the built-in text it selects, and the delivery conditions.

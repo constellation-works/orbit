@@ -304,14 +304,10 @@ For channel setup, plugin authentication and token recovery, see
 | `orbit experiment readout <id>` | Show per-arm outcomes computed now, intention-to-treat with forced assignments left out and counted: `n`, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes, crew mix, each arm's difference from control post-stratified by complexity, guardrail status, a sample-ratio chi-square against the weights (verdict withheld below p = 0.001), and overlay-digest drift. A failed sample-ratio check or any treatment arm below a 0.9 delivered rate sets the verdict to `withheld`; the delivery-rate rule applies before the horizon, even when its primary comparison would otherwise be `winner` or `no difference`. With no withhold, the verdict is `collecting` until every arm reaches `--min-sample` or `--max-days` passes, then `winner <arm>`, `no difference`, or `inconclusive`. `--metric <metric>` reports only that metric; the verdict is still read on the primary metric and guardrails. The shape carries `schema_version`. Read-only; agents may call `orbit.experiment.readout`. |
 | `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show`, `orbit.experiment.list`, and `orbit.experiment.readout`. |
 
-### Leases, residents and evolution
+### Residents and evolution
 
 | Command | Purpose |
 |---|---|
-| `orbit lease request` / `renew` / `expand` / `release` | Request or manage a workspace path lease. |
-| `orbit lease list` / `show` / `check` / `notices` | Inspect leases, conflicts and notices. |
-| `orbit lease token create` / `list` / `revoke` | Manage scoped listener tokens as the listener user. |
-| `orbit lease listen` | Run the token-only network listener as the listener user. |
 | `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, an earlier `--deadline`) a resident mandate's authority. Only the operator at a terminal widens directly; from any other caller, including an MCP session, a widening changes nothing and raises a `resident_authority` decision request quoting `--quote` verbatim, applied only if a human answers `grant`. Anyone who can write the assignment narrows. |
 | `orbit resident relay <task> --quote <words> --source <json>` | Relay a human's words to a resident verbatim as a `resident.answer` comment with provenance (`--request-id`, `--reverses` optional). It wakes the resident and never changes authority: input naming rights, workspaces or status is refused. |
 | `orbit resident control <task> pause\|resume\|stop\|wake\|takeover\|release --reason <why>` | Change whether a resident fires. `wake --status-request` asks for a status checkpoint; `--by-session` records the session acting. Each action is a history entry with the caller; `stop` ends the mandate and moves the assignment to review. |
@@ -325,6 +321,3 @@ For channel setup, plugin authentication and token recovery, see
 | `orbit evolution decline <id> [--days <n>]` | Operator-only: suppress proposals for a signature (default 30 days). CLI-only; not listed over MCP. |
 
 The mandate format and the authority rules are described in [Resident mandates](../resident-mandates/).
-
-See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
-listener authentication and examples.

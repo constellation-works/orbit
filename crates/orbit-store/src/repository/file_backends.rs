@@ -254,6 +254,9 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
         self.observe_task_candidate_keys(filter, limit)
     }
+    fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        self.in_boundary(|| self.registered_task_bundle_ids())
+    }
     fn query_task_rows(
         &self,
         filter: &crate::contracts::TaskListFilter,

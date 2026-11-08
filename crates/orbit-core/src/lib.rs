@@ -98,7 +98,7 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
-    /// Stop a worker's startup observer just after it reaps the worker.
+    /// Stop a worker's startup observer around reaping and exit recording.
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
     pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
@@ -197,8 +197,6 @@ pub use context::ActorIdentity;
 /// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
 pub use orbit_config::ComplexityCrewPools;
 pub use orbit_config::TaskTypeDefinition;
-/// The operator's `lease.intake.peer_user`, read by Orbit Web at startup.
-pub use orbit_config::load_lease_intake_peer_user;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.

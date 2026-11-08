@@ -274,6 +274,14 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError>;
+    /// Every registered bundle id, in newest-first listing order, without
+    /// validating or hydrating envelopes. Only for scans that validate the
+    /// bundles themselves (or reuse whole-bundle freshness proofs); no task
+    /// field or admission decision may be inferred from this enumeration.
+    /// `None` asks the caller to use the normal validated metadata listing.
+    fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        Ok(None)
+    }
     fn query_task_rows(
         &self,
         filter: &crate::contracts::TaskListFilter,

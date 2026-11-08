@@ -1017,6 +1017,23 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 - Submission fixtures use a harmless worker stub. The replay fixture runs the real worker through the ignored `replay_worker_child` entry point and waits for terminal run state before dropping its roots.
 - The security table discovers literal routes from the API router and their mutating methods from HTTP `Allow` responses, then checks origin/Host protection on every mutation and operator admission on governed actions. A new mutating route defaults to operator-only; existing ordinary writes have explicit exceptions. The table asserts HTTP behavior, not source text; never expose a private router API for testing.
 
+The waiting-count refresh (`GET /api/decisions`) enumerates registered bundle
+ids. Whole-bundle freshness proofs replace a separate envelope-index
+freshness pass and envelope hydration. It still probes every bundle,
+including terminal tasks, so corrupt-bundle warnings and `include_closed`
+keep the same population. Large bundle-stamp scans use at most 16 helper
+threads; bundle reads and request-state derivation stay on the caller.
+On Linux, probes share an open bundle directory so each file avoids walking
+the workspace path prefix again; other platforms retain ordinary metadata probes.
+After the first clean scan, unchanged bundles with no decision-request event
+need no further bundle read. The remaining filesystem probes still scale with
+the workspace's task count. Measure changes with paired base and candidate
+builds using identical optimization settings and the same disposable store:
+record the first observation, then at least 20 sequential warm requests
+250 ms apart, raw responses and samples, and nearest-rank p50/p95. Keep the
+measurement harness with that evidence, and stop each server before the next
+run. Never measure against a live workspace or generate competing load.
+
 Scheduled dashboard refreshes on Tasks, Jobs Catalogue, Run detail, Frictions
 and Metrics combine their due notice, routine-health, failing-job and audit
 summary reads through `GET /api/dashboard/chrome`. The endpoint dispatches only

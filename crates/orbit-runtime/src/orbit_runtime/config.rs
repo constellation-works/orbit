@@ -179,14 +179,14 @@ impl RuntimeKernel {
         self.context.settings().unlocked_context_paths()
     }
 
-    /// `lease.*` as admitted: whether path leases are accepted and the
-    /// per-class guards a request is held to.
+    /// The lease policy this runtime opened with: whether path leases are
+    /// accepted and the per-class guards a request is held to.
     pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
         self.context.settings().lease_policy()
     }
 
-    /// `lease.enabled` as admitted: whether this workspace accepts path
-    /// lease operations at all.
+    /// Whether this runtime accepts path lease operations at all; `false`
+    /// outside lease machinery tests [ORB-22808].
     pub fn leases_enabled(&self) -> bool {
         self.lease_policy().enabled()
     }

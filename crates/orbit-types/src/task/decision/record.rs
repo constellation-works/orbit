@@ -43,6 +43,13 @@ pub enum TaskDecision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hold: Option<Value>,
     },
+    /// A task-pilot run finished without deciding about the task, recorded
+    /// on the `task_pilot_unresolved` event. It holds the task until the
+    /// task changes, and keys replays of the same run's settlement.
+    PilotUnresolved {
+        /// The task-pilot run that left the task undecided.
+        pilot_run_id: String,
+    },
     /// An auto drain withheld approval of the task its pilot assessed.
     DrainApprovalHeld {
         /// Why the drain held it.

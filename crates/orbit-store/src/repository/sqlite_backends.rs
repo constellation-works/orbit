@@ -129,6 +129,10 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.get_audit_event_stats(since, tool)
     }
 
+    fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError> {
+        self.store.get_audit_event_count(since)
+    }
+
     fn get_audit_event_durations(
         &self,
         since: Option<&DateTime<Utc>>,

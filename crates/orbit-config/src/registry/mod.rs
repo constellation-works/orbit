@@ -187,9 +187,8 @@ mod settings;
 pub use allowed::ConfigAllowedValues;
 
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, LEASE_INTAKE_PEER_USER_KEY,
-    LEASE_LISTENER_KEY_PREFIX, REMOVED_CONFIG_KEYS, is_compatibility_config_key,
-    is_machine_identity_key, parse_crew_field_key,
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
+    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
@@ -203,5 +202,3 @@ pub use settings::{
     ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
     WorkerContainmentSettings,
 };
-pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
-pub(crate) use settings::{admit_lease_intake_peer_user, admit_lease_listener_settings};

@@ -21,7 +21,7 @@ use super::{ownership, source::Source};
 /// A request that asks for nothing is a read-only preview; adoption or reissue
 /// commits exactly one audited checkpoint. Either way the returned document
 /// reports the stalled identity, the retained debt and the frozen obligations.
-pub fn recover_auto_task(
+pub(crate) fn recover_auto_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     request: &RecoveryRequest,

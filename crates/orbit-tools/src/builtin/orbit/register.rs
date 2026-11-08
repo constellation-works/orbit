@@ -6,7 +6,6 @@ use orbit_common::governance::decision::DECISION;
 use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::experiment::EXPERIMENT;
 use orbit_common::governance::friction::FRICTION;
-use orbit_common::governance::lease::LEASE;
 use orbit_common::governance::notice::NOTICE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::resident::RESIDENT;
@@ -40,9 +39,8 @@ pub fn register(registry: &mut ToolRegistry) {
     // the MCP surface.
     operation::register_noun(registry, &WORKSPACE_CLAIM);
     // Each MCP tool's `orbit mcp serve` toolset comes from the one table in
-    // `crate::mcp`; leases, notices, experiments and the analytics
+    // `crate::mcp`; notices, experiments and the analytics
     // reads are opt-in there, and `orbit tool run` reaches them regardless.
-    operation::register_noun(registry, &LEASE);
     operation::register_noun(registry, &NOTICE);
     // Resident mandates: the governed authority grant and the mandate reads,
     // in the opt-in `resident` toolset the manager and resident roles serve.

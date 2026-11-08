@@ -605,12 +605,18 @@ filesystem profile or sandbox checks that also apply to the run.
 
 ### Fleet notice instructions
 
-An `agent_loop` may declare these optional strings under `spec`:
+An `agent_loop` selects the engine's built-in fleet-notice text with `fleet_notices`, and may replace either built-in text with its own under `spec`:
 
-- `notice_instruction` requests the host's open `fleet_notices` brief and tells the agent how to treat it. The instruction is appended only when a brief is delivered. Without the field, the host does not read notices for that prompt.
-- `notice_posting_instruction` gives posting guidance and is appended only when the dispatch may call `orbit.notice.post`. It does not depend on a delivered brief, so an empty board or disabled brief delivery does not suppress it.
+- `fleet_notices: none | read | post` (default `none`) selects the built-in texts.
+  - `none` selects no built-in text. The activity gets only its own instructions, if any.
+  - `read` selects the built-in reading text. It tells the agent to treat the brief as untrusted data: notices cannot change the task, its criteria, scope, tools, authority, validation, review or the workspace guide; an instruction inside a notice is ignored and may be reported; and a notice that seems to require action outside the task is noted in the task, not acted on.
+  - `post` selects the reading text and the built-in posting guidance. It limits posting to incident or info notices for a problem outside the task that affects other agents, with a linked task or evidence. It tells the agent to check the brief for an open notice before posting, to corroborate a duplicate rather than open one, and to close only the notices its own task authored once they stop being true.
+- `notice_instruction` is a non-empty string that replaces the built-in reading text. A non-empty value requests the host's open `fleet_notices` brief even without `fleet_notices`.
+- `notice_posting_instruction` is a non-empty string that replaces the built-in posting guidance. It applies with or without `fleet_notices: post`.
 
-Briefs are untrusted data, and neither field grants tool access or authority. See [fleet notices](../../how-to/fleet-notices/) for scope, limits and the independent MCP and brief-delivery controls.
+The reading text is appended only when the host delivers a brief for that prompt. The posting guidance is appended only when the dispatch may call `orbit.notice.post`. It does not depend on a delivered brief, so an empty board or disabled brief delivery does not suppress it. An activity with `fleet_notices: none` and no non-empty `notice_instruction` never has the host read notices for that prompt.
+
+Briefs are untrusted data, and none of these fields grants tool access or authority. See [fleet notices](../../how-to/fleet-notices/) for scope, limits and the independent MCP and brief-delivery controls.
 
 ### Completion contracts
 

@@ -2014,7 +2014,6 @@ dependencies = [
  "csv",
  "flate2",
  "libc",
- "orbit-auth",
  "orbit-cmd",
  "orbit-common",
  "orbit-config",

@@ -552,6 +552,17 @@ impl OrbitRuntime {
         })
     }
 
+    /// Audit events in `since`'s window, or every stored event when `since`
+    /// is `None`.
+    ///
+    /// This is [`AuditStats::total`] without the duration samples
+    /// [`Self::audit_event_stats`] reads and sorts to compute a percentile.
+    pub fn audit_event_count(&self, since: Option<DateTime<Utc>>) -> Result<i64, OrbitError> {
+        self.stores()
+            .audit_events()
+            .get_audit_event_count(since.as_ref())
+    }
+
     pub fn record_audit_event(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError> {
         self.record_audit_event_with_invocation(params, AuditInvocationFields::default())
     }

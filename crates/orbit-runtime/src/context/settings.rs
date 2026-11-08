@@ -108,8 +108,8 @@ pub struct OrbitRuntimeSettings {
     task_types: Vec<orbit_config::TaskTypeDefinition>,
     /// `[decision_channel] enabled`: raise decision requests for held work.
     decision_channel_enabled: bool,
-    /// `lease.*`: whether path leases are accepted and the per-class guards
-    /// a request is held to.
+    /// The fixed lease policy (path leases disabled) [ORB-22808]: whether
+    /// path leases are accepted and the per-class guards a request is held to.
     lease_policy: crate::task::locks::LeasePolicy,
     /// `experiments.*`: the workspace's experiment policy.
     experiments: orbit_config::ExperimentSettings,

@@ -89,8 +89,53 @@ pub(crate) use promotion::{
 };
 pub(crate) use source::requested_base_branch;
 
-use orbit_types::task::{CommentReceipt, TaskComment, TaskStatus};
+use std::borrow::Cow;
+
+use chrono::{DateTime, Utc};
+use orbit_types::task::{CommentReceipt, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
+
+use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::legacy_decisions;
+
+/// History event `system` records on a task whose task-pilot run finished
+/// without deciding about it. Its typed decision names the run. Later drains
+/// hold the task on it until a real change, whichever drain or standalone
+/// run dispatched that pilot [ORB-19544].
+pub(crate) const UNRESOLVED_PILOT_EVENT: &str = "task_pilot_unresolved";
+
+/// The history entry recording that pilot run `run_id` left a task
+/// undecided. The note keeps the JSON text history views have always shown;
+/// readers take the run from the typed decision.
+pub(crate) fn unresolved_pilot_entry(run_id: &str, at: DateTime<Utc>) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at,
+        by: SYSTEM_ACTOR_LABEL.to_string(),
+        event: UNRESOLVED_PILOT_EVENT.to_string(),
+        note: Some(json!({ "pilot_run_id": run_id }).to_string()),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::PilotUnresolved {
+            pilot_run_id: run_id.to_string(),
+        }),
+    }
+}
+
+/// The run an undecided-pilot record names: its typed decision, or the JSON
+/// note of a record written before the decision existed.
+pub(crate) fn unresolved_pilot_run_id(entry: &TaskHistoryEntry) -> Option<Cow<'_, str>> {
+    if entry.event != UNRESOLVED_PILOT_EVENT {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotUnresolved { pilot_run_id }) => {
+            Some(Cow::Borrowed(pilot_run_id.as_str()))
+        }
+        Some(_) => None,
+        None => legacy_decisions::unresolved_pilot_note_run_id(entry).map(Cow::Owned),
+    }
+}
 
 /// Whether an explicit pilot selection may assess a task in `status`. Prepare
 /// and an operator surface's pre-submission check share the predicate.

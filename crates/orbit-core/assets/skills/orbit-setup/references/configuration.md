@@ -59,7 +59,7 @@ including workspace discovery, is always present. Roles are presets:
 | `operator` | Every MCP toolset |
 | `manager` | Task and run reads, decisions, notices, resident mandates and search |
 | `resident` | The manager surface plus task writes and dispatch |
-| `agent` | Task reads and writes, decisions, codebase, search, UI, leases and notices |
+| `agent` | Task reads and writes, decisions, codebase, search, UI and notices |
 | `reader` | Task and run reads, codebase and search |
 
 The `operator` role selects every toolset but grants no operator authority.
@@ -70,7 +70,7 @@ Set and read back the global defaults with:
 
 ```bash
 orbit config set --global machine.mcp.role reader
-orbit config set --global machine.mcp.toolsets '["leases"]'
+orbit config set --global machine.mcp.toolsets '["experiments"]'
 orbit config get machine.mcp.role
 orbit config get machine.mcp.toolsets
 orbit config show --scope global
@@ -1625,209 +1625,6 @@ backfilled history should follow them. It records reviewable lines only when
 the landing's commits can be isolated to that task; otherwise the new row's
 denominator is unavailable. It does not rewrite existing rows. Run
 `orbit migrate` without flags to see pending migrations before applying.
-
-## Path-lease policy
-
-A path lease lets a named principal, a person or an agent, reserve workspace
-selectors for coordination. Leases are off until `lease.enabled` is `true`.
-While it is off, every lease operation is refused with an error naming the key.
-
-| Key | Built-in default | Accepted values | Governs |
-|---|---|---|---|
-| `lease.enabled` | `false` | `true`, `false` | Whether lease operations are accepted at all. |
-| `lease.default_mode` | `advisory` | `advisory`, `hard` | Mode of a request that names none. |
-| `lease.hard.human` | `allow` | `allow`, `never` | Whether a human principal's hard requests stay hard. `never` grants them as advisory. |
-| `lease.hard.agent` | `allow` | `allow`, `never` | The same rule for agent principals. |
-| `lease.max_priority.human` | `high` | `low`, `normal`, `high` | Highest priority a human request may name. |
-| `lease.max_priority.agent` | `normal` | `low`, `normal`, `high` | Highest priority an agent request may name. |
-| `lease.aging_minutes` | `30` | `1`–`10080` | Minutes a queued hard request or expansion waits before it moves up one priority level. |
-| `lease.intake.peer_user` | unset | an OS user name | Global only. The lease listener's OS user that `orbit web serve` accepts lease operations from over `~/.orbit/run/lease-intake.sock`. Unset serves no socket. |
-
-These keys inherit per key like other settings. Set the policy and read it back:
-
-```bash
-orbit config keys --json                 # confirm the lease.* keys in the installed version
-orbit config set lease.enabled true      # workspace config; add --global for ~/.orbit/config.toml
-orbit config get lease.enabled
-orbit config show --all                  # effective values with their source
-```
-
-The same policy as TOML, with each dotted key written as a table:
-
-```toml
-[lease]
-enabled = true
-default_mode = "advisory"
-
-[lease.hard]
-human = "allow"
-agent = "never"
-
-[lease.max_priority]
-human = "high"
-agent = "normal"
-```
-
-Enabling leases changes live coordination for everyone on the workspace, so
-make that choice deliberately and record it.
-
-`lease.intake.peer_user` is read only from the global `~/.orbit/config.toml`.
-Set it only for a lease listener user that meets the listener-user
-prerequisite in the path-leases design. Orbit Web refuses to start when it
-names root, the operator's own user or a missing user. The socket's directory
-and file are group-owned by that user's primary group, so the operator's user
-must belong to that group. Every connection from another user, the operator
-included, is refused and logged with its uid.
-
-### How requests behave
-
-- **Advisory** requests are granted whenever leases are enabled. They block
-  nothing. The answer lists the `overlaps` holders so the caller can coordinate.
-- **Hard** requests are granted only when no selector overlaps a task context
-  lock, a task reservation or another hard lease. Paths matching
-  `workflow.unlocked_context_paths` leave the hard surface and come back as
-  `unlocked_selectors`. An overlapping request waits in the lease queue:
-  `granted: false`, `queued: true`, its `queue_position`, every holder in
-  `conflicts`, and a lease in state `queued` that holds nothing, so drains and
-  reservations ignore it. It gets a `queued` notice now and a `granted` notice
-  when its holders release, expire or settle; a task holder is never preempted.
-  The queue orders by priority, then age, and a waiter older than
-  `lease.aging_minutes` moves up one level. Send `wait: false` (CLI
-  `--no-wait`) to be refused instead (`queued: false`, `reason: held`).
-- **Class downgrade:** a hard request from a principal class whose
-  `lease.hard.*` is `never` is granted as advisory, with `downgraded: true`
-  and a `notice`.
-- **Priority** is stored with the lease and checked only against the class
-  ceiling. A request above `lease.max_priority.*` is refused with
-  `reason: priority_ceiling`, and the refusal is audited. Priority orders the
-  queue; it never preempts a holder. A request that names no priority gets
-  `normal`, lowered to the ceiling if the ceiling is below it.
-- **Principal class** is `agent` when the process running the operation declares
-  an agent or managed run, and `human` otherwise. Over REST, that is the serving
-  process, not the remote caller. Over SSH the class and its ceilings are
-  attribution plus a guard, not a security boundary.
-- **TTL and expiry:** `ttl_seconds` defaults to `1800` and must be between `1`
-  and `14400`. `renew` moves expiry to now plus the TTL, and `release` ends a
-  lease. An expired lease ends lazily when a request, renew, release, show or list
-  touches it, and each ending emits a `lease.expired` audit event. `check` only
-  reads: it neither expires nor audits. Renewing an inactive lease fails, and
-  releasing one returns `released: false`. Either way, request a new lease.
-- **Expansion** (`orbit lease expand <id> <selector>…`, `orbit.lease.expand`,
-  `POST /api/leases/{id}/expand`) adds selectors to a granted lease. Free paths
-  are added at once; on a hard lease, blocked ones queue while the lease keeps
-  what it holds. When two leases each wait on the other's expansion, the
-  expansion ranked last in queue order (lowest effective priority, then
-  youngest) is refused with a `deadlock` notice and keeps what it holds.
-
-### Transports
-
-CLI and MCP expose request, renew, expand, release, show, list, check and notices through
-the same owner operations. Check `orbit lease --help` and the installed tool catalog
-when coordinating with an older binary. `orbit lease notices --after <seq>` and
-`orbit.lease.notices` return `{notices, cursor}`; add `--lease-id <id>` to filter.
-`--follow` polls continuously and emits JSONL in JSON modes. Save the last returned
-cursor to resume after a disconnect; reads never acknowledge notices or expire leases.
-
-- **Config:** the `orbit config` commands above.
-- **REST:** `orbit web serve` (default `127.0.0.1:7878`) serves `/api/leases`:
-  `GET` and `POST /api/leases`, `GET` and `DELETE /api/leases/{id}`,
-  `POST /api/leases/check`, `POST /api/leases/{id}/renew` and
-  `POST /api/leases/{id}/expand`, plus
-  `GET /api/leases/notices?after=<seq>` and `GET /api/leases/events` (SSE).
-  SSE accepts `Last-Event-ID` as the resume cursor; each ID is the notice sequence. Select a workspace
-  with `?workspace=<name-or-id>`. Reads need no operator session. Request, renew,
-  expand and release need the server started with `--operator`; otherwise they are denied.
-  The routes accept only localhost origins.
-- **Audit:** `orbit audit list --tool orbit.lease.request --since 1h`, or
-  `--kind lease` for every lease event. Granted requests record
-  `lease.request.granted`, waiting ones `lease.request.queued` and, once granted,
-  `lease.request.granted` with `from_queue: true`; refusals record
-  `lease.request.refused` with status `denied`, expansions `lease.expanded`,
-  and expiries record `lease.expired`.
-
-### Claude Code edit hook
-
-After requesting a session lease, export its ID as `ORBIT_LEASE_ID`. Put this
-command hook in the project's `.claude/settings.json` (merge with existing hooks):
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Edit|Write",
-      "hooks": [{"type": "command", "command": "python3 .claude/lease-check.py"}]
-    }]
-  }
-}
-```
-
-Save the following as `.claude/lease-check.py`. The hook reads the target path
-from Claude Code's stdin JSON and invokes the public check command with an argv
-list, so spaces and shell punctuation in paths stay literal:
-
-```python
-import json
-import os
-import pathlib
-import subprocess
-import sys
-
-request = json.load(sys.stdin)
-path = request.get("tool_input", {}).get("file_path")
-lease_id = os.environ.get("ORBIT_LEASE_ID")
-warning = None
-if not lease_id:
-    warning = "No session lease. Request one before editing shared paths."
-elif path:
-    try:
-        target = pathlib.Path(path).resolve()
-        root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                              capture_output=True, text=True, check=True).stdout.strip()
-        selector = "file:" + target.relative_to(pathlib.Path(root).resolve()).as_posix()
-        result = subprocess.run(
-            ["orbit", "lease", "check", selector, "--lease-id", lease_id, "--json"],
-            capture_output=True, text=True, cwd=root)
-        if result.returncode:
-            warning = "Lease check failed: " + result.stderr.strip()
-        else:
-            check = json.loads(result.stdout)
-            if not check["lease_active"] or any(not p["covered"] for p in check["paths"]):
-                warning = "Outside the session lease. Ask to expand it, or coordinate before editing."
-            elif any(p["holders"] for p in check["paths"]):
-                warning = "Other holders overlap this path. Coordinate before editing."
-    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
-        warning = "Lease check could not cover this target: " + str(error)
-if warning:
-    print(warning, file=sys.stderr)
-    if os.environ.get("ORBIT_LEASE_HOOK_DENY") == "1":
-        sys.exit(2)
-```
-
-The default is advisory: a warning exits zero and permits the edit. Set
-`ORBIT_LEASE_HOOK_DENY=1` explicitly to deny on warnings (Claude Code command hooks
-use exit 2 to block). To cover an added path, run `orbit lease expand "$ORBIT_LEASE_ID"
-<selector>` and wait for its `granted` notice. This hook does not expand or release
-leases automatically. Test both an inside and outside path before enabling denial.
-
-### Verify the policy
-
-Use a disposable workspace for the first check. Enable leases there, start the
-dashboard with `orbit web serve --operator --no-open`, and then:
-
-1. `orbit config show --all` shows each `lease.*` value and its source.
-2. Post an advisory request. Expect `"granted": true` and a `lease` object with a `lease_id`:
-
-   ```bash
-   curl -s -X POST 'http://127.0.0.1:7878/api/leases?workspace=<workspace>' \
-     -H 'Content-Type: application/json' \
-     -d '{"principal":"<person-or-agent>","selectors":["<workspace-relative-path-or-glob>"],"mode":"advisory","ttl_seconds":600}'
-   ```
-
-3. `GET /api/leases` lists the lease, and `orbit audit list --tool orbit.lease.request --since 1h` shows the granted event.
-4. To see the queue, send a `"mode":"hard"` request over a path held by another active hard lease. Expect `granted: false`, `queued: true` and `conflicts` naming the holder; release the holder and expect a `granted` notice for the queued lease. Add `"wait": false` to see a refusal instead, with a `lease.request.refused` event with status `denied`.
-5. To see a priority refusal, set `lease.max_priority.human` to `low` in the disposable workspace, then request `"priority":"high"`. Expect a refusal with `priority_ceiling` in the audit event.
-6. To see class downgrade, set `lease.hard.human` to `never`, then send a hard request. Expect `granted: true`, `downgraded: true` and a `notice`.
-7. Release the test lease with `DELETE /api/leases/<lease_id>`, and restore the previous `lease.*` values with `orbit config set`.
 
 ## Environment passthrough
 

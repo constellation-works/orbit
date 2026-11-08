@@ -287,7 +287,7 @@ pub(crate) async fn security_headers(mut response: Response) -> Response {
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
-    // Before the TCP bind, so a refused `lease.intake.peer_user` stops startup.
+    // Before the TCP bind, so a refused intake peer user stops startup.
     let mut lease_intake = bind_lease_intake(state.global_root())?;
     let intake_state = state.clone();
 
@@ -427,23 +427,28 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     Ok(())
 }
 
-/// Bind the lease intake socket when the operator's global
-/// `lease.intake.peer_user` is set; `None` when it is unset.
+/// The former `lease.intake.peer_user` default (unset), fixed when the key
+/// was removed [ORB-22808]: the OS user Orbit Web's lease intake socket
+/// accepts. With none, Orbit Web serves no intake socket.
+const LEASE_INTAKE_PEER_USER: Option<&str> = None;
+
+/// Bind the lease intake socket when there is an intake peer user; `None`
+/// when there is none.
 #[cfg(unix)]
 fn bind_lease_intake(
     global_root: &Path,
 ) -> Result<Option<lease_intake::LeaseIntakeSocket>, OrbitError> {
-    let Some(peer_user) = orbit_core::load_lease_intake_peer_user(global_root)? else {
+    let Some(peer_user) = LEASE_INTAKE_PEER_USER else {
         return Ok(None);
     };
-    lease_intake::LeaseIntakeSocket::bind(global_root, &peer_user).map(Some)
+    lease_intake::LeaseIntakeSocket::bind(global_root, peer_user).map(Some)
 }
 
 #[cfg(not(unix))]
-fn bind_lease_intake(global_root: &Path) -> Result<Option<()>, OrbitError> {
-    match orbit_core::load_lease_intake_peer_user(global_root)? {
+fn bind_lease_intake(_global_root: &Path) -> Result<Option<()>, OrbitError> {
+    match LEASE_INTAKE_PEER_USER {
         Some(_) => Err(OrbitError::InvalidInput(
-            "lease.intake.peer_user needs a Unix host: the lease intake socket checks its \
+            "a lease intake peer user needs a Unix host: the lease intake socket checks its \
              peer's user through the kernel"
                 .to_string(),
         )),

@@ -174,7 +174,6 @@ prove that a particular task or run succeeded.
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
-| **[Leases](#leases)** | Read-only path holders, waiters and recent landing notices for the selected workspace. |
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
@@ -201,14 +200,6 @@ its **denied** status.
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings. Plugins is
 `#plugins`.
-
-## Leases
-
-Select a workspace and open **Leases** to see path holders and queued requests
-or expansions, including holders inherited from a directory lease. Recent
-landing notices appear alongside them. The view is read-only and does not
-aggregate **All workspaces**. Request, renew, expand or release leases with the
-CLI or MCP tools instead; see [Hold paths with leases](../path-leases/).
 
 ## Notices
 

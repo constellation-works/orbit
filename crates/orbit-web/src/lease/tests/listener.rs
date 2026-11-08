@@ -197,11 +197,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
     std::fs::write(repo_root.join("src/y.rs"), "pub fn y() {}\n").unwrap();
     std::fs::write(repo_root.join("src/z.rs"), "pub fn z() {}\n").unwrap();
-    std::fs::write(
-        workspace_root.join("config.toml"),
-        "[lease]\nenabled = true\n",
-    )
-    .unwrap();
+    super::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 
@@ -272,10 +268,15 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::write(&cert_path, pair.cert.pem()).unwrap();
     std::fs::write(&key_path, pair.signing_key.serialize_pem()).unwrap();
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    std::fs::write(home.join("config.toml"), format!(
-        "[lease.listener]\nbind = '0.0.0.0:0'\nintake_socket = {socket_path:?}\ntls = {{ cert = {cert_path:?}, key = {key_path:?} }}\n"
-    )).unwrap();
-    let settings = orbit_config::load_lease_listener_settings(&home).unwrap();
+    let settings = crate::lease_listener::LeaseListenerSettings {
+        bind: Some("0.0.0.0:0".to_string()),
+        intake_socket: Some(socket_path.to_str().unwrap().to_string()),
+        tls: Some(crate::lease_listener::LeaseListenerTlsSettings {
+            cert: cert_path.to_str().unwrap().to_string(),
+            key: key_path.to_str().unwrap().to_string(),
+        }),
+        ..crate::lease_listener::LeaseListenerSettings::default()
+    };
     let tls_config = LeaseListenerConfig::from_settings(&settings).unwrap();
     let tls_store = LeaseTokenStore::open_in_orbit_home(&home).unwrap();
     let router = lease_listener_router(
@@ -602,11 +603,7 @@ fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces
     for name in ["x", "y"] {
         std::fs::write(repo_root.join(format!("src/{name}.rs")), "pub fn f() {}\n").unwrap();
     }
-    std::fs::write(
-        workspace_root.join("config.toml"),
-        "[lease]\nenabled = true\n",
-    )
-    .unwrap();
+    super::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 

@@ -123,14 +123,9 @@ pub(crate) fn run() {
     // Invalid `orbit tool run` input cannot run. Reporting it before generation
     // pin keeps a typo from resolving a workspace or applying pending migrations.
     let unusable_tool_input = matches!(runtime_need, RuntimeNeed::UnusableToolInput { .. });
-    // `orbit lease token` and `orbit lease listen` run as the lease listener
-    // user and touch only its own Orbit home, so they pin no generation there.
-    let listener_user_command =
-        matches!(&cli.command, command::Commands::Lease(lease) if lease.runs_as_listener_user());
     let _generation = if matches!(&cli.command, command::Commands::Update(_))
         || inspection
         || unusable_tool_input
-        || listener_user_command
     {
         None
     } else {
