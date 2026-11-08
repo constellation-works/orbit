@@ -23,17 +23,21 @@
 #   (`allow_non_success: true`).
 # - Load-failure hold [ORB-22892]: `classify_workspace_auto_tasks` also
 #   excludes a task whose own leaf of this drain ended `failed` before any
-#   real step started (its only step is the job-load diagnostic, or it has
-#   none) — a bad job/activity definition, invalid catalog entry, retired
-#   declaration or unresolvable script manifest. Such a failure changes
-#   nothing on the task, so re-admitting it would only repeat the same
-#   deterministic failure every iteration. The pass reports each held task
-#   as `leaf_load_failed` in its deferred list and in
-#   `leaf_load_failed_holds`, naming the leaf run and the load error. The
-#   hold lasts for the rest of this drain, lifts when the task is updated
-#   after the failure, and never applies to a leaf that started a step
-#   (a transient or post-step failure keeps ordinary re-admission) or to
-#   a different drain.
+#   activity step started. A failed leaf's run record keeps only a
+#   job-targeted diagnostic step (or none) whether it failed at load or
+#   after real work, so the hold reads the audit trail: it applies only
+#   when that trail has no started activity step (`step_started` with a
+#   step id). That is a bad job/activity definition, invalid catalog
+#   entry, retired declaration or unresolvable script manifest. Such a
+#   failure changes nothing on the task, so re-admitting it would only
+#   repeat the same deterministic failure every iteration. The pass
+#   reports each held task as `leaf_load_failed` in its deferred list and
+#   in `leaf_load_failed_holds`, naming the leaf run and the load error.
+#   The hold lasts for the rest of this drain, lifts when the task is
+#   updated after the failure, and never applies to a leaf whose audit
+#   shows an activity step started (a transient or post-step failure keeps
+#   ordinary re-admission, whatever the run record's diagnostic step and
+#   however long the leaf ran) or to a different drain.
 #
 # `--approve-proposed` [ORB-14117]
 # - Opt-in through `approve_proposed`. When no pilot of this drain is live, an

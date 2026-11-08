@@ -200,12 +200,13 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     snapshot
         .include_tasks(runtime, &claimed)
         .map_err(|error| PassError::store(action, "read claimed tasks", error))?;
-    // [ORB-22892] A leaf of this drain that failed at job load (no real step
-    // started) holds its task for the rest of this drain. The task itself is
-    // unchanged by such a failure, so without this the next iteration would
-    // dispatch the same deterministic failure again. The hold lifts when
-    // the task changes after the failure; a new drain starts fresh, and a
-    // leaf that ran any step is not held (see `load_failure`).
+    // [ORB-22892] A leaf of this drain that failed at job load (no activity
+    // step started, which the audit trail records) holds its task for the
+    // rest of this drain. The task itself is unchanged by such a failure, so
+    // without this the next iteration would dispatch the same deterministic
+    // failure again. The hold lifts when the task changes after the failure;
+    // a new drain starts fresh, and a leaf whose audit shows a started step
+    // is not held (see `load_failure`).
     let mut leaf_load_holds = leaf_load_failure_holds(runtime, action, drain_run_id(input))?;
     leaf_load_holds.retain(|task_id, hold| {
         snapshot.admissible_leaves.contains(task_id)
