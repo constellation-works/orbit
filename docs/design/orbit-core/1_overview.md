@@ -472,6 +472,12 @@ stay a legal `experiment -> tag_instructions` edge [ORB-23019]. Executor
 host-OS wait that resolves the draw's candidates is
 `job::crew_pools::host_os_wait`.
 
+`codebase/diff_stats.rs` owns landed task line aggregation over landed diff
+rows, shared by agent facts and experiment readout. Experiment reads agent
+facts, while the dependency guard rejects agents paths, grouped imports,
+`super::` chains and calls to experiment-owned inherent methods. This cuts
+the direct agents/experiment cycle; the separate crew_memory cycle remains.
+
 `codebase` (the analytics behind `orbit codebase`) sits outside the order but
 above `task` [ORB-22625]. Task owns the pure block classification
 (`task::block_cause`: `BlockCause`, `Anchor`, `classify_block`, `actor_kind`,
