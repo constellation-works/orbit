@@ -191,7 +191,8 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 /// An admitted check-repair handoff at attempt 1 of budget 3, through the
 /// public job run. A configured check-repair activity receives it. With none
 /// configured, the in-budget handoff holds the run. An exhausted repair
-/// budget still fails it.
+/// budget still fails it. Adding recovery after the hold cannot re-admit
+/// the same head, even from a new delivery run.
 #[test]
 fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
     auto_fix_table(
@@ -268,6 +269,48 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                     assert_eq!(fx.head(), fx.candidate, "{case}");
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+
+                    // The missing activity did not undo admission. A new
+                    // delivery with recovery configured must explain why
+                    // the same head still cannot enter repair.
+                    let attempts = repair_attempts(&host);
+                    let retry_run = "jrun-recovery-configured";
+                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .job_run_id = Some(retry_run.into());
+                    let mut input = auto_fix_input(&fx);
+                    input["run_id"] = json!(retry_run);
+                    input["job_run_id"] = json!(retry_run);
+                    let retry_error = run_job(
+                        &host,
+                        repair_job(input),
+                        REPAIR_ACTS,
+                        retry_run,
+                        json!({}),
+                        None,
+                    )
+                    .expect_err("a new run on the admitted head holds as a duplicate");
+                    assert_eq!(
+                        retry_error.failure_code(),
+                        "delivery_repair_dispatched",
+                        "{retry_error}"
+                    );
+                    assert!(!scripted_ran(&host, "test_ci_repair"));
+                    assert_eq!(repair_attempts(&host), attempts);
+                    assert!(repair_pushes(&host).is_empty());
+                    assert_eq!(fx.head(), fx.candidate);
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                    assert!(
+                        retry_error
+                            .to_string()
+                            .contains("repair and publish a new head"),
+                        "a held admission needs an actionable remedy, not a wait for a repair that never ran: {retry_error}"
+                    );
                 }
                 "exhausted" => {
                     let error = match outcome {
