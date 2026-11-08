@@ -49,6 +49,9 @@ def evaluate(expression, event, state="", *, cancelled=False, dependency_skipped
     expression = expression.replace("needs.pr-state.outputs.state", repr(state))
     for name, value in (bindings or {}).items():
         expression = expression.replace(name, repr(value))
+    # A cache-save gate also requires a restore miss; model the miss so the
+    # event half of the condition is what this fixture evaluates.
+    expression = re.sub(r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit", "'false'", expression)
     expression = expression.replace("success()", str(success))
     expression = expression.replace("cancelled()", str(cancelled)).replace("always()", "True")
     expression = expression.replace("&&", " and ").replace("||", " or ")
@@ -305,7 +308,9 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
                     with self.subTest(job=name, event=event):
                         self.assertEqual(evaluate(condition, event), event == "push")
-        self.assertEqual(sorted(set(writers)), ["ci", "guardrails", "msrv", "test-build"])
+        self.assertEqual(sorted(set(writers)), ["ci", "docs", "guardrails", "msrv", "test-1", "test-2",
+                                                "test-3", "test-build", "test-extra", "test-partition-2",
+                                                "test-partition-6", "test-partition-7", "test-partition-8"])
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 

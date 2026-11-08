@@ -38,6 +38,8 @@ plugin/.claude-plugin/types/
 
 # Scratch / session files
 tmp
+# Verified pinned-tool archives restored by actions/cache in CI (ci.yml).
+.tool-cache/
 
 # Runtime state
 

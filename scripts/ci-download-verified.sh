@@ -144,6 +144,9 @@ parser.add_argument("sha256")
 parser.add_argument("destination", type=Path, help="new file; existing destinations are refused")
 parser.add_argument("--budget-seconds", type=float, default=60,
                     help="total download/backoff/verification budget, >0 and <=60 (default: 60)")
+parser.add_argument("--cache-file", type=Path, default=None,
+                    help="verified archive restored from this file when present "
+                         "(SHA-256 still checked) and populated on a verified download")
 args = parser.parse_args()
 started = monotonic()
 deadline = started + args.budget_seconds
@@ -184,6 +187,31 @@ def download():
         raise ValueError("expected a pinned SHA-256 digest")
     if os.path.lexists(args.destination):
         raise ValueError("destination already exists; refusing stale bytes")
+    if args.cache_file is not None and args.cache_file == args.destination:
+        raise ValueError("cache file must differ from the destination")
+
+    def verified_digest(path):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                remaining()
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    # Warm path: a restored archive is published only after the same SHA-256
+    # check as a download. A tampered cache entry fails closed instead of
+    # falling through to the network, so corruption is never masked.
+    if args.cache_file is not None and os.path.lexists(args.cache_file):
+        if verified_digest(args.cache_file) != args.sha256.lower():
+            raise ValueError("SHA-256 mismatch; refusing cached archive")
+        remaining()
+        try:
+            os.link(args.cache_file, args.destination)
+        except OSError:
+            import shutil
+            shutil.copyfile(args.cache_file, args.destination)
+        log("cache=hit outcome=verified")
+        return
 
     # Same filesystem as the destination: publish only verified bytes, without
     # overwriting an existing file. Never resume or append an earlier attempt.
@@ -230,15 +258,20 @@ def download():
                 # A definitive success ends transient retry: later budget
                 # exhaustion during verification is the change's failure.
                 saw_definitive = True
-                digest = hashlib.sha256()
-                with candidate.open("rb") as stream:
-                    while chunk := stream.read(1024 * 1024):
-                        remaining()
-                        digest.update(chunk)
-                if digest.hexdigest() != args.sha256.lower():
+                if verified_digest(candidate) != args.sha256.lower():
                     raise ValueError("SHA-256 mismatch; refusing download")
                 remaining()
                 os.link(candidate, args.destination)
+                # Populate the cache with the same verified bytes. A store
+                # failure never fails a verified download; the next run
+                # simply misses again.
+                if args.cache_file is not None and not os.path.lexists(args.cache_file):
+                    try:
+                        args.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        os.link(candidate, args.cache_file)
+                        log("cache=stored")
+                    except OSError as store_error:
+                        log(f"cache=store_failed error={store_error}")
                 log(f"attempt={attempt} outcome=verified")
                 return
             if not transient:
