@@ -1,8 +1,8 @@
 ---
 title: Fleet Notices — Overview
 owner: claude
-last_updated: 2026-11-05
-last_validated: 2026-11-05
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 stage: shipped
 next: "—"
@@ -113,5 +113,6 @@ Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.
 - [ORB-21213] — slice 3: managed-agent posting (done)
 - [ORB-21214] — slice 4: federated reads and writes, global aggregation, sweep materializer (done)
 - [ORB-21215] — slice 5: dashboard banner and view, attention kind (done)
+- [ORB-22808] — removed the `notice.*` config switches, making agent posting and brief delivery always on (done)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
