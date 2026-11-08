@@ -24,7 +24,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
+use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
 
 use super::TaskCommitBoundary;
 use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
@@ -190,7 +190,11 @@ impl TaskCommitBoundary {
             let stop_evidence = self
                 .landing_attempt(&accepted.handoff_id)?
                 .and_then(|attempt| attempt.evidence)
-                .map(|evidence| super::landing::operator_stop_reason(&evidence))
+                .map(|evidence| {
+                    LandingStopEvidence::parse(&evidence)
+                        .operator_reason()
+                        .to_string()
+                })
                 .unwrap_or_default();
             candidates.push(RepairCandidate {
                 repair: ClaimRepair {
