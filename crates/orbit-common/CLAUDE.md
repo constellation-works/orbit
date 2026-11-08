@@ -1,6 +1,6 @@
 # orbit-common
 
-Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`error`, `fs`, `governance`, `migration`, `model`, `observability`, `process`, `protocol`, `security`, `storage`). No feature, runtime, or storage backend. `orbit-types` says what a thing is; this crate says how to do something with it.
+Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`error`, `fs`, `governance`, `migration`, `model`, `model_defaults`, `observability`, `process`, `protocol`, `security`, `storage`, `text`). No feature, runtime, or storage backend. `orbit-types` says what a thing is; this crate says how to do something with it.
 
 - Never add a module named after a caller or a vertical feature. If code fits no existing responsibility, it belongs in the crate that needs it. `mod.rs` = declarations + `#[cfg(test)] mod tests;` only.
 - Single-owner invariants — never reimplement at a call site:
