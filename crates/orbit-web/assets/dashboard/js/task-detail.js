@@ -33,12 +33,18 @@ export function primeTaskRuns(taskId, payload, task = null) {
   if (typeof taskId !== "string" || !taskId || !payload || typeof payload !== "object") return;
   const previous = taskRunLoads.get(taskId);
   const items = Array.isArray(payload.items) ? payload.items : [];
+  const failed = typeof payload.error === "string";
   taskRunLoads.set(taskId, {
     pending: false,
-    error: typeof payload.error === "string" ? payload.error : null,
-    items: typeof payload.error === "string" && previous?.items ? previous.items : items,
-    total: Number.isFinite(payload.total) ? payload.total : items.length,
-    at: Date.now(),
+    error: failed ? payload.error : null,
+    // A failed first read knows nothing about the run history: keep `items`
+    // null (as the direct-read path does) so the tab shows the error alone —
+    // never "No runs recorded" or a zero count — and keep the entry stale so
+    // opening the tab refetches instead of standing on the failure for the
+    // freshness window.
+    items: failed ? (previous?.items ?? null) : items,
+    total: failed ? (previous?.total ?? null) : (Number.isFinite(payload.total) ? payload.total : items.length),
+    at: failed ? (previous?.at ?? 0) : Date.now(),
   });
   if (task && taskRunsTabActive()) {
     const node = document.getElementById(`detail-${taskId}-runs`);

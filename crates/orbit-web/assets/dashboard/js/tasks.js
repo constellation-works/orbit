@@ -279,14 +279,39 @@ function syncTaskNotices(notices) {
   if (notices.some(node => !before.includes(`${node.dataset.key}:${node.dataset.hash}`))) raiseMessageSlot(host);
 }
 
-function takeTaskActionNotice() {
-  if (!taskState.taskActionNotice) return null;
-  const notice = el("div", { class: "task-action-notice", text: taskState.taskActionNotice });
+// An action notice stays up for a minimum read, like the quick-action
+// errors (180 s) and mutation feedback beside it: it is rebuilt from the
+// persisting state on every render instead of being consumed by the first
+// one, and a timer retires it once its window lapses. A newer notice resets
+// the window.
+const TASK_ACTION_NOTICE_MS = 30_000;
+let actionNoticeShownFor = null;
+let actionNoticeTimer = null;
+
+function takeTaskActionNotice(context) {
+  const text = taskState.taskActionNotice;
+  if (!text) {
+    actionNoticeShownFor = null;
+    if (actionNoticeTimer) { clearTimeout(actionNoticeTimer); actionNoticeTimer = null; }
+    return null;
+  }
+  const notice = el("div", { class: "task-action-notice", text });
   notice.dataset.key = "task-action-notice";
-  notice.dataset.hash = taskState.taskActionNotice;
+  notice.dataset.hash = text;
   notice.setAttribute("role", "status");
   notice.setAttribute("aria-live", "polite");
-  taskState.taskActionNotice = null;
+  if (actionNoticeShownFor !== text) {
+    actionNoticeShownFor = text;
+    if (actionNoticeTimer) clearTimeout(actionNoticeTimer);
+    actionNoticeTimer = setTimeout(() => {
+      actionNoticeTimer = null;
+      if (taskState.taskActionNotice === text) {
+        taskState.taskActionNotice = null;
+        actionNoticeShownFor = null;
+        rerender(context);
+      }
+    }, TASK_ACTION_NOTICE_MS);
+  }
   return notice;
 }
 // ORB-15216: a pull replica holds no tasks of its own; they live on its owner
@@ -467,7 +492,7 @@ export function renderTasks(tasks, context) {
   for (const node of body.children) {
     if (node.dataset.key) existingRowNodes.set(node.dataset.key, node);
   }
-  const notice = takeTaskActionNotice();
+  const notice = takeTaskActionNotice(context);
 
   const filtered = filterTasks(tasks, context);
   // Rows keep a fixed-width action column so actions line up between groups;
@@ -531,7 +556,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {

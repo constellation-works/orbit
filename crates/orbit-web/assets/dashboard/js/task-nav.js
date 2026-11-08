@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
 import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, isAggregateView, copyText } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
@@ -348,18 +348,24 @@ export function resolvePendingOpenTask(tasks, context) {
     // first read is pending or failed; ordinary renders must not retry it.
     if (taskState.taskPageId === taskId) taskState.selectedTaskId = null;
     if (cached) taskState.pinnedExternalTask = { task: cached, id: taskId };
-    else pinOpenTask(taskId, context);
+    else pinOpenTask(taskId, context, tasks);
   }
 }
 
-async function pinOpenTask(taskId, context) {
+async function pinOpenTask(taskId, context, tasks = []) {
   const visit = captureWorkspaceVisit();
   const generation = openTaskGeneration;
   const superseded = () => !visit.isCurrent() || taskState.openTaskId !== taskId || generation !== openTaskGeneration;
   try {
-    const task = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`);
+    // Scope the read to the owner the list already names: an unscoped read in
+    // the aggregate view falls back to the default workspace and can pin a
+    // different task (or a false not-found) for this id.
+    const owner = (Array.isArray(tasks) ? tasks : []).find((task) => task && task.id === taskId);
+    const ownerTask = owner && owner.workspace_id ? { id: taskId, workspace_id: owner.workspace_id } : { id: taskId };
+    const task = await fetchJson(taskWorkspacePath(ownerTask, `/api/tasks/${encodeURIComponent(taskId)}`));
     if (superseded()) return;
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
+    if (ownerTask.workspace_id && task.workspace_id && task.workspace_id !== ownerTask.workspace_id) throw new Error(`${taskId} not found`);
     taskState.pinnedExternalTask = { task, id: taskId };
   } catch (error) {
     if (superseded()) return;

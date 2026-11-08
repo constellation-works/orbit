@@ -136,19 +136,27 @@ export function initTaskCreate({ getWorkspaces }) {
     const visit = captureWorkspaceVisit();
     pending = true; feedback('Creating proposed task…'); paint();
     // Mark uncertainty durably BEFORE sending, so a reload during the request
-    // never treats an authorization refusal on retry as proof of no commit.
-    const wasUncertain = submission.uncertain;
+    // keeps the frozen submission until a definitive answer clears it.
     try {
       persist({ ...submission, uncertain: true });
       const response = await fetch(submission.path, {
         method: 'POST', headers: { 'accept': 'application/json', 'content-type': 'application/json' },
         body: JSON.stringify(submission.body),
       });
-      const receipt = await response.json();
+      // Framework rejections (413, 415, …) are plain text, not JSON: read the
+      // body as text first so a definitive refusal is recognised — and its
+      // text shown — instead of dying as a JSON parse error that wedges the
+      // saved submission with no way to discard it.
+      const rawBody = await response.text();
+      let receipt = null;
+      try { receipt = rawBody ? JSON.parse(rawBody) : null; } catch { receipt = null; }
       if (!response.ok) {
-        if (!wasUncertain && [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) persist(null);
-        throw new Error(receipt.error || `Request refused (HTTP ${response.status}).`);
+        // A definitive refusal proves this submission created nothing, on a
+        // first attempt and on a retry alike, so the frozen copy goes.
+        if ([400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) persist(null);
+        throw new Error((receipt && receipt.error) || rawBody.trim() || `Request refused (HTTP ${response.status}).`);
       }
+      if (!receipt) throw new Error('The creation receipt is incomplete. Retry the saved submission.');
       if (!receipt.id || receipt.workspace_id !== submission.workspace || receipt.request_id !== submission.body.request_id) {
         throw new Error('The creation receipt is incomplete. Retry the saved submission.');
       }

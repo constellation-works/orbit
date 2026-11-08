@@ -238,7 +238,7 @@ function jobRow(job, workspace, streak) {
       selection, key, feedbackId: "job-operation-feedback",
       pending: `Submitting ${job.id}…`,
       failure: `Could not run ${job.id}`,
-      render: () => renderJobs(lastJobs),
+      render: () => { if (lastJobs) renderJobs(lastJobs); },
       request: () => postJson(`/api/jobs/${encodeURIComponent(job.id)}/run`, {}),
       refresh: fetchAndRenderJobs,
       success: (result) => `Run ${result.run_id} ${result.state} for ${result.job_id}.`,
@@ -305,6 +305,9 @@ function jobRow(job, workspace, streak) {
 }
 
 export function renderJobs(payload) {
+  // A workspace change clears the cache mid-flight; a repaint then has
+  // nothing to draw and must not dereference the cleared payload.
+  if (!payload) return;
   if (payload.view !== "live") lastJobs = payload;
   const isLive = payload.view === "live";
   const body = $(isLive ? "jobs-live-body" : "jobs-body");

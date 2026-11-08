@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, el, fetchJson, patchJson, postJson, runHref, bindTaskLink } from './common.js';
 import { drainReason, drainReadinessFor, drainReadinessView, replaceDrainReadinessEntry } from './drain-waits.js';
-import { applyUpdatedTask, forgetTaskDetailLoad } from './task-data.js';
+import { applyUpdatedTask, currentTaskRecord, forgetTaskDetailLoad } from './task-data.js';
 import * as taskShared from './task-shared.js';
 import * as taskDecision from './task-decision.js';
 
@@ -465,7 +465,14 @@ async function runSkipPilot(task, button, context) {
   button.disabled = true;
   let updated;
   try {
-    updated = await patchJson(visit.path(taskShared.taskMutationPath(task)), { tags: [...taskTags(task), NO_PILOT_TAG] });
+    // The PATCH replaces the tag list wholesale, so build it from the
+    // current record — not the render-time closure — or tags added (or
+    // removed) since the detail was built are silently reverted.
+    const current = currentTaskRecord(task, context) || task;
+    const tags = taskTags(current);
+    updated = await patchJson(visit.path(taskShared.taskMutationPath(current)), {
+      tags: tags.includes(NO_PILOT_TAG) ? tags : [...tags, NO_PILOT_TAG],
+    });
   } catch (error) {
     button.disabled = false;
     if (!visit.isCurrent()) return;

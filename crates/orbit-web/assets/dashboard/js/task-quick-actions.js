@@ -36,7 +36,10 @@ export function quickActionSignature(task) {
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
   const pullRequest = pullRequestLink(task);
-  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
+  // `human_crew` alone decides the human-crew badge and whether Ship is
+  // offered, so it belongs in the row-reuse signature too.
+  const humanCrew = task.human_crew && task.human_crew.name ? String(task.human_crew.name) : "";
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))}-${humanCrew}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
