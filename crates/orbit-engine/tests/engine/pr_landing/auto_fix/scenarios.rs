@@ -4418,3 +4418,66 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
         },
     );
 }
+
+/// A required waiter should hand the repair the authenticated dependency's failure.
+#[test]
+fn auto_fix_includes_authenticated_waiter_dependency_failure() {
+    auto_fix_table(
+        "auto_fix::auto_fix_includes_authenticated_waiter_dependency_failure",
+        "valid large malformed forged",
+        |case, row| {
+            let (fx, host, _) = super::ci_rerun::fixture(row);
+            let path = fx.forge.join("retry-config.json");
+            let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            config["required"] = json!(["lint"]);
+            if case == "forged" {
+                config["changed_helper"] = json!(true);
+            }
+            fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+            let mut dependency_log =
+                "test\tTests\terror: distinctive dependency failure\n".to_string();
+            if case == "large" {
+                dependency_log.push_str(&"test\tTests\tmore diagnostic output\n".repeat(120));
+            }
+            fs::write(fx.forge.join("retry-log-1000"), dependency_log).unwrap();
+            if case == "malformed" {
+                fs::write(fx.forge.join("retry-log-1001"),
+                    "lint\tWait\terror: waiter fallback\nlint\tWait\torbit-dependency-evidence:{invalid}\n").unwrap();
+            }
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            input["completion"] = json!("review");
+            let error = super::complete_with_logical_clock(&host, &input)
+                .unwrap_err()
+                .to_string();
+            assert!(is_check_repair(&error), "{case}: {error}");
+            if matches!(case, "valid" | "large") {
+                assert!(
+                    error.contains("distinctive dependency failure") && error.contains("CI / test"),
+                    "{error}"
+                );
+                let excerpt = error.split_once("log excerpt:\n").unwrap().1;
+                assert!(
+                    excerpt.len() <= 2048,
+                    "dependency excerpt exceeds the per-job limit: {}",
+                    excerpt.len()
+                );
+            } else {
+                assert!(!error.contains("distinctive dependency failure"), "{error}");
+                assert!(
+                    error.contains(if case == "malformed" {
+                        "waiter fallback"
+                    } else {
+                        "orbit-dependency-evidence"
+                    }),
+                    "{error}"
+                );
+            }
+            assert!(
+                error.len() < 12000,
+                "repair evidence remains bounded: {}",
+                error.len()
+            );
+        },
+    );
+}

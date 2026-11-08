@@ -129,9 +129,9 @@ if args[0] != "api":
     raise SystemExit(77)
 if args[1] == "graphql":
     if any("requiredStatusChecks" in arg for arg in args):
-        emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "baseRefName": base_branch, "reviewDecision": "APPROVED", "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [{"context": name, "app": {"databaseId": 900}} for name in names]}}}}}})
+        emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "baseRefName": base_branch, "reviewDecision": "APPROVED", "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [{"context": name, "app": {"databaseId": 900}} for name in config.get("required", names)]}}}}}})
     if any("statusCheckRollup" in arg for arg in args):
-        contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [{"__typename": "CheckRun", "name": name, "workflowName": "CI", "status": "COMPLETED", "conclusion": outcome(name).upper(), "isRequired": True} for name in names]}
+        contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [{"__typename": "CheckRun", "name": name, "workflowName": "CI", "status": "COMPLETED", "conclusion": outcome(name).upper(), "isRequired": name in config.get("required", names)} for name in names]}
         emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"contexts": contexts}}}]}}}}})
     raise SystemExit(77)
 endpoint = next((arg for arg in args[1:] if arg.startswith("repos/")), "")

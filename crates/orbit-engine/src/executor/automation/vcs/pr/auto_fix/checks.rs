@@ -244,6 +244,21 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
             Ok(found) => found,
             Err(reason) => return CheckRepair::Ended(verdict::stopped(pr_number, &reason)),
         };
+    let dependency_base = status.base_branch.as_deref().and_then(|base| {
+        git_output(
+            Path::new(workspace_path),
+            &[
+                "merge-base",
+                head_sha,
+                &format!("refs/remotes/origin/{base}"),
+            ],
+        )
+        .ok()
+    });
+    let dependency_context = status
+        .head_branch
+        .as_deref()
+        .zip(dependency_base.as_deref());
     let (evidence, annotations) = match head_check_evidence(
         host,
         Path::new(workspace_path),
@@ -255,6 +270,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         &required,
         true,
         deadline_ms,
+        dependency_context,
     ) {
         HeadCheckEvidence::Repair {
             evidence,

@@ -1987,6 +1987,10 @@ existing recovery activities, final validation and push do the repair:
   watcher without spending an attempt. The answer is retained under
   `auto-fix/<run>/check-annotations-<failed-head>.json` before the repair is
   admitted from the same attempt budget.
+- When a failed required check is a dependency waiter, auto-fix uses the
+  authenticated workflow and job evidence to include bounded excerpts from
+  the failed dependencies in the repair input. If the complete proof or a
+  dependency log is unavailable, the repair retains the waiter excerpt.
 - A job log that exceeds the display or full-command retention limit can still
   supply bounded failure regions. Recovery requires a fully scanned source,
   complete command and region selection, and exactly one provider-reported

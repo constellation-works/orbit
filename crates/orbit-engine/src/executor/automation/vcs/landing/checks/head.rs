@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
-use serde_json::Value;
+use orbit_types::workflow::CiRerunRoot;
+use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
@@ -136,6 +137,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     required: &RequiredChecks,
     allow_suspect_repair: bool,
     deadline_ms: Option<u64>,
+    dependency_context: Option<(&str, &str)>,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
@@ -250,12 +252,27 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 Ok(None) => {}
             }
         }
+        let dependency = dependency_context.and_then(|(branch, accepted)| {
+            dependency_repair_excerpt(
+                host,
+                workspace,
+                pr,
+                head,
+                branch,
+                base_branch?,
+                accepted,
+                &jobs,
+                job,
+                &log,
+                deadline_ms,
+            )
+        });
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
             failed_step(job),
             signature.text,
-            excerpt(&log)
+            dependency.unwrap_or_else(|| excerpt(&log))
         ));
     }
     if !waits.is_empty() {
@@ -271,6 +288,101 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
         evidence: details.join("\n"),
         annotations,
     }
+}
+
+/// Authenticate a waiter's record using the same complete-set proof as reruns.
+/// This is a read-only proof: no rerun is reserved or dispatched.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "bind the read to the same PR, job and deadline"
+)]
+fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    head: &str,
+    branch: &str,
+    base: &str,
+    accepted: &str,
+    jobs: &[CiCommitJobEvidence],
+    waiter: &CiCommitJobEvidence,
+    log: &str,
+    deadline_ms: Option<u64>,
+) -> Option<String> {
+    if !log.contains("orbit-dependency-evidence:") {
+        return None;
+    }
+    let run = waiter.run_id.number()?;
+    let waiter_id = waiter.job_id.number()?;
+    let mut roots = Vec::new();
+    for job in jobs.iter().filter(|job| {
+        job.run_id.number() == Some(run)
+            && job.job_id.number() != Some(waiter_id)
+            && matches!(job.conclusion.value(), Some(CiJobConclusion::Failure))
+    }) {
+        let id = job.job_id.number()?;
+        let text = job_log(host, workspace, run, id, job, deadline_ms).ok()?;
+        let signature = error_signature(&text, failed_step(job));
+        if signature.step_fallback {
+            return None;
+        }
+        roots.push(CiRerunRoot {
+            job_id: id,
+            check: job_label(job),
+            classification: "flaky".into(),
+            signature: signature.text,
+        });
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    let deadline = deadline_ms.or_else(|| {
+        super::super::super::completion_deadline::now_ms()
+            .ok()?
+            .checked_add(15_000)
+    })?;
+    let answer = host.run_private_vcs_operation(
+        super::super::super::operations::CI_RERUN_PLAN,
+        json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":branch,
+            "base_branch":base,"accepted_base":accepted,"run_id":run,"roots":roots,"deadline_ms":deadline}),
+    ).ok()?;
+    let plan = &answer["plan"];
+    let records = plan["authentication"]["dependencies"].as_array()?;
+    let record = records
+        .iter()
+        .find(|record| record["job_id"].as_u64() == Some(waiter_id))?;
+    let ids = record["dependency_ids"].as_array()?;
+    if ids.is_empty() {
+        return None;
+    }
+    let logs = plan["authentication"]["logs"].as_array()?;
+    let failed = plan["failed_jobs"].as_array()?;
+    let mut result = String::new();
+    // Share the same 2 KiB budget as a single failed-job excerpt.
+    let per_job = 2048usize.checked_div(ids.len())?;
+    for id in ids {
+        let id = id.as_u64()?;
+        let job = failed.iter().find(|job| job["id"].as_u64() == Some(id))?;
+        let log = logs.iter().find(|log| log["job_id"].as_u64() == Some(id))?["log"].as_str()?;
+        let label = format!(
+            "{} / {} (run {run}, job {id}):\n",
+            waiter.workflow.text()?,
+            job["name"].as_str()?
+        );
+        if label.len() >= per_job {
+            return None;
+        }
+        let mut part = format!("{label}{}\n", excerpt(log));
+        if part.len() > per_job {
+            let mut end = per_job;
+            while !part.is_char_boundary(end) {
+                end -= 1;
+            }
+            part.truncate(end);
+        }
+        result.push_str(&part);
+    }
+    Some(result)
 }
 
 /// The jobs on one commit, or why they could not be read; read once per
