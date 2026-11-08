@@ -147,6 +147,7 @@ fn diagnose(
     // causality. Multiple failing children need separate obligations; ambiguous
     // wrapper evidence is withheld instead of guessing from error prose.
     let mut seen = BTreeSet::new();
+    let mut exhausted = true;
     for _ in 0..50 {
         if !seen.insert(run.run_id.clone()) {
             return Err(AutomationError::Deferred(
@@ -187,6 +188,7 @@ fn diagnose(
         }
 
         let Some(child) = children.first() else {
+            exhausted = false;
             break;
         };
 
@@ -194,7 +196,7 @@ fn diagnose(
         episode = root(runtime, &run, session)?;
     }
 
-    if seen.len() == 50 {
+    if exhausted {
         return Err(AutomationError::Deferred(
             DeferredReason::IncidentLineageBudget,
         ));
