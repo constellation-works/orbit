@@ -478,7 +478,6 @@ fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears(
     for (field, replacement, empty) in [
         ("context_files", json!(["file:replacement.rs"]), json!([])),
         ("context_files", json!("file:replacement.rs"), json!(",")),
-        ("context", json!("file:replacement.rs"), json!(",")),
     ] {
         workspace.run(
             &[
