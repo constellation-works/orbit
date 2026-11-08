@@ -533,6 +533,7 @@ fn legacy_db_adopts_versioned_ledger() {
             ),
             ("migration.v0085".to_string(), "notices".to_string()),
             ("migration.v0086".to_string(), "evolution".to_string()),
+            ("migration.v0087".to_string(), "crew_memory".to_string()),
         ]
     );
 }

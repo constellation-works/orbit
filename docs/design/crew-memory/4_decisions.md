@@ -87,7 +87,7 @@ A run receives exactly two spaces: its own model's space and the global memory. 
 ## Memory is keyed by model, not crew
 
 **Recorded:** 2026-11 · [ORB-23105]
-**Code anchors:** `crates/orbit-core/src/application/crew_memory/key.rs::memory_key` (planned)
+**Code anchors:** `crates/orbit-core/src/application/crew_memory/key.rs::memory_key`
 
 ### Context
 

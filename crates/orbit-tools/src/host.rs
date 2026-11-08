@@ -148,6 +148,8 @@ pub enum OrbitBuiltinAction {
     Resident(ResidentVerb),
     /// Capability-gap costs and evolution records.
     Evolution(orbit_common::governance::evolution::EvolutionVerb),
+    /// Crew memory spaces: operator reads, export and writes.
+    Memory(orbit_common::governance::memory::MemoryVerb),
 }
 
 impl From<DecisionVerb> for OrbitBuiltinAction {
@@ -328,5 +330,11 @@ impl From<orbit_common::governance::evolution::EvolutionVerb> for OrbitBuiltinAc
 impl From<AttentionVerb> for OrbitBuiltinAction {
     fn from(verb: AttentionVerb) -> Self {
         Self::Attention(verb)
+    }
+}
+
+impl From<orbit_common::governance::memory::MemoryVerb> for OrbitBuiltinAction {
+    fn from(verb: orbit_common::governance::memory::MemoryVerb) -> Self {
+        Self::Memory(verb)
     }
 }

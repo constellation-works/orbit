@@ -4,8 +4,8 @@ owner: claude
 last_updated: 2026-11-08
 last_validated: 2026-11-08
 status: Draft
-stage: designing
-next: "Experimental and off by default; design review on ORB-23105, then a shadow experiment slice"
+stage: building
+next: "M1 (store, write rules, operator CLI) landed with ORB-23113; next is M2, the memory overlay surface verified in shadow"
 feature: crew-memory
 doc_role: overview
 type: design
@@ -13,7 +13,7 @@ summary: "Experimental: each model keeps a small, capped, evidence-cited memory 
 tags: [crew-memory, experiments, agent-scorecards]
 paths: ["crates/orbit-core/src/application/crew_memory/**"]
 related_features: [agent-scorecards, experiments, auto-tasks, project-learnings]
-related_artifacts: [ORB-23105, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-10736]
 ---
 
 # Crew Memory — Overview
@@ -42,20 +42,23 @@ Orbit has tried durable learnings before. The native project-learning subsystem 
 
 ## 3. At a Glance
 
-Nothing is built yet. The paths below are where each concern is planned to live.
+Slice M1 is built: the store, the write rules and the operator CLI, behind `crew_memory.enabled` (default `false`). Nothing delivers memory to a prompt yet. Rows marked planned are where later slices will live.
 
 | Concern | File | Task |
 |---------|------|------|
-| Spaces, revisions, proposals (owner store) | `crates/orbit-store/src/driver/sqlite/migration/` (planned) | [ORB-23105] |
-| Write validation: caps, provenance, lint | `crates/orbit-core/src/application/crew_memory/` (planned) | [ORB-23105] |
+| Spaces, revisions, proposals (owner store) | `crates/orbit-store/src/driver/sqlite/migration/crew_memory.rs`, `crates/orbit-store/src/driver/sqlite/crew_memory_store.rs` | [ORB-23113] |
+| Write validation: caps, provenance, lint | `crates/orbit-core/src/application/crew_memory/validate.rs` | [ORB-23113] |
+| Memory key and the one write path | `crates/orbit-core/src/application/crew_memory/key.rs`, `operations.rs` | [ORB-23113] |
 | Memory overlay surface and receipt capture | `crates/orbit-core/src/application/experiments/` (planned) | [ORB-23105] |
 | Evidence pack from the scorecards | `crates/orbit-core/src/application/agents/` (planned) | [ORB-23105] |
 | Dreaming auto-task definition | `.orbit/auto_tasks/crew-memory-dream.yaml` (planned, plugin-seeded) | [ORB-23105] |
-| CLI and MCP (`orbit memory …`, `orbit.memory.*`) | `crates/orbit-cli/src/command/` (planned) | [ORB-23105] |
+| Operator CLI (`orbit memory show\|history\|export\|write\|reset\|copy`) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-cli/src/command/memory.rs` | [ORB-23113] |
+| Agent tools (`orbit.memory.*` for dreaming runs) | `crates/orbit-common/src/governance/memory.rs` (planned) | [ORB-23105] |
 
 ## Task References
 
 - [ORB-23105] — designs crew memory (this folder)
+- [ORB-23113] — builds slice M1: store, write rules, operator CLI
 - [ORB-10736] — retired the native project-learning subsystem
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

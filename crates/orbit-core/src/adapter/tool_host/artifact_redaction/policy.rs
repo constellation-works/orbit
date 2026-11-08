@@ -5,6 +5,7 @@ use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
+use orbit_common::governance::memory::MemoryVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, Redaction};
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
@@ -57,6 +58,14 @@ const NO_REDACTION: ActionPolicy = ActionPolicy {
 };
 
 /// The free text of each option an agent raises on a decision request.
+/// A memory write's file text is free prose that persists in the audit row.
+const MEMORY_WRITE_FILES: &[NestedArrayPolicy] = &[NestedArrayPolicy {
+    array_key: "files",
+    field_key: "text",
+    field_alias: None,
+    mode: TextMode::Free,
+}];
+
 const DECISION_RAISE_OPTIONS: &[NestedArrayPolicy] = &[
     NestedArrayPolicy {
         array_key: "options",
@@ -229,6 +238,23 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | ExperimentVerb::Show
             | ExperimentVerb::List
             | ExperimentVerb::Readout => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        // Crew memory: a write's file text redacts as free text; every other
+        // verb carries only keys, revisions, a directory and a reason.
+        OrbitBuiltinAction::Memory(verb) => match verb {
+            MemoryVerb::Write => ActionPolicy {
+                declared: verb.spec().params,
+                nested_arrays: MEMORY_WRITE_FILES,
+                ..NO_REDACTION
+            },
+            MemoryVerb::Show
+            | MemoryVerb::History
+            | MemoryVerb::Export
+            | MemoryVerb::Reset
+            | MemoryVerb::Copy => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

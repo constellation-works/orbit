@@ -637,6 +637,11 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
+    // Crew memory writes and export are operator CLI only (no MCP scope).
+    ("orbit.memory.copy", Placement::Unadvertised),
+    ("orbit.memory.export", Placement::Unadvertised),
+    ("orbit.memory.reset", Placement::Unadvertised),
+    ("orbit.memory.write", Placement::Unadvertised),
     // Listed only by a server that enables the opt-in `notice` toolset.
     ("orbit.notice.close", Placement::Advertised),
     ("orbit.notice.post", Placement::Advertised),

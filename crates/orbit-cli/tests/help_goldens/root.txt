@@ -49,6 +49,7 @@ Advanced:
   decision     List, show and answer human decision requests on held work
   evolution    Record and inspect capability gaps and their measured costs
   experiment   Define, run and conclude experiments over agent treatments
+  memory       Inspect, export and reset crew memory (experimental)
   resident     Grant, narrow and inspect resident orchestrator mandates
 
 Options:

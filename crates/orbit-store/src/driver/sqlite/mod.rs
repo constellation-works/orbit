@@ -3,6 +3,7 @@ pub(crate) mod audit_event_store;
 pub(crate) mod backlog_forecast_store;
 pub(crate) mod codebase_facts_store;
 pub(crate) mod connection;
+mod crew_memory_store;
 mod delivery_run_load;
 mod evolution_store;
 mod experiment_assignments;

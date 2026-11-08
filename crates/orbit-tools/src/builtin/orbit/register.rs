@@ -71,6 +71,9 @@ pub fn register(registry: &mut ToolRegistry) {
     // Experiments: show/list are reads; every write is a governed,
     // operator-only operation.
     operation::register_noun(registry, &EXPERIMENT);
+    // Crew memory (experimental): every verb is the operator's CLI and
+    // registers inactive; the writes and export are governed operator-only.
+    operation::register_noun(registry, &orbit_common::governance::memory::MEMORY);
     // Read-only agent scorecards, the dashboard Agents view's payloads.
     operation::register_noun(registry, &AGENTS);
     // The read-only condition-trigger explain.

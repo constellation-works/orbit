@@ -398,6 +398,12 @@ impl ConfigSnapshot {
         }
     }
 
+    /// `crew_memory.enabled` (default `false`): whether crew memory writes
+    /// are admitted in this workspace.
+    pub fn crew_memory_enabled(&self) -> bool {
+        self.crew_memory_enabled
+    }
+
     /// Admitted host resource thresholds, shared by dashboard and admission consumers.
     pub fn resource_throttle(&self) -> ResourceThrottleSettings {
         ResourceThrottleSettings {

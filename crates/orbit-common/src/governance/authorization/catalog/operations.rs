@@ -452,6 +452,34 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "deleting an experiment removes its record and event log for good, so only an operator may do it",
     },
+    // Crew memory (experimental): every write, and export, which writes
+    // files on this host, is the operator's; show and history stay
+    // ungoverned reads. Dreaming runs get their own key-scoped write tool
+    // in a later slice, never these.
+    GovernedOperation {
+        id: "orbit.memory.write",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "writing a crew memory space changes what a model will be told about its own past work, so only an operator may do it outside a dreaming run",
+    },
+    GovernedOperation {
+        id: "orbit.memory.reset",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resetting a crew memory space discards what a model wrote about its own work, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.memory.copy",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "copying a crew memory space moves one model's notes into another model's prompts, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.memory.export",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "exporting crew memory writes files into a directory on this host, so only an operator may do it",
+    },
     // Script grants (script steps phase 1): the operator's host-local
     // consent to run one workspace script at one content digest. No Agent
     // capability, so `classify_agent_tool_grant` makes both tools

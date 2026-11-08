@@ -8,6 +8,7 @@ mod domain_control;
 pub mod drain;
 mod evolution;
 mod experiment;
+mod memory;
 mod notice;
 pub mod operation;
 mod orchestrator;

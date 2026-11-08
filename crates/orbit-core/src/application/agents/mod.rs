@@ -108,6 +108,17 @@ impl AgentRole {
     }
 }
 
+/// Every role scorecard's term keys and labels, in role order. The crew
+/// memory score-blind lint refuses a note that quotes them, so a model's
+/// memory describes its work rather than how the work is measured.
+pub fn scorecard_term_vocabulary() -> Vec<&'static str> {
+    AgentRole::ALL
+        .into_iter()
+        .flat_map(|role| roles::spec(role).terms.iter())
+        .flat_map(|term| [term.key, term.label])
+        .collect()
+}
+
 /// Which tasks implementer metrics count, by their derived
 /// [`ExecutionMode`]. Unclassified tasks are in none. Cost and run time
 /// count managed tasks whatever the scope: interactive work records none.

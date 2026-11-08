@@ -11,6 +11,7 @@ use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::evolution::EvolutionVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::memory::MemoryVerb;
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::resident::ResidentVerb;
@@ -40,6 +41,7 @@ pub(super) fn resident_guard_tool_name(action: OrbitBuiltinAction) -> &'static s
         OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => verb.tool_name(),
         OrbitBuiltinAction::Evolution(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Memory(verb) => verb.tool_name(),
         OrbitBuiltinAction::Experiment(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::Orchestrator(verb) => verb.tool_name(),
@@ -150,6 +152,14 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelRevoke
             | DecisionVerb::ChannelRotateKey => Refused,
+        },
+        OrbitBuiltinAction::Memory(verb) => match verb {
+            MemoryVerb::Show | MemoryVerb::History => Read,
+            // Every crew memory write, and export to host files, is the
+            // operator's.
+            MemoryVerb::Export | MemoryVerb::Write | MemoryVerb::Reset | MemoryVerb::Copy => {
+                Refused
+            }
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,

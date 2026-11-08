@@ -517,6 +517,10 @@ impl Commands {
             Commands::Resident(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Resident))
             }
+            // Crew memory is registry-driven like experiments.
+            Commands::Memory(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Memory))
+            }
             // Experiments are registry-driven like friction.
             Commands::Experiment(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Experiment))
