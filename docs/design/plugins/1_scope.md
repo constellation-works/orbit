@@ -859,6 +859,10 @@ the consenting operator's `PATH`:
   path is what gets recorded, in the grant witness (§3).
 - The profile grants each recorded path read and execute, whichever caller (systemd unit, MCP
   server, ssh shell) spawns the backend. Nothing is resolved at call time.
+- The backend child's `PATH` is prepended with the parent directory of each recorded path
+  that is still granted (deduplicated), so the backend can resolve that program by name
+  whatever the spawning caller's `PATH`. A program whose recorded path is no longer granted
+  adds nothing to the child's `PATH`.
 - A recorded path is granted only while it still names that executable: it exists, is an
   executable regular file, is still its own canonical path (a link retargeted after consent
   stops matching), and lies outside the unreadable trees below. A path for a name the manifest

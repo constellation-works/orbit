@@ -49,6 +49,46 @@ else:
         send({"jsonrpc": "2.0", "id": request["id"], "result": result})
 "#;
 
+const PROGRAM_BACKEND: &str = r#"#!/usr/bin/env python3
+import json
+import os
+import shutil
+import sys
+
+def report():
+    os.fstat(int(os.environ["ORBIT_PLUGIN_CALLBACK_FD"]))
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "myprog": shutil.which("myprog") or "",
+        "otherprog": shutil.which("otherprog") or "",
+        "goneprog": shutil.which("goneprog") or "",
+        "retargetedprog": shutil.which("retargetedprog") or "",
+        "unresolvedprog": shutil.which("unresolvedprog") or "",
+    }
+
+def send(value):
+    print(json.dumps(value), flush=True)
+
+if sys.argv[1] == "exec":
+    json.load(sys.stdin)
+    send({"ok": True, "output": report()})
+else:
+    for line in sys.stdin:
+        request = json.loads(line)
+        method = request["method"]
+        if method == "initialize":
+            result = {"protocolVersion": request["params"]["protocolVersion"],
+                      "capabilities": {"tools": {}},
+                      "serverInfo": {"name": "env-fixture", "version": "1.0.0"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "environment", "inputSchema": {"type": "object"}}]}
+        elif method == "tools/call":
+            result = {"content": [], "structuredContent": report()}
+        else:
+            continue
+        send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+"#;
+
 #[test]
 fn caller_credentials_require_a_plugin_env_pass_request_and_grant_for_both_transports() {
     // A value available to the host but omitted by the caller's policy must
@@ -233,5 +273,133 @@ fn caller_credentials_require_a_plugin_env_pass_request_and_grant_for_both_trans
                 "{case}: only the per-call exec child has a tool name"
             );
         }
+    }
+}
+
+#[test]
+fn granted_program_directories_are_put_on_child_path_with_restricted_caller_path() {
+    let temp = tempfile::tempdir().expect("fixture root");
+    let root = temp.path().canonicalize().expect("physical root");
+    let command = root.join("backend.py");
+    std::fs::write(&command, PROGRAM_BACKEND).expect("write backend");
+    std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755))
+        .expect("executable backend");
+    let program_dir = root.join("program-bin");
+    std::fs::create_dir(&program_dir).expect("program dir");
+    for name in ["myprog", "otherprog"] {
+        let program = program_dir.join(name);
+        std::fs::write(&program, "#!/bin/sh\nexit 0\n").expect("write program");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("executable program");
+    }
+    let program_dir = program_dir.canonicalize().expect("canonical program dir");
+    let retarget_dir = root.join("retarget-bin");
+    std::fs::create_dir(&retarget_dir).expect("retarget dir");
+    std::os::unix::fs::symlink(
+        program_dir.join("myprog"),
+        retarget_dir.join("retargetedprog"),
+    )
+    .expect("retargeted program link");
+    let retarget_dir = retarget_dir.canonicalize().expect("canonical retarget dir");
+    let gone_dir = root.join("gone-bin");
+    let grants = PluginGrantSet::from_grants([PluginGrant::Unsandboxed]);
+    for transport in ["exec", "mcp"] {
+        let spec = Arc::new(PluginBackendSpec {
+            provenance: PluginProvenance {
+                name: "env-fixture".into(),
+                version: "1.0.0".into(),
+                manifest_digest: "fixture".into(),
+                grants: grants.to_recorded(),
+            },
+            plugin_root: root.clone(),
+            state_dir: root.join("state"),
+            global_root: root.join("global"),
+            command: command.clone(),
+            args: vec![transport.into()],
+            timeout_ms: Some(5_000),
+            sandbox: PluginSandbox::None,
+            permissions: PluginPermissions::default(),
+            programs: vec![
+                "myprog".into(),
+                "otherprog".into(),
+                "goneprog".into(),
+                "retargetedprog".into(),
+                "unresolvedprog".into(),
+            ],
+            program_paths: std::collections::BTreeMap::from([
+                ("myprog".into(), program_dir.join("myprog")),
+                ("otherprog".into(), program_dir.join("otherprog")),
+                ("goneprog".into(), gone_dir.join("goneprog")),
+                ("retargetedprog".into(), retarget_dir.join("retargetedprog")),
+            ]),
+            config: Default::default(),
+            grants: grants.clone(),
+            secrets: Default::default(),
+        });
+        let backend = match transport {
+            "exec" => PluginBackend::Exec(Arc::clone(&spec)),
+            "mcp" => PluginBackend::Mcp(Arc::new(McpBackend::new(
+                Arc::clone(&spec),
+                vec![McpExpectedTool {
+                    verb: "environment".into(),
+                    input_schema: None,
+                }],
+            ))),
+            _ => unreachable!(),
+        };
+        let tool = PluginTool {
+            name: "env-fixture.environment".into(),
+            verb: "environment".into(),
+            description: "report program resolution".into(),
+            parameters: Vec::new(),
+            input_schema: None,
+            execution_kind: PluginExecutionKind::ReadOnly,
+            output_schema: None,
+            binding: Arc::new(PluginToolBinding {
+                provenance: spec.provenance.clone(),
+                execution_kind: PluginExecutionKind::ReadOnly,
+                agent_callable: false,
+                diagnostic: None,
+            }),
+            backend,
+        };
+        let parent = vec![
+            ("HOME".into(), root.to_string_lossy().into_owned()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ];
+        let ctx = ToolContext {
+            cwd: Some(root.to_string_lossy().into_owned()),
+            workspace_root: Some(root.clone()),
+            proc_spawn_environment: Some(parent),
+            ..Default::default()
+        };
+        let env = tool.execute(&ctx, json!({})).expect("child environment");
+        let expected_path = format!("{}:/usr/bin:/bin", program_dir.display());
+        assert_eq!(
+            env["PATH"], expected_path,
+            "{transport}: granted dir prepended once"
+        );
+        assert_eq!(
+            env["myprog"],
+            program_dir.join("myprog").to_string_lossy().as_ref(),
+            "{transport}: declared program resolves by name"
+        );
+        assert_eq!(
+            env["otherprog"],
+            program_dir.join("otherprog").to_string_lossy().as_ref(),
+            "{transport}: second program in same dir resolves"
+        );
+        assert_eq!(
+            env["goneprog"], "",
+            "{transport}: missing program adds nothing"
+        );
+        assert_eq!(
+            env["retargetedprog"], "",
+            "{transport}: retargeted program adds nothing"
+        );
+        assert_eq!(
+            env["unresolvedprog"], "",
+            "{transport}: unresolved program adds nothing"
+        );
     }
 }
