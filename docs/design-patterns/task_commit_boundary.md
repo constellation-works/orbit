@@ -52,7 +52,11 @@ queueing each of its dozens of reads behind every admission and commit made one 
 take seconds under drain load. It still takes the shared locks and settles a pending commit
 first, so it never sees a half-applied transition and still waits for an exclusive holder; a
 queued writer may wait for the few reads it enters meanwhile. A re-entrant acquisition never
-reaches either lock.
+reaches either lock. A delivery's CI poll reads its CI retry journal the same way, through
+`RuntimeHost::observe_task_artifact`: that read decides nothing and the run that writes the
+journal is its only writer. Queued behind owner admissions that were themselves waiting on
+long dashboard reads, it once made one PR completion wait 62.5 s, including a 30 s acquisition
+timeout. A changed journal is still written through ordinary sections.
 
 A pass that makes many task reads (a search, the config view's review section) enters one shared
 section around all of them with `TaskStoreBackend::in_read_section`. Its nested reads re-enter

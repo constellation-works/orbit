@@ -184,6 +184,19 @@ impl RuntimeHost for OrbitRuntime {
         self.get_task_artifact_inline(task_id, path)
     }
 
+    fn observe_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<orbit_types::task::TaskArtifact>, OrbitError> {
+        // A best-effort diagnostic read decides nothing, so it must not queue
+        // behind every admission waiting on the partition. One queued behind
+        // dashboard reads stalled a PR completion's CI poll for 62 s.
+        orbit_store::TaskCommitBoundary::observe_for_status(|| {
+            self.get_task_artifact_inline(task_id, path)
+        })
+    }
+
     fn get_task_artifacts(
         &self,
         task_id: &str,
