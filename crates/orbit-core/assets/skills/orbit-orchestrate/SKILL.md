@@ -36,8 +36,10 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
   (criteria, context, dependencies; `required_tools` is set only at filing, so
   re-file to change it) and re-pilot, or record on the task why it stays.
   Treat an empty result as clear only when `degraded` is empty and the read
-  reached the owner: a caller without the agent or operator capability, or a
-  federated read that misses the owner, can return nothing.
+  reached the owner: a federated read that misses the owner can return
+  nothing. A caller holding neither the agent nor the operator capability
+  is refused with `capability_denied` and does not receive an empty
+  attention envelope.
 - Diagnose blocked work before retrying. Preserve user interventions and active
   work. A stopped admission loop does not mean its children were cancelled.
 - Record `orchestrator` separately from execution `crew`. Neither attribution
