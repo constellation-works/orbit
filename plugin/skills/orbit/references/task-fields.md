@@ -403,10 +403,11 @@ between two levels, take the lower and say why.
 The agent scorecards apply coefficients to regression rates, not fixed
 score-point penalties. A held review finding earns its severity weight. For
 Implementers, escaped regressions have a coefficient of -0.5 on the
-actual-minus-expected rate, compared with the fleet's expected rate for the
-same tier and change size; each escape is weighted by severity. For Reviewers,
-missed regressions have a coefficient of -2 on the actual rate; each missed
-link is weighted by severity.
+actual-minus-expected rate, compared with the expected rate: the rate among the
+other rows for the same tier and expected-size bucket, falling back to other
+rows in the tier, then other rows overall, or zero without peers. Each escape is
+weighted by severity. For Reviewers, missed regressions have a coefficient of
+-2 on the actual rate; each missed link is weighted by severity.
 
 ## Operator runbook: granting tools
 

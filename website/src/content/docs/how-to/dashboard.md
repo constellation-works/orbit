@@ -1215,12 +1215,14 @@ reject is counted once; regressions the reviewer missed count against
 Reviewers. Regressions that escaped because there was no test are scored as
 escaped regressions at weight −0.5, each at its severity weight (critical 8,
 high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review
-reject. Their expected count is size-adjusted: the fleet rate for the same
-tier and expected-size bucket (the fleet median lines changed for the task's
-tier and type, never the row's own diff). A defect a pre-landing review
-already rejected or repaired counts once, as that verdict, not again as an
-escaped regression. Each task counts once per crew and model that started an
-implementation run in the window.
+reject. Their expected count is size-adjusted: the rate among the other rows
+for the same tier and expected-size bucket, falling back to other rows in the
+tier, then other rows overall, or zero without peers. The buckets come from the
+fleet median lines changed for the task's tier and type, never the row's own
+diff, and the row's own escapes and observations are never in its expectation.
+A defect a pre-landing review already rejected or repaired counts once, as that
+verdict, not again as an escaped regression. Each task counts once per crew and
+model that started an implementation run in the window.
 
 Cost per weighted landed task, median completed run time and tasks by tier
 appear under **Shown, not scored** in the detail column. Cost uses recorded
