@@ -105,7 +105,9 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
             human_action: "Authorize a review reset".into(),
             summary: None,
         }),
-        outcome: Some("settled: recorded for the claim settlement".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Settled {
+            detail: "recorded for the claim settlement".into(),
+        }),
     });
     owner.pair.follower.write_run_state(&first, &state).unwrap();
     owner.pair.leaf_fails_with(

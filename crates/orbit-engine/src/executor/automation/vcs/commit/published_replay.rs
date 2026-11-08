@@ -5,7 +5,9 @@ use super::super::super::input::input_string_field;
 use super::checkpoint::pinned_object_id;
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+};
 use serde_json::{Value, json};
 
 use super::super::git::git_output;
@@ -165,7 +167,10 @@ pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
     };
     if recovery.key.run_id != active
         || recovery.task_id != task
-        || recovery.outcome.as_deref() != Some("resume")
+        || !matches!(
+            recovery.outcome,
+            Some(FinalRecoveryCheckpointOutcome::Resume)
+        )
         || recovery.repair_commit.is_some()
         || !matches!(
             recovery.decision,

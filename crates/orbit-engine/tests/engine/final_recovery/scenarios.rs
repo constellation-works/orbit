@@ -21,8 +21,8 @@ use orbit_engine::{
 };
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
-    RecoveryFault, TransientInfrastructure,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
+    FinalRecoveryKey, JobRunState, PipelineState, RecoveryFault, TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
@@ -663,7 +663,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
                 step_id: context.step_id.clone(),
                 rationale: context.rationale.clone(),
             },
-            Some("resume"),
+            Some(FinalRecoveryCheckpointOutcome::Resume),
         );
         state.final_recovery.as_mut().unwrap().resume_context = Some(context.clone());
         let restarted = RecoveryHost::new([]);
@@ -957,7 +957,10 @@ fn final_recovery_runs_at_most_once_per_run() {
 
 /// State a source run left after its final recovery recorded `decision`
 /// (and `outcome`, when it got that far), resumed at `work`.
-fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> PipelineState {
+fn resumed_after(
+    decision: FinalRecoveryDecision,
+    outcome: Option<FinalRecoveryCheckpointOutcome>,
+) -> PipelineState {
     let mut state = PipelineState::new(
         "jrun-source".to_string(),
         "final_recovery_fixture".to_string(),
@@ -980,7 +983,7 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
         admitted_at: Utc::now(),
         decision: Some(decision),
         fault: Default::default(),
-        outcome: outcome.map(str::to_string),
+        outcome,
     });
     state
 }
@@ -991,7 +994,7 @@ fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
             step_id: "work".to_string(),
             rationale: "repaired the worktree".to_string(),
         },
-        Some("resume"),
+        Some(FinalRecoveryCheckpointOutcome::Resume),
     );
     let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, Some(&state));

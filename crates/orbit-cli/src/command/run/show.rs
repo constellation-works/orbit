@@ -307,7 +307,11 @@ pub(crate) fn run_show_payload(
         header.push_str(&format!(
             "\nFinal recovery: {} ({}); fault: {}{}",
             decision.kind(),
-            checkpoint.outcome.as_deref().unwrap_or("not applied"),
+            checkpoint
+                .outcome
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "not applied".to_string()),
             checkpoint.fault.fault,
             if checkpoint.fault.fault_evidence.is_empty() {
                 String::new()

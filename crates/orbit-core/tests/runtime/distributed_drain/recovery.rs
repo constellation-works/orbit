@@ -507,7 +507,9 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
             reason: "the task contradicts its own criteria".into(),
             evidence: "criterion 1 forbids the change criterion 2 requires".into(),
         }),
-        outcome: Some("settled: recorded for the claim settlement".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Settled {
+            detail: "recorded for the claim settlement".into(),
+        }),
     });
     pair.follower.write_run_state(&leaf, &state).unwrap();
     // The leaf ran, its final recovery decided, and the run failed.
@@ -653,7 +655,9 @@ fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
         decision: Some(FinalRecoveryDecision::Requeue {
             reason: "the goldens now pass on the unchanged candidate".into(),
         }),
-        outcome: Some("settled: recorded for the claim settlement".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Settled {
+            detail: "recorded for the claim settlement".into(),
+        }),
     });
     pair.follower.write_run_state(&leaf, &state).unwrap();
     pair.leaf_fails_with(&leaf, "golden fixtures failed");
@@ -770,7 +774,9 @@ fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
             human_action: "Authorize a review reset".into(),
             summary: None,
         }),
-        outcome: Some("settled: recorded for the claim settlement".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Settled {
+            detail: "recorded for the claim settlement".into(),
+        }),
     });
     pair.follower.write_run_state(&leaf, &state).unwrap();
     pair.leaf_fails_with(

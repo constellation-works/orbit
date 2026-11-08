@@ -47,8 +47,9 @@ use orbit_types::workflow::handoff::{
     HandoffValidationLog, TaskHandoff,
 };
 use orbit_types::workflow::{
-    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey,
-    JobRunState, JobTargetType, PipelineState, ReviewTiming,
+    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome,
+    FinalRecoveryDecision, FinalRecoveryKey, JobRunState, JobTargetType, PipelineState,
+    ReviewTiming,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Value, json};

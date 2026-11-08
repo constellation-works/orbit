@@ -12,7 +12,10 @@ use orbit_engine::{
 };
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState, ReviewManifest};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+    ReviewManifest,
+};
 use serde_json::{Value, json};
 
 use super::super::review_gate_audit::Fixture;
@@ -859,7 +862,11 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
             "before" => repair.head_sha_before = "0".repeat(40),
             "workspace" => repair.workspace_path = fixture.repo.join(".orbit"),
             "key" => checkpoint.key.run_id = "jrun-foreign".into(),
-            "decision" => checkpoint.outcome = Some("escalated: refused".into()),
+            "decision" => {
+                checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Escalated {
+                    detail: "refused".into(),
+                })
+            }
             _ => unreachable!(),
         }
         fixture.runtime.write_run_state(&resumed, &state).unwrap();

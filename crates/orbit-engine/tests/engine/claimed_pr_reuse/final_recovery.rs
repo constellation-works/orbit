@@ -12,7 +12,8 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::handoff::TaskHandoff;
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryKey, JobRunState, PipelineState,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryKey, JobRunState,
+    PipelineState,
 };
 
 const TASK_ID: &str = "ORB-1";
@@ -430,7 +431,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         let mut state = self.state.lock().unwrap();
         let checkpoint = state.final_recovery.as_mut().unwrap();
         checkpoint.decision = Some(application.decision.clone());
-        checkpoint.outcome = Some("resume".into());
+        checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Resume);
         checkpoint.repair_commit = application.repair_commit.clone();
         checkpoint.resume_context = application.resume_context.clone();
         let from = application

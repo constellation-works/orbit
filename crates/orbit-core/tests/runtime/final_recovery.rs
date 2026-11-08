@@ -18,7 +18,9 @@ use orbit_engine::{
     FinalRecoveryApplied, RuntimeHost,
 };
 use orbit_store::contracts::JobRunStoreBackend;
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -428,9 +430,10 @@ fn a_local_decision_is_applied_to_the_task_through_the_applier() {
     assert_eq!(fixture.status(&task), "archived");
     let recorded = fixture.state(&run).final_recovery.unwrap();
     assert!(
-        recorded
-            .outcome
-            .is_some_and(|outcome| outcome.starts_with("settled")),
+        matches!(
+            recorded.outcome,
+            Some(FinalRecoveryCheckpointOutcome::Settled { .. })
+        ),
         "the outcome is recorded with the decision"
     );
 }
@@ -526,7 +529,9 @@ fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
             .final_recovery
             .unwrap()
             .outcome
-            .is_some_and(|outcome| outcome.starts_with("settled")),
+            .is_some_and(|outcome| {
+                matches!(outcome, FinalRecoveryCheckpointOutcome::Settled { .. })
+            }),
         "the replay records the outcome the crash lost"
     );
 
