@@ -288,6 +288,8 @@ impl PipelineWorkerSupervisor {
     ) -> Result<(), OrbitError> {
         #[cfg(feature = "test-support")]
         let worker_pid = child.id();
+        #[cfg(feature = "test-support")]
+        worker_reap_hook::run(worker_reap_hook::WorkerReapPhase::BeforeReap, run_id);
         let settled = self.observe_startup(run_id, child, worker_log, worker_log_reader, actor);
         announce_worker_exit();
         #[cfg(feature = "test-support")]
@@ -796,16 +798,17 @@ impl PipelineWorkerSupervisor {
     }
 }
 
-/// A rendezvous on the startup observer's thread just after it reaps its
-/// worker, around the durable exit record, so a test can let stale-run
-/// reconciliation settle the run first, deterministically.
+/// A rendezvous on the startup observer's thread around reaping and the
+/// durable exit record, for deterministic teardown and reconciliation races.
 #[cfg(feature = "test-support")]
 pub(crate) mod worker_reap_hook {
     use std::sync::{Mutex, PoisonError};
 
-    /// Where the observer stops after reaping its worker.
+    /// Where the observer stops around reaping its worker.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum WorkerReapPhase {
+        /// Before any wait can reap the child, including an already-exited child.
+        BeforeReap,
         /// Before the exit is recorded: reconciliation finds no exit record.
         BeforeExitRecorded,
         /// After the exit is recorded, before the run is settled.
