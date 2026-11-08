@@ -172,7 +172,7 @@ impl MemberHost for Host<'_> {
         // those ids by live `task.crew` and then by `max_partition_size`
         // [ORB-12746, ORB-16839].
         let task_ids = attempt.task_ids();
-        let mut input = json!({
+        let input = json!({
             "state_automation": attempt,
             "task_ids": task_ids,
             "source_revision": attempt.member.source.commit,
@@ -181,10 +181,6 @@ impl MemberHost for Host<'_> {
             "promotion_authorized": false,
             "automation_origin": origin,
         });
-        // One escalation job reads both subjects; the trigger names which.
-        if let Some(subject) = self.escalation_subject() {
-            input["subject"] = json!(subject);
-        }
         self.runtime
             .submit_automation_pipeline_run(
                 self.trigger.job_name(),
@@ -590,14 +586,6 @@ pub(super) enum Escalation {
     Qualifies(String),
     /// It no longer qualifies, for this retirement reason.
     Gone(String),
-}
-
-/// A temporary hold diagnostic names every durable run the operator can inspect.
-pub(super) fn already_triaging(run_ids: &BTreeSet<String>) -> String {
-    format!(
-        "already_triaging: {}",
-        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
-    )
 }
 
 /// A temporary hold diagnostic names every durable run the operator can inspect.
