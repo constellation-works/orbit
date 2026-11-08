@@ -140,7 +140,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Activity / Job](./design/activity-job/1_overview.md) | Condition consumer (ORB-20397) and disabled readiness job (ORB-20166) remain someday; completion contracts/history (ORB-20165) and historical reuse (ORB-22649) shipped | codex |
+| [Activity / Job](./design/activity-job/1_overview.md) | Release-readiness example (ORB-20166) stays disabled until its owner prerequisites are met; completion contracts/history (ORB-20165), historical reuse (ORB-22649) and condition facts over accepted history (ORB-20397) shipped | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Operator decides when admission moves from shadow to forecast mode | claude |
