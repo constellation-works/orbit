@@ -10,7 +10,7 @@ use serde_json::Value;
 impl GuardedModes for AgentsVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Scorecard | Self::Show => None,
+            Self::Scorecard | Self::Show | Self::CiFailures => None,
         }
     }
 
@@ -20,19 +20,19 @@ impl GuardedModes for AgentsVerb {
         _input: &OperationInput,
     ) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::Scorecard | Self::Show => None,
+            Self::Scorecard | Self::Show | Self::CiFailures => None,
         }
     }
 
     fn shape_input(self, _ctx: &ToolContext, _input: &mut Value) -> Result<(), OrbitError> {
         match self {
-            Self::Scorecard | Self::Show => Ok(()),
+            Self::Scorecard | Self::Show | Self::CiFailures => Ok(()),
         }
     }
 
     fn schema_extension(self) -> Option<fn(&mut Value)> {
         match self {
-            Self::Scorecard | Self::Show => None,
+            Self::Scorecard | Self::Show | Self::CiFailures => None,
         }
     }
 }

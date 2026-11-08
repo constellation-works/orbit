@@ -37,6 +37,9 @@ pub struct HandoffLandingContext {
     pub handoff_id: String,
     pub task_id: String,
     pub claim_id: String,
+    /// The run that produced the handed-off candidate, which a required-check
+    /// failure on its head is recorded against. Empty when unknown.
+    pub producing_run_id: String,
     /// The accepted candidate: repository, branches, candidate/base revisions
     /// and delivery variant.
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,

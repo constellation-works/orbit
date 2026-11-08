@@ -194,7 +194,7 @@ fn until_rejected(raw: &str) -> OrbitError {
 /// metrics window: `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`,
 /// with whitespace ignored and a trailing `s` trimmed. A bare date is not
 /// accepted. `until` in the future is refused.
-fn parse_until(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitError> {
+pub(super) fn parse_until(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitError> {
     if let Ok(at) = DateTime::parse_from_rfc3339(raw) {
         let at = at.with_timezone(&Utc);
         if at > now {

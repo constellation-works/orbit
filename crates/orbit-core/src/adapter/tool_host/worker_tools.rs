@@ -49,7 +49,7 @@ pub(crate) fn execute(
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
-            AgentsVerb::Scorecard | AgentsVerb::Show => false,
+            AgentsVerb::Scorecard | AgentsVerb::Show | AgentsVerb::CiFailures => false,
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
@@ -382,7 +382,7 @@ pub(crate) fn execute(
             }
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
-            AgentsVerb::Scorecard | AgentsVerb::Show => return Ok(None),
+            AgentsVerb::Scorecard | AgentsVerb::Show | AgentsVerb::CiFailures => return Ok(None),
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain => return Ok(None),

@@ -157,7 +157,7 @@ authenticated role.
 | Pick up work without collisions | `orbit_task_eligible` (read only; `explain: true` names each blocking selector and holder) | `orbit task eligible`: backlog/proposed tasks whose lock surface overlaps no in-progress or review task. Lock overlap is the only test; check dependencies yourself |
 | Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
-| Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`; optional `until`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`, both with optional `--until`. `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
+| Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`; optional `until`); `orbit_agents_ci_failures` (optional `window`, `until`, `task`, `class`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`, both with optional `--until`; `orbit agents ci-failures` lists required-check failures by cause (see [CI failures by cause](#ci-failures-by-cause)). `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
 | Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Evolution costs | `orbit.evolution.add` records an interactive cost event; `orbit.evolution.list` ranks capability-gap signatures by recorded cost; `orbit.evolution.show` inspects one record and its occurrences | `orbit evolution add --event <JSON>`, `list [--state <state>] [--since <time>]`, and `show <id>`; operator-only `decline <id>` suppresses proposals for a signature. Use this for repeated costs caused by a missing capability; use [Friction](friction.md) for defects and contradicted assumptions |
@@ -617,6 +617,30 @@ MCP it is in the `analytics` toolset.
 - **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0).
 - The dashboard's Agents view reads this payload.
 
+### CI failures by cause
+
+`orbit_agents_ci_failures` (`orbit agents ci-failures`, `GET /api/agents/ci-failures`)
+lists the required-check failures the owner's landing recorded on candidate heads: one
+record per head and check with the task, the run that produced the head
+(`producing_run_id`), the check, its error signature and a cause `class`:
+
+- `code`: the failure cites a file the head changed (its log, or the failure
+  annotations of a check outside a workflow), or the same head failed the same
+  check again on a rerun;
+- `flaky`: the same head later passed the same check, with no new commit;
+- `infrastructure`: the runner, the network or a declared
+  `workflow.ci_infrastructure_signatures` entry failed it, or the base fails
+  the same check;
+- `unknown`: none of these was established.
+
+A candidate failure with no evidence of its cause, on a head that has had no rerun, is
+rerun once on the unchanged head before the landing repairs it, so the second result
+can class it. Later evidence upgrades only an `unknown` class; each change is listed in
+the record's `changes` with its evidence, and is a `ci_failure_reclassified` event in
+the task's history. Filters: `window` (`all` or a duration such as `14d`; default
+`30d`, by when the failure was first recorded), `until`, `task` and `class` (the
+current class). The response lists the records newest first, with per-class `counts`
+over the window and task whatever `class` selects.
 ## Common MCP arguments
 
 These are JSON arguments to the named tool, not shell commands:

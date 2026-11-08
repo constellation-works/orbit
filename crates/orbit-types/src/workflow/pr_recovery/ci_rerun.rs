@@ -7,6 +7,9 @@ use serde_json::Value;
 pub const CI_RERUN_RESERVED_EVENT: &str = "ci_check_rerun_reserved";
 
 /// The independently classified root of a workflow-wide failed-jobs retry.
+/// `classification` is `transient`, `flaky` or `unattributed`: a failure
+/// whose cause no evidence established yet, rerun once per head so its
+/// [`CiFailureClass`](super::CiFailureClass) can be told apart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CiRerunRoot {
@@ -104,10 +107,12 @@ pub fn decide_ci_rerun_with_policy(
     if plan.schema_version != 1
         || plan.roots.is_empty()
         || plan.failed_jobs.is_empty()
-        || plan
-            .roots
-            .iter()
-            .any(|root| !matches!(root.classification.as_str(), "transient" | "flaky"))
+        || plan.roots.iter().any(|root| {
+            !matches!(
+                root.classification.as_str(),
+                "transient" | "flaky" | "unattributed"
+            )
+        })
     {
         return CiRerunAdmission::Refused("incomplete CI retry authorization".into());
     }

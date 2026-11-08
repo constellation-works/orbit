@@ -4,5 +4,6 @@
   {"argv": ["agents", "rank"], "golden": "agents/rank.txt"},
   {"argv": ["agents", "rank", "calibrate"], "golden": "agents/rank-calibrate.txt"},
   {"argv": ["agents", "show"], "golden": "agents/show.txt"},
+  {"argv": ["agents", "ci-failures"], "golden": "agents/ci-failures.txt"},
   {"argv": ["agents", "vision-probe"], "golden": "agents/vision-probe.txt"}
 ]

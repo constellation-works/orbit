@@ -253,6 +253,7 @@ pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLand
             handoff_id: "accepted-fixture".into(),
             task_id: TASK_ID.into(),
             claim_id: "fixture-claim".into(),
+            producing_run_id: "run-1".into(),
             workspace_path: fx.repo.clone(),
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["Protected (rust)".into()],

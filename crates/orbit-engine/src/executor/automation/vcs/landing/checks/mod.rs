@@ -106,11 +106,20 @@
 //! accepted candidate, its validation evidence and the observation the store
 //! rechecks stay the validated commit.
 //!
+//! [model ranking §5.1] Each failed required check the landing classifies is
+//! also recorded once per head with the cause the model ranking charges
+//! (code, flaky, infrastructure or unknown; [`failure_ledger`]). A set whose
+//! cause no evidence establishes, and whose head has had no rerun, is rerun
+//! once on the unchanged head before the candidate is repaired, so the
+//! second result can class it; an `unknown` record is upgraded, with an
+//! audited reclassification, when that result or a later pass arrives.
+//!
 //! [`verified_base_update`]: base_update::verified_base_update
 
 mod annotations;
 mod base_tip;
 mod base_update;
+mod failure_ledger;
 mod head;
 mod jobs;
 mod log;

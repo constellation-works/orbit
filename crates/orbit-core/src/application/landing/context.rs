@@ -46,6 +46,7 @@ impl OrbitRuntime {
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
             claim_id: accepted.handoff.claim_id,
+            producing_run_id: accepted.handoff.run_id,
             candidate: accepted.handoff.candidate,
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
