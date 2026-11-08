@@ -214,17 +214,60 @@ fn ownership_name(description: &str) -> Option<&'static str> {
         let Some(name) = ownership_choice_name(&lower) else {
             continue;
         };
+        let identity = ownership_choice_identity(&lower, name);
         if OPEN_MARKERS.iter().any(|cue| lower.contains(cue)) {
-            if !open.contains(&name) {
-                open.push(name);
+            if !open.contains(&(name, identity.clone())) {
+                open.push((name, identity));
             }
             continue;
         }
         if ownership_resolution(&lower) {
-            open.retain(|current| *current != name);
+            open.retain(|current| *current != (name, identity.clone()));
         }
     }
-    open.into_iter().max_by_key(|name| rank(name))
+    open.into_iter()
+        .max_by_key(|(name, _)| rank(name))
+        .map(|(name, _)| name)
+}
+
+/// Retain the policy's modifiers independently from its user-facing label.
+/// An unqualified policy only resolves another unqualified policy; ambiguity
+/// should leave a hold in place rather than clear a potentially different one.
+fn ownership_choice_identity(lower: &str, name: &str) -> String {
+    if name == "the ownership choice" {
+        return name.to_string();
+    }
+    let mut modifiers = Vec::new();
+    for word in lower.split(|c: char| !c.is_alphanumeric() && c != '-') {
+        if word == "policy" {
+            break;
+        }
+        if matches!(
+            word,
+            "" | "the"
+                | "a"
+                | "an"
+                | "current"
+                | "existing"
+                | "preserve"
+                | "preserves"
+                | "preserving"
+                | "keep"
+                | "keeps"
+                | "keeping"
+                | "retain"
+                | "retains"
+                | "retaining"
+                | "whether"
+                | "to"
+                | "is"
+        ) {
+            modifiers.clear();
+        } else {
+            modifiers.push(word);
+        }
+    }
+    modifiers.join(" ")
 }
 
 fn ownership_choice_name(lower: &str) -> Option<&'static str> {
