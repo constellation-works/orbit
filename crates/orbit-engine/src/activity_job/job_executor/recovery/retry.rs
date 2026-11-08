@@ -289,7 +289,11 @@ fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, Dispatc
         refusal: orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
         message: format!(
             "admitted check repair has no step_failure_recovery on this job; the run holds \
-             and no repair agent runs. {diagnostic}"
+             and no repair agent runs. The admission remains recorded and spends one repair \
+             attempt; adding recovery and retrying the same head holds again as \
+             delivery_repair_dispatched. Configure step_failure_recovery for future heads, \
+             repair and publish a new head, then start a new delivery attempt. \
+             Further repairs require remaining per-PR budget. {diagnostic}"
         ),
     })
 }
