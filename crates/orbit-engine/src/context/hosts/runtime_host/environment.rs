@@ -28,6 +28,11 @@ macro_rules! environment_methods {
         /// check: the owner delivery path validates nothing.
         fn required_validation_commands(&self) -> Vec<String>;
 
+        /// `completion.hold`: the admitted rules, in configured order, that
+        /// keep a completion-authorized run's task in `review` [ORB-23322].
+        /// Empty holds nothing.
+        fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule>;
+
         /// The owner's review gates (`review.baseline_commands`). With the
         /// required commands they are the gates whose Bubblewrap deferrals an
         /// implementer may hand off for a native replay [ORB-15287].

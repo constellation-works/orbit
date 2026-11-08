@@ -16,7 +16,10 @@ spec:
     auto_fix, failed required checks and merge conflicts on the PR are
     admitted against its repair ledger and handed to the run's repair
     activities; without completion done it only watches, never merges, and
-    ends once the PR is mergeable.
+    ends once the PR is mergeable. A `completion.hold` rule matching the PR's
+    changed files or the task's complexity, type or tags holds a completion
+    done run before it merges: the PR stays ready, the tasks stay in review
+    with the rule and match recorded, and the output names them as held.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids]
@@ -148,6 +151,19 @@ spec:
         type: array
         items:
           type: string
+      held_task_ids:
+        type: array
+        description: >
+          Tasks a `completion.hold` rule kept in review; nothing merged and
+          nothing completed. Absent when no rule held the run.
+        items:
+          type: string
+      completion_hold:
+        type: object
+        description: >
+          The hold: `rule`, the `field` that matched (paths,
+          complexity_at_least, types or tags), its configured `pattern`, what
+          it `matched` and the `run_id`.
       authorization:
         type: string
   action: pr_complete

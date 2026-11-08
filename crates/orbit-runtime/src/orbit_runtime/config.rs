@@ -203,6 +203,12 @@ impl RuntimeKernel {
         self.context.settings().light_delivery_paths()
     }
 
+    /// `completion.hold`: the admitted rules that keep a
+    /// completion-authorized run's task in `review`, in configured order.
+    pub fn completion_hold_rules(&self) -> &[orbit_types::workflow::CompletionHoldRule] {
+        self.context.settings().completion_hold()
+    }
+
     /// `workflow.test_paths` as a compiled filter: the landed-diff paths
     /// counted as tests.
     pub fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {

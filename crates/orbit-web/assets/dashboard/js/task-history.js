@@ -35,6 +35,7 @@ const HISTORY_EVENT_CATEGORY = {
   pull_request: "run",
   landing_completed: "run",
   landing_checks_observed: "run",
+  completion_held: "lifecycle",
   transient_infra_requeued: "warning",
   escalated: "warning",
 };
@@ -95,6 +96,14 @@ function historyPullRequestParts(text) {
   }
   const rest = text.replace(url ? url[0] : number[0], "").replace(/[\s.#\d]/g, "");
   return { parts: ["opened pull request ", target], note: rest ? text : "" };
+}
+
+// ORB-23322: "held for review: paths .github/workflows/** matched
+// .github/workflows/ci.yml (rule ci)", from a `completion.hold` record.
+export function completionHoldSummary(hold) {
+  if (!hold || typeof hold !== "object") return "held for review";
+  const task = hold.matched_task_id ? ` (bundled task ${hold.matched_task_id})` : "";
+  return `held for review: ${hold.field || "?"} ${hold.pattern || "?"} matched ${hold.matched || "?"}${task} (rule ${hold.rule || "?"})`;
 }
 
 function historyCountLabel(count, noun) {
@@ -166,6 +175,8 @@ function describeHistoryEntry(entry, parsed, data) {
       return historyPullRequestParts(text);
     case "landing_completed":
       return { parts: ["completed landing"] };
+    case "completion_held":
+      return { parts: [el("strong", { text: completionHoldSummary(data) })], summarized: true };
     case "operator_requeued":
       return { parts: ["requeued the task"] };
     case "transient_infra_requeued":

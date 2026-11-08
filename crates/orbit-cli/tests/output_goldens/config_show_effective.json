@@ -28,6 +28,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "completion.hold": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "crew_memory.enabled": {
       "scope": "built-in",
       "state": "default",

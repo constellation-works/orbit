@@ -115,7 +115,9 @@ pub fn task_record_json(
 /// `next_step` says what to do about a task a failed run left `blocked`.
 /// `final_recovery` is the last automated final-recovery decision, with
 /// `run_id`, `decision`, `outcome`, `fault` (`unknown` on an older decision),
-/// `fault_evidence`, `fault_judged_by` and `at`. `owed_criteria` lists each
+/// `fault_evidence`, `fault_judged_by` and `at`. `completion_hold` is the
+/// `completion.hold` rule and match that kept a completion-authorized run's
+/// task in `review`, while it is still there. `owed_criteria` lists each
 /// criterion the delivery owes after deploy, with its host, command, target
 /// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
@@ -141,6 +143,14 @@ pub fn task_show_json(
     }
     if let Some(record) = super::FinalRecoveryRecord::last(&row.history, &row.comments) {
         object.insert("final_recovery".to_string(), final_recovery_json(&record));
+    }
+    if let Some(hold) =
+        orbit_types::workflow::current_completion_hold(row.task.status, &row.history)
+    {
+        object.insert(
+            "completion_hold".to_string(),
+            serde_json::to_value(hold).map_err(serialize_error("completion_hold"))?,
+        );
     }
     if let Some(owed) = super::owed_criteria_json(&row.history) {
         object.insert("owed_criteria".to_string(), owed);
@@ -220,6 +230,13 @@ pub fn task_show_field_json(
             &runtime.get_task_comments(&task.id)?,
         )
         .map_or(Value::Null, |record| final_recovery_json(&record))),
+        "completion_hold" => {
+            let history = runtime.get_task_history(&task.id)?;
+            orbit_types::workflow::current_completion_hold(task.status, &history)
+                .map_or(Ok(Value::Null), |hold| {
+                    serde_json::to_value(hold).map_err(serialize_error("completion_hold"))
+                })
+        }
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)

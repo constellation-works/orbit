@@ -234,6 +234,14 @@ macro_rules! assemble_config_settings {
         allowed: integers(1, operation::MAX_REVIEW_MINUTES as u64, "minutes"),
         resolve: |raw: Option<u32>| operation::review_minutes(raw).map(|minutes| minutes.unwrap_or(DEFAULT_REVIEW_MINUTES)),
     },
+    completion_hold: Vec<orbit_types::workflow::CompletionHoldRule> => Vec<orbit_types::workflow::CompletionHoldRule> {
+        key: "completion.hold", value_type: "array<table>",
+        description: "Rules that keep a --complete run's task in review for risky paths or task traits.",
+        section: ConfigSection::Review, order: 40,
+        allowed: format("ordered tables of paths, complexity_at_least, types, tags and an optional name"),
+        detail: "A rule holds when any of its fields matches: paths against the pull request's changed files, complexity_at_least (low, medium, hard, xhard), types (feature, bug, refactor, chore) or tags. It only lowers done to review; it never grants completion.",
+        resolve: |raw: Option<Vec<orbit_types::workflow::CompletionHoldRule>>| crate::completion_hold::admit_completion_hold(raw),
+    },
     retention_audit_days: u32 => u32 {
         key: "retention.audit_days", value_type: "integer",
         description: "Days orbit gc audit keeps command and run audit rows.",

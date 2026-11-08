@@ -448,6 +448,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn required_validation_commands(&self) -> Vec<String> {
         NullRuntimeHost::required_validation_commands(self)
     }
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        NullRuntimeHost::completion_hold_rules(self)
+    }
     fn review_baseline_commands(&self) -> Vec<String> {
         NullRuntimeHost::review_baseline_commands(self)
     }

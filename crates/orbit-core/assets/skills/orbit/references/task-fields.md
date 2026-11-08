@@ -66,8 +66,9 @@ created_by, created_by_model, planned_by, implemented_by, status, terminal, prio
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
-readiness, pilot_warnings, open_decisions, final_recovery, orchestrator,
-orchestrator_model, orchestrator_model_source, origin, rule_fingerprint,
+readiness, pilot_warnings, open_decisions, final_recovery, completion_hold,
+orchestrator, orchestrator_model, orchestrator_model_source, origin,
+rule_fingerprint,
 created_at, updated_at, comments, history, artifacts
 ```
 
@@ -79,6 +80,11 @@ or `null`. `fault` says whose fault the failed run was: `implementer`,
 provider of the agent that judged it, as Orbit observed it; it is `null`
 when Orbit decided without an agent or did not observe a provider. Older
 decisions may retain a model name. The field does not name the implementer's crew or model.
+
+`completion_hold` is the `completion.hold` rule that kept a `--complete`
+run's task in `review` (`rule`, `field`, `pattern`, `matched`, `run_id`, and
+`matched_task_id` when another task of its bundle matched), while the task is
+still in that review; otherwise `null`. Approve the task to finish it.
 
 Show without a projection returns the full task. A projection returns only
 the requested fields as JSON: a single field returns its value, and multiple

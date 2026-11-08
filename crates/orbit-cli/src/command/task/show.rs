@@ -340,6 +340,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             final_recovery_text(record)
         );
     }
+    // The `completion.hold` rule that kept a `--complete` run's task here.
+    if let Some(hold) = task.get("completion_hold") {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Completion Hold:"),
+            completion_hold_text(hold)
+        );
+    }
     // Criteria the delivery owes until the deployed build is measured.
     if let Some(owed) = task.get("owed_criteria") {
         let _ = writeln!(out, "{}", bold("Owed After Deploy:"));
@@ -644,6 +653,25 @@ pub(crate) fn final_recovery_text(record: &Value) -> String {
         }
     }
     text
+}
+
+/// The words after `Completion Hold:` on a task show: the rule, the field
+/// and value that matched and what they matched, and the run it held. Local
+/// and routed text both use this.
+pub(crate) fn completion_hold_text(hold: &Value) -> String {
+    let part = |key: &str| hold.get(key).and_then(Value::as_str).unwrap_or_default();
+    let task = match part("matched_task_id") {
+        "" => String::new(),
+        id => format!(" (bundled task {id})"),
+    };
+    format!(
+        "held for review: {} {} matched {}{task} (rule {}, run {})",
+        part("field"),
+        part("pattern"),
+        part("matched"),
+        part("rule"),
+        part("run_id")
+    )
 }
 
 /// One line per owed criterion on a task show: its state, host, command and

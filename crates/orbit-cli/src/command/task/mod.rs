@@ -19,7 +19,9 @@ mod settle_merged;
 mod show;
 pub(crate) mod support;
 
-pub(crate) use show::{final_recovery_text, next_step_text, owed_criteria_lines};
+pub(crate) use show::{
+    completion_hold_text, final_recovery_text, next_step_text, owed_criteria_lines,
+};
 
 pub(crate) use command::TaskInvocation;
 pub use command::{TaskCommand, TaskSubcommand};

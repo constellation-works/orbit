@@ -365,6 +365,7 @@ pub(crate) fn build_context_from_roots(
                 .snapshot
                 .workflow_light_delivery_paths
                 .clone(),
+            runtime_config.snapshot.completion_hold.clone(),
             (
                 orbit_common::fs::path_filter::PathFilter::new(
                     "workflow.test_paths",

@@ -463,6 +463,11 @@ impl RuntimeHost for OrbitRuntime {
         validation::required_validation_commands(self)
     }
 
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        // The kernel's accessor, not this trait method of the same name.
+        crate::runtime::RuntimeKernel::completion_hold_rules(self).to_vec()
+    }
+
     fn review_baseline_commands(&self) -> Vec<String> {
         validation::review_baseline_commands(self)
     }
