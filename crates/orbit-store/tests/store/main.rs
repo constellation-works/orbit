@@ -200,6 +200,7 @@ include!("file_store.rs");
 include!("incident_cause.rs");
 include!("incident_performance.rs");
 include!("invocation_workspace_scope.rs");
+include!("job_run_recency.rs");
 include!("job_run_states.rs");
 include!("job_run_tasks.rs");
 include!("migration_freeze.rs");

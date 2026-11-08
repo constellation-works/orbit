@@ -470,6 +470,30 @@ pub(super) fn job_run_list_sql(
     let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
     let order_clause = job_run_order_sql(query.order_by);
     if query.order_by == JobRunOrder::Recency
+        && query.job_id.is_some()
+        && !live_states_only(query)
+        && let Some(limit) = query.limit
+    {
+        // A streak must seek this job, rather than walk each state's entire
+        // workspace history. Sort narrow IDs before hydrating the bounded
+        // page: old inputs can be large and are not needed for ordering.
+        // Pin the job index because SQLite has no selectivity statistics.
+        params.push(Box::new(limit as i64));
+        return (
+            format!(
+                "SELECT {JOB_RUN_COLUMNS} FROM (SELECT run_id AS selected_run_id, \
+                 COALESCE(finished_at, started_at, created_at) AS selected_recency \
+                 FROM job_runs INDEXED BY idx_job_runs_ws_job_created \
+                 WHERE {where_clause} ORDER BY {order_clause} LIMIT ?{}) AS selected \
+                 CROSS JOIN job_runs WHERE workspace_id = ?1 \
+                 AND run_id = selected.selected_run_id \
+                 ORDER BY selected.selected_recency DESC, run_id ASC",
+                params.len()
+            ),
+            params,
+        );
+    }
+    if query.order_by == JobRunOrder::Recency
         && query.states.len() > 1
         && let Some(limit) = query.limit
     {
