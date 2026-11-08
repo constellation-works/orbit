@@ -595,8 +595,13 @@ SERVER_LOG="$WORKDIR/logs/sccache-server-client-side-shared-tcp.log"
 rm -f "$SERVER_LOG"
 alloc_port; cs_port="$ALLOC_PORT"
 release_port
-rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
-mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
+# Cold shared disk cache for the concurrent run: the previous stages leave warm
+# entries for these same sources, and concurrent cache hits across namespaces
+# race the rlib restore (participant C exit 101 with missing tgt-c rlib in CI).
+# A cold cache keeps the shared-TCP concurrency hazard while staying
+# deterministic; warmth is already covered by warm-identical-source above.
+rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
+mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" \
