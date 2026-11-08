@@ -1647,9 +1647,13 @@ evidence.
 **Authority.** `CompletionPolicy` (`crates/orbit-types/src/workflow/ship.rs`)
 stays the only grant of `done`, per invocation and never derived from
 configuration. `completion.hold` can only lower it: the rules are read only
-when the run's input carries `completion: done`, and a matching rule replaces
-the `done` outcome with the one a run without `--complete` reaches. A
-watch-only auto-fix run has no completion to hold.
+when a completion was actually granted — the run's input carries
+`completion: done`, or the owner's standing policy
+(`workflow.distributed_completion = "done"`) authorized the landing — and a
+matching rule replaces the `done` outcome with the one a run without
+`--complete` reaches. A watch-only auto-fix run has no completion to hold,
+and under the `review` policy neither does a claimed handoff: every landing
+there was already approved by a person.
 
 **Rules.** `[[completion.hold]]` is an ordered `array<table>` registered in the
 config key registry (Review section). Each rule sets at least one of `paths`,
@@ -1677,12 +1681,29 @@ the rebased head), the re-review rounds (`complete_reviewed_pr`,
 A no-diff completion and a final-recovery `complete_no_diff` carry no diff of
 their own; only `complexity_at_least`, `types` and `tags` apply there, the
 latter lowering the decision's completion to `review` before the host applies
-it. Local delivery and the owner's landing of a claimed leaf under
-`workflow.distributed_completion` are outside this gate.
+it. Local delivery (`task_local_pipeline`, [ORB-23365]) decides the rules in
+its `git_merge` step — the fast-forward is that route's merge, and
+`task_complete` runs only after it — against the same merge-base diff of the
+worktree candidate, so a held candidate never reaches the base, the push or
+completion. An owner's landing of a claimed leaf under
+`workflow.distributed_completion = "done"` ([ORB-23365],
+`vcs/landing/record.rs::completion_hold_stop`) decides them against the
+accepted candidate: a pull request on its first still-unmerged observation,
+with the candidate's objects fetched from its source branch so
+`pull_request_changed_paths` can read the diff; a local candidate against
+the pinned base-to-candidate diff, after the already-contained fast path; a
+no-diff or already-landed candidate on the task alone. A candidate a person
+already merged or landed is settled as that fact and never held after it.
+The canonical `complete_tasks` transition refuses planned tasks matching a
+task-field rule as the last guard behind every route.
 
 **Outcome.** A held pull request is left open and ready, and its tasks in
 `review`, exactly as a run without `--complete` leaves them; with auto-fix the
-step still watches and repairs the PR with merge authority withdrawn. Every
+step still watches and repairs the PR with merge authority withdrawn. A held
+local candidate stays on its branch unmerged, its run ending in `review`
+with the merge step reporting `merged: false`. A held owner landing records
+a non-repairable stop before any merge intent, so the attempt settles
+unmerged and unlanded and an operator retry re-decides the rules. Every
 task of the bundle gets a comment and a `completion_held` history entry whose
 typed decision (`TaskDecision::CompletionHeld`) names the rule, the field, the
 configured pattern, what it matched, the run, and the bundled task when

@@ -8,7 +8,10 @@ spec:
     Perform the guarded review -> done completion transition for tasks a run was
     explicitly authorized to complete. Already-done tasks are skipped; any other
     source status is refused, so completion authority can never substitute for
-    backlog approval or skip delivery.
+    backlog approval or skip delivery. A planned task whose complexity, type
+    or tags match a `completion.hold` rule stays in review instead, reported
+    in `held_task_ids` with the hold; path rules are decided by the route
+    before its merge.
   input_schema_json:
     type: object
     required: [job_run_id]
@@ -44,6 +47,12 @@ spec:
         type: array
         items:
           type: string
+      held_task_ids:
+        type: array
+        items:
+          type: string
+      completion_hold:
+        type: [object, "null"]
       authorization:
         type: string
   action: task_complete

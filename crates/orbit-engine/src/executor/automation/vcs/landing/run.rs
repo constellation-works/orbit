@@ -234,9 +234,13 @@ fn land<H: RuntimeHost + ?Sized>(
         return Ok(landed);
     }
 
+    // The run a completion hold is recorded against: the landing job's own
+    // run, injected into every activity input, or the handoff itself when a
+    // caller named none.
+    let run_id = input_string_field(input, "run_id").unwrap_or_else(|| context.handoff_id.clone());
     match context.candidate.delivery.clone() {
         HandoffDelivery::PullRequest { number } => {
-            land_pull_request(host, context, number, budget, &view)
+            land_pull_request(host, context, number, budget, &view, &run_id)
         }
         // [ORB-15677] Only a pull request's hosted CI runs the checks the
         // review owed it; a local candidate has none to wait for.
@@ -249,10 +253,12 @@ fn land<H: RuntimeHost + ?Sized>(
                 context.owed_hosted_checks.join(", ")
             ),
         )?),
-        HandoffDelivery::LocalCandidate => land_local_candidate(host, context, input, &view),
-        HandoffDelivery::NoDiff { .. } => land_no_diff(host, context, &view),
+        HandoffDelivery::LocalCandidate => {
+            land_local_candidate(host, context, input, &view, &run_id)
+        }
+        HandoffDelivery::NoDiff { .. } => land_no_diff(host, context, &view, &run_id),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
-        } => land_already_landed(host, context, &covering_commit, &view),
+        } => land_already_landed(host, context, &covering_commit, &view, &run_id),
     }
 }

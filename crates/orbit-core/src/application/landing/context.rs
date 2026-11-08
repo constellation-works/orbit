@@ -53,6 +53,7 @@ impl OrbitRuntime {
             owed_hosted_checks,
             // [ORB-15956] A repair claim has spent the one automatic repair.
             automatic_repair_spent: claim.claim.repair.is_some() || requeued,
+            owner_distributed_completion_done: self.owner_completion_authority().is_some(),
         })
     }
 

@@ -52,6 +52,7 @@ fn hand_off<'a>(fx: &Fixture, follower: &'a DeliveryHost, spent: bool) -> DraftL
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["test".into()],
             automatic_repair_spent: spent,
+            owner_distributed_completion_done: false,
             candidate: follower.handoffs().last().unwrap().candidate.clone(),
         },
         updates: Mutex::default(),

@@ -113,6 +113,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             workspace_path: repo.to_path_buf(),
             owed_hosted_checks: Vec::new(),
             automatic_repair_spent: false,
+            owner_distributed_completion_done: false,
         },
         steps: Mutex::default(),
         intents: Mutex::default(),

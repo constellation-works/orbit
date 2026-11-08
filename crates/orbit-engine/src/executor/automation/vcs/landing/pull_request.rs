@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
+use super::super::completion_hold::pull_request_changed_paths;
+use super::super::git::{fetch_remote_base, git_command_success};
 use super::super::operations;
 use super::super::pr::{
     BlockedCheckWait, OwedHostedChecks, PrMergeState, UnreportedChecks, checked_pr_state,
@@ -22,7 +24,9 @@ use super::checks::{
 };
 use super::intent::{LandingView, reconcile_intent};
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
-use super::record::{behind_base, complete, describe, hold_pr, record, refuse_pr, stop_pr};
+use super::record::{
+    behind_base, complete, completion_hold_stop, describe, hold_pr, record, refuse_pr, stop_pr,
+};
 use super::run::{LandingBudget, LandingPass, transport_failure};
 
 pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
@@ -31,6 +35,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     number: u64,
     budget: &LandingBudget,
     view: &LandingView,
+    run_id: &str,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
     let pr_number = number.to_string();
@@ -50,6 +55,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
     let mut waiting_for_checks = false;
+    // [ORB-23365] The completion hold is decided once, on the first
+    // observation that shows the pull request still unmerged.
+    let mut completion_hold_checked = false;
     // Merge requests the provider refused because the base moved, against the
     // same ceiling pr_complete uses.
     let mut base_modified_refusals = 0_u32;
@@ -114,6 +122,32 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         diagnostic["classification"] = diagnostics::text(&describe(&state));
         waited_seconds = waited_seconds
             .max(super::super::completion_deadline::now_ms()?.saturating_sub(started_ms) / 1000);
+        // [ORB-23365] Decide a completion hold before any recovery write or
+        // merge request. An already-merged pull request is settled below as
+        // the fact it is; it cannot be held after the fact. The candidate's
+        // objects reach this checkout by fetching its source branch, best
+        // effort: a diff that still cannot be read holds under a `paths`
+        // rule rather than landing unchecked, as in `pr_complete`.
+        if !completion_hold_checked && !matches!(state, PrMergeState::Merged) {
+            completion_hold_checked = true;
+            if context.owner_distributed_completion_done && !host.completion_hold_rules().is_empty()
+            {
+                if git_command_success(&workspace, &["remote", "get-url", "origin"])
+                    .unwrap_or(false)
+                {
+                    let _ = fetch_remote_base(&workspace, &candidate.source_branch);
+                }
+                let changed = pull_request_changed_paths(
+                    &workspace,
+                    Some(&candidate.base_branch),
+                    false,
+                    Some(&candidate.candidate.commit),
+                );
+                if let Some(held) = completion_hold_stop(host, context, &changed, run_id)? {
+                    return Err(held);
+                }
+            }
+        }
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
         let updated_head = adopt_base_update(&mut pin, context, &status);

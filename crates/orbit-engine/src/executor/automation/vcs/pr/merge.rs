@@ -9,6 +9,9 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
 };
+use super::super::completion_hold::{
+    evaluate_completion_hold, pull_request_changed_paths, record_completion_hold,
+};
 use super::super::freshness::ensure_branch_fresh_against_base;
 use super::super::git::{base_sync_mode_from_input, git_command_success, git_output};
 use super::super::operations;
@@ -110,7 +113,8 @@ pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "git_merge")?;
-    if host.list_run_tasks(batch_id)?.is_empty() {
+    let batch_tasks = host.list_run_tasks(batch_id)?;
+    if batch_tasks.is_empty() {
         return Ok(json!({}));
     }
 
@@ -119,12 +123,74 @@ pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>
         .and_then(Value::as_str)
         .unwrap_or("fast_forward");
     match strategy {
-        "fast_forward" => super::super::worktree::merge_batch_worktree_into_base(host, input),
+        "fast_forward" => {
+            // [ORB-23365] A completion-authorized local delivery decides a
+            // `completion.hold` here, before the candidate lands on the
+            // base: this fast-forward is the local route's merge, and
+            // `task_complete` runs only after it. A held candidate stays
+            // on its branch and its tasks stay in review.
+            if let Some(held) = local_completion_hold(host, input, batch_id, &batch_tasks)? {
+                return Ok(held);
+            }
+            super::super::worktree::merge_batch_worktree_into_base(host, input)
+        }
         "pr_merge" => merge_batch_pr(host, input),
         other => Err(OrbitError::InvalidInput(format!(
             "git_merge: unknown strategy '{other}'; expected fast_forward or pr_merge"
         ))),
     }
+}
+
+/// The held `git_merge` outcome of a completion-authorized local delivery
+/// whose candidate diff or tasks match a `completion.hold` rule, or `None`
+/// when the merge may proceed. Only a run whose input carries
+/// `completion: done` is held; a run without it already ends in review.
+fn local_completion_hold<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    batch_id: &str,
+    batch_tasks: &[orbit_types::task::Task],
+) -> Result<Option<Value>, OrbitError> {
+    if input.get("completion").and_then(Value::as_str) != Some("done") {
+        return Ok(None);
+    }
+    let rules = host.completion_hold_rules();
+    if rules.is_empty() {
+        return Ok(None);
+    }
+    // Only a task this delivery could still complete can be held: a task
+    // the run already settled another way (a verified finding-invalid
+    // rejection at `commit`, say) is neither evaluated nor recorded on.
+    let completable = batch_tasks
+        .iter()
+        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
+        .cloned()
+        .collect::<Vec<_>>();
+    if completable.is_empty() {
+        return Ok(None);
+    }
+    let workspace_path = resolve_batch_workspace_path(host, input, batch_id)?;
+    let head = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
+    let changed = pull_request_changed_paths(
+        &workspace_path,
+        input_string_field(input, "base").as_deref(),
+        input_string_field(input, "base_sync").as_deref() == Some("local"),
+        Some(head.trim()),
+    );
+    let Some(hold) = evaluate_completion_hold(&rules, &completable, &changed, batch_id)? else {
+        return Ok(None);
+    };
+    let task_ids = completable
+        .iter()
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    record_completion_hold(host, &task_ids, &hold)?;
+    Ok(Some(json!({
+        "merged": false,
+        "reason": "completion_held",
+        "held_task_ids": task_ids,
+        "completion_hold": hold,
+    })))
 }
 
 pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(

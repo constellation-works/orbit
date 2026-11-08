@@ -366,15 +366,18 @@ for posting and verifying steering comments.
 
 `--complete` (`orbit run ship --complete`, `orbit run auto --complete`, the
 dashboard and the desktop drain) merges each task's pull request and moves the
-task to `done` with nobody looking. `[[completion.hold]]` rules keep a task in
+task to `done` with nobody looking, and under
+`workflow.distributed_completion = "done"` an owner lands claimed leaves the
+same way. `[[completion.hold]]` rules keep a task in
 `review` instead when the change is risky. A rule only lowers `done` to
 `review`; it never grants completion, and a run without `--complete` is
 unchanged.
 
 Each rule sets at least one of:
 
-- `paths` — globs matched against the files the pull request actually changes
-  (a `!` prefix excludes), never the task's declared context files;
+- `paths` — globs matched against the files the delivery actually changes
+  (the pull request diff, or the local/claimed candidate's diff against its
+  base; a `!` prefix excludes), never the task's declared context files;
 - `complexity_at_least` — `low`, `medium`, `hard` or `xhard`;
 - `types` — `feature`, `bug`, `refactor`, `chore`;
 - `tags` — task tags, compared case-insensitively;
@@ -411,7 +414,11 @@ complexity_at_least = "xhard"
 
 A held run leaves the pull request open and ready and the task in `review`,
 as a run without `--complete` would (with `--auto-fix` it still watches and
-repairs the PR, but never merges it). The task gets a comment and a
+repairs the PR, but never merges it). A held local (`--mode local`)
+candidate is not merged onto the base and not pushed, and a held owner
+landing under `workflow.distributed_completion = "done"` stops before
+merging or fast-forwarding anything; both leave their task in `review`.
+Under the `review` policy nothing is held: a person already approved it. The task gets a comment and a
 `completion_held` history entry such as
 `held for review: paths .github/workflows/** matched .github/workflows/ci.yml (rule ci-workflows)`;
 `orbit task show` prints it as `Completion Hold:` (JSON `completion_hold`),
@@ -419,11 +426,12 @@ the dashboard shows it under **Held for review**, and the run's `complete_pr`
 step succeeds with the task in `held_task_ids`. Approve it as any task in
 review: merge the PR, then `orbit task update <id> --approve`.
 
-A pull request whose changed files cannot be read is held by any rule with
+A delivery whose changed files cannot be read is held by any rule with
 `paths`. No-diff and already-landed completions have no diff of their own, so
-only complexity, type and tag rules apply to them. Local delivery and an
-owner's landing of a claimed leaf under `workflow.distributed_completion` are
-not held.
+only complexity, type and tag rules apply to them. The `task_complete`
+transition also refuses a task matching a complexity, type or tag rule, so
+no completion route reaches `done` past it. For an owner landing, the rules
+are the owner's, from the owner's workspace config.
 
 Loading fails, naming the rule's position, on an unknown key, an empty rule,
 a blank name, glob or tag, a glob that is not a confined relative path, an

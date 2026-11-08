@@ -18,6 +18,10 @@
 #   (`completion: done`), `complete_tasks` runs *after* `push`, so a failed merge
 #   or a failed push fails the run with the tasks still in `review`. Completion is
 #   never reached by a leaf whose publication did not succeed.
+# - ORB-23365: under `completion: done`, `merge` first decides a
+#   `completion.hold` rule against the candidate's diff. A held candidate
+#   is not merged onto the base, not pushed and not completed; the run
+#   still marks the task `review`, with the hold recorded on it.
 #
 schemaVersion: 2
 kind: Job
@@ -175,6 +179,7 @@ spec:
         # reconcile against the current local base and preserve that history.
         base_sync: local
         strategy: fast_forward
+        completion: "{{ input.completion }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
 
     # A verified finding-invalid report already rejected its task at
@@ -192,7 +197,7 @@ spec:
               status: "{{ input.terminal_status }}"
 
     - id: push
-      when: "{{ input.auto_push }} == true"
+      when: "{{ input.auto_push }} == true && {{ steps.merge.output.merged }} != false"
       recovery_activity: step_failure_recovery
       target: activity:git_push
       default_input:
@@ -203,7 +208,7 @@ spec:
     # here, which is the precondition the completion authorization was granted
     # against.
     - id: complete_tasks
-      when: "{{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid"
+      when: "{{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.merged }} != false"
       loop:
         items: "{{ input.task_ids }}"
         max_iterations: 1
