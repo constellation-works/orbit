@@ -1462,15 +1462,15 @@ auto-tasks.
 ### Routines
 
 
-![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group paged at three routines per page, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
+![Automation → Routines: the filter toolbar above the Next hour timeline, the Active group listing every matching routine, and the Paused group collapsed. Active cards show each routine's switch, cadence, next fire, and last run.](../../../assets/dashboard/dashboard-automation.png)
 
 The toolbar filters routine names, job targets, and descriptions. The Active
-and Paused groups paginate independently, with up to three routines on each
-page. The Paused group starts collapsed; open it to find paused routines.
-Typing a filter opens Paused to show matching routines. The filter and paging
-controls are disabled only while a trigger editor is on screen; close the
-editor first. An open editor whose routine is on another page or filtered out
-does not disable them, so you can page or filter back to it.
+group lists every matching routine. The Paused group starts collapsed; open it
+to find paused routines. Typing a filter opens Paused to show matching
+routines. The filter controls are disabled only while a trigger editor is on
+screen; close the editor first. An open editor whose routine is filtered out
+keeps the controls usable, so you can filter back to it; filtering back onto
+the editor disables them again.
 
 A **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
