@@ -15,9 +15,9 @@ A separate approval continues to authorize backlog admission on its own.
 
 ## Context selectors
 
-`orbit.task.update` accepts `context_files` as a comma-separated string or an
-array of strings. A `context` input is refused; the only field is
-`context_files`.
+`orbit.task.update` accepts `context_files` as an array of selectors on MCP.
+The CLI also accepts a comma-separated string. A `context` input is refused;
+the only field is `context_files`.
 
 - Omitting `context_files` preserves the current list. Supplying it replaces
   the **whole list**, never appends.
@@ -53,8 +53,9 @@ For the read → full-union update → verify command sequence, see
 default. Cwd, MCP initialize metadata and linked-worktree runtime identities
 are not filters. Optional `workspace` is an explicit fail-closed filter.
 
-For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, use `fields`
-as a string or array of field names, or `field` as a single-field alias.
+For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
+`fields` as an array of field names, or `field` as a single-field alias.
+The CLI also accepts a repeated flag or a comma-separated string.
 `fields` takes precedence when both are supplied. The projection catalogue is:
 
 ```text
@@ -333,6 +334,30 @@ on the operator-only `orbit.workflow.run.show`.
   `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
+
+## Review verdict
+
+`orbit.task.update` accepts `verdict` as an object. MCP advertises the object
+without repeating its fields; the host still checks them.
+
+- `decision` is `accept` or `changes_requested`.
+- `rationale` is a string.
+- `criteria` is an array of `{criterion, met, evidence}`. `criterion` is a
+  string, `met` is a boolean, and `evidence` is an array of strings.
+- `evidence` is an array of strings.
+- `expected_run_id` and `expected_head` are a string or null.
+
+`decision`, `rationale`, `criteria` and `evidence` are required. A review
+write also requires `request_id` and `expected_revision` from task show with
+`snapshot` true.
+
+Relation types and `regression_from` attribution are in
+[Behavior-affecting optional fields](#behavior-affecting-optional-fields).
+Status transitions are in [Task lifecycle and listing](#task-lifecycle-and-listing).
+Context-file creation intent is in [Context selectors](#context-selectors).
+Granted tools, required tools, capability labels and OS tags are in
+[Behavior-affecting optional fields](#behavior-affecting-optional-fields).
+Field projection is in [Task projections and delivery evidence](#task-projections-and-delivery-evidence).
 
 ## Task lifecycle and listing
 

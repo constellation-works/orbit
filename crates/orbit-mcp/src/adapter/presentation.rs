@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use super::schema::WORKSPACE_SELECTOR_DESCRIPTION;
 use crate::presentation_definition::{
     PRESENTATION_DEFINITIONS, PresentationKind, presentation_definition,
 };
@@ -45,19 +46,14 @@ pub(super) fn reader(
     })
 }
 
-pub(super) fn tools(federated: bool) -> Vec<Tool> {
+pub(super) fn tools(_federated: bool) -> Vec<Tool> {
     PRESENTATION_DEFINITIONS.iter()
         .map(|definition| {
-            let selector = if federated {
-                "Copy the opaque host-qualified selector from orbit_workspace_list."
-            } else {
-                "Explicit registered workspace name, ID or absolute checkout path."
-            };
             let mut schema = json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
-                    "workspace": { "type": "string", "minLength": 1, "description": selector },
-                    "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID returned by Orbit." },
+                    "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
+                    "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
                     "kind": {"type":"string", "enum":["task","run"], "default":"task"}
                 }
             });
@@ -66,7 +62,7 @@ pub(super) fn tools(federated: bool) -> Vec<Tool> {
             } else {
                 schema["dependentRequired"] = json!({ "id": ["workspace"], "kind": ["workspace", "id"] });
             }
-            Tool::new(definition.name, "Open the Orbit control center or a selected task/run panel. The entrypoint only reads; authoring and review use separately guarded application tools. Opening grants no authority.",
+            Tool::new(definition.name, "Open the Orbit control center or a selected task or run panel.",
                 Arc::new(schema.as_object().cloned().unwrap_or_default()))
                 .with_title(definition.title)
                 .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).idempotent(true).open_world(false))

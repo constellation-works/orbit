@@ -204,17 +204,13 @@ const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
 pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix";
 
 /// The `view: "bounded"` selector of the dashboard's bounded reads.
-const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
-    "view",
-    ParamType::String,
-    "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
-);
+const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only("view", ParamType::String, "Bounded metadata view.");
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -249,7 +245,7 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "status",
             ParamType::EnumList(TASK_STATUS_VALUES),
-            "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday.",
+            "Filter by status name.",
             CliArgKind::Flag {
                 long: "status",
                 delimiter: Some(','),
@@ -264,7 +260,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "parent_id",
                 ParamType::String,
-                "Optional parent task ID to list subtasks for",
+                "Parent task ID.",
                 CliArgKind::flag("parent"),
                 "Filter to subtasks belonging to a parent task",
             ),
@@ -274,7 +270,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Optional task type filter",
+                "Filter by task type.",
                 CliArgKind::Flag {
                     long: "type",
                     delimiter: None,
@@ -290,28 +286,28 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "scheduled",
             ParamType::Switch,
-            "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply.",
+            "Keep only future schedules, soonest first.",
             CliArgKind::flag("scheduled"),
             "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
         ),
         preserve_empty(both(
             "not_before_from",
             ParamType::String,
-            "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+            "Inclusive lower schedule bound as RFC 3339.",
             CliArgKind::flag("not-before-from"),
             "Inclusive lower schedule bound (RFC 3339 with an offset)",
         )),
         preserve_empty(both(
             "not_before_until",
             ParamType::String,
-            "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+            "Inclusive upper schedule bound as RFC 3339.",
             CliArgKind::flag("not-before-until"),
             "Inclusive upper schedule bound (RFC 3339 with an offset)",
         )),
         both(
             "origin",
             ParamType::Enum(TASK_ORIGIN_VALUES),
-            "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match.",
+            "Filter by task origin.",
             CliArgKind::flag("origin"),
             "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
         ),
@@ -326,7 +322,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "tag",
                 ParamType::StringList,
-                "Filter by tag. Repeat or pass an array for AND semantics.",
+                "Filter by tag; an array is AND.",
                 CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
@@ -346,28 +342,28 @@ const LIST: TaskOperation = TaskOperation {
                 EnumValue::helped("macos", "macOS hosts"),
                 EnumValue::helped("windows", "Windows hosts"),
             ]),
-            "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
+            "Filter by effective host OS.",
             CliArgKind::flag("runs-on"),
             "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
         ),
         both(
             "pilot_warnings",
             ParamType::Switch,
-            "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings.",
+            "Keep proposed tasks held by pilot warnings.",
             CliArgKind::flag("pilot-warnings"),
             "Keep proposed tasks held by pilot warning findings",
         ),
         both(
             "ready",
             ParamType::Switch,
-            "When true, keep only tasks whose dependencies are satisfied",
+            "Keep tasks whose dependencies are satisfied.",
             CliArgKind::flag("ready"),
             "Keep only tasks whose dependencies are already satisfied",
         ),
         both(
             "path",
             ParamType::String,
-            "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
+            "Filter by context selector path.",
             CliArgKind::flag("path"),
             "Filter to tasks whose `context_files` selectors apply to this path",
         ),
@@ -375,7 +371,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
+                "Maximum number of tasks to return.",
                 CliArgKind::flag("limit"),
                 "Maximum number of tasks to return (default 50). Must be at least 1",
             ),
@@ -384,33 +380,33 @@ const LIST: TaskOperation = TaskOperation {
         mcp_only(
             "fields",
             ParamType::StringList,
-            "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
+            "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
         ),
         BOUNDED_VIEW_PARAM,
-        mcp_only("offset", ParamType::Integer, "Bounded view list offset"),
+        mcp_only("offset", ParamType::Integer, "Bounded view list offset."),
         mcp_only(
             "search",
             ParamType::String,
-            "Bounded view key/title substring",
+            "Bounded view key or title substring.",
         ),
         both(
             "priority",
             ParamType::Enum(TASK_PRIORITY_VALUES),
-            "Optional task priority filter",
+            "Filter by priority.",
             CliArgKind::flag("priority"),
             "Filter by priority level",
         ),
         both(
             "external_ref",
             ParamType::String,
-            "Optional exact external reference filter in `system:id` form",
+            "Exact external reference in system:id form.",
             CliArgKind::flag("ref"),
             "Filter by exact external reference in `system:id` form",
         ),
         both(
             "has_ref",
             ParamType::String,
-            "Optional external reference system filter: keep tasks with any reference in this system",
+            "Keep tasks with a reference in this system.",
             CliArgKind::flag("has-ref"),
             "Filter by external reference system",
         ),
@@ -549,7 +545,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
+                    "Field names to return; `delivery` is selected alone.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,

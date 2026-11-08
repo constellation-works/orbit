@@ -25,7 +25,7 @@ use super::name_map::{advertise_tool_names, advertise_tool_names_in_schema, buil
 use super::presentation;
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, host_owns_plugin_selector,
-    schema_to_tool,
+    schema_to_tool, slim_advertised_property_descriptions,
 };
 use super::structured::mcp_tool_call_result;
 use super::{OrbitToolServer, ToolSurface};
@@ -120,6 +120,7 @@ impl OrbitToolServer {
             ),
         };
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
+        slim_advertised_property_descriptions(&mut schema, &definition.schema.name);
         Ok(schema)
     }
 
@@ -631,8 +632,10 @@ impl ServerHandler for OrbitToolServer {
                     .input_schema_for(&definition)
                     .map_err(invalid_definitions_mcp_error)?;
                 advertise_tool_names_in_schema(&mut input_schema, &canonical_names);
-                definition.schema.description =
-                    advertise_tool_names(&definition.schema.description, &canonical_names);
+                definition.schema.description = super::schema::advertised_tool_description(
+                    &definition.schema.name,
+                    &advertise_tool_names(&definition.schema.description, &canonical_names),
+                );
                 Ok(schema_to_tool(
                     definition.schema,
                     input_schema,

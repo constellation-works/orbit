@@ -1,128 +1,70 @@
 [
   {
     "name": "orbit_attention",
-    "description": "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention.md`.",
+    "description": "List operator waits and suggested next actions; use at session start or on-call.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "workspace": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Registered workspace names or IDs, as one string or an array; conflicts with all."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Workspace selector from orbit_workspace_list."
         },
         "all": {
           "type": "boolean",
           "description": "Read every active workspace on this host."
         },
         "host": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Host name or machine id (repeatable)."
         },
         "kind": {
-          "anyOf": [
-            {
-              "type": "string",
-              "enum": [
-                "pilot_warning",
-                "pilot_hold",
-                "blocked",
-                "decision_open",
-                "review_waiting",
-                "run_failed",
-                "run_stuck",
-                "claim_stale",
-                "ci_red",
-                "friction_untriaged",
-                "host_unhealthy",
-                "notice_open",
-                "resident_stalled"
-              ]
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "pilot_warning",
-                  "pilot_hold",
-                  "blocked",
-                  "decision_open",
-                  "review_waiting",
-                  "run_failed",
-                  "run_stuck",
-                  "claim_stale",
-                  "ci_red",
-                  "friction_untriaged",
-                  "host_unhealthy",
-                  "notice_open",
-                  "resident_stalled"
-                ]
-              }
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pilot_warning",
+              "pilot_hold",
+              "blocked",
+              "decision_open",
+              "review_waiting",
+              "run_failed",
+              "run_stuck",
+              "claim_stale",
+              "ci_red",
+              "friction_untriaged",
+              "host_unhealthy",
+              "notice_open",
+              "resident_stalled"
+            ]
+          },
           "description": "Include kinds (repeatable)."
         },
         "exclude_kind": {
-          "anyOf": [
-            {
-              "type": "string",
-              "enum": [
-                "pilot_warning",
-                "pilot_hold",
-                "blocked",
-                "decision_open",
-                "review_waiting",
-                "run_failed",
-                "run_stuck",
-                "claim_stale",
-                "ci_red",
-                "friction_untriaged",
-                "host_unhealthy",
-                "notice_open",
-                "resident_stalled"
-              ]
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "pilot_warning",
-                  "pilot_hold",
-                  "blocked",
-                  "decision_open",
-                  "review_waiting",
-                  "run_failed",
-                  "run_stuck",
-                  "claim_stale",
-                  "ci_red",
-                  "friction_untriaged",
-                  "host_unhealthy",
-                  "notice_open",
-                  "resident_stalled"
-                ]
-              }
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pilot_warning",
+              "pilot_hold",
+              "blocked",
+              "decision_open",
+              "review_waiting",
+              "run_failed",
+              "run_stuck",
+              "claim_stale",
+              "ci_red",
+              "friction_untriaged",
+              "host_unhealthy",
+              "notice_open",
+              "resident_stalled"
+            ]
+          },
           "description": "Exclude kinds (repeatable)."
         },
         "severity": {
@@ -136,73 +78,38 @@
           ]
         },
         "status": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Task lifecycle states (repeatable)."
         },
         "tag": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Task tags (repeatable)."
         },
         "task": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Task ids (repeatable)."
         },
         "crew": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Assigned crews (repeatable)."
         },
         "orchestrator": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
           "description": "Attributed orchestrators (repeatable)."
         },
         "older_than": {
@@ -211,7 +118,7 @@
         },
         "since": {
           "type": "string",
-          "description": "Opaque cursor from a prior response; unusable tokens restart the list."
+          "description": "Opaque cursor from a prior response; unusable."
         },
         "limit": {
           "type": "integer",
@@ -221,7 +128,7 @@
         },
         "candidate_read": {
           "type": "boolean",
-          "description": "Reserved for Orbit's federated aggregator; never send it."
+          "description": "Reserved for Orbit's federated aggregator."
         }
       },
       "additionalProperties": true
@@ -239,46 +146,39 @@
       "properties": {
         "body": {
           "type": "string",
-          "description": "Markdown body describing what happened and why it caused friction"
+          "description": "Markdown body describing what happened and why."
         },
         "title": {
           "type": "string",
-          "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
+          "description": "One-line handle identifying the problem, at.",
           "maxLength": 120
         },
         "tags": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "automation",
-                  "build",
-                  "docs",
-                  "history-diverged",
-                  "lifecycle",
-                  "naming",
-                  "other",
-                  "policy",
-                  "skill-guidance",
-                  "tooling"
-                ]
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures."
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "automation",
+              "build",
+              "docs",
+              "history-diverged",
+              "lifecycle",
+              "naming",
+              "other",
+              "policy",
+              "skill-guidance",
+              "tooling"
+            ]
+          },
+          "description": "Friction taxonomy tags."
         },
         "during_task": {
           "type": "string",
-          "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused"
+          "description": "Optional task ID being worked on when friction."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "required": [
@@ -295,43 +195,36 @@
   },
   {
     "name": "orbit_friction_update",
-    "description": "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
+    "description": "Update triage metadata for a friction record.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Friction record ID, e.g. FYYYY-MM-NNN"
+          "description": "Friction record ID, e.g."
         },
         "status": {
           "type": "string",
           "description": "Optional status: open, triaged, or resolved"
         },
         "tags": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "automation",
-                  "build",
-                  "docs",
-                  "history-diverged",
-                  "lifecycle",
-                  "naming",
-                  "other",
-                  "policy",
-                  "skill-guidance",
-                  "tooling"
-                ]
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures."
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "automation",
+              "build",
+              "docs",
+              "history-diverged",
+              "lifecycle",
+              "naming",
+              "other",
+              "policy",
+              "skill-guidance",
+              "tooling"
+            ]
+          },
+          "description": "Friction taxonomy tags."
         },
         "body": {
           "type": "string",
@@ -339,20 +232,20 @@
         },
         "rehome_to": {
           "type": "string",
-          "description": "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition"
+          "description": "Optional registered workspace that owns a."
         },
         "move": {
           "type": "boolean",
-          "description": "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true"
+          "description": "With `rehome_to`: false records the."
         },
         "title": {
           "type": "string",
-          "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
+          "description": "Optional replacement one-line title, at most.",
           "maxLength": 120
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "required": [
@@ -369,78 +262,56 @@
   },
   {
     "name": "orbit_search",
-    "description": "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
+    "description": "Search tasks and frictions using lexical matching.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "query": {
           "type": "string",
-          "description": "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions.",
+          "description": "Tasks match non-adjacent terms: full matches.",
           "minLength": 1
         },
         "kind": {
           "type": "string",
-          "description": "Corpus kind: task, friction, or all. Default: all."
+          "description": "Corpus kind: task, friction, or all."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing."
+          "description": "Maximum number of results, at most 1000."
         },
         "tag": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1
-            },
-            {
-              "type": "string",
-              "minLength": 1
-            }
-          ],
-          "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "AND-filter by tag.",
+          "minItems": 1
         },
         "all": {
           "type": "boolean",
-          "description": "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved."
+          "description": "Include every status for the queried kind."
         },
         "status": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit per-kind status override using."
         },
         "workspaces": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Federated scope: registered workspace names."
         },
         "all_workspaces": {
           "type": "boolean",
-          "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run."
+          "description": "Search every active workspace registered on the."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "additionalProperties": true,
@@ -478,117 +349,75 @@
   },
   {
     "name": "orbit_task_add",
-    "description": "Create an Orbit task and return the created task JSON",
+    "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "title": {
           "type": "string",
-          "description": "Task title"
+          "description": "Task title."
         },
         "description": {
           "type": "string",
-          "description": "Task description markdown"
+          "description": "Task description markdown."
         },
         "workspace": {
           "type": "string",
-          "description": "Registered workspace name, ID or path, defaulting to a bound session's workspace."
+          "description": "Workspace selector from orbit_workspace_list."
         },
         "acceptance_criteria": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional acceptance criteria as a string or array of strings"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Acceptance criteria."
         },
         "tags": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task (several: any one of them); any other `os:` value is rejected"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Task tags."
         },
         "required_tools": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Canonical tool names added to the activity baseline."
         },
         "granted_tools": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Operator-granted tool names."
         },
         "requires_labels": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Host capability labels the task requires."
         },
         "not_before": {
           "type": "string",
-          "description": "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused"
+          "description": "Earliest dispatch time as an RFC 3339 instant."
         },
         "context_files": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Context selectors this task will change."
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default."
+          "description": "Accept selectors for created files."
         },
         "priority": {
           "type": "string",
-          "description": "Optional priority level"
+          "description": "Priority level."
         },
         "complexity": {
           "type": "string",
@@ -598,7 +427,7 @@
             "hard",
             "xhard"
           ],
-          "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+          "description": "Task complexity."
         },
         "type": {
           "type": "string",
@@ -608,146 +437,48 @@
             "refactor",
             "chore"
           ],
-          "description": "Optional task type (defaults to chore)"
+          "description": "Task type."
         },
         "relations": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "type",
-              "target"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "blocked_by",
-                  "child_of",
-                  "spawned_from",
-                  "regression_from",
-                  "supersedes",
-                  "related_to",
-                  "covered_by",
-                  "produces",
-                  "resolves"
-                ]
-              },
-              "target": {
-                "type": "string",
-                "description": "Target task ID; `covered_by` also takes a `github-pr:` reference, `produces`/`resolves` a friction or ADR ID"
-              },
-              "regression": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "nature",
-                  "escape"
-                ],
-                "properties": {
-                  "nature": {
-                    "type": "string",
-                    "enum": [
-                      "broke_existing",
-                      "defect_in_new",
-                      "incomplete",
-                      "merge_reintroduced",
-                      "contract_drift",
-                      "unclassified"
-                    ],
-                    "description": "Kind of regression the link records"
-                  },
-                  "escape": {
-                    "type": "string",
-                    "enum": [
-                      "no_test",
-                      "test_not_selected",
-                      "platform_only",
-                      "review_missed",
-                      "spec_ambiguous",
-                      "nondeterministic",
-                      "unclassified"
-                    ],
-                    "description": "Why the delivery gates missed the defect"
-                  },
-                  "severity": {
-                    "type": "string",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low",
-                      "nit"
-                    ],
-                    "description": "critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"
-                  },
-                  "severity_source": {
-                    "type": "string",
-                    "enum": [
-                      "filer",
-                      "operator",
-                      "backfill",
-                      "verified",
-                      "default"
-                    ],
-                    "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
-                  },
-                  "sites": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    },
-                    "maxItems": 8,
-                    "uniqueItems": true,
-                    "description": "Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"
-                  }
-                }
-              }
-            }
+            "type": "object"
           },
-          "description": "Optional typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a new classified link."
+          "description": "Typed task relations."
         },
         "crew": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default"
+          "description": "Crew that runs this task."
         },
         "orchestrator": {
           "type": "string",
-          "description": "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted"
+          "description": "Crew credited for orchestration."
         },
         "orchestrator_model": {
           "type": "string",
-          "description": "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer"
+          "description": "Orchestrator model when it differs from the crew."
         },
         "origin": {
           "type": "string",
-          "description": "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`."
+          "description": "Why the task was filed."
         },
         "fields": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Response field names."
         },
         "field": {
           "type": "string",
-          "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`."
+          "description": "One response field."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."
+          "description": "Retry-safe creation identity."
         }
       },
       "required": [
@@ -811,7 +542,7 @@
   },
   {
     "name": "orbit_task_artifact_get",
-    "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit_task_show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
+    "description": "Read one stored task artifact by owning task ID and artifact path.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -821,11 +552,11 @@
         },
         "path": {
           "type": "string",
-          "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected."
+          "description": "Artifact path relative to the task artifacts."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "required": [
@@ -841,7 +572,7 @@
   },
   {
     "name": "orbit_task_artifact_put",
-    "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. Artifact paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Name ordinary supporting evidence with a nonreserved name (for example `examination-checks.json`). See the assigned task's evidence template for automation coverage and review report contracts.",
+    "description": "Store a file (any content, up to 1 MiB) as a task artifact.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -851,15 +582,15 @@
         },
         "source_path": {
           "type": "string",
-          "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused."
+          "description": "Source file to store as a task artifact."
         },
         "path": {
           "type": "string",
-          "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`)."
+          "description": "Artifact path relative to the task artifacts."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "required": [
@@ -877,39 +608,32 @@
   },
   {
     "name": "orbit_task_eligible",
-    "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
+    "description": "List backlog and proposed tasks that can be picked up now without colliding.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "status": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Candidate statuses: `backlog`, `proposed`, or."
         },
         "path": {
           "type": "string",
-          "description": "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit_task_list` matches `path`."
+          "description": "Keep only candidates whose `context_files`."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum eligible tasks to return (default 50). Must be at least 1."
+          "description": "Maximum eligible tasks to return (default 50)."
         },
         "explain": {
           "type": "boolean",
-          "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it."
+          "description": "When true, also return `conflicting`: every."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -921,127 +645,106 @@
   },
   {
     "name": "orbit_task_list",
-    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "status": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Filter by status name."
         },
         "parent_id": {
           "type": "string",
-          "description": "Optional parent task ID to list subtasks for"
+          "description": "Parent task ID."
         },
         "type": {
           "type": "string",
-          "description": "Optional task type filter"
+          "description": "Filter by task type."
         },
         "scheduled": {
           "type": "boolean",
-          "description": "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply."
+          "description": "Keep only future schedules, soonest first."
         },
         "not_before_from": {
           "type": "string",
-          "description": "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
+          "description": "Inclusive lower schedule bound as RFC 3339."
         },
         "not_before_until": {
           "type": "string",
-          "description": "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
+          "description": "Inclusive upper schedule bound as RFC 3339."
         },
         "origin": {
           "type": "string",
-          "description": "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match."
+          "description": "Filter by task origin."
         },
         "job_run_id": {
           "type": "string",
           "description": "Filter by job run ID"
         },
         "tag": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Filter by tag. Repeat or pass an array for AND semantics."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Filter by tag; an array is AND."
         },
         "runs_on": {
           "type": "string",
-          "description": "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not."
+          "description": "Filter by effective host OS."
         },
         "pilot_warnings": {
           "type": "boolean",
-          "description": "Keep only proposed tasks whose latest pilot receipt holds promotion on warning findings."
+          "description": "Keep proposed tasks held by pilot warnings."
         },
         "ready": {
           "type": "boolean",
-          "description": "When true, keep only tasks whose dependencies are satisfied"
+          "description": "Keep tasks whose dependencies are satisfied."
         },
         "path": {
           "type": "string",
-          "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment."
+          "description": "Filter by context selector path."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1."
+          "description": "Maximum number of tasks to return."
         },
         "fields": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Name fields, or fetch one task with `orbit_task_show`; compact rows match `orbit tool run orbit.task.list`."
         },
         "view": {
           "type": "string",
-          "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response."
+          "description": "Bounded metadata view."
         },
         "offset": {
           "type": "integer",
-          "description": "Bounded view list offset"
+          "description": "Bounded view list offset."
         },
         "search": {
           "type": "string",
-          "description": "Bounded view key/title substring"
+          "description": "Bounded view key or title substring."
         },
         "priority": {
           "type": "string",
-          "description": "Optional task priority filter"
+          "description": "Filter by priority."
         },
         "external_ref": {
           "type": "string",
-          "description": "Optional exact external reference filter in `system:id` form"
+          "description": "Exact external reference in system:id form."
         },
         "has_ref": {
           "type": "string",
-          "description": "Optional external reference system filter: keep tasks with any reference in this system"
+          "description": "Keep tasks with a reference in this system."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -1059,41 +762,34 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required."
+          "description": "Globally unique task ID."
         },
         "snapshot": {
           "type": "boolean",
-          "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections."
+          "description": "True returns a bounded versioned snapshot with."
         },
         "fields": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Field names to return; `delivery` is selected."
         },
         "field": {
           "type": "string",
-          "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`."
+          "description": "Compatibility alias for a single field."
         },
         "run_id": {
           "type": "string",
-          "description": "With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used."
+          "description": "With `field: \"delivery\"` only: the delivery run."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
+          "description": "Workspace selector from orbit_workspace_list."
         },
         "view": {
           "type": "string",
-          "description": "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response."
+          "description": "Bounded metadata view."
         },
         "limit": {
           "type": "integer",
@@ -1124,205 +820,79 @@
   },
   {
     "name": "orbit_task_update",
-    "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
+    "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "repilot": {
           "type": "boolean",
-          "description": "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot."
+          "description": "Request one new pilot."
         },
         "id": {
           "type": "string",
-          "description": "task ID"
+          "description": "Task ID."
         },
         "title": {
           "type": "string",
-          "description": "New task title"
+          "description": "New task title."
         },
         "description": {
           "type": "string",
-          "description": "New task description (empty string clears)"
+          "description": "New description; empty clears it."
         },
         "acceptance_criteria": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "New acceptance criteria as an array of strings or a single string"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Replacement criteria."
         },
         "dependencies": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Replacement dependency task IDs as a string or array of strings"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Replacement dependency IDs."
         },
         "relations": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "type",
-              "target"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "blocked_by",
-                  "child_of",
-                  "spawned_from",
-                  "regression_from",
-                  "supersedes",
-                  "related_to",
-                  "covered_by",
-                  "produces",
-                  "resolves"
-                ]
-              },
-              "target": {
-                "type": "string",
-                "description": "Target task ID; `covered_by` also takes a `github-pr:` reference, `produces`/`resolves` a friction or ADR ID"
-              },
-              "regression": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "nature",
-                  "escape"
-                ],
-                "properties": {
-                  "nature": {
-                    "type": "string",
-                    "enum": [
-                      "broke_existing",
-                      "defect_in_new",
-                      "incomplete",
-                      "merge_reintroduced",
-                      "contract_drift",
-                      "unclassified"
-                    ],
-                    "description": "Kind of regression the link records"
-                  },
-                  "escape": {
-                    "type": "string",
-                    "enum": [
-                      "no_test",
-                      "test_not_selected",
-                      "platform_only",
-                      "review_missed",
-                      "spec_ambiguous",
-                      "nondeterministic",
-                      "unclassified"
-                    ],
-                    "description": "Why the delivery gates missed the defect"
-                  },
-                  "severity": {
-                    "type": "string",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low",
-                      "nit"
-                    ],
-                    "description": "critical: data loss, security hole, drains halted or silently wrong results; high: core workflow broken, no workaround; medium: feature broken on a real path, with a workaround; low: edge case or misleading message; nit: wording, doc drift or cosmetic"
-                  },
-                  "severity_source": {
-                    "type": "string",
-                    "enum": [
-                      "filer",
-                      "operator",
-                      "backfill",
-                      "verified",
-                      "default"
-                    ],
-                    "description": "filer (default when severity is given), operator or backfill; `verified` and `default` are recorded values, not filer inputs"
-                  },
-                  "sites": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    },
-                    "maxItems": 8,
-                    "uniqueItems": true,
-                    "description": "Up to 8 `symbol:` or `file:` selectors of the defect, or a `dir:` selector"
-                  }
-                }
-              }
-            }
+            "type": "object"
           },
-          "description": "Replacement typed task relations: an array of {type, target} objects. A `regression_from` link may carry a `regression` object; `severity` is required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source."
+          "description": "Replacement task relations."
         },
         "tags": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Replacement task tags."
         },
         "granted_tools": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Replacement granted tool names."
         },
         "requires_labels": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags"
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Replacement capability labels."
         },
         "not_before": {
           "type": "string",
-          "description": "Replacement scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused"
+          "description": "Earliest start, or empty to clear."
         },
         "allow_drop_system_tags": {
           "type": "boolean",
-          "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop."
+          "description": "Allow dropping a system tag."
         },
         "plan": {
           "type": "string",
-          "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required."
+          "description": "Replacement plan text."
         },
         "status": {
           "type": "string",
@@ -1336,15 +906,15 @@
             "blocked",
             "rejected"
           ],
-          "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits."
+          "description": "New task status."
         },
         "note": {
           "type": "string",
-          "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion"
+          "description": "Note on this status transition."
         },
         "priority": {
           "type": "string",
-          "description": "New dispatch priority (low, medium, high, or critical)"
+          "description": "New dispatch priority."
         },
         "complexity": {
           "type": "string",
@@ -1354,7 +924,7 @@
             "hard",
             "xhard"
           ],
-          "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+          "description": "New task complexity."
         },
         "type": {
           "type": "string",
@@ -1364,164 +934,89 @@
             "refactor",
             "chore"
           ],
-          "description": "New task type"
+          "description": "New task type."
         },
         "source_task_id": {
           "type": "string",
-          "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)"
+          "description": "Source bug ID; empty clears it."
         },
         "planned_by": {
           "type": "string",
-          "description": "Explicit planning attribution label (empty string clears)"
+          "description": "Planner; empty clears it."
         },
         "implemented_by": {
           "type": "string",
-          "description": "Explicit implementation attribution label (empty string clears)"
+          "description": "Implementer; empty clears it."
         },
         "execution_summary": {
           "type": "string",
-          "description": "Replacement execution summary text"
+          "description": "New execution summary."
         },
         "comment": {
           "type": "string",
-          "description": "Task comment to append"
+          "description": "Comment to append."
         },
         "pr_status": {
           "type": "string",
-          "description": "PR review status (e.g. approve, request-changes; empty string clears)"
+          "description": "PR status; empty clears it."
         },
         "job_run_id": {
           "type": "string",
-          "description": "Job run ID to associate with the task (empty string clears)"
+          "description": "Job run ID; empty clears it."
         },
         "crew": {
           "type": "string",
-          "description": "Named crew to use when running this task (empty string draws a fresh one)"
+          "description": "Named crew; empty redraws."
         },
         "orchestrator": {
           "type": "string",
-          "description": "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)"
+          "description": "Orchestrator crew; empty clears it."
         },
         "origin": {
           "type": "string",
-          "description": "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared."
+          "description": "Why the task was filed."
         },
         "context_files": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "New context selectors."
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`."
+          "description": "Accept selectors for created files."
         },
         "fields": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Response field names."
         },
         "field": {
           "type": "string",
-          "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`."
+          "description": "One response field."
         },
         "request_id": {
           "type": "string",
-          "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot."
+          "description": "Retry-safe write identity."
         },
         "expected_revision": {
           "type": "string",
-          "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately."
+          "description": "Revision from task show."
         },
         "verdict": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "decision",
-            "rationale",
-            "criteria",
-            "evidence"
-          ],
-          "properties": {
-            "decision": {
-              "enum": [
-                "accept",
-                "changes_requested"
-              ]
-            },
-            "rationale": {
-              "type": "string"
-            },
-            "evidence": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "expected_run_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "expected_head": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "criteria": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "criterion",
-                  "met",
-                  "evidence"
-                ],
-                "properties": {
-                  "criterion": {
-                    "type": "string"
-                  },
-                  "met": {
-                    "type": "boolean"
-                  },
-                  "evidence": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
+          "description": "Review verdict object."
         },
         "complete": {
           "type": "boolean",
-          "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches."
+          "description": "Complete an accepted review."
         },
         "workspace": {
           "type": "string",
-          "description": "Optional in this session; select another registered workspace by name, ID or path."
+          "description": "Workspace selector from orbit_workspace_list."
         }
       },
       "required": [
@@ -1628,23 +1123,16 @@
   },
   {
     "name": "orbit_workspace_list",
-    "description": "List active workspaces with a checkout registered on this machine, optionally with each one's configured crews.",
+    "description": "List active workspaces with a checkout registered on this machine, optionally.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "include": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "description": "Optional extra detail per workspace row. `crews` adds the workspace's effective configured crews and default crew as `crews`, read on the machine that holds the checkout, or `crews_error` when its configuration cannot be read."
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional extra detail per workspace row."
         }
       },
       "additionalProperties": true

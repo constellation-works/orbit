@@ -38,6 +38,28 @@ fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
 /// Canonical name of the authoritative server's workspace selector.
 pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 
+/// One description for every advertised `workspace` selector.
+///
+/// Required versus optional stays in the schema `required` array. Routing
+/// rules live in the installed Orbit skill `references/task-fields.md`.
+pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str =
+    "Workspace selector from orbit_workspace_list.";
+
+/// Property descriptions on these tools are hand-written one-sentence contract.
+const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] =
+    &["orbit.task.add", "orbit.task.update", "orbit.task.list"];
+const HAND_AUTHORED_PROPERTY_CAP: usize = 200;
+/// Other property descriptions stay short so `tools/list` cannot regrow.
+const ADVERTISED_PROPERTY_CAP: usize = 48;
+/// Tool descriptions that tests and the skill link require whole.
+const PRESERVED_TOOL_DESCRIPTIONS: &[&str] = &[
+    "orbit.task.add",
+    "orbit.task.update",
+    "orbit.task.list",
+    "orbit.task.show",
+];
+const ADVERTISED_TOOL_DESCRIPTION_CAP: usize = 80;
+
 /// A tool's own declared input schema, as advertised before the host adds its
 /// selector: every keyword verbatim except the root `type`, which is always
 /// `"object"` — MCP's `inputSchema` must describe an object and `tools/call`
@@ -59,39 +81,6 @@ pub(crate) enum WorkspaceBinding {
     Unbound,
 }
 
-const BOUND_SESSION_SELECTOR_DESCRIPTION: &str =
-    "Optional in this session; select another registered workspace by name, ID or path.";
-
-const UNBOUND_SESSION_SELECTOR_DESCRIPTION: &str =
-    "Required in this session; copy a workspace ID from orbit_workspace_list.";
-
-/// Federated callers copy the list token; they must not mint a v1 local form.
-const FEDERATED_SELECTOR_DESCRIPTION: &str =
-    "Copy the opaque host-qualified selector from orbit_workspace_list.";
-
-/// An id-routed task tool on a bound authoritative session: the binding is
-/// the default, and a remote prefix is refused rather than relayed.
-const ID_ROUTED_BOUND_SELECTOR_DESCRIPTION: &str =
-    "Optional in this session; select another registered workspace by name, ID or path.";
-
-/// An id-routed task tool on an unbound authoritative session: the id
-/// addresses the task, so the selector is optional.
-const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str =
-    "Optional workspace filter; omit to resolve the task ID on this server.";
-
-/// An id-routed task tool on the federated mux: an id-only call goes to the
-/// host the id's prefix names.
-const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional host-qualified workspace selector; omit to route by the task ID prefix, or copy `selector` from orbit_workspace_list.";
-
-/// A workspace-optional tool on the federated mux: omitted, the mux
-/// aggregates every owner it reaches.
-const FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION: &str =
-    "Optional host-qualified workspace selector; omit to read all reachable owners unless bound.";
-
-/// A workspace-optional tool on an authoritative server: omitted, the
-/// server reads every workspace homed on it.
-const WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION: &str = "Optional workspace selector; omit to read the bound workspace or all local workspaces if unbound.";
-
 /// How this session advertises the workspace selector on workspace-scoped tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorAdvertisement {
@@ -99,17 +88,6 @@ pub(crate) enum SelectorAdvertisement {
     Authoritative(WorkspaceBinding),
     /// Federated mux: copy `selector` from federated `orbit.workspace.list`.
     Federated,
-}
-
-impl WorkspaceBinding {
-    fn selector_description(self, id_routed: bool) -> &'static str {
-        match (self, id_routed) {
-            (Self::Bound, false) => BOUND_SESSION_SELECTOR_DESCRIPTION,
-            (Self::Unbound, false) => UNBOUND_SESSION_SELECTOR_DESCRIPTION,
-            (Self::Bound, true) => ID_ROUTED_BOUND_SELECTOR_DESCRIPTION,
-            (Self::Unbound, true) => ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION,
-        }
-    }
 }
 
 /// Advertise the workspace selector on every workspace-scoped tool.
@@ -150,20 +128,22 @@ fn ensure_authoritative_selector(
     binding: WorkspaceBinding,
     id_routed: bool,
 ) {
-    // The owning definition may declare an authoritative optional filter
-    // whose wording must survive session binding.
-    if definition.rules.declared_workspace_selector {
-        return;
-    }
     let Some(properties) = selector_properties(schema) else {
         return;
     };
+    // A declared filter keeps its required-ness. Every other path still
+    // inserts the selector when the tool did not declare one. The description
+    // is the same line either way.
+    if definition.rules.declared_workspace_selector {
+        set_workspace_description(properties);
+        return;
+    }
     if definition.rules.workspace_optional {
         properties.insert(
             WORKSPACE_SELECTOR_PARAM.to_string(),
             json!({
                 "type": "string",
-                "description": WORKSPACE_OPTIONAL_SELECTOR_DESCRIPTION,
+                "description": WORKSPACE_SELECTOR_DESCRIPTION,
             }),
         );
         unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);
@@ -174,12 +154,26 @@ fn ensure_authoritative_selector(
             WORKSPACE_SELECTOR_PARAM.to_string(),
             json!({
                 "type": "string",
-                "description": binding.selector_description(id_routed),
+                "description": WORKSPACE_SELECTOR_DESCRIPTION,
             }),
         );
+    } else {
+        set_workspace_description(properties);
     }
     if binding == WorkspaceBinding::Unbound && !id_routed {
         require_property(schema, WORKSPACE_SELECTOR_PARAM);
+    }
+}
+
+fn set_workspace_description(properties: &mut JsonObject) {
+    if let Some(property) = properties
+        .get_mut(WORKSPACE_SELECTOR_PARAM)
+        .and_then(Value::as_object_mut)
+    {
+        property.insert(
+            "description".to_string(),
+            json!(WORKSPACE_SELECTOR_DESCRIPTION),
+        );
     }
 }
 
@@ -187,22 +181,14 @@ fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool, workspace
     let Some(properties) = selector_properties(schema) else {
         return;
     };
-    // Replace any v1 local wording a tool declared itself. Federated callers
-    // copy the list token; an id-routed task tool may instead omit it and
-    // route by the id's prefix, and a workspace-optional tool may omit it
-    // to aggregate every owner.
-    let description = if id_routed {
-        FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION
-    } else if workspace_optional {
-        FEDERATED_WORKSPACE_OPTIONAL_DESCRIPTION
-    } else {
-        FEDERATED_SELECTOR_DESCRIPTION
-    };
+    // Replace any v1 local wording a tool declared itself. Required-ness
+    // still follows the route: an id-routed or workspace-optional tool may
+    // omit the selector. The description is the shared line.
     properties.insert(
         WORKSPACE_SELECTOR_PARAM.to_string(),
         json!({
             "type": "string",
-            "description": description,
+            "description": WORKSPACE_SELECTOR_DESCRIPTION,
         }),
     );
     if id_routed || workspace_optional {
@@ -253,24 +239,10 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
             if let Some(query) = properties.get_mut("query").and_then(Value::as_object_mut) {
                 query.insert("minLength".to_string(), json!(1));
             }
-            if let Some(alternatives) = properties
-                .get_mut("tag")
-                .and_then(|tag| tag.get_mut("anyOf"))
-                .and_then(Value::as_array_mut)
+            if let Some(tag) = properties.get_mut("tag").and_then(Value::as_object_mut)
+                && tag.get("type").and_then(Value::as_str) == Some("array")
             {
-                for alternative in alternatives {
-                    if let Some(option) = alternative.as_object_mut() {
-                        match option.get("type").and_then(Value::as_str) {
-                            Some("string") => {
-                                option.insert("minLength".to_string(), json!(1));
-                            }
-                            Some("array") => {
-                                option.insert("minItems".to_string(), json!(1));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                tag.insert("minItems".to_string(), json!(1));
             }
         }
         // A query or tag narrows any search; `kind: friction` alone lists
@@ -299,7 +271,6 @@ fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String,
     let Some(tags) = properties.get_mut("tags").and_then(Value::as_object_mut) else {
         return;
     };
-    let using_workspace_taxonomy = taxonomy.is_some_and(|entries| !entries.is_empty());
     let fallback;
     let entries = match taxonomy.filter(|entries| !entries.is_empty()) {
         Some(entries) => entries,
@@ -315,29 +286,99 @@ fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String,
         .iter()
         .map(|(tag, _description)| tag.clone())
         .collect::<Vec<_>>();
-    if let Some(alternatives) = tags.get_mut("anyOf").and_then(Value::as_array_mut) {
-        for alternative in alternatives {
-            if alternative.get("type").and_then(Value::as_str) == Some("array")
-                && let Some(items) = alternative.get_mut("items").and_then(Value::as_object_mut)
-            {
-                items.insert("enum".to_string(), json!(values));
-            }
-        }
+    if tags.get("type").and_then(Value::as_str) == Some("array")
+        && let Some(items) = tags.get_mut("items").and_then(Value::as_object_mut)
+    {
+        items.insert("enum".to_string(), json!(values));
     }
-    let vocabulary = entries
-        .iter()
-        .map(|(tag, description)| format!("`{tag}` — {description}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    let fallback_note = if using_workspace_taxonomy {
-        ""
-    } else {
-        " The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
-    };
+    // The vocabulary and its workspace override live in the installed skill,
+    // not in the advertised schema.
     tags.insert(
         "description".to_string(),
-        Value::String(format!(
-            "Friction taxonomy tags as a string or array. Vocabulary: {vocabulary}.{fallback_note}"
-        )),
+        Value::String("Friction taxonomy tags.".to_string()),
     );
+}
+
+/// Shorten advertised property descriptions after workspace selection.
+///
+/// `orbit.task.add`, `orbit.task.update` and `orbit.task.list` keep the
+/// one-sentence descriptions written on the operation. Every other tool is
+/// capped so the operator `tools/list` stays inside its byte budget.
+pub(super) fn slim_advertised_property_descriptions(schema: &mut JsonObject, tool_name: &str) {
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let hand_authored = HAND_AUTHORED_PROPERTY_TOOLS.contains(&tool_name);
+    for (name, property) in properties.iter_mut() {
+        if name == WORKSPACE_SELECTOR_PARAM {
+            continue;
+        }
+        let Some(object) = property.as_object_mut() else {
+            continue;
+        };
+        let Some(description) = object.get("description").and_then(Value::as_str) else {
+            continue;
+        };
+        let slim = if hand_authored {
+            cap_description(description, HAND_AUTHORED_PROPERTY_CAP)
+        } else {
+            advertised_other_property_description(description)
+        };
+        if slim != description {
+            object.insert("description".to_string(), Value::String(slim));
+        }
+    }
+}
+
+/// First sentence, then a short cap, for tools other than the three task writes.
+pub(super) fn advertised_tool_description(tool_name: &str, description: &str) -> String {
+    if PRESERVED_TOOL_DESCRIPTIONS.contains(&tool_name) {
+        return description.to_string();
+    }
+    cap_description(first_sentence(description), ADVERTISED_TOOL_DESCRIPTION_CAP)
+}
+
+fn advertised_other_property_description(description: &str) -> String {
+    let sentence = first_sentence(description);
+    let lower = sentence.to_ascii_lowercase();
+    if lower.contains("string or array")
+        || lower.contains("string or an array")
+        || lower.contains("comma-separated")
+    {
+        return "Array of strings.".to_string();
+    }
+    cap_description(sentence, ADVERTISED_PROPERTY_CAP)
+}
+
+fn first_sentence(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(index) = trimmed.find(". ") {
+        &trimmed[..=index]
+    } else {
+        trimmed
+    }
+}
+
+fn cap_description(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let mut end = 0;
+    for (index, ch) in trimmed.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > max_chars {
+            break;
+        }
+        end = next;
+    }
+    let prefix = &trimmed[..end];
+    let cut = prefix.rsplit_once(' ').map_or(prefix, |(head, _)| head);
+    let cut = cut.trim_end_matches([',', ';', ':']);
+    let cut = if cut.is_empty() { prefix } else { cut };
+    if cut.ends_with('.') {
+        cut.to_string()
+    } else {
+        format!("{cut}.")
+    }
 }
