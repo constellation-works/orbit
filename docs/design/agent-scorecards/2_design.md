@@ -169,7 +169,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 
 - **Implementation run**: the activity job run that produced the candidate. A problem recorded on a task is charged to the implementation run whose span (the run's start to the next status change, as `run_spans` computes it today) contains the problem's timestamp. If none does, it goes to the most recent run before it.
 - **Final implementation run**: the run whose candidate landed. Landed credit and `no_test` regressions go to it.
-- **Review run**: the review gate's settlement comment for the attempt. Its reviewer line names the row's crews, model and recorded effort. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
+- **Review run**: the review gate's settlement comment for the attempt. Its reviewer line names that review's crew, provider and model — one comment identity, not the row's aggregated contributing crews. The row's recorded effort comes from the matching review invocation (§2's main-invocation rule), never from the comment; a review with no matching invocation stays effort unknown. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
 - **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot.rs`).
 
 ### 3.3 The attribution strip
