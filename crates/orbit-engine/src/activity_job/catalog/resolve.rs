@@ -165,15 +165,20 @@ fn resolve_loop(
 }
 
 /// Check one `script:<name>` ref against the script catalog. The catalog
-/// loader has already refused a manifest whose entry escapes the
-/// workspace or whose interpreter carries inline code, naming that
-/// manifest file; the only refusal left here is a name with no manifest.
+/// records invalid manifests as unavailable, with their diagnostic.
 fn resolve_script_ref(
     step_id: &str,
     target: &str,
     scripts: &super::super::script_catalog::V2ScriptCatalog,
 ) -> Result<(), ResolveError> {
     let name = target.strip_prefix(SCRIPT_REF_PREFIX).unwrap_or(target);
+    if let Some(reason) = scripts.unavailable_script(name) {
+        return Err(ResolveError::ScriptUnavailable {
+            step_id: step_id.to_string(),
+            name: name.to_string(),
+            reason: reason.to_string(),
+        });
+    }
     if scripts.get(name).is_some() {
         return Ok(());
     }

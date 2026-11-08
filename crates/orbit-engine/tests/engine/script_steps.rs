@@ -144,12 +144,14 @@ fn release_readiness_example_loads_and_rejects_nested_input_names() {
     let mut catalog =
         V2ScriptCatalog::new(fixture.scripts_dir(), fixture.workspace().to_path_buf());
     assert!(matches!(
-        catalog.load_dir(),
+        load_script_asset(&manifest, fixture.workspace()),
         Err(ScriptLoadError::Validation {
-            source: ScriptValidationError::InvalidFileInputName(name),
-            ..
+            source: ScriptValidationError::InvalidFileInputName(name), ..
         }) if name == nested_name
     ));
+    catalog.load_dir().unwrap();
+    let error = catalog.unavailable_script("release-readiness").unwrap();
+    assert!(error.contains(nested_name), "{error}");
 }
 
 #[test]

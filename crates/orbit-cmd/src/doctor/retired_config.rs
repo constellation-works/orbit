@@ -146,8 +146,7 @@ const RETIRED_SCRIPT_MANIFESTS: &[RetiredScriptManifest] = &[RetiredScriptManife
 }];
 
 /// Report each retired script manifest still in the workspace scripts
-/// directory. Every job dispatch loads the whole script catalog, so one
-/// whose entry no longer exists refuses every job in the workspace.
+/// directory. A script whose entry no longer exists cannot be used.
 pub(super) fn doctor_check_retired_scripts(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     let paths = runtime.paths();
     let mut warnings = Vec::new();
@@ -165,8 +164,7 @@ pub(super) fn doctor_check_retired_scripts(runtime: &OrbitRuntime) -> Vec<Worksp
             let consequence = if paths.repo_root.join(retired.entry).is_file() {
                 "nothing runs it any more"
             } else {
-                "its entry no longer exists, so every job dispatch in this workspace refuses \
-                 while the manifest stays"
+                "its entry no longer exists, so jobs that reference it refuse"
             };
             warnings.push(actionable_check(
                 RETIRED_SCRIPTS_CHECK,
