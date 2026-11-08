@@ -389,7 +389,6 @@ Changes apply to deliveries recorded afterwards.
 | Feature | Turn on when | Reference |
 |---|---|---|
 | `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [Mid-run steering configuration](configuration.md#mid-run-steering) |
-| `[lease]` | Interactive editors and agents share a checkout | [Path-lease policy](configuration.md#path-lease-policy) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |
 | `notice.*`, `attention.*`, `resident.evolution.*`, `jobs.failure_streak_warn`, `commit.regression_trailers` | Fleet-notice limits or brief quoting, the attention feed, the evolution ledger, the failing-job badge or commit regression trailers need tuning | [Fleet notices, attention, evolution ledger and failing jobs](configuration.md#fleet-notices-attention-evolution-ledger-and-failing-jobs) |
 

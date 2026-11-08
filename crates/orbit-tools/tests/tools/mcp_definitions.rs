@@ -93,14 +93,6 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.experiment.update",
             "orbit.friction.add",
             "orbit.friction.update",
-            "orbit.lease.check",
-            "orbit.lease.expand",
-            "orbit.lease.list",
-            "orbit.lease.notices",
-            "orbit.lease.release",
-            "orbit.lease.renew",
-            "orbit.lease.request",
-            "orbit.lease.show",
             "orbit.notice.close",
             "orbit.notice.list",
             "orbit.notice.post",
@@ -166,7 +158,7 @@ struct UnclassifiedIdTool;
 impl Tool for UnclassifiedIdTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "orbit.lease.unclassified_fixture".to_string(),
+            name: "orbit.experiment.unclassified_fixture".to_string(),
             description: "unclassified id-addressing fixture".to_string(),
             parameters: vec![
                 ToolParam {
@@ -198,7 +190,7 @@ fn unclassified_id_addressing_builtin_fails_closed_in_this_target() {
     assert_eq!(
         registry.mcp_tool_definitions(),
         Err(McpToolDefinitionError::UnclassifiedIdRoute(
-            "orbit.lease.unclassified_fixture".to_string()
+            "orbit.experiment.unclassified_fixture".to_string()
         )),
         "a builtin that takes a required id and an optional workspace but declares no \
          McpIdRoute at its definition site must fail where the tool is added, not on \

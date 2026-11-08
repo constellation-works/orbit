@@ -390,7 +390,6 @@ const ROOT_ADVANCED: &[GroupedRow] = &[
         "experiment",
         "Define, run and conclude experiments over agent treatments",
     ),
-    ("lease", "Coordinate path leases with the workspace owner"),
     (
         "resident",
         "Grant, narrow and inspect resident orchestrator mandates",

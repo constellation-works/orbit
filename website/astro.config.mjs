@@ -213,7 +213,6 @@ export default defineConfig({
             { slug: 'how-to/friction', label: 'Report and triage friction' },
             { slug: 'how-to/plugins', label: 'Install and grant plugins' },
             { slug: 'how-to/decision-channels', label: 'Decision channels' },
-            { slug: 'how-to/path-leases', label: 'Hold paths with leases' },
           ],
         },
         {

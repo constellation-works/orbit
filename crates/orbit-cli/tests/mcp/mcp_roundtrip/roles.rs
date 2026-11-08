@@ -107,10 +107,10 @@ fn a_role_serves_only_its_toolsets_in_every_mode() {
 
     // `--toolset` adds to the role rather than replacing it.
     let mut widened =
-        workspace.serve_with_args(&["--operator", "--role", "reader", "--toolset", "leases"]);
+        workspace.serve_with_args(&["--operator", "--role", "reader", "--toolset", "experiments"]);
     let listed = widened.tools_list();
     let names = tool_names(&listed);
-    assert!(names.contains(&"orbit_lease_list"), "{names:?}");
+    assert!(names.contains(&"orbit_experiment_list"), "{names:?}");
     assert!(names.contains(&"orbit_task_show"), "{names:?}");
     assert!(!names.contains(&"orbit_task_update"), "{names:?}");
 

@@ -71,80 +71,8 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "revoking application authority requires the operator",
     },
-    // Identified people and agents may coordinate paths. This is an identity
-    // floor, while owner placement and lease policy constrain the operation.
-    GovernedOperation {
-        id: "orbit.lease.request",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.renew",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.expand",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.release",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.show",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.list",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    GovernedOperation {
-        id: "orbit.lease.check",
-        surface: OperationSurface::Tool,
-        allowed: &[
-            McpCapability::Agent,
-            McpCapability::Operator,
-            McpCapability::Runner,
-        ],
-        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
-    },
-    // Fleet notices: an identification floor like leases. Poster class,
-    // rights and limits are decided in core from the caller's session.
+    // Fleet notices: an identification floor. Poster class, rights and
+    // limits are decided in core from the caller's session.
     GovernedOperation {
         id: "orbit.notice.post",
         surface: OperationSurface::Tool,

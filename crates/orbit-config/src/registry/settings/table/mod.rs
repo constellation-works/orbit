@@ -19,17 +19,6 @@ use super::super::{
     ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
     SECURITY_ALERT_SEVERITIES,
 };
-use super::lease_listener::{
-    LeaseListenerTlsSettings, resolve_lease_listener_failed_auth,
-    resolve_lease_listener_failed_auth_window, resolve_lease_listener_tls,
-    resolve_lease_listener_trusted_proxy, resolve_listener_address_per_minute,
-    resolve_listener_header_timeout_seconds, resolve_listener_ipv6_prefix_len,
-    resolve_listener_max_body_bytes, resolve_listener_max_connections,
-    resolve_listener_max_in_flight_per_token, resolve_listener_max_in_flight_requests,
-    resolve_listener_max_streams_per_token, resolve_listener_max_tracked_keys,
-    resolve_listener_request_timeout_seconds, resolve_listener_token_reads_per_minute,
-    resolve_listener_token_writes_per_minute,
-};
 use super::resolve::{
     DEFAULT_APPLICATION_CONSENT_MAX_DAYS, DEFAULT_JOURNAL_RETENTION_DAYS,
     DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS, DEFAULT_STORE_WARN_BYTES,
@@ -39,16 +28,15 @@ use super::resolve::{
     resolve_build_output_env, resolve_choice, resolve_commit_subject_template,
     resolve_cpu_light_leaves, resolve_distributed_completion,
     resolve_experiments_min_delivered_rate, resolve_generated_paths,
-    resolve_host_shutdown_hold_minutes, resolve_lease_intake_peer_user,
-    resolve_light_delivery_paths, resolve_machine_id, resolve_machine_labels, resolve_machine_name,
-    resolve_material_fields, resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
-    resolve_mid_run_steering_max_rounds, resolve_name_list, resolve_non_code_paths,
-    resolve_non_empty, resolve_non_reviewable_paths, resolve_optional_choice,
-    resolve_optional_non_empty, resolve_percent, resolve_pr_body_template, resolve_reclaim,
-    resolve_retention_days, resolve_task_prefix, resolve_task_tag_labels, resolve_task_type_labels,
-    resolve_test_paths, resolve_text_template, resolve_unlocked_context_paths,
-    resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    resolve_host_shutdown_hold_minutes, resolve_light_delivery_paths, resolve_machine_id,
+    resolve_machine_labels, resolve_machine_name, resolve_material_fields, resolve_mcp_role,
+    resolve_mcp_toolsets, resolve_memory_limit, resolve_mid_run_steering_max_rounds,
+    resolve_name_list, resolve_non_code_paths, resolve_non_empty, resolve_non_reviewable_paths,
+    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_pr_body_template,
+    resolve_reclaim, resolve_retention_days, resolve_task_prefix, resolve_task_tag_labels,
+    resolve_task_type_labels, resolve_test_paths, resolve_text_template,
+    resolve_unlocked_context_paths, resolve_unlocked_path_validation_commands,
+    resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use super::snapshot::AdmissionScope;
 use crate::crew_auto_effort::AutoEffortBand;

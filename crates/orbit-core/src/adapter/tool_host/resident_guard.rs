@@ -47,7 +47,6 @@ pub(super) fn resident_guard_tool_name(action: OrbitBuiltinAction) -> &'static s
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
         OrbitBuiltinAction::Workflow(verb) => verb.tool_name(),
         OrbitBuiltinAction::WorkspaceClaim(verb) => verb.tool_name(),
-        OrbitBuiltinAction::Lease(verb) => verb.tool_name(),
         OrbitBuiltinAction::Notice(verb) => verb.tool_name(),
         OrbitBuiltinAction::Resident(verb) => verb.tool_name(),
     }
@@ -190,7 +189,6 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
         OrbitBuiltinAction::Experiment(verb) => read_only(verb),
         OrbitBuiltinAction::Orchestrator(verb) => read_only(verb),
         OrbitBuiltinAction::Search(verb) => read_only(verb),
-        OrbitBuiltinAction::Lease(verb) => read_only(verb),
         OrbitBuiltinAction::WorkspaceClaim(verb) => read_only(verb),
     }
 }

@@ -2,12 +2,70 @@
 
 use super::{LeaseListenerLimits, tls};
 use orbit_auth::client_address::{LeaseClientAddressPolicy, TrustedProxies};
-use orbit_config::LeaseListenerSettings;
 use orbit_core::OrbitError;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The former `lease.listener.limits.failed_auth` default, fixed when the key
+/// was removed [ORB-22808].
+pub const LEASE_LISTENER_FAILED_AUTH_LIMIT: u32 = 10;
+/// The former `lease.listener.limits.failed_auth_window_seconds` default,
+/// fixed when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_FAILED_AUTH_WINDOW_SECONDS: u32 = 300;
+
+/// PEM certificate chain and private key for native listener TLS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseListenerTlsSettings {
+    /// Certificate chain path, with the leaf certificate first.
+    pub cert: String,
+    /// Matching unencrypted private key path.
+    pub key: String,
+}
+
+/// The listener's settings before validation.
+///
+/// Path leases are not configurable [ORB-22808], so nothing reads these from
+/// `config.toml`: [`run_lease_listener`](super::run_lease_listener) starts
+/// from [`LeaseListenerSettings::default`], which names no bind address and
+/// so refuses to start. Tests build their own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseListenerSettings {
+    /// The address to listen on, or `None` for no listener.
+    pub bind: Option<String>,
+    /// Native TLS material, loaded and checked at startup.
+    pub tls: Option<LeaseListenerTlsSettings>,
+    /// A terminating proxy is in front of the listener.
+    pub behind_proxy: bool,
+    /// Proxy addresses or CIDR ranges whose X-Forwarded-For is read.
+    pub trusted_proxy: Vec<String>,
+    /// The operator's lease intake socket the listener forwards to.
+    pub intake_socket: Option<String>,
+    /// Failed authentications from one address before it gets 429.
+    pub failed_auth_limit: u32,
+    /// The window, in seconds, those failures are counted over.
+    pub failed_auth_window_seconds: u32,
+    /// Request, transport and concurrency bounds.
+    pub limits: LeaseListenerLimits,
+}
+
+impl Default for LeaseListenerSettings {
+    /// Unconfigured: no bind address, TLS, proxy or intake socket, and the
+    /// former default limits.
+    fn default() -> Self {
+        Self {
+            bind: None,
+            tls: None,
+            behind_proxy: false,
+            trusted_proxy: Vec::new(),
+            intake_socket: None,
+            failed_auth_limit: LEASE_LISTENER_FAILED_AUTH_LIMIT,
+            failed_auth_window_seconds: LEASE_LISTENER_FAILED_AUTH_WINDOW_SECONDS,
+            limits: LeaseListenerLimits::default(),
+        }
+    }
+}
 
 /// The listener's validated configuration.
 #[derive(Debug, Clone)]
@@ -29,7 +87,7 @@ pub struct LeaseListenerConfig {
 }
 
 impl LeaseListenerConfig {
-    /// Validate `lease.listener.*`, refusing an unsafe or incomplete
+    /// Validate listener settings, refusing an unsafe or incomplete
     /// combination with a message naming the setting.
     pub fn from_settings(settings: &LeaseListenerSettings) -> Result<Self, OrbitError> {
         let tls = settings
@@ -39,20 +97,20 @@ impl LeaseListenerConfig {
             .transpose()?;
         let Some(raw_bind) = settings.bind.as_deref() else {
             return Err(refused(
-                "lease.listener.bind is unset, so there is no listener. Set it in the listener \
-                 user's ~/.orbit/config.toml, for example bind = \"100.64.0.5:7480\"",
+                "no bind address is set, so there is no listener: path leases are not \
+                 configurable on this Orbit",
             ));
         };
         let bind: SocketAddr = raw_bind.parse().map_err(|_| {
             refused(&format!(
-                "lease.listener.bind = \"{raw_bind}\" is not an IP address and port, such as \
+                "bind = \"{raw_bind}\" is not an IP address and port, such as \
                  127.0.0.1:7480 or [::1]:7480"
             ))
         })?;
         let client_address = if settings.behind_proxy {
             if settings.trusted_proxy.is_empty() {
                 return Err(refused(
-                    "lease.listener.behind_proxy = true needs lease.listener.trusted_proxy: list \
+                    "behind_proxy = true needs trusted_proxy: list \
                      the proxy addresses or CIDR ranges whose X-Forwarded-For may be read",
                 ));
             }
@@ -62,21 +120,21 @@ impl LeaseListenerConfig {
         };
         if bind.ip().is_unspecified() && tls.is_none() && !settings.behind_proxy {
             return Err(refused(&format!(
-                "lease.listener.bind = \"{raw_bind}\" listens on every interface without TLS. \
-                 Set lease.listener.tls, bind a specific address, or put a terminating proxy in front and set \
-                 lease.listener.behind_proxy = true"
+                "bind = \"{raw_bind}\" listens on every interface without TLS. \
+                 Set tls, bind a specific address, or put a terminating proxy in front and set \
+                 behind_proxy = true"
             )));
         }
         let Some(intake_socket) = settings.intake_socket.as_deref() else {
             return Err(refused(
-                "lease.listener.intake_socket is unset: name the operator's lease intake socket, \
+                "intake_socket is unset: name the operator's lease intake socket, \
                  such as /home/<operator>/.orbit/run/lease-intake.sock",
             ));
         };
         let intake_socket = PathBuf::from(intake_socket);
         if !intake_socket.is_absolute() {
             return Err(refused(&format!(
-                "lease.listener.intake_socket = \"{}\" must be an absolute path",
+                "intake_socket = \"{}\" must be an absolute path",
                 intake_socket.display()
             )));
         }
@@ -87,7 +145,7 @@ impl LeaseListenerConfig {
             intake_socket,
             failed_auth_limit: settings.failed_auth_limit,
             failed_auth_window: Duration::from_secs(u64::from(settings.failed_auth_window_seconds)),
-            limits: LeaseListenerLimits::from_settings(settings),
+            limits: settings.limits.clone(),
         })
     }
 }

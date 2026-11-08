@@ -102,7 +102,7 @@ One specific worth knowing:
 | Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH. |
 | MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
 | MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. |
-| Lease listener (`orbit lease listen`) | Off | Runs as a dedicated listener user at the address in its own `lease.listener.bind`. Serves only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forwards operations to Orbit Web over a local Unix socket. Refuses `0.0.0.0` or `::` unless TLS is configured (`lease.listener.tls`) or a proxy is declared (`lease.listener.behind_proxy`). |
+| Lease listener | Off, not configurable | Path leases are not configurable [ORB-22808]: no command starts the listener and Orbit Web serves no lease intake socket. The retained code would run as a dedicated listener user, serve only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forward operations to Orbit Web over a local Unix socket, refusing `0.0.0.0` or `::` without TLS or a declared proxy. |
 | Federated MCP | Off | Presents one MCP namespace over this host plus the hosts you register with `orbit host add`. Only hosts you name; there is no discovery. |
 | Task publication | Off | Pushes task bundles to a Git repository you bind. |
 

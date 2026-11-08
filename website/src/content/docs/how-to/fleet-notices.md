@@ -3,7 +3,7 @@ title: Post and retire fleet notices
 description: Share scoped, expiring operational information with agents and operators.
 ---
 
-Fleet notices share short-lived incidents, planned maintenance, or other information with agents and operators. They inform readers; they do not grant authority or override policy. They are separate from [lease notices](../path-leases/), which are events on a path lease.
+Fleet notices share short-lived incidents, planned maintenance, or other information with agents and operators. They inform readers; they do not grant authority or override policy.
 
 ## Post, inspect and close
 

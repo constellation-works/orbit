@@ -8,7 +8,8 @@ last_validated: 2026-10-26
 
 Recipe for the fresh-authorization prerequisite in
 [2_design.md §7.1](../../design/path-leases/2_design.md#71-the-listener-user). The network lease
-listener and `orbit lease token create|list|revoke` are implemented. A root-owned stub stands
+listener is implemented, but its configuration and the `orbit lease` commands were withdrawn
+[ORB-22808], so nothing starts it today. A root-owned stub stands
 in for the transition, so the recipe isolates host authorization without product execution. The
 recipe shows two results:
 
@@ -198,8 +199,8 @@ the one warm command) can still complete the transition. `child_exit` is non-zer
 usual text. The pass condition is the non-zero status and the stub not running, so a wording
 change in a later `sudo` still has a defined result.
 
-This denial is what a deployment needs before `lease.listener.bind` or
-`lease.intake.peer_user` may be set. The recipe does not set either key.
+This denial is what a deployment needs before a lease listener bind address or an intake peer
+user may be configured again. The recipe configures neither.
 
 ## Case C — a passwordless grant defeats the denial
 
