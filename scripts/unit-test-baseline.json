@@ -357,6 +357,7 @@
         "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
         "application/task/tests/resolves.rs::landing_keeps_every_named_target_through_a_failed_history_read",
         "application/task/tests/transitions/approve.rs::approve_does_not_overwrite_a_status_changed_after_its_read",
+        "application/task/tests/transitions/reject.rs::dashboard_archive_rechecks_run_ownership_after_its_guard_and_preserves_force",
         "application/task/tests/transitions/reject.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force",
         "application/tests/executor.rs::custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration",
         "application/tests/executor.rs::seed_default_executors_heals_leftover_macos_sandbox_on_linux",

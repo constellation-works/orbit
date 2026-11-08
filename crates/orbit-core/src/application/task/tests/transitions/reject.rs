@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn dashboard_archive_rechecks_run_ownership_after_its_guard_and_preserves_force() {
+    if !enter_isolated_child(
+        module_path!(),
+        "dashboard_archive_rechecks_run_ownership_after_its_guard_and_preserves_force",
+    ) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let task = add_task(&runtime, "Archive stale guard");
+
+    // A local run starts owning the task after the dashboard archive's outer
+    // ownership pre-check and before the archive write commits.
+    runtime.set_transition_run_hook_task(Some(&task.id));
+    let result = runtime.archive_task_for_dashboard(&task.id, false);
+    runtime.set_transition_run_hook_task(None);
+
+    let refusal = result
+        .expect_err("a run inserted after the guard must refuse the archive")
+        .force_overridable()
+        .cloned()
+        .expect("the refusal carries the force override");
+    assert_eq!(
+        refusal.kind,
+        orbit_common::ForceOverridableKind::RunStillOwnsTask,
+        "the archive refusal names its run-ownership guard"
+    );
+    let run_id = refusal
+        .run_id
+        .clone()
+        .expect("the refusal names the owning run");
+    assert_eq!(
+        runtime
+            .get_task(&task.id)
+            .expect("task must survive")
+            .status,
+        TaskStatus::Proposed,
+        "a refused archive writes nothing"
+    );
+
+    runtime
+        .archive_task_for_dashboard(&task.id, true)
+        .expect("force archives despite the owning run");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("archived task").status,
+        TaskStatus::Archived
+    );
+    assert!(
+        runtime
+            .get_task_history(&task.id)
+            .expect("history")
+            .iter()
+            .any(|entry| entry.event == "forced"),
+        "the forced archive is recorded as forced"
+    );
+    assert!(
+        !runtime
+            .show_job_run(&run_id)
+            .expect("owning run")
+            .state
+            .is_terminal(),
+        "forcing does not cancel the owning run"
+    );
+}
+
+#[test]
 fn delete_rechecks_a_status_changed_after_its_guard_and_preserves_force() {
     if !enter_isolated_child(
         module_path!(),

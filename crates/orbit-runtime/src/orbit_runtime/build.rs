@@ -169,6 +169,8 @@ impl RuntimeKernel {
             pr_repair_checks: Arc::default(),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_run_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -246,6 +248,8 @@ impl RuntimeKernel {
             pr_repair_checks: Arc::default(),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_run_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -301,6 +305,26 @@ impl RuntimeKernel {
     #[cfg(any(test, feature = "test-support"))]
     pub fn transition_read_hook_status(&self) -> Option<(String, orbit_types::task::TaskStatus)> {
         self.transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Arm the dashboard-archive race seam for `id` (`None` disarms it).
+    /// While armed, the archive path inserts a non-terminal local run owning
+    /// `id` after its outer ownership pre-check, so the under-lock recheck
+    /// observes the lost race. Production never arms it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_transition_run_hook_task(&self, id: Option<&str>) {
+        *self
+            .transition_run_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = id.map(str::to_string);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn transition_run_hook_task(&self) -> Option<String> {
+        self.transition_run_hook
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()

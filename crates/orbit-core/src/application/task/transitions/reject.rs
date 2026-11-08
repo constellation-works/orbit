@@ -133,7 +133,17 @@ impl OrbitRuntime {
                 .map(|_| ());
         }
         ensure_status_change_not_run_owned(self, id)?;
-        self.archive_task(id)
+        // The preflight can go stale while a local run starts owning the
+        // task. Re-read ownership under the task write lock and hold it
+        // through the archive write, like `delete_task_guarded` does.
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            #[cfg(test)]
+            self.apply_transition_read_hook(id)?;
+            #[cfg(any(test, feature = "test-support"))]
+            self.apply_transition_run_hook(id)?;
+            ensure_status_change_not_run_owned(self, id)?;
+            self.archive_task(id)
+        })
     }
 
     pub fn delete_task(&self, id: &str) -> Result<(), OrbitError> {
@@ -158,6 +168,27 @@ impl OrbitRuntime {
                     status: Some(status),
                     ..Default::default()
                 },
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Test seam for the dashboard-archive ownership race: when the run hook
+    /// names `id`, insert a non-terminal local run owning it. The archive
+    /// path calls this after its outer pre-check and before its under-lock
+    /// recheck, so the recheck observes the lost race.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn apply_transition_run_hook(&self, id: &str) -> Result<(), OrbitError> {
+        if let Some(hook_id) = self.transition_run_hook_task()
+            && hook_id == id
+        {
+            self.stores().jobs().insert_job_run(
+                "fixture",
+                1,
+                chrono::Utc::now(),
+                Some(serde_json::json!({ "task_ids": [id] })),
+                None,
             )?;
         }
 
