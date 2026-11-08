@@ -34,9 +34,11 @@ refs help, or would they turn this layer into a generic workflow engine?
 [`auto-task:<name>` target](./specs/auto-task-step.md) has schema/explain and durable
 bind/mint, parked CEL waits and partial-branch checkpoints, plus opt-in completion
 contracts and accepted-result history ([ORB-20165]). Their condition-fact consumer
-([ORB-20397]) and the disabled composition ([ORB-20166]) remain `someday`; historical
-`reuse_when` matching is shipped ([ORB-22649]). Existing skip guards stay
-separate; no auto-sequence carrier, nested-job or cross-workspace reference was added.
+([ORB-20397]) ships as `self.last_succeeded_at`, and the disabled composition
+([ORB-20166]) ships as a disabled, nonseeded example installed only after owner
+prerequisites; historical `reuse_when` matching is shipped ([ORB-22649]). Existing
+skip guards stay separate; no auto-sequence carrier, nested-job or cross-workspace
+reference was added.
 
 ### 1.3 Is the provider model too closed-set?
 
@@ -153,9 +155,9 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
 - [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
 - [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history.
-- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (someday).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples (disabled example).
 - [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
-- [ORB-20397] — Expose accepted-result history through condition success facts (someday).
+- [ORB-20397] — Expose accepted-result history through condition success facts (shipped).
 - [ORB-22649] — Add historical result reuse to auto-task job steps.
 - [T20260420-0510-2] — add the Groundhog v1 activity runner.
 

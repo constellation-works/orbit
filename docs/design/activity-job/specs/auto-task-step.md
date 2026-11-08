@@ -405,8 +405,9 @@ Deliver in phases: (1) disabled schema, target resolution and CEL explain
 (2) keyed bind/mint, parked waits, admission and partial-branch checkpoints
 (built, see "Phase 2 as built");
 (3) QA, security and preparation readiness contracts (built, see "Phase 3 as
-built"), the accepted-history condition consumers ([ORB-20397], [ORB-22676]), and
-disabled job/routine examples ([ORB-20166]).
+built"), the accepted-history condition consumers ([ORB-20397], [ORB-22676],
+shipped), and disabled, nonseeded job/routine examples ([ORB-20166], shipped as
+disabled examples installed only after owner prerequisites).
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
 
@@ -600,9 +601,9 @@ work even though this is a smaller authoring model. Board emptiness remains a
 snapshot; admission is rechecked and stale source evidence holds the job. The
 first version excludes dynamic loop/fan-out targets, cross-workspace references
 and arbitrary artifact predicates. The QA, security and preparation contracts are
-opt-in workspace configuration, and their examples stay disabled; no
-release-readiness run is ready to enable until an owner installs them, the
-composition exists and a sandboxed adapter launch has been observed.
+opt-in workspace configuration, and their examples ship disabled and nonseeded; no
+release-readiness run is ready to enable until an owner installs them and a
+sandboxed adapter launch has been observed.
 
 ## Task References
 
