@@ -656,6 +656,230 @@ impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
     }
 }
 
+/// The shipped `complete_no_diff` step with the real `pr_complete` action:
+/// a `completion.hold` rule matching the task's tags holds a no-diff-expected
+/// delivery in review instead of completing it [ORB-23450].
+fn shipped_no_diff_completion_holds_a_matching_task() {
+    let (host, _workspace) = NoDiffCompletionHost::new(&["no-diff-expected", "sensitive"]);
+    let outcome = run_no_diff_completion(&host);
+    assert!(outcome.success, "{outcome:?}");
+    let step = &outcome.pipeline["complete_no_diff"];
+    assert_eq!(step["held_task_ids"], json!(["FIXTURE"]));
+    assert_eq!(step["completed_task_ids"], json!([]));
+    assert_eq!(step["completion_hold"]["field"], "tags");
+    assert_eq!(step["completion_hold"]["matched"], "sensitive");
+    let task = host.task();
+    assert_eq!(task.status, orbit_types::task::TaskStatus::Review);
+    assert!(
+        host.history()
+            .iter()
+            .any(|entry| entry.event == orbit_types::workflow::COMPLETION_HELD_EVENT),
+        "the hold is recorded on the task"
+    );
+}
+
+/// The same shipped wiring completes a clean-tree task no rule matches.
+fn shipped_no_diff_completion_completes_without_a_match() {
+    let (host, _workspace) = NoDiffCompletionHost::new(&["no-diff-expected"]);
+    let outcome = run_no_diff_completion(&host);
+    assert!(outcome.success, "{outcome:?}");
+    let step = &outcome.pipeline["complete_no_diff"];
+    assert_eq!(step["completed_task_ids"], json!(["FIXTURE"]));
+    assert!(step.get("held_task_ids").is_none());
+    assert_eq!(host.task().status, orbit_types::task::TaskStatus::Done);
+}
+
+fn run_no_diff_completion(host: &NoDiffCompletionHost) -> JobOutcome {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), NO_DIFF_RUN);
+    execute_job_with_resume(
+        &shipped_no_diff_completion_job(),
+        json!({
+            "task_ids": ["FIXTURE"],
+            "base_branch": "main",
+            "base_sync": "remote",
+            "completion": "done",
+        }),
+        NO_DIFF_RUN,
+        writer,
+        host,
+        None,
+    )
+    .expect("the no-diff completion job runs")
+}
+
+/// The shipped `complete_no_diff` step, resolved to the real `pr_complete`
+/// action; only `worktree` and `commit` are stubbed.
+fn shipped_no_diff_completion_job() -> orbit_types::workflow::JobV2 {
+    let shipped = std::fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .expect("read the shipped PR pipeline");
+    let shipped = load_job_asset(&shipped)
+        .expect("the shipped PR pipeline loads")
+        .spec;
+    let step = shipped
+        .steps
+        .iter()
+        .find(|step| step.id == "complete_no_diff")
+        .cloned()
+        .expect("the shipped PR pipeline has `complete_no_diff`");
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([stub("worktree"), stub("commit")]));
+    job.default_input = shipped.default_input.clone();
+    job.steps.push(step);
+    let mut catalog = V2ActivityCatalog::new();
+    catalog.insert(
+        "pr_complete",
+        ActivityV2 {
+            description: "the real pr_complete action".to_string(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: "pr_complete".to_string(),
+                config: Value::Null,
+            }),
+        },
+    );
+    catalog.insert(
+        RECOVERY,
+        ActivityV2 {
+            description: "scripted step failure recovery".to_string(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: format!("test_stub_{RECOVERY}"),
+                config: Value::Null,
+            }),
+        },
+    );
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        .expect("resolve the shipped complete_no_diff step");
+    job
+}
+
+const NO_DIFF_RUN: &str = "complete-no-diff-run";
+
+/// In-memory task store for the no-diff completion route: one review task,
+/// a `tags = ["sensitive"]` hold rule, and the real `pr_complete` action.
+struct NoDiffCompletionHost {
+    task: Mutex<orbit_types::task::Task>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    workspace: std::path::PathBuf,
+}
+
+impl NoDiffCompletionHost {
+    fn new(tags: &[&str]) -> (Self, tempfile::TempDir) {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let task: orbit_types::task::Task = serde_json::from_value(json!({
+            "id": "FIXTURE",
+            "title": "Fixture",
+            "description": "Fixture",
+            "status": "review",
+            "priority": "medium",
+            "task_type": "bug",
+            "tags": tags,
+            "context_files": [],
+            "execution_summary": "Validated the fixture; no change required.",
+            "job_run_id": NO_DIFF_RUN,
+            "created_at": chrono::Utc::now(),
+            "updated_at": chrono::Utc::now(),
+        }))
+        .expect("fixture task");
+        let host = Self {
+            task: Mutex::new(task),
+            history: Mutex::default(),
+            workspace: workspace.path().to_path_buf(),
+        };
+        (host, workspace)
+    }
+
+    fn task(&self) -> orbit_types::task::Task {
+        self.task.lock().expect("task").clone()
+    }
+
+    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
+        self.history.lock().expect("history").clone()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for NoDiffCompletionHost {
+    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+        Ok(self.task())
+    }
+
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history())
+    }
+
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .expect("history")
+            .extend(update.append_history);
+        Ok(())
+    }
+
+    fn update_task_from_activity(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskActivityUpdate,
+    ) -> Result<orbit_types::task::Task, OrbitError> {
+        let mut task = self.task.lock().expect("task");
+        assert_eq!(task.status, update.expected_status);
+        task.status = update.status;
+        Ok(task.clone())
+    }
+
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        match action {
+            "test_stub_worktree" => Ok(json!({
+                "job_run_id": NO_DIFF_RUN,
+                "workspace_path": self.workspace,
+            })),
+            "test_stub_commit" => Ok(json!({
+                "skipped_no_diff_expected": true,
+                "decision": "skipped_no_diff_expected",
+            })),
+            "pr_complete" => orbit_engine::execute_deterministic_action(
+                self,
+                action,
+                config,
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+            .map_err(|error| DispatchError::JobExecution(error.to_string())),
+            other => panic!("unexpected action `{other}`"),
+        }
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn completion_review_contracts_1() {
@@ -676,6 +900,14 @@ fn completion_review_contracts_1() {
             (
                 "conflict_recovery_rounds_are_bounded_per_failure",
                 conflict_recovery_rounds_are_bounded_per_failure,
+            ),
+            (
+                "shipped_no_diff_completion_holds_a_matching_task",
+                shipped_no_diff_completion_holds_a_matching_task,
+            ),
+            (
+                "shipped_no_diff_completion_completes_without_a_match",
+                shipped_no_diff_completion_completes_without_a_match,
             ),
         ]);
     });
