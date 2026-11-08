@@ -34,7 +34,8 @@ const TASK_PROVENANCE_TITLE_PREFIXES: &[(&str, &str)] = &[
 ];
 
 impl OrbitRuntime {
-    /// Validate task-scoped tool requirements against the current registry.
+    /// Validate task-scoped tool requirements against the current registry
+    /// and the implementing activity's disallow list.
     ///
     /// A requirement is durable metadata, so a name an operator has disabled is
     /// kept: `orbit tool enable` restores it, so that state is only a warning.
@@ -42,11 +43,27 @@ impl OrbitRuntime {
     /// at all, are both rejected — activity admission refuses them and
     /// `required_tools` is immutable after creation, so the record would be
     /// impossible to dispatch and impossible to repair.
+    ///
+    /// A name that activity disallows, and that no grant could lift, is
+    /// rejected with the same classification dispatch admission uses. The
+    /// error names the tool, the activity and the reason. An exact denial of
+    /// a read/repeat-safe tool can still be required, because a grant could
+    /// lift it later. A missing activity or allow-mode catalog does not invent
+    /// a refusal; a catalog that fails to load fails the call.
     pub fn validate_required_tools(
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
-        self.validate_task_tool_names("required_tools", required_tools)
+        let warnings = self.validate_task_tool_names("required_tools", required_tools)?;
+        let Some(disallow_list) = self.required_tool_implementer_disallow_list()? else {
+            return Ok(warnings);
+        };
+        for name in normalize_required_tools(required_tools.to_vec()) {
+            if let Some(message) = self.unliftable_implementer_requirement(&disallow_list, &name) {
+                return Err(OrbitError::InvalidInput(message));
+            }
+        }
+        Ok(warnings)
     }
 
     /// Validate durable requirement names against the current registry, as

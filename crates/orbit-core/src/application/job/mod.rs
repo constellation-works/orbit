@@ -55,7 +55,13 @@ pub(crate) fn log_best_effort<T>(
     }
 }
 
-pub(crate) use activity_tool_requirements::{drops_disallowed_requirements, granted_tool_refusal};
+#[cfg(test)]
+pub(crate) use activity_tool_requirements::set_grant_classification_override;
+pub(crate) use activity_tool_requirements::{
+    DisallowGrant, IMPLEMENTING_ACTIVITY, agent_tool_grant_classification, classify_disallow_grant,
+    drops_disallowed_requirements, granted_tool_refusal, implementing_activity_disallow_list,
+    unliftable_required_tool_error,
+};
 pub(in crate::application) use admission_port::JobAdmissionPort;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;

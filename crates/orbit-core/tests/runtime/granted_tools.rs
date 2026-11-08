@@ -98,11 +98,27 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
             parameters: Vec::new(),
         })
         .unwrap();
-    // Requirements retain their established warning-only handling of a
-    // temporarily disabled tool; granting one must be a filing error.
+    // A disabled tool the implementer may still require stays a warning.
+    // `usable` is on the implementing activity's disallow list and is
+    // classified mutating, so requiring it is a filing error once that
+    // catalog is present; this fixture has no catalog, and the warning is
+    // checked on a tool the activity allows.
+    let warning_only = "orbit.task.show";
+    runtime
+        .stores()
+        .tools()
+        .insert_tool(&StoredTool {
+            name: warning_only.into(),
+            path: String::new(),
+            description: String::new(),
+            enabled: false,
+            builtin: true,
+            parameters: Vec::new(),
+        })
+        .unwrap();
     assert_eq!(
         runtime
-            .validate_required_tools(&[usable.into()])
+            .validate_required_tools(&[warning_only.into()])
             .unwrap()
             .len(),
         1

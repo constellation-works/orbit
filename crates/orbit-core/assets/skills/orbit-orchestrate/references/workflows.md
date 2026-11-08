@@ -29,7 +29,10 @@ invalid required names before provider launch, and
 the run envelope, `ORBIT_ACTIVITY_TOOLS`, and audit evidence carry the effective
 list. A deny-list activity instead exposes registered agent-facing tools except
 those covered by `tool_disallow_list`; a task requirement never overrides that
-list and refuses dispatch when covered. The shipped `agent_implement` uses
+list. Filing refuses an unliftable covered requirement (a mutating tool, an
+always-operator-only tool, or a name a wildcard entry still covers), and a
+stored one still refuses dispatch when covered. A read/repeat-safe exact
+denial can still be required, because a grant could lift it. The shipped `agent_implement` uses
 this deny-list mode. Tool inclusion does not bypass later role, capability, policy, sandbox,
 subprocess, or authentication checks.
 

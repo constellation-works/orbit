@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use orbit_common::governance::authorization::{self, GrantedToolEffect, ToolGrantability};
 use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
@@ -11,11 +10,10 @@ use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed, tools_allowed_
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::build_orbit_tool_host;
-use crate::application::job::{drops_disallowed_requirements, granted_tool_refusal};
-
-/// The one activity a task's `granted_tools` reach. Every other activity,
-/// including reviewers, recovery and pilot, never reads a grant.
-const GRANT_LIFTING_ACTIVITY: &str = "agent_implement";
+use crate::application::job::{
+    DisallowGrant, IMPLEMENTING_ACTIVITY, agent_tool_grant_classification, classify_disallow_grant,
+    drops_disallowed_requirements, granted_tool_refusal,
+};
 
 /// Activities whose tool baseline carries the fleet-notice write tools, so
 /// a managed run can warn other agents about a problem outside its task
@@ -111,7 +109,7 @@ pub(super) fn resolve_activity_tool_denials(
     disallow_list: &[String],
 ) -> Result<ResolvedActivityTools, DispatchError> {
     let tasks = load_tasks(runtime, task_ids)?;
-    let grants = if activity == GRANT_LIFTING_ACTIVITY {
+    let grants = if activity == IMPLEMENTING_ACTIVITY {
         resolve_granted_deny_lifts(runtime, &tasks, activity, disallow_list)?
     } else {
         GrantedDenyLifts::default()
@@ -224,31 +222,33 @@ fn resolve_granted_deny_lifts(
             if let Some(reason) = unavailable {
                 return Err(refuse(reason));
             }
-            if !tool_allowed(tool_name, disallow_list) {
-                // The activity already allows this exact task grant. Preserve
-                // it for MCP surface selection even though no denial needs
-                // lifting; the existing activity policy still applies.
-                grants.lifted.insert(tool_name.clone());
-                continue;
+            match classify_disallow_grant(
+                disallow_list,
+                tool_name,
+                agent_tool_grant_classification(tool_name),
+            ) {
+                // Not covered: the activity already allows this exact task
+                // grant. Preserve it for MCP surface selection even though no
+                // denial needs lifting; the existing activity policy still
+                // applies. Liftable: an exact read/repeat-safe denial.
+                DisallowGrant::NotCovered | DisallowGrant::Liftable => {
+                    grants.lifted.insert(tool_name.clone());
+                }
+                DisallowGrant::Mutating => {
+                    grants.held_mutating.insert(tool_name.clone());
+                }
+                DisallowGrant::OperatorOnly => {
+                    return Err(refuse(
+                        "the tool is always operator-only, so a grant cannot lift its denial"
+                            .into(),
+                    ));
+                }
+                DisallowGrant::Wildcard { entry } => {
+                    return Err(refuse(format!(
+                        "a grant lifts only an exact disallow entry, and `{entry}` still covers it for {activity}"
+                    )));
+                }
             }
-            let classification = authorization::classify_agent_tool_grant(tool_name);
-            if classification.grantability == ToolGrantability::AlwaysOperatorOnly {
-                return Err(refuse(
-                    "the tool is always operator-only, so a grant cannot lift its denial".into(),
-                ));
-            }
-            if let Some(entry) = disallow_list.iter().find(|entry| {
-                *entry != tool_name && tool_allowed(tool_name, std::slice::from_ref(*entry))
-            }) {
-                return Err(refuse(format!(
-                    "a grant lifts only an exact disallow entry, and `{entry}` still covers it for {activity}"
-                )));
-            }
-            if classification.effect == GrantedToolEffect::Mutating {
-                grants.held_mutating.insert(tool_name.clone());
-                continue;
-            }
-            grants.lifted.insert(tool_name.clone());
         }
     }
     Ok(grants)

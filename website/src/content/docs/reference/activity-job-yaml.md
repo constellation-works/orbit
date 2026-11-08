@@ -55,8 +55,14 @@ In deny mode the effective list is every callable tool, and the run also
 exports `ORBIT_ACTIVITY_TOOL_POLICY=deny`, `ORBIT_ACTIVITY_TOOLS_DENY`, and
 `ORBIT_ACTIVITY_NAME`. Disallow entries follow the same name and wildcard
 rules as `tools`. A task's `required_tools` cannot re-grant a disallowed tool.
-On `agent_implement`, and on any activity outside the shipped non-implementer
-set, a covered requirement refuses the run before launch. `final_recovery`,
+Filing refuses an unliftable covered requirement up front, using the same
+rule admission uses: a mutating tool, an always-operator-only tool, or a
+name a wildcard entry still covers. A read/repeat-safe exact denial can
+still be required, because a grant could lift it. Task-pilot reports a
+stored requirement that would fail admission as a blocking validation
+finding before dispatch. On `agent_implement`, and on any activity outside
+the shipped non-implementer set, a covered requirement refuses the run
+before launch. `final_recovery`,
 `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
 `review_reconciliation_review` and `task_pilot` drop that
 requirement from the requested list and record a note; it stays out of the

@@ -14,8 +14,11 @@
 //! [`orbit_tools::canonical_builtin_mcp_tool_definitions`], the implementation
 //! activity's tool allowlist, and the governed-operation registry.
 //!
-//! Preparation findings remain advisory; admission separately holds a current
-//! operator-reserved requirement for an explicit operator decision:
+//! Preparation itself still completes. An unliftable `required_tools` entry
+//! is reported as a `validation_tool_warnings` finding, and that field holds
+//! promotion, so a task filed before the filing check is caught before
+//! dispatch. Admission separately holds a current operator-reserved
+//! requirement for an explicit operator decision:
 //!
 //! - Prose never grants. A tool named in a criterion stays ungranted;
 //!   `required_tools` remains the only grant, and this check merely reports
@@ -40,12 +43,9 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::validation_tools::{names_tool, positive_validation_sentences};
-use crate::application::task::{OperatorValidationRequirement, operator_validation_requirements};
-
-/// Activity that implements a task. Its tool allowlist is the baseline a
-/// task's `required_tools` extends, so it is the lane a validation criterion
-/// has to be feasible in.
-const IMPLEMENTATION_ACTIVITY: &str = "agent_implement";
+use crate::application::task::{
+    OperatorValidationRequirement, TaskJobPort, operator_validation_requirements,
+};
 
 /// Owner-mode attachment tool. Claimed mode does not need it: the implement
 /// handoff attaches declared `task_artifacts` either way.
@@ -80,10 +80,14 @@ pub(super) struct ImplementationLane {
     /// A deny-mode implementation activity's disallow list, which a task's
     /// `required_tools` cannot override.
     disallow_list: Vec<String>,
+    /// The implementing activity these findings name, read from the job port
+    /// so it stays the activity admission checks.
+    activity: String,
 }
 
 impl ImplementationLane {
     pub(super) fn resolve(runtime: &OrbitRuntime) -> Self {
+        let activity = runtime.implementer_activity_name().to_string();
         let mut registered = runtime.allowlist_known_tool_names();
         registered.sort();
 
@@ -97,7 +101,7 @@ impl ImplementationLane {
             });
 
         let policy = runtime.v2_activity_catalog().ok().and_then(|catalog| {
-            match &catalog.get(IMPLEMENTATION_ACTIVITY)?.spec {
+            match &catalog.get(activity.as_str())?.spec {
                 ActivityV2Spec::AgentLoop(spec) => Some(match &spec.tool_disallow_list {
                     Some(disallow_list) => (
                         tools_allowed_by_disallow_list(
@@ -121,6 +125,7 @@ impl ImplementationLane {
             mcp_exposed,
             baseline,
             disallow_list,
+            activity,
         }
     }
 
@@ -133,7 +138,7 @@ impl ImplementationLane {
     pub(super) fn prompt_input(&self) -> Value {
         match &self.baseline {
             Some(tools) => json!({
-                "activity": IMPLEMENTATION_ACTIVITY,
+                "activity": self.activity,
                 "tools": tools,
                 "artifact_attachment": {
                     "owner": ARTIFACT_ATTACHMENT_TOOL,
@@ -167,13 +172,17 @@ impl ImplementationLane {
         Some(granted)
     }
 
-    /// Findings for every tool this task's acceptance criteria positively
-    /// require.
+    /// Findings for an unliftable `required_tools` entry, then for every tool
+    /// this task's acceptance criteria positively require.
     ///
-    /// Only acceptance criteria are read. They are the task's validation
-    /// contract; a tool named in the problem statement describes what broke,
-    /// not what the implementing agent has to call.
-    pub(super) fn validation_warnings(&self, task: &Task) -> Vec<String> {
+    /// Stored requirements are checked with the same classification filing
+    /// and dispatch admission use. An unread catalog or an allow-mode
+    /// activity has an empty disallow list, so this reports nothing rather
+    /// than inventing a refusal. Only acceptance criteria are read for the
+    /// remaining findings. They are the task's validation contract; a tool
+    /// named in the problem statement describes what broke, not what the
+    /// implementing agent has to call.
+    pub(super) fn validation_warnings(&self, runtime: &OrbitRuntime, task: &Task) -> Vec<String> {
         let granted = self.baseline.as_ref().map(|baseline| {
             baseline
                 .iter()
@@ -187,6 +196,16 @@ impl ImplementationLane {
         });
 
         let mut findings = Findings::default();
+        for tool in &task.required_tools {
+            if let Some(message) =
+                runtime.unliftable_implementer_requirement(&self.disallow_list, tool)
+            {
+                findings.push(message);
+                if findings.is_full() {
+                    return findings.ordered;
+                }
+            }
+        }
         for (_, sentence) in positive_validation_sentences(task) {
             for tool in self.tools_named_in(&sentence) {
                 self.report(tool, &sentence, granted.as_deref(), &mut findings);
@@ -240,7 +259,8 @@ impl ImplementationLane {
 
         if granted.is_some_and(|granted| !tool_allowed(tool, granted)) {
             findings.push(format!(
-                "acceptance criterion requires `{tool}`, which the `{IMPLEMENTATION_ACTIVITY}` allowlist does not grant and this task's `required_tools` does not declare; declare it in `required_tools` at creation, because that field is immutable once the task exists"
+                "acceptance criterion requires `{tool}`, which the `{}` allowlist does not grant and this task's `required_tools` does not declare; declare it in `required_tools` at creation, because that field is immutable once the task exists",
+                self.activity
             ));
         }
 

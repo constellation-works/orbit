@@ -133,7 +133,12 @@ any open status → blocked | archived
 4. **Required tools are fixed at creation.** `required_tools` holds exact
    registered tool names, normalized when the task is created. No update path
    (`orbit task update`, the dashboard, or `orbit.task.update`) accepts it
-   afterwards.
+   afterwards. Filing refuses a name the implementing activity disallows when
+   no grant could lift it: a mutating tool, an always-operator-only tool, or
+   a name a wildcard entry still covers. The error names the tool, the
+   activity and the reason. Have an operator perform that step, or file it as
+   a separate operator-owned task. A read/repeat-safe tool denied by an exact
+   entry can still be required, because a grant could lift it.
 
 Criteria the task pilot identifies as requiring a deployed build can remain
 owed after delivery. The task stays in `review`, even with `--complete`, until
@@ -347,8 +352,10 @@ do not. A grant can lift an exact deny entry only for a tool classified
 read/repeat-safe; a covering wildcard still refuses admission. All tools in
 the shipped implementer's deny list are currently classified mutating, and
 unclassified tools default to mutating. A mutating grant stays denied for
-live calls. Adding the same denied mutation to `required_tools` still
-refuses implementer admission. Grants do not bypass capability, field-level,
+live calls. Adding the same denied mutation to `required_tools` is refused
+at filing, and still refuses implementer admission for a task that already
+carries it. Have an operator perform that step, or file it as a separate
+operator-owned task. Grants do not bypass capability, field-level,
 filesystem, process or other runtime checks. A task with any grant runs on
 the owner host; if its required labels or OS exclude that host, it waits
 even if a follower has the right labels.

@@ -215,6 +215,11 @@ on the operator-only `orbit.workflow.run.show`.
 - `required_tools: ["<exact.canonical.tool>", ...]` — tools the task requires.
   Allowlist activities add them to their baseline; deny-list activities refuse
   a requirement covered by `tool_disallow_list`, which it never overrides.
+  Filing refuses a covered name no grant could lift — a mutating tool, an
+  always-operator-only tool, or a name a wildcard entry still covers — and
+  names the tool, the activity and the reason. Have an operator perform that
+  step, or file it as a separate operator-owned task. A read/repeat-safe tool
+  denied by an exact entry can still be required.
   Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,
   sorted, and deduplicated at creation. It is immutable afterward, and every
@@ -251,7 +256,8 @@ on the operator-only `orbit.workflow.run.show`.
   the deny list only for a tool classified read/repeat-safe. Every tool
   `agent_implement` denies today is classified mutating, so such a grant
   stays denied and is never called live, and also listing it in
-  `required_tools` still fails implementer admission. A lifted tool still
+  `required_tools` is refused at filing and still fails implementer admission.
+  A lifted tool still
   passes every other check: capability and field-level operator gates,
   filesystem and process policy, and claimed-mode denials.
 - **Mutation proposals** carry a mutating grant's call instead. Attach
@@ -426,7 +432,9 @@ exact tool schema first (`orbit task show <id>`, `orbit tool show <tool>`).
 Decide whether the work needs a reviewed mutation or a prerequisite operator
 action: all currently denied implementer tools are mutating, so a grant does
 not enable their live execution. Do not also put a denied mutation in
-`required_tools`; that still refuses implementer admission.
+`required_tools`; filing refuses it, and a task that already carries it
+still refuses implementer admission. Have an operator perform that step,
+or file it as a separate operator-owned task.
 
 1. Before dispatch, set the complete grant list with
    `orbit task update <id> --granted-tools orbit.auto_task.update`.
@@ -476,8 +484,11 @@ has to be right at creation. Task-pilot preparation reads each criterion
 against the registered tool surface, the canonical MCP tool list, the
 implementation activity's allowlist, and the governed-operation registry, and
 reports one `validation_tool_warnings` finding per contradiction before the
-task is admitted. Preparation stays advisory. Transport, allowlist, credential,
-and utility findings do not withhold an already-approved backlog task. A current
+task is admitted, including a stored `required_tools` entry the implementing
+activity disallows and no grant could lift. That finding holds promotion of
+a proposed task. Preparation itself still completes. Transport, allowlist,
+credential, and utility findings do not withhold an already-approved backlog
+task. A current
 operator-reserved validation requirement holds local workflow admission and
 owner pull claims until an operator handles it, and a criterion that needs
 native evidence from an OS the task's `os:` tags do not name holds a host of
@@ -502,7 +513,10 @@ another OS (see [Native host evidence](#native-host-evidence)).
 - **Activity tools.** For an allowlist activity, a tool outside its baseline
   has to be in `required_tools`. A deny-list activity exposes registered
   agent-facing tools except its disallowed names; `required_tools` cannot
-  override a denial, and such a requirement refuses dispatch. Screenshot and
+  override a denial. Filing refuses an unliftable covered requirement, and a
+  stored one still refuses dispatch. Task-pilot reports that stored
+  requirement as a blocking `validation_tool_warnings` finding before
+  dispatch. A read/repeat-safe exact denial can still be required. Screenshot and
   task-artifact attachment is part of the implement lane. Owner mode attaches
   with `orbit.task.artifact.put`. Claimed mode attaches declared files through
   the `task_artifacts` handoff even without that tool. A criterion that only

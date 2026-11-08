@@ -8,10 +8,11 @@
 //! baseline-hold refresh and the blocked-task backstop submit their routine
 //! runs, completion and requeue ask whether a run's owner is still
 //! executing, requeue asks whether an owner publication is unbound, backlog
-//! reads ask for a task's host-OS wait, and mock admission asks which
-//! delivery runs are live. `job` owns all of that, and it also drives task
-//! writes, so a direct call from here would close a cycle. This port is the
-//! way in: `job` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
+//! reads ask for a task's host-OS wait, mock admission asks which delivery
+//! runs are live, and filing and task-pilot ask whether a required tool is
+//! one the implementer can be granted. `job` owns all of that, and it also
+//! drives task writes, so a direct call from here would close a cycle. This
+//! port is the way in: `job` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
 //! composing the runtime binds it. The values both sides name live in
 //! [`contracts`](crate::application::contracts).
 
@@ -66,6 +67,26 @@ pub(in crate::application) trait TaskJobPort {
     /// `None` means the activity availability rule admits it.
     fn task_tool_availability_refusal(&self, tool_name: &str)
     -> Result<Option<String>, OrbitError>;
+
+    /// The activity whose tool contract `required_tools` names.
+    fn implementer_activity_name(&self) -> &'static str;
+
+    /// That activity's deny list when it is a deny-mode agent loop.
+    ///
+    /// `Ok(None)` when the activity is absent, not an agent loop, or still in
+    /// allow mode, so filing does not invent a refusal. A catalog that fails
+    /// to load is an error.
+    fn required_tool_implementer_disallow_list(&self) -> Result<Option<Vec<String>>, OrbitError>;
+
+    /// Why `required_tools` cannot name `tool_name` against `disallow_list`,
+    /// using the same classification dispatch admission uses. `None` when the
+    /// name is not covered, or an exact read/repeat-safe grant could lift the
+    /// denial later.
+    fn unliftable_implementer_requirement(
+        &self,
+        disallow_list: &[String],
+        tool_name: &str,
+    ) -> Option<String>;
 
     /// The crew a task is created or re-rated with: `explicit` verbatim,
     /// else the purpose pool its tags name, then its complexity pool, then
