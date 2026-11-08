@@ -25,22 +25,58 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
-download() {
+download() (
   url="$1"
   destination="$2"
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$destination"
-    return
+    downloader=curl
+  elif command -v wget >/dev/null 2>&1; then
+    downloader=wget
+  else
+    fail "curl or wget is required to download Orbit releases"
   fi
 
-  if command -v wget >/dev/null 2>&1; then
-    wget -qO "$destination" "$url"
-    return
-  fi
+  attempt=1
+  delay=4
+  while :; do
+    rc=0
+    retry=false
+    if [ "$downloader" = curl ]; then
+      status="$(curl -fsSL --connect-timeout 10 --max-time 30 \
+        -w '%{http_code}' "$url" -o "$destination")" || rc=$?
+      [ "$rc" -ne 0 ] || return 0
+      case "$status" in
+        429 | 5[0-9][0-9]) retry=true ;;
+        4[0-9][0-9]) retry=false ;;
+        *)
+          case "$rc" in
+            5 | 6 | 7 | 18 | 28 | 35 | 52 | 55 | 56 | 92) retry=true ;;
+          esac
+          ;;
+      esac
+    else
+      # Wget's exit 8 covers every HTTP error: inspect the final status so
+      # permanent 4xx failures do not get retried. Disable its own retries.
+      wget --tries=1 --timeout=30 --server-response -O "$destination" "$url" \
+        2>"$destination.download.err" || rc=$?
+      [ "$rc" -ne 0 ] || return 0
+      cat "$destination.download.err" >&2
+      status="$(awk '/HTTP\/[0-9.]+ [0-9]+/ { code=$2 } END { print code }' "$destination.download.err")"
+      case "$status" in
+        429 | 5[0-9][0-9]) retry=true ;;
+        4[0-9][0-9]) retry=false ;;
+        *) [ "$rc" -ne 4 ] || retry=true ;;
+      esac
+    fi
 
-  fail "curl or wget is required to download Orbit releases"
-}
+    [ "$retry" = true ] && [ "$attempt" -lt 4 ] || return "$rc"
+    warn "download failed; retrying in ${delay}s (attempt $((attempt + 1))/4)"
+    sleep "$delay"
+    delay=$((delay * 2))
+    attempt=$((attempt + 1))
+  done
+)
 
 # Key IDs are stable labels carried alongside the public key blocks below.
 # The numeric suffix is a generation counter, not a date — IDs survive rotation

@@ -76,26 +76,77 @@ function resolveTarget() {
   return target;
 }
 
-function fetchBuffer(url, redirectsLeft = 5) {
+function fetchBufferAttempt(url, headers, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
-    https
-      .get(url, { headers: { 'user-agent': '@orbit-tools/cli installer' } }, (res) => {
+    const networkError = (err) => reject(Object.assign(err, { retryable: true }));
+    const request = https
+      .get(url, { headers }, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          if (redirectsLeft <= 0) return reject(new Error(`too many redirects fetching ${url}`));
           res.resume();
-          return resolve(fetchBuffer(res.headers.location, redirectsLeft - 1));
+          if (redirectsLeft <= 0) return reject(new Error(`too many redirects fetching ${url}`));
+          let nextUrl;
+          try {
+            nextUrl = new URL(res.headers.location, url);
+          } catch (err) {
+            return reject(err);
+          }
+          if (nextUrl.protocol !== 'https:') return reject(new Error('release download redirected to a non-HTTPS URL'));
+          const nextHeaders = { ...headers };
+          if (nextUrl.origin !== new URL(url).origin) delete nextHeaders.authorization;
+          return resolve(fetchBufferAttempt(nextUrl, nextHeaders, redirectsLeft - 1));
         }
         if (res.statusCode !== 200) {
           res.resume();
-          return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+          return reject(Object.assign(new Error(`HTTP ${res.statusCode} fetching ${url}`), {
+            retryable: res.statusCode === 429 || (res.statusCode >= 500 && res.statusCode <= 599),
+          }));
         }
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => resolve(Buffer.concat(chunks)));
-        res.on('error', reject);
+        res.on('error', networkError);
       })
-      .on('error', reject);
+      .on('error', networkError);
+    request.setTimeout(30000, () => request.destroy(new Error(`download timed out fetching ${url}`)));
   });
+}
+
+async function fetchBuffer(url, headers = {}) {
+  const requestHeaders = { 'user-agent': '@orbit-tools/cli installer', ...headers };
+  // Four attempts, with at most 28 seconds of backoff per URL. Keep 4xx
+  // failures other than rate limiting immediate (including on the API path).
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetchBufferAttempt(url, requestHeaders);
+    } catch (err) {
+      if (!err.retryable || attempt >= 3) throw err;
+      const delay = 4000 * (2 ** attempt);
+      log(`download failed (${err.message}); retrying in ${delay / 1000}s...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function fetchReleaseAsset(url) {
+  try {
+    return await fetchBuffer(url);
+  } catch (err) {
+    const parsed = new URL(url);
+    const release = parsed.pathname.match(/^\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/);
+    if (!err.retryable || parsed.origin !== 'https://github.com' || !release) throw err;
+    log('release download retries exhausted; trying the GitHub API...');
+    const [, repo, tag, assetName] = release;
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+    const headers = { accept: 'application/vnd.github+json' };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const apiBase = `https://api.github.com/repos/${repo}/releases`;
+    const metadata = JSON.parse((await fetchBuffer(`${apiBase}/tags/${tag}`, headers)).toString('utf8'));
+    const asset = metadata.assets?.find((entry) => entry.name === decodeURIComponent(assetName));
+    if (!asset || !Number.isSafeInteger(asset.id) || asset.id <= 0) {
+      throw new Error(`release asset ${assetName} was not found in GitHub API metadata`);
+    }
+    return fetchBuffer(`${apiBase}/assets/${asset.id}`, { ...headers, accept: 'application/octet-stream' });
+  }
 }
 
 function sha256(buf) {
@@ -363,8 +414,8 @@ async function main() {
   let checksumText;
   let signatureBuf;
   try {
-    checksumText = (await fetchBuffer(checksumUrl)).toString('utf8');
-    signatureBuf = await fetchBuffer(checksumSignatureUrl);
+    checksumText = (await fetchReleaseAsset(checksumUrl)).toString('utf8');
+    signatureBuf = await fetchReleaseAsset(checksumSignatureUrl);
     verifyChecksumSignature(checksumText, signatureBuf);
   } catch (err) {
     fail(`could not authenticate ${CHECKSUM_FILE}: ${err.message}`);
@@ -372,7 +423,7 @@ async function main() {
 
   let archiveBuf;
   try {
-    archiveBuf = await fetchBuffer(archiveUrl);
+    archiveBuf = await fetchReleaseAsset(archiveUrl);
   } catch (err) {
     fail(`failed to download ${archiveUrl}: ${err.message}`);
   }
