@@ -545,6 +545,47 @@ fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
     }
 }
 
+#[test]
+fn ci_dependency_folding_requires_observed_run_and_job_identity() {
+    if !isolated("ci_dependency_folding_requires_observed_run_and_job_identity") {
+        return;
+    }
+    for (dependency, same_run_name) in [
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911", "\"job_id\":999"),
+            false,
+        ),
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911,", ""),
+            false,
+        ),
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911", "\"job_id\":999"),
+            true,
+        ),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(&dependency, 0, &commits[0], 4242, AGGREGATE_JOB, "Await");
+        let log = compiler_log("E0433", "missing module", "crates/example/src/lib.rs", 8, 1);
+        let first = named_failure(
+            &log,
+            1,
+            &commits[0],
+            4242,
+            if same_run_name {
+                SIBLING_JOB
+            } else {
+                "Other job"
+            },
+            "Build",
+        );
+        let second = named_failure(&log, 2, &commits[0], 4343, SIBLING_JOB, "Build");
+        let output = file(&runtime, vec![aggregate, first, second]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+}
+
 fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
     format!("error[{code}]: {message}\n   --> {path}:{line}:{column}\n")
 }
