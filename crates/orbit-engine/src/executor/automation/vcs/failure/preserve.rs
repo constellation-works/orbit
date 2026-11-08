@@ -158,8 +158,17 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (branch, head_sha) = candidate_head(workspace_path)?;
-    let kind = orbit_types::workflow::task_blocked_by_agent_kind(error_message)
-        .unwrap_or("unspecified")
+    // The step failure carries the blocker as text; parse it once here and
+    // record it typed beside the note, which keeps its kind for older readers.
+    let blocker = orbit_types::workflow::AgentBlocker::from_step_failure_message(error_message)
+        .map(|mut blocker| {
+            // Redacted like the status note beside it.
+            blocker.evidence = orbit_common::security::redaction::redact_all(&blocker.evidence);
+            blocker
+        });
+    let kind = blocker
+        .as_ref()
+        .map_or("unspecified", |blocker| blocker.kind.as_str())
         .to_string();
     let diagnostic = bounded_diagnostic(error_message);
     let note = format!(
@@ -182,6 +191,8 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
             status: Some(TaskStatus::Blocked),
             status_event: Some(orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT.to_string()),
             status_note: Some(note.clone()),
+            status_decision: blocker
+                .map(|blocker| orbit_types::task::TaskDecision::AgentBlocked { blocker }),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),

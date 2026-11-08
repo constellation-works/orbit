@@ -3085,10 +3085,30 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr(sandbox: &Path)
         "still drafting\n"
     );
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, decision) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some("task_blocked_by_agent"));
     let note = note.unwrap();
     assert!(note.contains("kind=environment") && is_task_blocked_by_agent(None, Some(&note)));
+    assert_eq!(
+        decision,
+        Some(orbit_types::task::TaskDecision::AgentBlocked {
+            blocker: AgentBlocker {
+                kind: "environment".to_string(),
+                evidence: "the toolchain the task needs is not installed".to_string(),
+            }
+        }),
+        "the blocker is recorded typed on the blocking entry"
+    );
+    assert_eq!(
+        note,
+        format!(
+            "[task_blocked_by_agent] kind=environment an agent declared a blocker: run={}, \
+             failed_step=implement_bundle, candidate={head_before}, branch={}; no PR was opened",
+            handoff["handoff_run_id"].as_str().unwrap(),
+            handoff["branch"].as_str().unwrap(),
+        ),
+        "the note keeps its pre-decision text for older readers"
+    );
     assert!(
         host.comments(TASK_ID)
             .iter()
@@ -3327,7 +3347,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr(sandbox: &Path
     assert_held_without_pr(&fx, &handoff, &remote_before, "baseline-red");
     assert_eq!(fx.head(), fx.candidate, "the candidate is kept");
     assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, _) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
     assert_eq!(
         note.as_deref().and_then(BaselineRedHold::from_text),
@@ -3933,7 +3953,7 @@ fn a_red_base_during_pr_revalidation_holds_the_task(sandbox: &Path) {
     assert_eq!(handoff["pr_created"], false);
     assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
     assert_eq!(fx.remote_tip(BRANCH), remote_before);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, _) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
     assert_eq!(
         note.as_deref().and_then(BaselineRedHold::from_text),
@@ -5584,7 +5604,12 @@ struct DeliveryHost {
     pr_config: Mutex<orbit_engine::PrConfig>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
-type StatusEvent = (String, Option<String>, Option<String>);
+type StatusEvent = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<orbit_types::task::TaskDecision>,
+);
 impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
         Self {
@@ -6036,6 +6061,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             task_id.to_string(),
             update.status_event,
             update.status_note,
+            update.status_decision,
         ));
         locked(&self.comments)
             .entry(task_id.to_string())
