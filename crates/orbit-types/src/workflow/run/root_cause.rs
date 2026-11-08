@@ -32,8 +32,9 @@ use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 /// review refusal left its pull request open for a recorded decision.
 pub const REVIEW_DECISION_PENDING_ERROR_CODE: &str = "review_decision_pending";
 
-/// Error code a parent's diagnostic step records when it ends `cancelled`
-/// because a child it waited on was cancelled.
+/// Legacy error code associated with a parent cancelled because a child it
+/// waited on was cancelled. Current child-cancelled parents store no
+/// `error_code`.
 pub const CHILD_CANCELLED_ERROR_CODE: &str = "child_cancelled";
 
 /// Error code of a blocking child its parent cancelled because the parent's
