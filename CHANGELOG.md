@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.47.0 — 2026-11-08
+
+### Breaking Changes
+
+- **Config surface trimmed**: 108 unused or tuning config keys, including the `[assistance]` table, are ignored with a deprecation warning and stop being recognised after 2026-12-08. Path leases, decision assistance, browser sessions and selective review are gone. ([ORB-22808])
+  `orbit decision assist`, `orbit lease`, `orbit web open` and the `orbit.decision.assist_*` / `orbit.lease.*` tools removed → delete the keys from config
+- **Crew ladder removed**: `orbit agents ladder`, `orbit crew ladder` and the `orbit.crew.ladder` tool are retired, and `workflow.crew_ladder.*` keys warn and are ignored. ([ORB-22803])
+  `orbit agents ladder` removed → no replacement; delete the `workflow.crew_ladder.*` keys
+- **Crew-performance weighting removed**: Crew draws no longer weight by performance, and `workflow.crew_performance*` keys warn and are ignored. The task-type list moves to `workflow.task_types`. ([ORB-22804])
+  `orbit agents scorecard --shadow` removed → no replacement; rename `crew_performance_types` to `workflow.task_types`
+- **Explore brief removed**: `workflow.explore_brief.*` keys warn and are ignored, and `orbit run show --json` no longer reports `tag_instructions.explore_briefs`. ([ORB-22805])
+  Explore-brief keys and fields removed → no replacement
+- **Regression-risk prompt marks removed**: `workflow.regression_risk.*` keys warn and are ignored, and analytics drop the `risk_marks` field. Riskiness scores remain. ([ORB-22806])
+  `risk_marks` removed → no replacement
+- **Visual review removed**: `orbit visual`, the `orbit.visual.*` tools, mock comparison and the visual-review metrics and JSON fields are gone, and `visual_review.*` keys warn and are ignored. ([ORB-22807])
+  `orbit visual` removed → no replacement; delete the `visual_review.*` keys
+- **Four routines retired**: The evolution-pass, ux-rules, finding-verification and pilot-warning-triage routines and their jobs and activities are removed. Their config keys warn and are ignored. ([ORB-22844])
+  Retired routines removed → no replacement; delete `ux_rules.*`, `review.verify_findings` and the retired `resident.evolution.*` keys
+
+### Highlights
+
+- **MCP listener checks who connects**: `orbit mcp listen` grants Agent authority only to a local peer running as the listener's own user, on Linux and macOS. ([ORB-23052])
+- **Resource forecast on the dashboard**: The dashboard shows the admission resource forecast, and the drain card's forecast opens it. ([ORB-22973])
+- **Config keys explain themselves**: Config listings show each key's allowed values and a short description. ([ORB-22809])
+- **Fresh defaults for new installs**: New installs seed the revised config and routine defaults. ([ORB-22802])
+- **Audit rows mask keyed credentials**: Values under `authorization`, `x-api-key` and `api_key`-style JSON keys are masked in v2 audit rows and step errors, and the stored payload stays valid JSON. ([ORB-23084])
+- **Faster dashboard pages**: Multi-second stalls are gone from the friction list and stats, and the Jobs catalogue, decisions and audit-incident reads are bounded. ([ORB-22914])
+
 ## 0.46.0 — 2026-11-07
 
 ### Breaking Changes
