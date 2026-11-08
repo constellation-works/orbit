@@ -109,6 +109,7 @@ implementation with the old candidate discarded. See
 | Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
 | Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |
 | Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
+| Choose checkpoint resume or a whole-run replay from step zero | [Whole-run replay](references/run-debugging.md#whole-run-replay-from-step-zero) |
 | Tell a corrected agent reply from a clean one | [Response-correction rounds](references/run-debugging.md#bounded-response-correction-rounds) |
 | Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
 | Tell an inherited red base from candidate damage in hosted CI | [Hosted-check diagnosis](references/run-debugging.md#hosted-check-failures-and-inherited-red-bases) |
