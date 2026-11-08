@@ -80,13 +80,22 @@ impl RefreshFailure {
 pub(crate) struct WsRejection {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
 }
+
+/// Stable code for the environmental refusal when the selected workspace is
+/// not active in the pinned registry snapshot. That state can change between
+/// attempts and this rejection precedes any handler or receipt lookup, so a
+/// retained replay key must not treat it as proof that no dispatch was
+/// recorded. Mirrors the `workspace_unavailable` code in task creation.
+pub(crate) const WORKSPACE_UNAVAILABLE_CODE: &str = "workspace_unavailable";
 
 impl WsRejection {
     pub(super) fn unknown(id: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown workspace: {id}"),
+            code: None,
         }
     }
 
@@ -94,6 +103,7 @@ impl WsRejection {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: format!("workspace '{id}' is inactive; select an active workspace"),
+            code: Some(WORKSPACE_UNAVAILABLE_CODE),
         }
     }
 
@@ -101,6 +111,7 @@ impl WsRejection {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("failed to open workspace '{id}': {err}"),
+            code: None,
         }
     }
 
@@ -108,6 +119,7 @@ impl WsRejection {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("active workspace '{id}' has no runtime binding"),
+            code: None,
         }
     }
 
@@ -117,13 +129,18 @@ impl WsRejection {
             message: "no workspace selected and no default is configured; \
                       pass ?workspace=<id>"
                 .to_string(),
+            code: None,
         }
     }
 }
 
 impl IntoResponse for WsRejection {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        let mut body = json!({ "error": self.message });
+        if let Some(code) = self.code {
+            body["code"] = json!(code);
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -168,6 +185,7 @@ impl FromRequestParts<DashboardState> for Ws {
         .map_err(|error| WsRejection {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("workspace selection panicked: {error}"),
+            code: None,
         })?
     }
 }
@@ -210,6 +228,7 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         .map_err(|error| WsRejection {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("workspace selection panicked: {error}"),
+            code: None,
         })?
     }
 }
