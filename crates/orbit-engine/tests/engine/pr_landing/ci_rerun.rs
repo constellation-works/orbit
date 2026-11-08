@@ -179,6 +179,7 @@ fn first_dependency_failure_repairs_without_owner_rerun() {
 
 mod bounded;
 mod cancelled;
+mod dependency_class;
 mod diagnostic;
 mod hold;
 mod infrastructure;
@@ -416,6 +417,9 @@ struct ClaimedRetry<'a> {
 impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
     fn data_root(&self) -> &Path {
         &self.data_root
+    }
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        RuntimeHost::pr_config(self.inner)
     }
     fn repo_root(&self) -> Res<String> {
         Ok(self.inner.repo.to_string_lossy().into_owned())
