@@ -1796,7 +1796,11 @@ one. From then on:
     the initial fetch failed and the head and base are cached. A failed
     fetch stops adoption without spending rerun, update or repair budgets.
   - **transient**: the log shows the network or the runner giving out. The
-    landing reruns the failed jobs once and judges the rerun.
+    landing reruns the failed jobs within
+    `workflow.ci_infrastructure_retry.max_attempts` (default 3) with exponential
+    backoff from `workflow.ci_infrastructure_retry.backoff_seconds` (default 60).
+    Reservations survive restarts. Exhaustion records a transient-class hold
+    with its attempt count; candidate failures never use this path.
   - **base-suspect**: the failure's log cites repository files (`path:line`
     locations that name files at the head) that all lie outside the
     candidate's changed paths, and no same-signature failure on the base

@@ -35,6 +35,8 @@ pub(super) struct CiRerunHold {
 /// Planner and read outcome driving one hold transition. The throttled-read
 /// outcome is kept distinct so it never clears the hold clock [ORB-20781].
 pub(super) enum CiRerunRecoveryOutcome<'a> {
+    /// Infrastructure backoff is paced by its durable reservation.
+    BackingOff(&'a str),
     /// The planner asked to wait; the hold may still hold or expire.
     Waiting(&'a str),
     /// The planner retried CI.
@@ -77,6 +79,11 @@ impl CiRerunHold {
         last_poll: bool,
     ) -> Result<CiRerunHoldStep, OrbitError> {
         Ok(match outcome {
+            CiRerunRecoveryOutcome::BackingOff(reason) => {
+                self.clear();
+                tracing::debug!(reason, "waiting for infrastructure CI backoff");
+                CiRerunHoldStep::Hold(true)
+            }
             CiRerunRecoveryOutcome::Waiting(reason) => CiRerunHoldStep::Hold(self.still_holds(
                 host,
                 auto_fix,

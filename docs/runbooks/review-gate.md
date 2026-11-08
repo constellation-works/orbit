@@ -256,8 +256,8 @@ The owner enforces what it is owed in two places:
   inherited from the base gets a branch update; while the base stays red the
   landing waits within its deadline for a newer passing base and updates
   again, at most three updates per handoff, recording each wait and update
-  in task history. A transient one gets one rerun, and one the candidate
-  caused gets the claim's one automatic repair
+  in task history. A logged transient one uses the configured bounded
+  infrastructure reruns, and one the candidate caused gets the claim's one automatic repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
   log cites only files the candidate did not change is base-suspect: it waits
   for a successful same-check push run on the accepted base ancestry, then
@@ -275,6 +275,19 @@ The owner enforces what it is owed in two places:
   candidate recovery. Candidate failures keep their candidate repair/requeue
   route, and inherited failures keep their base update/wait route. Other
   failure classes with unreadable rerun evidence stop naming the read failure.
+  Logged infrastructure/transient failures use
+  `workflow.ci_infrastructure_retry.max_attempts` (default 3 total reruns)
+  and `workflow.ci_infrastructure_retry.backoff_seconds` (default 60, doubled
+  between retries). The budget survives watcher/completion restarts and
+  unknown replies; the same provider attempt is never resent. Candidate
+  siblings prevent this recovery. Exhaustion appends
+  `ci_infrastructure_retry_exhausted`, naming the transient classification
+  and attempt count in `orbit task show` history, and keeps the task in review.
+  The existing completion deadline still bounds the wait. Rate-limited log
+  reads follow the recorded read-deferral path without spending an attempt.
+  Owner-local review deliveries use the same planner from their existing
+  review watcher, then resume check observation; merge authorization is unchanged.
+  Conclusion-only cancellations/timeouts and flaky failures still get one rerun.
   If the evidence remains incomplete,
   `handoff_land` holds in review (`delivery_base_checks_pending`) after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`

@@ -39,6 +39,22 @@ macro_rules! with_workflow_keys {
         detail: "A match gets a CI rerun, not a repair agent or a CI sweep task.",
         resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.ci_infrastructure_signatures"),
     },
+    workflow_ci_infrastructure_retry_max_attempts: u32 => u32 {
+        key: "workflow.ci_infrastructure_retry.max_attempts", value_type: "integer",
+        description: "Total failed-jobs reruns for logged infrastructure failures on one PR head.",
+        section: ConfigSection::Delivery, order: 169,
+        tier: ConfigKeyTier::Advanced,
+        allowed: integers(0, 10, "attempts"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 3, "workflow.ci_infrastructure_retry.max_attempts"),
+    },
+    workflow_ci_infrastructure_retry_backoff_seconds: u64 => u64 {
+        key: "workflow.ci_infrastructure_retry.backoff_seconds", value_type: "integer",
+        description: "Initial delay between infrastructure reruns, doubled after each attempt.",
+        section: ConfigSection::Delivery, order: 170,
+        tier: ConfigKeyTier::Advanced,
+        allowed: integers(1, 3600, "seconds"),
+        resolve: |raw: Option<u64>| resolve_bounded_range(raw, 60, "workflow.ci_infrastructure_retry.backoff_seconds"),
+    },
     workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
         key: "workflow.generated_paths", value_type: "table<string,string>",
         description: "Generated files and the command that regenerates each one.",

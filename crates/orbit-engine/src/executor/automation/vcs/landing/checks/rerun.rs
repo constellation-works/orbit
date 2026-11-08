@@ -20,14 +20,16 @@ use std::{
 
 pub(in crate::executor::automation::vcs) enum CiRerunStep {
     NotEligible,
+    /// A durable infrastructure backoff; it never expires into source repair.
+    Backoff(String),
     Wait(String),
     /// [ORB-21586] The retry's evidence could not be read or authenticated,
     /// for this reason. Unlike [`CiRerunStep::Wait`], nothing is in flight:
     /// the landing bounds how often it repeats before it escalates.
     Unreadable(String),
     Acted(Box<CiRerunPlan>),
-    /// The one rerun is already spent and the jobs are still cancelled or
-    /// timed out. The reason names those jobs; no repair agent runs.
+    /// Admitted reruns are spent. The reason names the stopped jobs or the
+    /// exhausted infrastructure classification and count; no repair runs.
     BudgetSpent(String),
 }
 
@@ -109,6 +111,9 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             "CI retry requires exact PR/head/branch identity".into(),
         ));
     };
+    if let Some(reason) = infrastructure_backoff(host, tasks, head, &pr.to_string())? {
+        return Ok(CiRerunStep::Backoff(reason));
+    }
     diagnostic.stage = CiRerunStage::Jobs;
     let jobs = commit_jobs(host, workspace, head)?;
     diagnostic.bind_jobs(&jobs);
@@ -276,8 +281,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                 CheckFailureClass::Candidate => {
                     // A genuinely source-attributed sibling keeps its repair path.
                     // A generic trailer or asserted dependency record proves none.
-                    independent_candidate |=
-                        super::suspect::cites_changed_candidate(workspace, head, base, &log)?;
+                    independent_candidate = true;
                 }
                 _ => uncertain = true,
             }
@@ -314,6 +318,12 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         Ok(response) => response,
         Err(error) => {
             *diagnostic = diagnostic.clone().with_error(&error);
+            if error
+                .private_vcs_failure()
+                .is_some_and(|failure| failure.read_throttle.is_some())
+            {
+                return Err(error);
+            }
             for root in roots.iter().filter(|root| root.classification == "flaky") {
                 if let Some(job) = jobs
                     .iter()
@@ -350,7 +360,36 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         ));
     }
     diagnostic.stage = CiRerunStage::Admission;
-    match host.admit_ci_rerun(tasks, handoff, &plan)? {
+    match host.admit_ci_rerun(
+        tasks,
+        handoff,
+        &plan,
+        super::super::super::completion_deadline::now_ms()?,
+    )? {
+        CiRerunAdmission::Backoff { not_before_ms } => {
+            let reason = format!("infrastructure CI retry backs off until {not_before_ms} ms");
+            record_retry_history(
+                host,
+                tasks,
+                handoff,
+                "ci_infrastructure_retry_backoff",
+                &json!({
+                    "head":plan.head_sha,"pr_number":plan.pr_number,"run_id":plan.run_id,
+                    "run_attempt":plan.run_attempt,"classification":"transient",
+                    "not_before_ms":not_before_ms,"reason":reason,
+                })
+                .to_string(),
+            )?;
+            Ok(CiRerunStep::Backoff(reason))
+        }
+        CiRerunAdmission::InfrastructureExhausted { attempts } => {
+            let reason = format!(
+                "ci_infrastructure_retry_exhausted: classification=transient attempts={attempts} limit={}; the candidate stays in review",
+                host.pr_config().ci_infrastructure_retry.max_attempts
+            );
+            record_retry_exhausted(host, tasks, handoff, &plan, attempts, &reason)?;
+            Ok(CiRerunStep::BudgetSpent(reason))
+        }
         CiRerunAdmission::Refused(reason) => {
             if conclusion_set && reason == SHARED_RETRY_BUDGET_SPENT {
                 let stop = cancellation_timeout_reason(&plan.roots);
@@ -376,7 +415,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         CiRerunAdmission::Reserved => {
             // The exact set and budget are durable now. A lost/error reply is
             // ambiguous; never retransmit. The next poll reads actual checks.
-            if !matches!(host.admit_ci_rerun(tasks,handoff,&plan)?,CiRerunAdmission::Observe(previous) if *previous==plan)
+            if !matches!(host.admit_ci_rerun(tasks,handoff,&plan,super::super::super::completion_deadline::now_ms()?)?,CiRerunAdmission::Observe(previous) if *previous==plan)
             {
                 return Ok(CiRerunStep::Wait(
                     "CI retry reservation or current owner authority changed before send".into(),
@@ -566,6 +605,93 @@ fn record_cancellation_exhausted<H: RuntimeHost + ?Sized>(
                 ..Default::default()
             },
         )?;
+    }
+    Ok(())
+}
+
+/// Read only the durable ledger while backing off; do not re-fetch completed
+/// jobs, logs or provider authentication on every completion poll.
+pub(super) fn infrastructure_backoff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[String],
+    head: &str,
+    pr: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(task) = tasks.iter().min() else {
+        return Ok(None);
+    };
+    let history = host.get_task_history(task)?;
+    let now = super::super::super::completion_deadline::now_ms()?;
+    for entry in history
+        .iter()
+        .rev()
+        .filter(|entry| entry.event == "ci_infrastructure_retry_backoff")
+    {
+        let record: serde_json::Value =
+            serde_json::from_str(entry.note.as_deref().unwrap_or_default()).map_err(|error| {
+                OrbitError::Execution(format!("unreadable CI retry backoff: {error}"))
+            })?;
+        if record["head"] == head && record["pr_number"] == pr {
+            let not_before = record["not_before_ms"].as_u64().ok_or_else(|| {
+                OrbitError::Execution("CI retry backoff has no not-before".into())
+            })?;
+            return Ok((now < not_before)
+                .then(|| format!("infrastructure CI retry backs off until {not_before} ms")));
+        }
+    }
+    Ok(None)
+}
+
+fn record_retry_exhausted<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[String],
+    handoff: Option<&str>,
+    plan: &CiRerunPlan,
+    attempts: u32,
+    reason: &str,
+) -> Result<(), OrbitError> {
+    let event = "ci_infrastructure_retry_exhausted";
+    let note = json!({"head":plan.head_sha,"pr_number":plan.pr_number,
+        "classification":"transient","attempts":attempts,"reason":reason})
+    .to_string();
+    record_retry_history(host, tasks, handoff, event, &note)
+}
+
+fn record_retry_history<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[String],
+    handoff: Option<&str>,
+    event: &str,
+    note: &str,
+) -> Result<(), OrbitError> {
+    if let Some(handoff) = handoff {
+        host.record_handoff_landing_history(handoff, event, note)?;
+    } else {
+        for task in tasks {
+            if host
+                .get_task_history(task)?
+                .iter()
+                .any(|entry| entry.event == event && entry.note.as_deref() == Some(note))
+            {
+                continue;
+            }
+            host.apply_task_automation_update(
+                task,
+                crate::context::TaskAutomationUpdate {
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: event.into(),
+                        note: Some(note.to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )?;
+        }
     }
     Ok(())
 }

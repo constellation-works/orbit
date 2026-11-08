@@ -843,12 +843,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         _tasks: &[String],
         _handoff: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         let mut history = self.history.lock().unwrap();
-        let decision = orbit_types::workflow::decide_ci_rerun(&history, plan);
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &history,
+            plan,
+            Default::default(),
+            now_ms,
+        );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
             history.push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
+                at: chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
                 by: "owner".into(),
                 event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
                 note: Some(serde_json::to_string(plan).unwrap()),

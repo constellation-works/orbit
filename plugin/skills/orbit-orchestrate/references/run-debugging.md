@@ -367,7 +367,7 @@ alone does not establish a code defect or an abandoned run.
 | Class | Decisive evidence and owner-landing behavior |
 |---|---|
 | **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
-| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs once and waits again. A repeated transient failure stops in review, without a code repair. |
+| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs within `workflow.ci_infrastructure_retry.max_attempts` (default 3), backing off exponentially from `workflow.ci_infrastructure_retry.backoff_seconds` (default 60). Exhaustion records a transient-class hold with the attempt count; no code repair runs. |
 | **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
 | **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. Landing stops for its one automatic repair, or the bounded backlog return when that repair is spent. |
 | **Unknown** | One failed job's log could not be read, including a truncated log without a selected diagnostic. The job is named in the evidence; it does not void the class decided by readable jobs. If no readable job decides, landing stays unclassified and stops in review without spending recovery. A cancelled or timed-out job is transient from its conclusion even without a log. |
@@ -379,8 +379,8 @@ after the earlier attempt completed, with the same check and signature.
 Compare provider evidence with `ci_base_suspect` or `ci_check_rerun`; a
 suspicion note, another push/dispatch run or a green base alone cannot spend
 the repair. The rerunnable untouched-file case can appear as `flaky` in
-`ci_check_rerun.jobs[].classification`. It shares landing's one-rerun budget
-with transient recovery.
+`ci_check_rerun.jobs[].classification`. A flaky rerun retains one shared reservation; only a pure logged transient
+set can expand to the configured infrastructure retry budget.
 
 Every failed required check needs its own evidence. A required aggregate
 check with no answering workflow job is candidate-owned only when its own
@@ -433,7 +433,9 @@ history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
 `failed_checks`, plus a `classification` and `detail` that use the classes in
 the table above. A watch that cannot read the job listing, or has no deciding
 job after log reads, records `inconclusive`; an individual unreadable failed-job
-log does not void a readable job's classification. The watch only observes. To repair a red or conflicting pull
+log does not void a readable job's classification. The watch retries authenticated
+transient CI failures using that same bounded policy, then resumes observing.
+To repair a red or conflicting pull
 request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
 [auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
 resumes the succeeded leaf at its completion step under the leaf's own
