@@ -42,7 +42,7 @@ jobs:
         run: echo independent check
 "#;
 
-fn fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
+pub(super) fn fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
     fixture_with_source(row, WORKFLOW)
 }
 
