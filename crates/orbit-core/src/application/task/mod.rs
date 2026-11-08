@@ -2,6 +2,7 @@
 
 mod add;
 mod artifact_export;
+pub mod artifact_put_result;
 mod automation_port;
 // Compatibility shim: the forecast lives above `workspace_auto`, but `lib.rs`
 // and `orbit-web` still name these at this path. Retiring it means re-pointing
