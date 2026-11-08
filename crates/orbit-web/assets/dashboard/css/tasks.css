@@ -852,7 +852,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
      form so state, Stop and warnings lead. */
   main.tasks-layout.dock-route .dock-seg { min-height: 44px; }
   main.tasks-layout.dock-route .dock-seg { padding-bottom: 0; }
-  main.tasks-layout.dock-route :is(.drain-duration, .drain-step, .drain-stepper-value, .operation-button.drain-stop) { min-height: 44px; }
+  main.tasks-layout.dock-route :is(.drain-step, .drain-stepper-value, .operation-button.drain-stop) { min-height: 44px; }
   main.tasks-layout.dock-route .drain-step { min-width: 44px; }
   main.tasks-layout.dock-route #auto-drain-panel { overflow: clip; }
   main.tasks-layout.dock-route .drain-foot:has(.drain-stop) {

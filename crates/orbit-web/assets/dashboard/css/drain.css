@@ -248,20 +248,7 @@
 /* A label and its hint on the left, the control on the right. */
 .drain-field.drain-field-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; }
 .drain-field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-/* The window length is a segmented control of buttons. */
-.drain-segments {
-  display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; min-width: 0;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
-}
-.drain-segments > .drain-duration { flex: 1 0 auto; min-width: 40px; padding: 0 8px; }
-.drain-duration:disabled { color: var(--fg-disabled); cursor: not-allowed; }
-.drain-duration {
-  min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg-dim); font: 500 13px var(--font-sans); cursor: pointer;
-}
-.drain-duration:hover { color: var(--fg); }
-.drain-duration.selected { background: var(--bg-selected); color: var(--fg-strong); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
-.drain-duration:focus-visible, .drain-step:focus-visible, .drain-stepper-value:focus-visible,
+.drain-step:focus-visible, .drain-stepper-value:focus-visible,
 .drain-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Parallel tasks: − value + on the right of its label. */
@@ -277,8 +264,8 @@
 }
 .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .drain-stepper-value::placeholder { color: var(--fg-dim); }
-#auto-drain-concurrency-problem { margin-top: -10px; }
-#auto-drain-concurrency-problem[hidden] { display: none; }
+#auto-drain-concurrency-problem, #auto-drain-duration-problem { margin-top: -10px; }
+#auto-drain-concurrency-problem[hidden], #auto-drain-duration-problem[hidden] { display: none; }
 
 /* Auto-fix: a checkbox drawn as a switch. */
 .drain-switch {
@@ -307,13 +294,8 @@
   border-top: 1px solid var(--hair); background: var(--bg-well);
 }
 .drain-start-held { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; }
-/* The Tasks dock's simple Start card: six window lengths in one row, and a
-   footer that ends the card rather than sticking to the pane. */
-#auto-drain-quick-start .drain-durations {
-  display: grid; gap: 3px; padding: 3px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
+/* The Tasks dock's simple Start card: a footer that ends the card rather
+   than sticking to the pane. */
 #auto-drain-quick-start .drain-start-foot { position: static; }
 #auto-drain-quick-start .drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: 14px; }
 
