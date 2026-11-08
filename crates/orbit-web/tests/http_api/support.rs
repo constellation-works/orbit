@@ -65,7 +65,9 @@ fn fixture_command(home: &Path) -> Command {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    // An explicit agent envelope prevents an inherited TTY granting operator authority.
+    // An explicit agent envelope keeps an inherited TTY from granting operator
+    // authority on surfaces that read the process envelope (the dashboard
+    // itself grants only through `--operator`).
     command
         .current_dir(home)
         .env("HOME", home)

@@ -58,8 +58,9 @@ pub struct ServeArgs {
     pub workspace: Option<String>,
 
     /// Grant operator capability for the dashboard's governed controls —
-    /// Operations, and the owner's handoff approve/revoke/recover actions —
-    /// without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by
+    /// Operations, and the owner's handoff approve/revoke/recover actions.
+    /// This flag is the dashboard's only operator grant: the server's terminal
+    /// and ORBIT_OPERATOR are ignored. `orbit web connect` passes it by
     /// default.
     #[arg(long)]
     pub operator: bool,

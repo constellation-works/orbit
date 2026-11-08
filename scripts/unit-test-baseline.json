@@ -636,6 +636,7 @@
     },
     "orbit-web": {
       "test_function_paths": [
+        "api/tests/handlers.rs::non_operator_dashboard_on_a_terminal_refuses_governed_writes",
         "api/tests/handlers.rs::routine_health_clock_token_for_each_status_combination",
         "api/tests/handlers.rs::successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown",
         "api/tests/log.rs::over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline",
