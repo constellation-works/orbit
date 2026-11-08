@@ -175,3 +175,80 @@ fn unauthenticated_dependency_record_keeps_candidate_class() {
         },
     );
 }
+
+/// A required sibling that the provider stopped with `cancelled`. Its
+/// conclusion classifies it, so its log is never read.
+fn cancelled_sibling(fx: &Fixture) {
+    patch_config(fx, |config| {
+        config["conclusions"] = json!({"independent": "cancelled"});
+    });
+}
+
+#[test]
+fn waiter_folds_past_cancelled_required_sibling_into_transient_shard() {
+    isolated(
+        "ci_rerun::dependency_class::waiter_folds_past_cancelled_required_sibling_into_transient_shard",
+        |sandbox| {
+            let (fx, host, _) = fixture(sandbox);
+            locked(&host.pr_config).ci_infrastructure_signatures = vec![SIGNATURE.to_string()];
+            setup(&fx, DOWNLOAD_504, false);
+            cancelled_sibling(&fx);
+            let message = land(&fx, &host);
+            assert!(
+                message.contains("classified `transient`"),
+                "a cancelled required sibling does not block the waiter's fold: {message}"
+            );
+            assert!(
+                message.contains("folded into 'CI / test'"),
+                "the waiter is named as folded into the shard: {message}"
+            );
+        },
+    );
+}
+
+#[test]
+fn waiter_folds_when_cancelled_sibling_is_not_required() {
+    isolated(
+        "ci_rerun::dependency_class::waiter_folds_when_cancelled_sibling_is_not_required",
+        |sandbox| {
+            let (fx, host, _) = fixture(sandbox);
+            locked(&host.pr_config).ci_infrastructure_signatures = vec![SIGNATURE.to_string()];
+            setup(&fx, DOWNLOAD_504, false);
+            cancelled_sibling(&fx);
+            patch_config(&fx, |config| {
+                config["required"] = json!(["test", "lint"]);
+            });
+            let message = land(&fx, &host);
+            assert!(
+                message.contains("classified `transient`"),
+                "the waiter folds into the shard without the cancelled sibling: {message}"
+            );
+            assert!(
+                message.contains("folded into 'CI / test'"),
+                "the waiter is named as folded into the shard: {message}"
+            );
+        },
+    );
+}
+
+#[test]
+fn tampered_record_beside_cancelled_sibling_stays_candidate() {
+    isolated(
+        "ci_rerun::dependency_class::tampered_record_beside_cancelled_sibling_stays_candidate",
+        |sandbox| {
+            let (fx, host, _) = fixture(sandbox);
+            locked(&host.pr_config).ci_infrastructure_signatures = vec![SIGNATURE.to_string()];
+            setup(&fx, DOWNLOAD_504, true);
+            cancelled_sibling(&fx);
+            let message = land(&fx, &host);
+            assert!(
+                message.contains("classified `candidate`"),
+                "a tampered record keeps the waiter's candidate class: {message}"
+            );
+            assert!(
+                !message.contains("folded into"),
+                "nothing folds on a tampered record: {message}"
+            );
+        },
+    );
+}
