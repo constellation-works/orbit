@@ -1095,7 +1095,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     // workspace does not inherit. set/get continue admitting advanced keys.
     for (key, value, expected, global) in [
         (
-            "workflow.validation_env.cargo_incremental",
+            "workflow.resource_throttle.enabled",
             "false",
             json!(false),
             true,
@@ -1123,7 +1123,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     let configured = fixture.run(&["config", "show"], &[]);
     let configured = String::from_utf8(configured.stdout).expect("configured text");
     for label in [
-        "validation_env.cargo_incremental",
+        "resource_throttle.enabled",
         "provider_limit_budgets",
         "codex.approval_policy",
     ] {
@@ -1137,7 +1137,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
         "configured show",
     );
     assert_eq!(
-        loaded["settings"]["workflow.validation_env.cargo_incremental"],
+        loaded["settings"]["workflow.resource_throttle.enabled"],
         false
     );
     assert_eq!(

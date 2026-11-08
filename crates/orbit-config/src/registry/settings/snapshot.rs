@@ -6,8 +6,10 @@ use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 use orbit_types::workflow::{
-    ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
-    PrBodyTemplateSource, ScreenshotSection, TemplateSurface,
+    COMMIT_ORCHESTRATED_BY_TRAILER, COMMIT_REGRESSION_TRAILERS, ConventionTemplate, CrewPurpose,
+    DeliveryConventions, MissingSectionPolicy, PR_DRAFT, PR_FRESHNESS_SECTION,
+    PR_ORCHESTRATION_TRAILER, PR_SCREENSHOT_SECTION, PR_SIGNATURE, PrBodyTemplateSource,
+    TemplateSurface,
 };
 
 use super::machine::{
@@ -180,11 +182,6 @@ impl ConfigSnapshot {
                 resources.disk_high_percent,
                 resources.disk_resume_percent,
             ),
-            (
-                "io_full",
-                resources.io_full_high_percent,
-                resources.io_full_resume_percent,
-            ),
         ] {
             if resume >= high {
                 return Err(OrbitError::InvalidInput(format!(
@@ -237,18 +234,6 @@ impl ConfigSnapshot {
         ))
     }
 
-    /// The admitted `workflow.validation_env.shell_probe`.
-    pub fn shell_probe(&self) -> crate::aliases::ShellProbeMode {
-        crate::aliases::ShellProbeMode::parse(&self.workflow_validation_env_shell_probe)
-            .unwrap_or(crate::aliases::ShellProbeMode::Interactive)
-    }
-
-    /// The admitted `workflow.admission_affinity`.
-    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        orbit_types::task::AdmissionAffinityReach::parse(&self.workflow_admission_affinity)
-            .unwrap_or_default()
-    }
-
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
     pub fn purpose_crews(&self) -> crate::PurposeCrewPools {
         crate::PurposeCrewPools::new([
@@ -279,12 +264,13 @@ impl ConfigSnapshot {
         ])
     }
 
-    /// The admitted `workflow.auto_effort.*` policy that resolves
-    /// `<crew>@auto` pool entries.
+    /// The admitted `workflow.auto_effort.bands` policy that resolves
+    /// `<crew>@auto` pool entries, at the fixed
+    /// [`crate::AUTO_EFFORT_EXPLORE_SHARE`].
     pub fn auto_effort(&self) -> crate::AutoEffortPolicy {
         crate::AutoEffortPolicy::new(
             self.workflow_auto_effort_bands.clone(),
-            self.workflow_auto_effort_explore_share,
+            crate::AUTO_EFFORT_EXPLORE_SHARE,
         )
     }
 
@@ -468,20 +454,18 @@ impl ConfigSnapshot {
             cpu_source: self.workflow_resource_throttle_cpu_source.clone(),
             cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
             cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
-            cpu_light_leaves: self.workflow_resource_throttle_cpu_light_leaves,
             memory_high_percent: self.workflow_resource_throttle_memory_high_percent,
             memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
-            io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
-            io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
         }
     }
 }
 
 impl ConfigSnapshot {
-    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions.
-    /// Admission already parsed every template, so each parses again here.
+    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions,
+    /// with the fixed section and trailer switches [ORB-22808]. Admission
+    /// already parsed every template, so each parses again here.
     pub fn delivery_conventions(&self) -> DeliveryConventions {
         let text = |key: &str, raw: &Option<String>| {
             raw.as_deref()
@@ -498,22 +482,21 @@ impl ConfigSnapshot {
             required_sections: self.pr_required_sections.clone(),
             missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
                 .unwrap_or_default(),
-            screenshot_section: ScreenshotSection::parse(&self.pr_screenshot_section)
-                .unwrap_or_default(),
-            freshness_section: self.pr_freshness_section,
-            signature: self.pr_signature,
-            pr_orchestration_trailer: self.pr_orchestration_trailer,
+            screenshot_section: PR_SCREENSHOT_SECTION,
+            freshness_section: PR_FRESHNESS_SECTION,
+            signature: PR_SIGNATURE,
+            pr_orchestration_trailer: PR_ORCHESTRATION_TRAILER,
             labels: self.pr_labels.clone(),
             task_tag_labels: self.pr_task_tag_labels.clone(),
             task_type_labels: self.pr_task_type_labels.clone(),
             reviewers: self.pr_reviewers.clone(),
-            draft: self.pr_draft,
+            draft: PR_DRAFT,
             commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
                 ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
             }),
             commit_body: text("commit.body_template", &self.commit_body_template),
-            orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
-            regression_trailers: self.commit_regression_trailers,
+            orchestrated_by_trailer: COMMIT_ORCHESTRATED_BY_TRAILER,
+            regression_trailers: COMMIT_REGRESSION_TRAILERS,
             branch_name: self
                 .branch_name_template
                 .as_deref()

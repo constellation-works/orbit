@@ -163,12 +163,6 @@ impl RuntimeKernel {
         self.context.settings().workflow_distributed_completion()
     }
 
-    /// `[workflow] admission_affinity`: how far admission lets work only
-    /// the requesting executor can run lead.
-    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        self.context.settings().admission_affinity()
-    }
-
     /// `[workflow.task_pilot_freshness]`, before any routine override.
     pub fn task_pilot_freshness(
         &self,

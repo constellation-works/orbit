@@ -79,10 +79,6 @@ fn auto_effort_refuses_unusable_bands_and_shares() {
             "[[workflow.auto_effort.bands.sol]]\neffort = \"bogus\"\ncomplexity = [\"hard\"]\n",
             ("an unknown effort", "bogus"),
         ),
-        (
-            "[workflow.auto_effort]\nexplore_share = 0.9\n",
-            ("an exploration share past half", "between 0 and 0.5"),
-        ),
     ] {
         let body = auto_effort_body(
             "low_complexity_crews = [\"sol@auto\"]",
@@ -99,7 +95,7 @@ fn auto_effort_policy_resolves_bands_fallback_and_escalation() {
     use orbit_types::task::TaskComplexity;
 
     let config = auto_effort_load(&auto_effort_body(
-        "low_complexity_crews = [\"sol@auto\"]\n[workflow.auto_effort]\nexplore_share = 0.5",
+        "low_complexity_crews = [\"sol@auto\"]",
         AUTO_EFFORT_BANDS,
     ))
     .expect("bands admit");

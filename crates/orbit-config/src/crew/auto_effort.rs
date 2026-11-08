@@ -4,8 +4,8 @@
 //! A pool entry written `opus@auto` (or `opus@auto:100` in a weighted pool)
 //! runs `opus` at the effort its bands choose for the draw's subject: the
 //! first band whose every condition the subject's signal meets. No match, or
-//! no signal, falls back to the crew's configured effort. A share of draws
-//! (`workflow.auto_effort.explore_share`) runs another effort the bands name,
+//! no signal, falls back to the crew's configured effort. A fixed share of
+//! draws ([`AUTO_EFFORT_EXPLORE_SHARE`]) runs another effort the bands name,
 //! so each side of a cutover keeps getting data. Bands are workspace policy;
 //! nothing in core names a cutover.
 
@@ -21,12 +21,10 @@ use serde::{Deserialize, Serialize};
 
 /// `workflow.auto_effort.bands`, keyed by crew.
 pub const AUTO_EFFORT_BANDS_KEY: &str = "workflow.auto_effort.bands";
-/// `workflow.auto_effort.explore_share`.
-pub const AUTO_EFFORT_EXPLORE_SHARE_KEY: &str = "workflow.auto_effort.explore_share";
-/// The exploration share when unset: one draw in ten.
-pub const DEFAULT_AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.1;
-/// The largest exploration share: past half, the policy is no longer the norm.
-pub(crate) const MAX_AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.5;
+/// The former `workflow.auto_effort.explore_share` default, fixed when the
+/// key was removed [ORB-22808]: one draw in ten runs another effort the
+/// bands name.
+pub const AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.1;
 /// Resolution of the exploration roll, in parts per million.
 const EXPLORE_SCALE: u64 = 1_000_000;
 
@@ -79,7 +77,7 @@ impl AutoEffortBand {
     }
 }
 
-/// The admitted `workflow.auto_effort.*` policy.
+/// The admitted `workflow.auto_effort.bands` policy and its exploration share.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AutoEffortPolicy {
     bands: BTreeMap<String, Vec<AutoEffortBand>>,
@@ -87,7 +85,8 @@ pub struct AutoEffortPolicy {
 }
 
 impl AutoEffortPolicy {
-    /// The policy over admitted bands and share.
+    /// The policy over admitted bands and an exploration share
+    /// ([`AUTO_EFFORT_EXPLORE_SHARE`] for configured runtimes).
     pub fn new(bands: BTreeMap<String, Vec<AutoEffortBand>>, explore_share: f64) -> Self {
         Self {
             bands,
@@ -103,7 +102,7 @@ impl AutoEffortPolicy {
             .filter(|bands| !bands.is_empty())
     }
 
-    /// The admitted exploration share.
+    /// The exploration share.
     pub fn explore_share(&self) -> f64 {
         self.explore_share
     }
@@ -316,20 +315,6 @@ pub(crate) fn admit_auto_effort_bands(
         }
     }
     Ok(())
-}
-
-/// Admit `workflow.auto_effort.explore_share`: a share from 0 to 0.5,
-/// [`DEFAULT_AUTO_EFFORT_EXPLORE_SHARE`] when unset.
-pub(crate) fn admit_auto_effort_explore_share(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let share = raw.unwrap_or(DEFAULT_AUTO_EFFORT_EXPLORE_SHARE);
-    if share.is_finite() && (0.0..=MAX_AUTO_EFFORT_EXPLORE_SHARE).contains(&share) {
-        Ok(share)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{AUTO_EFFORT_EXPLORE_SHARE_KEY} must be between 0 and \
-             {MAX_AUTO_EFFORT_EXPLORE_SHARE}, got {share}"
-        )))
-    }
 }
 
 /// Refuse a canonical pool's `<crew>@auto` entries that `setting` cannot

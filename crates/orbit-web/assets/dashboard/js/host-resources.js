@@ -99,7 +99,8 @@ let ioReported = false;
 
 const NAMES = { cpu: 'Load', memory: 'Memory', disk: 'Disk', io: 'Disk I/O stall' };
 // Server defaults, used when a payload omits a mark. They match
-// workflow.resource_throttle.* so a tick is never a made-up threshold.
+// workflow.resource_throttle.* so a tick is never a made-up threshold; the
+// io marks are fixed server-side and never in the payload [ORB-22808].
 const MARK_DEFAULTS = {
   cpu: [85, 90], memory: [85, 90], disk: [85, 90], io: [10, 20],
 };

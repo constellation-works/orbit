@@ -122,12 +122,10 @@ use orbit_common::OrbitError;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
-pub use aliases::{
-    ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
-};
+pub use aliases::{WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys};
 pub use crew_auto_effort::{
-    AUTO_EFFORT_BANDS_KEY, AUTO_EFFORT_EXPLORE_SHARE_KEY, AUTO_EFFORT_POOLS, AutoEffortBand,
-    AutoEffortPolicy, DEFAULT_AUTO_EFFORT_EXPLORE_SHARE,
+    AUTO_EFFORT_BANDS_KEY, AUTO_EFFORT_EXPLORE_SHARE, AUTO_EFFORT_POOLS, AutoEffortBand,
+    AutoEffortPolicy,
 };
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
@@ -165,10 +163,9 @@ pub use plugins::{
     PluginConfigSchema, plugin_config_schema_generation, register_plugin_config_schemas,
 };
 pub use provider_limit::{
-    CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
-    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitBudget, ProviderLimitBudgetUnit,
+    CrewSelection, PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitBudget, ProviderLimitBudgetUnit,
     ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitTarget, ProviderLimitThreshold,
-    UsagePressurePolicy,
+    USAGE_PRESSURE_CAP, USAGE_PRESSURE_STRENGTH, UsagePressurePolicy,
 };
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigAllowedValues, ConfigKeyDescriptor,

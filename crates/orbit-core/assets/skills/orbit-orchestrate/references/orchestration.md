@@ -377,7 +377,7 @@ example `circuit_open` once three of its claims in a row settled as failures,
 until its breaker half-opens to admit one probe claim.
 
 When CPU is the only held resource, `no-diff-expected` auto-tasks (marked
-`cpu-light`) still start within the `cpu_light_leaves` reserved slots. Once
+`cpu-light`) still start within two reserved slots. Once
 those are taken they report `cpu_light_budget_full`; memory, disk or I/O
 pressure holds them too. On Linux, sustained disk I/O stall (`io full`, from
 `/proc/pressure/io`) is one of the held resources; hosts without it are not gated.

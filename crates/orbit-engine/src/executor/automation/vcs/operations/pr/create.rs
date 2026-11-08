@@ -29,7 +29,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_create(
         "--head".to_string(),
         head.to_string(),
     ];
-    // `pr.draft`, `pr.labels` and `pr.reviewers`; absent fields add nothing.
+    // The draft convention, `pr.labels` and `pr.reviewers`; absent fields add nothing.
     if input.get("draft").and_then(Value::as_bool) == Some(true) {
         args.push("--draft".to_string());
     }

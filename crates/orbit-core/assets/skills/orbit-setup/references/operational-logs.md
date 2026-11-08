@@ -348,11 +348,9 @@ scripts. Compare that value with the service's `Environment=PATH=…` when a too
 cannot be found. Restart the launching service between runs after changing its
 environment, then confirm a new box delivery passes `candidate_validate`.
 
-The config schema exposes `workflow.validation_env.shell_probe`: `interactive`
-(default), `login` to select only the non-interactive probe, or `off` to
-disable shell probing. `workflow.validation_env.path` adds explicit PATH entries
-(leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
-is `prepend` by default or `replace` to use only those entries. Only allow-listed
+The probe always tries the interactive login shell first and falls back to a
+login-only shell. `workflow.validation_env.path` adds explicit PATH entries
+(leading `~/` expands to the owner's home) ahead of the resolved PATH. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
 Agent sessions start with the same `path` entries ahead of their PATH, so a
 reviewer runs the `python3` validation runs. While `path` has an entry, Codex

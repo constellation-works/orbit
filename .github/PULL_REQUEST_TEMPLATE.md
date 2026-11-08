@@ -42,7 +42,7 @@ Optional. For a UI change, add a Before/After table with one row per view and
 viewport width. Name shots `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`:
 a file with no suffix is an After shot, and the Before shot is optional.
 Orbit fills this section in place when `pr.body_template = "repo"` and
-`pr.screenshot_section` applies, so leave the heading and delete this comment
+the task is tagged `ui`, so leave the heading and delete this comment
 when Orbit publishes the table for you. Example row:
 
 | | Before | After |

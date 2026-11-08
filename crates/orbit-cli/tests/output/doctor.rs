@@ -1143,13 +1143,12 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     if in_child("doctor::doctor_retired_repair_rewrites_consolidated_key_families") {
         return;
     }
-    const KEYS: [&str; 6] = [
+    const KEYS: [&str; 5] = [
         "workflow.purpose_crews.review",
         "workflow.purpose_crews.final_recovery",
         "workflow.purpose_crews.sweep_tasks",
         "review.timing",
         "machine.worker_containment",
-        "workflow.validation_env.shell_probe",
     ];
     let f = WorkCheckout::new();
     let global = "[workflow]\nfinal_recovery_crews = [\"sol\"]\n\n[workflow.validation_env]\nlogin_shell = false\n\n[machine]\nworker_containment = false\n";
@@ -1164,7 +1163,6 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
             serde_json::json!(["sol"]),
             serde_json::json!(["sol"]),
             serde_json::json!("off"),
-            serde_json::json!("off"),
             serde_json::json!("off")
         ],
         "deprecated spellings load"
@@ -1177,9 +1175,16 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     let v = g["workflow"]["purpose_crews"]["final_recovery"].clone();
     assert_eq!(v, toml::Value::Array(vec!["sol".into()]));
     assert!(g["workflow"].get("final_recovery_crews").is_none());
-    let v = g["workflow"]["validation_env"]["shell_probe"].as_str();
-    assert_eq!(v, Some("off"));
-    assert!(g["workflow"]["validation_env"].get("login_shell").is_none());
+    // The shell probe is fixed [ORB-22808]: its switches are deleted, not
+    // translated.
+    let probe = |doc: &toml::Value, key: &str| {
+        doc["workflow"]
+            .get("validation_env")
+            .and_then(|table| table.get(key))
+            .cloned()
+    };
+    assert_eq!(probe(&g, "login_shell"), None);
+    assert_eq!(probe(&g, "shell_probe"), None);
     let v = g["machine"]["worker_containment"].as_str();
     assert_eq!(v, Some("off"));
     let w = read_toml(&wp);
@@ -1201,8 +1206,8 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     let v = w["review"]["timing"].as_str();
     assert_eq!(v, Some("off"));
     assert!(w["review"].get("before_landing").is_none());
-    let v = w["workflow"]["validation_env"]["shell_probe"].as_str();
-    assert_eq!(v, Some("off"));
+    assert_eq!(probe(&w, "interactive"), None);
+    assert_eq!(probe(&w, "shell_probe"), None);
     has(&read_str(&wp), "# keep this note");
     assert_backup(&gd, global);
     assert_backup(&f.work.join(".orbit"), workspace);

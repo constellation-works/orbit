@@ -4,8 +4,8 @@
 //! artifacts are committed to the task's permanent evidence ref on `origin`
 //! (`refs/orbit/evidence/<task-id>`), and the body links each image by that
 //! commit's sha, so the images keep resolving after the pull request merges
-//! and its branch is deleted. `pr.screenshot_section` and the task's tags
-//! decide whether the section is rendered at all.
+//! and its branch is deleted. The screenshot-section convention and the
+//! task's tags decide whether the section is rendered at all.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;

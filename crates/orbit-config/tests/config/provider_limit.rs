@@ -48,12 +48,10 @@ fn unset_keys_gate_at_ninety_percent_and_keep_explicit_crews_waiting() {
 #[test]
 fn overrides_are_admitted_under_their_canonical_provider() {
     let policy = load(
-        "provider_limit_max_used_pct = 80\n\
-         provider_limit_overrides = [\"anthropic:95\", \"grok:100\"]\n\
+        "provider_limit_overrides = [\"anthropic:95\", \"grok:100\"]\n\
          provider_limit_explicit_crews = \"pool\"",
     )
     .expect("valid provider limit settings load");
-    assert_eq!(policy.max_used_pct, 80);
     assert_eq!(
         policy.threshold("claude"),
         ProviderLimitThreshold::Percent(95),
@@ -69,8 +67,8 @@ fn overrides_are_admitted_under_their_canonical_provider() {
     );
     assert_eq!(
         policy.threshold("codex"),
-        ProviderLimitThreshold::Percent(80),
-        "the default threshold"
+        ProviderLimitThreshold::Percent(90),
+        "the shared threshold"
     );
     assert_eq!(policy.explicit_crews, ProviderLimitExplicitCrews::Pool);
     set(OVERRIDES, r#"["claude:80", "grok:100"]"#).expect("config set admits valid overrides");
@@ -81,10 +79,7 @@ fn overrides_are_admitted_under_their_canonical_provider() {
 /// canonical provider. `off` is not a budget percent.
 #[test]
 fn off_turns_one_providers_gate_off_and_is_stored_canonically() {
-    let config = load_config(
-        "provider_limit_max_used_pct = 80\n\
-         provider_limit_overrides = [\"openai:OFF\", \"grok:100\"]",
-    )
+    let config = load_config("provider_limit_overrides = [\"openai:OFF\", \"grok:100\"]")
     .expect("codex:off loads");
     assert_eq!(
         config.snapshot.workflow_provider_limit_overrides,
@@ -97,7 +92,7 @@ fn off_turns_one_providers_gate_off_and_is_stored_canonically() {
     assert_eq!(policy.threshold("chatgpt"), ProviderLimitThreshold::Off);
     assert_eq!(
         policy.budget_threshold("codex", None),
-        80,
+        90,
         "off is not a percent"
     );
     assert_eq!(
@@ -107,7 +102,7 @@ fn off_turns_one_providers_gate_off_and_is_stored_canonically() {
     assert_eq!(policy.budget_threshold("grok", None), 100);
     assert_eq!(
         policy.threshold("claude"),
-        ProviderLimitThreshold::Percent(80)
+        ProviderLimitThreshold::Percent(90)
     );
     set(OVERRIDES, r#"["codex:off"]"#).expect("config set admits off");
 }
@@ -126,8 +121,6 @@ fn invalid_provider_limit_settings_are_refused_by_load_and_config_set() {
             "more than once",
         ),
         (OVERRIDES, r#"["codex:off", "openai:80"]"#, "more than once"),
-        ("workflow.provider_limit_max_used_pct", "0", "1..=100"),
-        ("workflow.provider_limit_max_used_pct", "101", "1..=100"),
         (
             "workflow.provider_limit_explicit_crews",
             r#""redraw""#,
@@ -329,8 +322,8 @@ fn crew_account_targets_load_only_for_a_defined_crew_with_env() {
     }
 }
 
-/// [ORB-17770] `workflow.crew_selection` and `workflow.usage_pressure_*`
-/// default to static draws at cap 8 and strength 1, and a value written by
+/// [ORB-17770] `workflow.crew_selection` defaults to static draws, weighting
+/// runs at the fixed cap 8 and strength 1 [ORB-22808], and a value written by
 /// `orbit config set` is what `orbit config get` reads back.
 #[test]
 fn usage_pressure_keys_default_to_static_and_round_trip_through_config_set() {
@@ -340,17 +333,12 @@ fn usage_pressure_keys_default_to_static_and_round_trip_through_config_set() {
     assert!(!policy.applies());
     assert_eq!((policy.cap, policy.strength), (8.0, 1.0));
 
-    for (key, value, read_back) in [
-        (
+    {
+        let (key, value, read_back) = (
             "workflow.crew_selection",
             r#""usage_pressure""#,
             json!("usage_pressure"),
-        ),
-        ("workflow.usage_pressure_cap", "4", json!(4.0)),
-        ("workflow.usage_pressure_cap", "1", json!(1.0)),
-        ("workflow.usage_pressure_strength", "0.5", json!(0.5)),
-        ("workflow.usage_pressure_strength", "0", json!(0.0)),
-    ] {
+        );
         let global = tempfile::tempdir().expect("global tempdir");
         let workspace = tempfile::tempdir().expect("workspace tempdir");
         let mut store = ConfigStore::open(ConfigScope::Global, global.path().join("config.toml"))
@@ -369,31 +357,20 @@ fn usage_pressure_keys_default_to_static_and_round_trip_through_config_set() {
         );
     }
 
-    let policy = load(
-        "crew_selection = \"usage_pressure\"\nusage_pressure_cap = 4\nusage_pressure_strength = 2",
-    )
-    .expect("valid usage pressure settings load")
-    .usage_pressure;
-    assert!(policy.applies());
-    assert_eq!(policy.multiplier(1.5), 2.25, "pressure ^ strength");
-    assert_eq!(policy.multiplier(25.0), 4.0, "capped at cap");
-    assert_eq!(policy.multiplier(0.1), 0.25, "floored at 1 / cap");
-    let off = load("crew_selection = \"usage_pressure\"\nusage_pressure_strength = 0")
-        .expect("strength 0 loads")
+    let policy = load("crew_selection = \"usage_pressure\"")
+        .expect("valid usage pressure settings load")
         .usage_pressure;
-    assert!(!off.applies(), "strength 0 disables weighting");
+    assert!(policy.applies());
+    assert_eq!(policy.multiplier(1.5), 1.5, "pressure ^ strength");
+    assert_eq!(policy.multiplier(25.0), 8.0, "capped at cap");
+    assert_eq!(policy.multiplier(0.1), 0.125, "floored at 1 / cap");
 }
 
-/// [ORB-17770] A cap below 1, a negative strength and an unknown selection
-/// are refused by load and by `orbit config set`, naming the key.
+/// [ORB-17770] An unknown selection is refused by load and by `orbit config
+/// set`, naming the key.
 #[test]
 fn invalid_usage_pressure_settings_are_refused_by_load_and_config_set() {
     for (key, value, expected) in [
-        ("workflow.usage_pressure_cap", "0.5", "at least 1"),
-        ("workflow.usage_pressure_cap", "0", "at least 1"),
-        ("workflow.usage_pressure_cap", "nan", "at least 1"),
-        ("workflow.usage_pressure_strength", "-0.1", "at least 0"),
-        ("workflow.usage_pressure_strength", "inf", "at least 0"),
         (
             "workflow.crew_selection",
             r#""pressure""#,

@@ -533,16 +533,6 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
     Ok(normalized.into_iter().collect())
 }
 
-pub(super) fn resolve_validation_path_mode(raw: Option<String>) -> Result<String, OrbitError> {
-    resolve_choice(raw, "prepend", "workflow.validation_env.path_mode")
-}
-
-/// The key's declared maximum keeps this a reservation, not a second
-/// concurrency limit.
-pub(super) fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError> {
-    resolve_bounded_range(raw, 2, "workflow.resource_throttle.cpu_light_leaves")
-}
-
 pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
     resolve_bounded_range(raw, default, key)
 }

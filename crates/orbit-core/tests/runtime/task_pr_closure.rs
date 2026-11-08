@@ -527,25 +527,6 @@ fn configured_delivery_authors_replace_the_forge_login() {
 }
 
 #[test]
-fn the_config_switch_disables_closing() {
-    if !super::dispatch_admission::isolated("task_pr_closure::the_config_switch_disables_closing") {
-        return;
-    }
-    let fx = Fixture::with_config(Some("[pr]\nclose_on_terminal = false\n"));
-    let task_id = fx.add_task("Switch off");
-    let other = fx.add_task("Unrelated task");
-    fx.seed_forge(&task_id, &other);
-    fx.record_prs(&task_id, &[11, 13]);
-
-    fx.runtime
-        .reject_task(&task_id, "not wanted".to_string(), None)
-        .expect("reject the task");
-
-    assert!(fx.forge.closed_numbers().is_empty());
-    assert_eq!(fx.forge.state().lookups, 0);
-}
-
-#[test]
 fn an_operator_requeue_closes_the_tasks_undelivered_orbit_prs() {
     if !super::dispatch_admission::isolated(
         "task_pr_closure::an_operator_requeue_closes_the_tasks_undelivered_orbit_prs",

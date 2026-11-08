@@ -455,7 +455,7 @@ pub(crate) fn requeue_text(value: &Value) -> String {
                 .into(),
         ),
         Some("disabled") => lines.push(
-            "pr.close_on_terminal is off, so no pull request was closed; close the discarded one \
+            "Pull request closure is off, so no pull request was closed; close the discarded one \
              by hand."
                 .into(),
         ),

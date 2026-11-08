@@ -857,14 +857,16 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
     ship_cleanup.armed = false;
 }
 
-/// [ORB-13987] With login-shell resolution disabled and no configured PATH,
-/// required validation runs with whatever PATH launched the worker. The MCP
-/// drain status and the CLI doctor both say so before a drain is started;
-/// without required commands there is nothing to warn about. Doctor also
-/// reports configured tool shadowing, the selected startup mode, and the
-/// reason a broken interactive rc falls back to login-only resolution.
+/// [ORB-13987] The MCP drain status and the CLI doctor report the required
+/// validation environment before a drain is started; without required
+/// commands there is nothing to warn about. Doctor reports configured tool
+/// shadowing, the selected startup mode, and the reason a broken interactive
+/// rc falls back to login-only resolution. The launcher-fallback warning a
+/// disabled probe gives is covered at the resolver
+/// (`disabled_resolution_never_starts_the_login_shell`), since configured
+/// runtimes always probe [ORB-22808].
 #[test]
-fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
+fn drain_status_and_doctor_report_the_validation_environment() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let configure = |key: &str, value: &str| {
@@ -899,7 +901,6 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         (readiness["validation_env_warning"].clone(), row)
     };
 
-    configure("workflow.validation_env.shell_probe", "off");
     let (warning, row) = observe();
     assert_eq!(
         warning,
@@ -912,26 +913,6 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         "workflow.required_validation_commands",
         r#"["make ci-fast"]"#,
     );
-    let (warning, row) = observe();
-    let warning = warning.as_str().expect("the drain status warns");
-    assert!(
-        warning.contains("`workflow.validation_env.shell_probe = off`")
-            && warning.contains("source: launcher_fallback")
-            && warning.contains("PATH="),
-        "the warning names the disabled resolution, the fallback and its PATH: {warning}"
-    );
-    assert_eq!(row["status"], "warning", "{row}");
-    assert!(
-        row["message"].as_str().unwrap().contains(warning),
-        "doctor includes the same warning: {row}"
-    );
-    assert!(
-        row["remediation"]
-            .as_str()
-            .is_some_and(|fix| fix.contains("workflow.validation_env.path")),
-        "{row}"
-    );
-
     // The validation PATH is separate from the fixture command's PATH, so
     // these stubs affect only doctor resolution, never workspace setup.
     let first = workspace.home.join("validation-first");
@@ -940,15 +921,17 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         plant_agent_cli_stub(&first, tool);
         plant_agent_cli_stub(&later, tool);
     }
-    configure("workflow.validation_env.path_mode", "replace");
     configure(
         "workflow.validation_env.path",
         &json!([first, later]).to_string(),
     );
-    let (_, row) = observe();
+    let (warning, row) = observe();
+    assert!(
+        warning.is_null(),
+        "configured entries are prepended, keeping the login-shell PATH: {warning}"
+    );
     assert_eq!(row["status"], "warning", "shadowing is advisory: {row}");
     let message = row["message"].as_str().unwrap();
-    assert!(message.contains("probe mode: disabled"), "{message}");
     assert!(
         message.contains(&format!("PATH={}:{}", first.display(), later.display())),
         "{message}"
@@ -970,19 +953,6 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
             "{message}"
         );
     }
-
-    configure("workflow.validation_env.shell_probe", "login");
-    let (_, row) = observe();
-    assert!(
-        row["message"]
-            .as_str()
-            .unwrap()
-            .contains("probe mode: login;"),
-        "the setting reaches the runtime resolver: {row}"
-    );
-    configure("workflow.validation_env.shell_probe", "interactive");
-    let (_, row) = observe();
-    let message = row["message"].as_str().unwrap();
     // With no rc files the interactive probe succeeds unless a saturated host
     // holds `bash -i -l` past the resolver's production timeout. That bounded
     // fallback is the resolver working, so it passes only when the report says
@@ -993,19 +963,9 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         && message.contains("did not finish within");
     assert!(
         message.contains("probe mode: interactive_login;") || timed_out_fallback,
-        "the interactive setting reaches the resolver ({}): {row}",
+        "the runtime resolver tries the interactive login shell first ({}): {row}",
         orbit_common::test_env::host_load()
     );
-
-    let (warning, row) = observe();
-    let warning = warning
-        .as_str()
-        .expect("replace drops login-shell PATH entries");
-    assert!(
-        warning.contains("lacks login-shell PATH entries"),
-        "{warning}"
-    );
-    assert!(row["message"].as_str().unwrap().contains(warning), "{row}");
     let cli = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "run",
@@ -1015,13 +975,6 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     );
     let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
     assert_eq!(cli["validation_env_warning"], warning);
-    configure("workflow.validation_env.path_mode", "prepend");
-    let (warning, _) = observe();
-    assert!(
-        warning.is_null(),
-        "prepend preserves the login-shell PATH: {warning}"
-    );
-    configure("workflow.validation_env.path_mode", "replace");
 
     // Fixture rc files affect only the probe, with no dependency on the
     // operator's dotfiles. Cover the common account shells on Linux/macOS.

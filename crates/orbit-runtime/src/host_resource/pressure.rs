@@ -13,6 +13,14 @@ use super::{
 
 /// The held-pressure name of the Linux disk I/O stall share.
 const IO_PRESSURE: &str = "io full";
+/// The former `workflow.resource_throttle.io_full_high_percent` default,
+/// fixed when the key was removed [ORB-22808]: the Linux disk I/O stall
+/// share (`/proc/pressure/io` `full avg60`) that starts throttling.
+pub const IO_FULL_HIGH_PERCENT: u8 = 20;
+/// The former `workflow.resource_throttle.io_full_resume_percent` default,
+/// fixed when the key was removed [ORB-22808]: the I/O stall share below
+/// which throttled admissions resume.
+pub const IO_FULL_RESUME_PERCENT: u8 = 10;
 
 #[derive(Default, Serialize, Deserialize)]
 struct PressureState {
@@ -163,8 +171,8 @@ impl ResourcePressureEvaluator {
             reading(
                 IO_PRESSURE.into(),
                 Some(percent),
-                settings.io_full_high_percent,
-                settings.io_full_resume_percent,
+                IO_FULL_HIGH_PERCENT,
+                IO_FULL_RESUME_PERCENT,
                 false,
             )
         });

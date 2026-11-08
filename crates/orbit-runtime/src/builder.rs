@@ -269,7 +269,7 @@ pub(crate) fn build_context_from_roots(
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
         task_url_template: runtime_config.pr.task_url_template.clone(),
-        close_superseded: runtime_config.pr.close_on_terminal,
+        close_superseded: orbit_types::workflow::PR_CLOSE_ON_TERMINAL,
         delivery_authors: runtime_config.pr.delivery_authors.clone(),
         ci_infrastructure_signatures: runtime_config.pr.ci_infrastructure_signatures.clone(),
         conventions: runtime_config.pr.conventions.clone(),
@@ -283,25 +283,18 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
-    let admission_affinity = runtime_config.snapshot.admission_affinity();
-    // Config admitted the mode's spelling; Core translates it into the exec
-    // layer's policy, as it does for PR settings above.
-    let shell_probe = runtime_config.snapshot.shell_probe();
+    // Config admitted the PATH entries and output variables; the probe,
+    // PATH mode and CARGO_INCREMENTAL handling are fixed [ORB-22808].
     let validation_env = orbit_exec::ValidationEnvPolicy {
-        login_shell: shell_probe.probes(),
-        interactive: shell_probe.interactive(),
+        login_shell: orbit_exec::VALIDATION_LOGIN_SHELL,
+        interactive: orbit_exec::VALIDATION_INTERACTIVE_PROBE,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         build_output_env: runtime_config
             .snapshot
             .workflow_validation_env_build_output_env
             .clone(),
-        cargo_incremental: runtime_config
-            .snapshot
-            .workflow_validation_env_cargo_incremental,
-        path_mode: orbit_exec::ValidationPathMode::parse(
-            &runtime_config.snapshot.workflow_validation_env_path_mode,
-        )
-        .unwrap_or_default(),
+        cargo_incremental: orbit_exec::VALIDATION_CARGO_INCREMENTAL,
+        path_mode: orbit_exec::VALIDATION_PATH_MODE,
     };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
@@ -352,7 +345,6 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
-            admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
             runtime_config.human_crews.clone(),

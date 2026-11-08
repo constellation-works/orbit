@@ -22,7 +22,8 @@
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
 //! timeout or a missing marker triggers a fallback to `<shell> -l -c …`.
-//! `workflow.validation_env.shell_probe = "login"` uses only that login probe.
+//! A policy with [`ValidationEnvPolicy::interactive`] off uses only that
+//! login probe; configured runtimes always try the interactive one first.
 //! Each attempt has a bounded timeout and null stdin. The printer writes a
 //! marker and then one NUL-terminated record per toolchain variable, ignoring
 //! banners and rc output. Successful probes ignore stderr (including bash's
@@ -109,6 +110,23 @@ impl LoginShellMode {
     }
 }
 
+/// The former `workflow.validation_env.shell_probe = "interactive"` default,
+/// fixed when the key was removed [ORB-22808]: required validation resolves
+/// PATH and toolchain locators from the owner's login shell.
+pub const VALIDATION_LOGIN_SHELL: bool = true;
+/// The interactive half of the former `workflow.validation_env.shell_probe =
+/// "interactive"` default [ORB-22808]: an interactive login shell is tried
+/// before the login-only fallback.
+pub const VALIDATION_INTERACTIVE_PROBE: bool = true;
+/// The former `workflow.validation_env.path_mode` default, fixed when the key
+/// was removed [ORB-22808]: configured PATH entries come before the resolved
+/// PATH.
+pub const VALIDATION_PATH_MODE: ValidationPathMode = ValidationPathMode::Prepend;
+/// The former `workflow.validation_env.cargo_incremental` default, fixed when
+/// the key was removed [ORB-22808]: a runner that binds a host validation
+/// target forces `CARGO_INCREMENTAL=0`.
+pub const VALIDATION_CARGO_INCREMENTAL: bool = false;
+
 /// How `workflow.validation_env.path` combines with the resolved PATH.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ValidationPathMode {
@@ -153,21 +171,21 @@ pub struct ValidationEnvPolicy {
     /// Output variables bound to managed host output by validation runners.
     /// Empty means no output allocation or environment override.
     pub build_output_env: Vec<String>,
-    /// When false (the default), a runner that binds a host validation
-    /// target forces `CARGO_INCREMENTAL=0`. True is the operator opt-in:
-    /// the runner leaves `CARGO_INCREMENTAL` untouched.
+    /// When false ([`VALIDATION_CARGO_INCREMENTAL`]), a runner that binds a
+    /// host validation target forces `CARGO_INCREMENTAL=0`. True leaves
+    /// `CARGO_INCREMENTAL` untouched.
     pub cargo_incremental: bool,
 }
 
 impl Default for ValidationEnvPolicy {
     fn default() -> Self {
         Self {
-            login_shell: true,
-            interactive: true,
+            login_shell: VALIDATION_LOGIN_SHELL,
+            interactive: VALIDATION_INTERACTIVE_PROBE,
             path: Vec::new(),
-            path_mode: ValidationPathMode::Prepend,
+            path_mode: VALIDATION_PATH_MODE,
             build_output_env: Vec::new(),
-            cargo_incremental: false,
+            cargo_incremental: VALIDATION_CARGO_INCREMENTAL,
         }
     }
 }
@@ -439,7 +457,7 @@ pub struct ValidationEnvironment {
     pub build_output_dir: Option<PathBuf>,
     /// Canonical source namespace of the managed output.
     pub build_output_source: Option<PathBuf>,
-    /// Operator opt-in copied from [`ValidationEnvPolicy::cargo_incremental`].
+    /// Copied from [`ValidationEnvPolicy::cargo_incremental`].
     /// Host runners read it when they bind output; resolution itself does not
     /// set `CARGO_INCREMENTAL`.
     pub cargo_incremental: bool,
@@ -644,8 +662,8 @@ impl ValidationEnvironment {
         }
         if !self.login_shell_enabled && self.source == ValidationEnvSource::LauncherFallback {
             return Some(format!(
-                "login-shell resolution is disabled (`workflow.validation_env.shell_probe = \
-                 off`) and `workflow.validation_env.path` is empty, so required validation \
+                "login-shell resolution is disabled and `workflow.validation_env.path` is \
+                 empty, so required validation \
                  runs with whatever PATH launched the worker: PATH={path} (source: \
                  launcher_fallback)."
             ));

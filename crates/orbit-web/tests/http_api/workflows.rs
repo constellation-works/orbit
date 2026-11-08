@@ -923,39 +923,35 @@ wf_test!(
         let fixture = Fixture::new();
         let home = fixture.global.parent().unwrap();
         let marker = home.join("login-probes");
-        for name in [".bash_profile", ".profile", ".zprofile"] {
-            std::fs::write(home.join(name),
-                "printf 'probe\\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n"
-            ).unwrap();
-        }
-        std::fs::create_dir_all(home.join(".config/fish")).unwrap();
-        std::fs::write(home.join(".config/fish/config.fish"),
-            "printf 'probe\\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n"
-        ).unwrap();
-        let configure = |mode: &str| {
+        // Every profile records a probe and fails, so validation cannot use
+        // the login shell and each resolution probes twice (interactive,
+        // then login-only).
+        fail_login_profiles(home);
+        // A different validation PATH is a different policy and cache key.
+        let configure = |path: &str| {
             std::fs::write(fixture.work.join("config.toml"), format!(
-                "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n"
+                "[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = {path}\n"
             )).unwrap();
         };
-        configure("replace");
+        configure(r#"["/usr/bin", "/bin"]"#);
         let uri = readiness_uri();
         let first = {
             let server = fixture.server(false);
             let first = ok_get(&server, &uri);
-            chk!(first["validation_env_warning"] .as_str() .unwrap() .contains(home.join("login-tools").to_str().unwrap()) => "{first}");
+            chk!(first["validation_env_warning"] .as_str() .unwrap() .contains("could not resolve the login-shell environment") => "{first}");
             let warm = ok_get(&server, &uri);
             eq!(warm["validation_env_warning"] => first["validation_env_warning"]);
-            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
+            assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
             first
         };
         // Cross-process reuse also prevents a cold probe after a web restart.
         let restarted = ok_get(&fixture.server(false), &uri);
         eq!(restarted["validation_env_warning"] => first["validation_env_warning"]);
-        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);
-        configure("prepend");
-        let kept = ok_get(&fixture.server(false), &uri);
-        assert!(kept["validation_env_warning"].is_null(), "{kept}");
         assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 2);
+        configure(r#"["/usr/bin"]"#);
+        let changed = ok_get(&fixture.server(false), &uri);
+        assert!(changed["validation_env_warning"].is_string(), "{changed}");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 4);
     }
 );
 // A task ready for admission but for what the test arranges: criteria, a plan, an assessed complexity and one existing file it locks.
@@ -1162,6 +1158,15 @@ wf_test!(auto_readiness_applies_the_live_drains_crew_restriction, {
         eq!(admitted["eligible"] => true, "the pull drain admits it: {admitted}");
     }
 });
+// Make every login profile in `home` record a probe in `login-probes` and fail, so required validation cannot resolve the login shell.
+fn fail_login_profiles(home: &std::path::Path) {
+    let profile = "printf 'probe\\n' >> \"$HOME/login-probes\"\nexit 42\n";
+    for name in [".bash_profile", ".profile", ".zprofile"] {
+        std::fs::write(home.join(name), profile).unwrap();
+    }
+    std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+    std::fs::write(home.join(".config/fish/config.fish"), profile).unwrap();
+}
 // Not `ORBIT_`-prefixed: those names are never reported unset.
 const UNSET_PASS: &str = "FIXTURE_HTTP_NOTICE_TOKEN";
 // A fixture whose operator passes a variable the server does not hold, configured by `extra`, with both delivery workflows deployed.
@@ -1263,10 +1268,8 @@ wf_test!(auto_start_and_ship_report_the_submission_notices, {
 // Required validation that cannot use the login shell is reported by a dashboard drain start and ship, as by the CLI and MCP.
 wf_test!(auto_start_and_ship_report_the_validation_environment, {
     let _credential = held_worker_credential();
-    let fixture = notice_fixture(
-        "[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n\n\
-             [workflow.validation_env]\nshell_probe = \"off\"\n",
-    );
+    let fixture = notice_fixture("[workflow]\nrequired_validation_commands = [\"make ci-fast\"]\n");
+    fail_login_profiles(fixture.global.parent().unwrap());
     let explicit = backlog_task(&fixture, "explicit", &[]);
     let server = fixture.server(false);
     for (path, body) in [
@@ -1281,7 +1284,7 @@ wf_test!(auto_start_and_ship_report_the_validation_environment, {
         let warning = receipt["validation_env_warning"]
             .as_str()
             .unwrap_or_else(|| panic!("{path}: {receipt}"));
-        chk!(warning.contains("`workflow.validation_env.shell_probe = off`") => "{path}: {receipt}");
+        chk!(warning.contains("could not resolve the login-shell environment") => "{path}: {receipt}");
         chk!(warning_lines(&receipt).iter().any(|line| line == warning) => "{path}: {receipt}");
         let notes = note_lines(&receipt);
         chk!(notes.iter().all(|note| !note.contains("workflow.required_validation_commands")) && notes.len() == usize::from(cfg!(target_os = "macos")) => "{path}: configured required validation needs no note, and a macOS host adds only its worker-containment note: {receipt}");

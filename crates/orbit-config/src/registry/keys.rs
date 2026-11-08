@@ -159,8 +159,14 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "translated: true sets machine.worker_containment = \"strict\"; false keeps the \
      boolean's mode. Set machine.worker_containment to off, warn or strict instead",
     ),
-    ("workflow.validation_env.login_shell", SHELL_PROBE_NOTE),
-    ("workflow.validation_env.interactive", SHELL_PROBE_NOTE),
+    (
+        "workflow.validation_env.login_shell",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.interactive",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
     // [ORB-15663] System work names no lane of its own: auto-task templates,
     // the task pilot and step-failure / PR conflict recovery draw from the
     // complexity pools. The key loads and warns, but no longer routes.
@@ -369,6 +375,48 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         NOTICE_LIMITS_FIXED_NOTE,
     ),
     ("notice.retention_days", NOTICE_LIMITS_FIXED_NOTE),
+    // [ORB-22808] Delivery switches, crew-draw constants, throttle internals
+    // and validation-env internals were fixed at their defaults on
+    // 2026-11-08. Each key loads, warns and is ignored; code-health-sweep
+    // deletes these entries after 2026-12-08, when they become ordinary
+    // unknown settings.
+    ("pr.close_on_terminal", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.draft", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.freshness_section", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.orchestration_trailer", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.screenshot_section", DELIVERY_SWITCH_FIXED_NOTE),
+    ("pr.signature", DELIVERY_SWITCH_FIXED_NOTE),
+    ("commit.orchestrated_by_trailer", DELIVERY_SWITCH_FIXED_NOTE),
+    ("commit.regression_trailers", DELIVERY_SWITCH_FIXED_NOTE),
+    ("workflow.admission_affinity", CREW_DRAW_FIXED_NOTE),
+    ("workflow.auto_effort.explore_share", CREW_DRAW_FIXED_NOTE),
+    ("workflow.provider_limit_max_used_pct", CREW_DRAW_FIXED_NOTE),
+    ("workflow.usage_pressure_cap", CREW_DRAW_FIXED_NOTE),
+    ("workflow.usage_pressure_strength", CREW_DRAW_FIXED_NOTE),
+    (
+        "workflow.resource_throttle.cpu_light_leaves",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.resource_throttle.io_full_high_percent",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.resource_throttle.io_full_resume_percent",
+        RESOURCE_THROTTLE_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.shell_probe",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.path_mode",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
+    (
+        "workflow.validation_env.cargo_incremental",
+        VALIDATION_ENV_FIXED_NOTE,
+    ),
 ];
 
 const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
@@ -381,6 +429,29 @@ const NOTICE_LIMITS_FIXED_NOTE: &str = "ignored: fleet notice limits are fixed a
      per hour; 30-day retention; agent posting and brief delivery on, 5 notices of 600 \
      characters within 2000 ms). Delete the [notice] table. This key stops being recognised \
      after 2026-12-08";
+
+const DELIVERY_SWITCH_FIXED_NOTE: &str = "ignored: delivery always closes a task's open Orbit \
+     pull requests when it ends, opens pull requests ready for review (a draft only for a \
+     required-section gap), adds the Screenshots table for ui-tagged tasks, the Branch Freshness \
+     section, the model signature and the Orchestrated-By line, and adds the Orchestrated-By and \
+     regression trailers to commits. Delete the key. This key stops being recognised after \
+     2026-12-08";
+
+const CREW_DRAW_FIXED_NOTE: &str = "ignored: admission affinity is fixed at \"band\", the \
+     <crew>@auto exploration share at 0.1, the provider-limit skip threshold at 90% (set \
+     workflow.provider_limit_overrides to change it per provider or crew), and the usage-pressure \
+     cap and strength at 8 and 1 (choose with workflow.crew_selection). Delete the key. This key \
+     stops being recognised after 2026-12-08";
+
+const RESOURCE_THROTTLE_FIXED_NOTE: &str = "ignored: the throttle keeps 2 CPU-light leaves \
+     under CPU-only pressure and throttles on Linux disk I/O stalls at 20% (resuming below 10%); \
+     tune the cpu, memory and disk thresholds instead. Delete the key. This key stops being \
+     recognised after 2026-12-08";
+
+const VALIDATION_ENV_FIXED_NOTE: &str = "ignored: required validation always probes the \
+     owner's interactive login shell (falling back to a login shell), prepends \
+     workflow.validation_env.path to the resolved PATH, and forces CARGO_INCREMENTAL=0 for bound \
+     host validation. Delete the key. This key stops being recognised after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
      removed; resident.evolution.window_days and decline_suppress_days still apply to the \
@@ -421,10 +492,6 @@ const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks,
 const REVIEW_TIMING_NOTE: &str = "translated to review.timing: before_pr = true is \"before_pr\", \
      before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead. \
      review.timing = before_pr itself is deprecated (use off or before_landing) but still honoured";
-
-const SHELL_PROBE_NOTE: &str = "translated to workflow.validation_env.shell_probe: login_shell = \
-     false is \"off\", interactive = false is \"login\", otherwise \"interactive\"; set \
-     shell_probe instead";
 
 /// A registry key whose deprecated value form still loads: the row's own
 /// resolver reads it, load warns, and `orbit doctor --fix-retired-config-keys`
