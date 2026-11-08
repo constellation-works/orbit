@@ -42,6 +42,7 @@ use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDo
 mod acceptance;
 mod artifact_paths;
 mod artifacts;
+mod bundle_stamp;
 mod creation_grant;
 mod crud;
 pub(crate) mod desktop;
