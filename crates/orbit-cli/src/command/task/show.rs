@@ -622,17 +622,28 @@ pub(crate) fn next_step_text(next: &Value) -> String {
     }
 }
 
-/// The words after `Final Recovery:` on a task show. Local and routed text
-/// both use this.
+/// The words after `Final Recovery:` on a task show, and an indented
+/// `Fault:` line when the decision recorded one (an older decision reads as
+/// `unknown` with no evidence and prints none). Local and routed text both
+/// use this.
 pub(crate) fn final_recovery_text(record: &Value) -> String {
     let part = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or_default();
-    format!(
+    let mut text = format!(
         "{} ({}) by run {} at {}",
         part("decision"),
         part("outcome"),
         part("run_id"),
         timestamp(part("at"))
-    )
+    );
+    let fault = part("fault");
+    let evidence = part("fault_evidence");
+    if !fault.is_empty() && (fault != "unknown" || !evidence.is_empty()) {
+        text.push_str(&format!("\n  Fault: {fault}"));
+        if !evidence.is_empty() {
+            text.push_str(&format!(" ({evidence})"));
+        }
+    }
+    text
 }
 
 /// One line per owed criterion on a task show: its state, host, command and

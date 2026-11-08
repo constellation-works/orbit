@@ -9,7 +9,7 @@ use orbit_types::task::{
     decision_option_answers,
 };
 use orbit_types::workflow::{
-    FinalRecoveryDecision, TRANSIENT_INFRA_BLOCKED_EVENT, TransientInfraBlock,
+    FaultAttribution, FinalRecoveryDecision, TRANSIENT_INFRA_BLOCKED_EVENT, TransientInfraBlock,
 };
 use serde_json::Value;
 
@@ -97,6 +97,9 @@ impl OrbitRuntime {
         infra: Option<TransientInfraBlock>,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
         let decision = FinalRecoveryDecision::from_output(output);
+        // Recorded beside the decision; a decision without one, such as an
+        // older follower's, reads as `unknown`.
+        let fault = FaultAttribution::of_output(output);
         if let FinalRecoveryDecision::Resume { step_id, .. } = &decision {
             return Ok(FinalRecoveryOutcome::Resume {
                 step_id: step_id.trim().to_string(),
@@ -145,7 +148,7 @@ impl OrbitRuntime {
                     self.ensure_mutation_proposals_applied(&task)?;
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
-                self.write_plan(&task, request, &decision, &plan)?;
+                self.write_plan(&task, request, &decision, &fault, &plan)?;
                 transition = Some((task.status, plan.status, plan.note.clone()));
                 applied = Some(plan.outcome);
                 Ok(())
@@ -545,6 +548,7 @@ impl OrbitRuntime {
         task: &Task,
         request: &FinalRecoveryRequest,
         decision: &FinalRecoveryDecision,
+        fault: &FaultAttribution,
         plan: &Plan,
     ) -> Result<(), OrbitError> {
         let comment = TaskComment {
@@ -567,6 +571,9 @@ impl OrbitRuntime {
                 run_id: request.run_id.clone(),
                 decision: decision.kind().to_string(),
                 outcome,
+                fault: fault.fault,
+                fault_evidence: fault.fault_evidence.clone(),
+                fault_judged_by: fault.judged_by.clone(),
             }),
         });
         let published =

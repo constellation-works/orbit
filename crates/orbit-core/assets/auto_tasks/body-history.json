@@ -4642,6 +4642,7 @@
       }
     }
   ],
+  "recovery-fault-audit": [],
   "run-failure-patterns": [
     {
       "comments": [
@@ -4819,6 +4820,32 @@
       ],
       "digest": "5d546f6f40c0da0872af6589fd1bf1973aefac25e1e4c71e07614125a992a977",
       "revision": "d2f0c13b735cb63c073125a887a521bca25b350d",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "5f290ec3483255af9e90a8b3e897f4a7f9eb851bd5747ea87740db6632863f0f",
+      "revision": "c2c48abde57c1ca4660e986e5b2caebe429829e2",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

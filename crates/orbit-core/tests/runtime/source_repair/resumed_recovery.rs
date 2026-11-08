@@ -154,6 +154,7 @@ fn resumed_fixture() -> Resumed {
     git(&checkout, &["commit", "-qm", "final-recovery repair"]);
     let repair = git(&checkout, &["rev-parse", "HEAD"]);
     let application = FinalRecoveryApplication {
+        fault: Default::default(),
         task_id: f.task.clone(),
         failed_step_id: "validate".into(),
         decision: FinalRecoveryDecision::Resume {

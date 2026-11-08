@@ -142,6 +142,9 @@ pub struct FinalRecoveryApplication {
     /// The decision as the engine will act on it: a `resume` here already
     /// names a valid step, and an invalid one arrives as `escalate`.
     pub decision: orbit_types::workflow::FinalRecoveryDecision,
+    /// Whose fault the failure was: the agent's attribution, or the engine's
+    /// from the triggering evidence for a decision it made itself.
+    pub fault: orbit_types::workflow::FaultAttribution,
     /// Top-level index a `resume` reruns from. Durable step checkpoints at and
     /// after it are stale once the run goes back there.
     pub resume_step_index: Option<u32>,

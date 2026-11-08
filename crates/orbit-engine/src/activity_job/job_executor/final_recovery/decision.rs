@@ -5,14 +5,24 @@ use crate::executor::automation::vcs::git::git_output;
 use super::super::*;
 use super::types;
 
-/// Dispatch the activity under its configured crew, returning its output and
-/// the dispatched spec's resolved model [ORB-16768].
+/// What a dispatched final recovery answered.
+pub(super) struct RecoveryDispatch {
+    /// The agent's own answer ([`decision_payload`]).
+    pub(super) payload: Value,
+    /// The dispatched spec's resolved model [ORB-16768].
+    pub(super) model: Option<String>,
+    /// Who judged the fault: that model, or the provider the dispatch ran
+    /// on when the spec named no model. Observed, never the agent's claim.
+    pub(super) judge: Option<String>,
+}
+
+/// Dispatch the activity under its configured crew.
 pub(super) fn dispatch_final_recovery(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     activity: &ResolvedRecoveryActivity,
     input: &Value,
-) -> Result<(Value, Option<String>), String> {
+) -> Result<RecoveryDispatch, String> {
     let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
         .map_err(|error| format!("crew: {error}"))?
         .unwrap_or_else(|| activity.spec.clone());
@@ -46,7 +56,9 @@ pub(super) fn dispatch_final_recovery(
         {
             // Evidence has no task selector. Only a well-formed decision reaches
             // the host's writer, using the engine's admitted task and worktree.
-            let decision = serde_json::from_value::<FinalRecoveryDecision>(payload.clone())
+            // The decision's fault fields ride beside it; parsing them is
+            // the caller's.
+            let decision = FinalRecoveryDecision::parse(&payload)
                 .map_err(|error| format!("invalid final recovery decision: {error}"))?;
             if !matches!(decision, FinalRecoveryDecision::Resume { .. }) {
                 return Err("evidence handoff requires a repair resume decision".into());
@@ -64,7 +76,18 @@ pub(super) fn dispatch_final_recovery(
                 )
                 .map_err(|error| format!("persist final recovery evidence: {error}"))?;
         }
-        Ok((payload, recovery_model))
+        let judge = recovery_model.clone().or_else(|| {
+            dispatch
+                .output
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        Ok(RecoveryDispatch {
+            payload,
+            model: recovery_model,
+            judge,
+        })
     } else {
         Err(dispatch
             .message

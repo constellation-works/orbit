@@ -123,6 +123,6 @@ pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
             original_summary
         );
     }
-    json!({"decision": "resume", "step_id": "review_gate_settle",
+    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
         "rationale": "repaired and verified candidate", "repair_evidence": evidence})
 }

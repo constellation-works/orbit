@@ -72,6 +72,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow, write_new_private_text};
 use orbit_store::maintenance::task_registry::task_registry_path;
 use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::RecoveryFault;
 use serde_json::Value;
 
 use super::blocked_recovery::FinalRecoveryRecord;
@@ -233,6 +234,10 @@ pub(crate) fn final_recovery_comment(comment: &TaskComment) -> Option<FinalRecov
         run_id: header_field(header, "run_id=")?.to_string(),
         decision: header_field(header, "decision=")?.to_string(),
         outcome: header_field(header, "outcome=").unwrap_or("-").to_string(),
+        // Legacy comments predate fault attribution.
+        fault: RecoveryFault::Unknown,
+        fault_evidence: String::new(),
+        fault_judged_by: None,
     })
 }
 

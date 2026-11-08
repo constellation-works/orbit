@@ -238,6 +238,10 @@ impl OrbitRuntime {
                     run_id: run_id.clone(),
                     decision: requeue.decision.to_string(),
                     outcome: RecordedFinalRecovery::Requeued,
+                    // A requeue judges no fault.
+                    fault: Default::default(),
+                    fault_evidence: String::new(),
+                    fault_judged_by: None,
                 }),
             });
         self.with_mutation(|| {

@@ -307,7 +307,7 @@ fn a_later_resume_target_records_the_downgrade_on_the_task() {
         &fixture,
         &run,
         &task,
-        json!({"decision": "resume", "step_id": "deliver", "rationale": "repair is ready"}),
+        json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "deliver", "rationale": "repair is ready"}),
         "review",
         TaskStatus::InProgress,
     );
@@ -360,7 +360,7 @@ fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails
                     &fixture,
                     &run,
                     &task,
-                    json!({"decision": "requeue", "reason": "the environment is repaired"}),
+                    json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "the environment is repaired"}),
                     "review",
                     failure_status,
                 );
@@ -439,25 +439,25 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
         "landed",
     ]);
     let commit = git(&["rev-parse", "HEAD"]);
-    let complete = json!({"decision": "complete_no_diff", "evidence_commit": commit, "rationale": "already landed"});
+    let complete = json!({"decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "evidence_commit": commit, "rationale": "already landed"});
     for job in ["task_pr_pipeline", "task_local_pipeline"] {
         for (decision, completion, status, event, outcome) in [
             (
-                json!({"decision": "escalate", "diagnosis": "provider denied access", "human_action": "restore access"}),
+                json!({"decision": "escalate", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "diagnosis": "provider denied access", "human_action": "restore access"}),
                 "review",
                 "blocked",
                 "final_recovery_escalated",
                 "escalated",
             ),
             (
-                json!({"decision": "reject", "reason": "invalid requirement", "evidence": "the contract excludes it"}),
+                json!({"decision": "reject", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "invalid requirement", "evidence": "the contract excludes it"}),
                 "review",
                 "rejected",
                 "final_recovery_rejected",
                 "settled",
             ),
             (
-                json!({"decision": "archive", "reason": "superseded"}),
+                json!({"decision": "archive", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "superseded"}),
                 "review",
                 "archived",
                 "final_recovery_archived",
@@ -598,7 +598,7 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
     let run = fixture.pipeline_run(&task_id, "task_pr_pipeline");
     let handoffs = AtomicUsize::new(0);
     let decision = json!({
-        "decision": "complete_no_diff",
+        "decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
         "evidence_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "rationale": "already landed"
     });

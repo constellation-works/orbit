@@ -114,7 +114,8 @@ pub fn task_record_json(
 /// `block` explains the latest block or escalation (reason, time and source).
 /// `next_step` says what to do about a task a failed run left `blocked`.
 /// `final_recovery` is the last automated final-recovery decision, with
-/// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
+/// `run_id`, `decision`, `outcome`, `fault` (`unknown` on an older decision),
+/// `fault_evidence`, `fault_judged_by` and `at`. `owed_criteria` lists each
 /// criterion the delivery owes after deploy, with its host, command, target
 /// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
@@ -139,15 +140,7 @@ pub fn task_show_json(
         );
     }
     if let Some(record) = super::FinalRecoveryRecord::last(&row.history, &row.comments) {
-        object.insert(
-            "final_recovery".to_string(),
-            serde_json::json!({
-                "run_id": record.run_id,
-                "decision": record.decision,
-                "outcome": record.outcome,
-                "at": record.at,
-            }),
-        );
+        object.insert("final_recovery".to_string(), final_recovery_json(&record));
     }
     if let Some(owed) = super::owed_criteria_json(&row.history) {
         object.insert("owed_criteria".to_string(), owed);
@@ -163,6 +156,21 @@ pub fn task_show_json(
         }
     }
     Ok(object)
+}
+
+/// The last final-recovery decision as `task show` and the `final_recovery`
+/// projection serve it. It names no crew or model, so a fault audit can read
+/// it blind to the implementer's model.
+fn final_recovery_json(record: &super::FinalRecoveryRecord) -> Value {
+    serde_json::json!({
+        "run_id": record.run_id,
+        "decision": record.decision,
+        "outcome": record.outcome,
+        "fault": record.fault,
+        "fault_evidence": record.fault_evidence,
+        "fault_judged_by": record.fault_judged_by,
+        "at": record.at,
+    })
 }
 
 /// One `orbit.task.show` / `orbit task show --fields` projection.
@@ -207,6 +215,11 @@ pub fn task_show_field_json(
             .placement_wait(task)
             .map_or(Value::Null, Value::String)),
         "open_decisions" => runtime.open_decisions_json(&task.id),
+        "final_recovery" => Ok(super::FinalRecoveryRecord::last(
+            &runtime.get_task_history(&task.id)?,
+            &runtime.get_task_comments(&task.id)?,
+        )
+        .map_or(Value::Null, |record| final_recovery_json(&record))),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)

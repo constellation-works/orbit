@@ -13,6 +13,7 @@ use std::path::Path;
 /// The failed run's inherited receipt, as the engine records an applied `resume`.
 fn resume_receipt(f: &Fixture) -> FinalRecoveryCheckpoint {
     FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: f.source.run_id.clone(),
             attempt: 1,

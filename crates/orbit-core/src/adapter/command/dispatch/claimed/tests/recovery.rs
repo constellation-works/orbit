@@ -261,6 +261,7 @@ impl Leaf {
             .jobs()
             .update_run_state(&self.leaf, &mut |_, state| {
                 state.final_recovery = Some(FinalRecoveryCheckpoint {
+                    fault: Default::default(),
                     key: FinalRecoveryKey {
                         run_id: leaf.clone(),
                         attempt: 1,

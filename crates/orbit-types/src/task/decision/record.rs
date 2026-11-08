@@ -33,6 +33,17 @@ pub enum TaskDecision {
         decision: String,
         /// What the applier did with it.
         outcome: RecordedFinalRecovery,
+        /// Whose fault the failure was; `unknown` on a decision recorded
+        /// before faults were.
+        #[serde(default)]
+        fault: crate::workflow::RecoveryFault,
+        /// One line citing the run, check or file the fault rests on.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        fault_evidence: String,
+        /// The model or provider of the recovery agent that judged the
+        /// fault, when Orbit observed one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fault_judged_by: Option<String>,
     },
     /// An operator's decision on the task-pilot assessment a receipt sealed.
     PilotAdmission {

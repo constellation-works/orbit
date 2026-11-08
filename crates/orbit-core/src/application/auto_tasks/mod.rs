@@ -162,6 +162,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),
     (
+        "recovery-fault-audit",
+        include_str!("../../../assets/auto_tasks/recovery-fault-audit.yaml"),
+    ),
+    (
         "run-failure-patterns",
         include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
     ),

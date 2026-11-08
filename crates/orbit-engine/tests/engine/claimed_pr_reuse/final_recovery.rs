@@ -329,8 +329,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                     input["failed_step_id"], "handoff",
                     "unexpected original error: {input}"
                 );
-                return Ok(json!({"decision": "resume", "step_id": "implement_bundle",
-                    "rationale": "Correct self-attribution; preserve the published candidate"}));
+                return Ok(
+                    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle",
+                    "rationale": "Correct self-attribution; preserve the published candidate"}),
+                );
             }
             _ => {}
         }
@@ -412,6 +414,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
             base_ref: Some(BASE.into()),
             admitted_at: Utc::now(),
             decision: None,
+            fault: Default::default(),
             repair_commit: None,
             resume_context: None,
             outcome: None,

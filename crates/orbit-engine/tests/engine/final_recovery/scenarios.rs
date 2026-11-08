@@ -22,7 +22,7 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState,
-    TransientInfrastructure,
+    RecoveryFault, TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
@@ -470,7 +470,7 @@ fn run_with_input(
 
 fn resume_to(step_id: &str) -> Reply {
     Reply::Ok(json!({
-        "decision": "resume",
+        "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
         "step_id": step_id,
         "rationale": "repaired the worktree",
     }))
@@ -478,7 +478,7 @@ fn resume_to(step_id: &str) -> Reply {
 
 fn escalate() -> Reply {
     Reply::Ok(json!({
-        "decision": "escalate",
+        "decision": "escalate", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
         "diagnosis": "the provider rejected the push",
         "human_action": "grant the token repository write access",
     }))
@@ -499,10 +499,10 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
         (
             "decide",
             vec![Reply::Ok(json!({
-                "decision": "resume",
+                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
                 "step_id": "work",
                 "rationale": "finished the implementation",
-                "response_result_fields": ["decision", "step_id", "rationale"],
+                "response_result_fields": ["decision", "fault", "fault_evidence", "step_id", "rationale"],
                 "invocation_id": "inv-1",
             }))],
         ),
@@ -562,7 +562,7 @@ fn resume_context_is_opaque_when_the_target_inherits_job_input() {
         (
             "decide",
             vec![Reply::Ok(json!({
-                "decision": "resume", "step_id": "work", "rationale": rationale,
+                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "work", "rationale": rationale,
             }))],
         ),
     ]);
@@ -607,7 +607,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
             (
                 "decide",
                 vec![Reply::Ok(json!({
-                    "decision": "resume", "step_id": "implement_bundle", "rationale": rationale,
+                    "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle", "rationale": rationale,
                 }))],
             ),
         ]);
@@ -697,7 +697,7 @@ fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id()
         (
             "decide",
             vec![Reply::Ok(json!({
-                "decision": "resume", "step_id": " work ", "rationale": "repair the probe",
+                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": " work ", "rationale": "repair the probe",
             }))],
         ),
     ]);
@@ -738,7 +738,7 @@ fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
         (
             "decide",
             vec![Reply::Ok(json!({
-                "decision": "resume", "step_id": "implement_bundle",
+                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle",
                 "rationale": "Name only the gate summary instead of hand-writing the deferral record",
             }))],
         ),
@@ -775,7 +775,7 @@ fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
         (
             "decide",
             vec![Reply::Ok(json!({
-                "decision": "archive",
+                "decision": "archive", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
                 "reason": "superseded by the landed rewrite",
             }))],
         ),
@@ -979,6 +979,7 @@ fn resumed_after(decision: FinalRecoveryDecision, outcome: Option<&str>) -> Pipe
         base_ref: Some("main".to_string()),
         admitted_at: Utc::now(),
         decision: Some(decision),
+        fault: Default::default(),
         outcome: outcome.map(str::to_string),
     });
     state
@@ -1325,6 +1326,110 @@ fn a_malformed_decision_is_escalated() {
     assert_eq!(host.count("handoff"), 1);
 }
 
+fn a_decision_carries_its_fault_and_one_without_a_fault_escalates() {
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail]),
+        (
+            "decide",
+            vec![Reply::Ok(json!({
+                "decision": "requeue",
+                "reason": "the task was rewritten",
+                "fault": "specification",
+                "fault_evidence": "file docs/spec.md contradicts criterion 2",
+                // Only Orbit's observation names the judge.
+                "fault_judged_by": "claimed-by-the-agent",
+            }))],
+        ),
+    ]);
+    run(&pipeline(false), &host, None);
+    let application = &host.applications()[0];
+    assert!(matches!(
+        application.decision,
+        FinalRecoveryDecision::Requeue { .. }
+    ));
+    assert_eq!(application.fault.fault, RecoveryFault::Specification);
+    assert_eq!(
+        application.fault.fault_evidence,
+        "file docs/spec.md contradicts criterion 2"
+    );
+    assert_eq!(application.fault.judged_by, None);
+
+    let host = RecoveryHost::new([
+        ("work", vec![Reply::Fail]),
+        (
+            "decide",
+            vec![Reply::Ok(json!({
+                "decision": "requeue",
+                "reason": "the task was rewritten",
+            }))],
+        ),
+    ]);
+    run(&pipeline(false), &host, None);
+    let application = &host.applications()[0];
+    assert!(
+        matches!(application.decision, FinalRecoveryDecision::Escalate { .. }),
+        "a decision without its fault is malformed: {application:?}"
+    );
+    assert_eq!(application.fault.fault, RecoveryFault::Unknown);
+    assert!(application.fault.fault_evidence.contains("`fault`"));
+}
+
+fn the_recovery_packet_withholds_the_implementers_model() {
+    let host = RecoveryHost::new([
+        (
+            "setup",
+            vec![Reply::Ok(json!({
+                "workspace_path": "/worktrees/run",
+                "base_ref": "main",
+                "base_sha": "0123456789abcdef0123456789abcdef01234567",
+                "provider": "claude",
+                "model": "claude-opus-5-5",
+                "argv_redacted": ["claude", "--model", "claude-opus-5-5"],
+                "final_message": "implemented with claude-opus-5-5",
+            }))],
+        ),
+        (
+            "work",
+            vec![Reply::Diagnostic(
+                "opus@high ran out of turns; the candidate fails cargo test".into(),
+            )],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    run_with_input(
+        &pipeline(false),
+        &host,
+        None,
+        Vec::new(),
+        json!({ "task_ids": ["T-1"], "crew": "opus@high" }),
+    );
+    let packet = host.inputs("decide").remove(0);
+    let text = packet.to_string();
+    for name in [
+        "claude-opus-5-5",
+        "opus@high",
+        "argv_redacted",
+        "\"provider\"",
+    ] {
+        assert!(
+            !text.contains(name),
+            "the packet names `{name}`: {packet:#}"
+        );
+    }
+    assert_eq!(
+        packet["step_outputs"]["setup"]["final_message"],
+        "implemented with [implementer model withheld]"
+    );
+    assert!(
+        packet["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("[implementer model withheld] ran out of turns"),
+        "{packet:#}"
+    );
+    assert_eq!(packet["workspace_path"], "/worktrees/run");
+}
+
 fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     let host = RecoveryHost::new([("setup", vec![Reply::Fail]), ("decide", vec![escalate()])]);
     let run = run(&pipeline(false), &host, None);
@@ -1441,7 +1546,7 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
             (
                 "decide",
                 vec![Reply::Ok(
-                    json!({"decision": "requeue", "reason": "retry later"}),
+                    json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "retry later"}),
                 )],
             ),
         ]);
@@ -1709,7 +1814,7 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
             (
                 "decide",
                 vec![Reply::Ok(json!({
-                    "decision": "resume",
+                    "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
                     "step_id": "sync_base",
                     "rationale": "resolved the stopped rebase",
                 }))],
@@ -1890,6 +1995,14 @@ fn recovery_contracts_3() {
             (
                 "a_malformed_decision_is_escalated",
                 a_malformed_decision_is_escalated,
+            ),
+            (
+                "a_decision_carries_its_fault_and_one_without_a_fault_escalates",
+                a_decision_carries_its_fault_and_one_without_a_fault_escalates,
+            ),
+            (
+                "the_recovery_packet_withholds_the_implementers_model",
+                the_recovery_packet_withholds_the_implementers_model,
             ),
         ]);
     });

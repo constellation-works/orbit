@@ -66,10 +66,19 @@ created_by, created_by_model, planned_by, implemented_by, status, terminal, prio
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
-readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model,
-orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments,
-history, artifacts
+readiness, pilot_warnings, open_decisions, final_recovery, orchestrator,
+orchestrator_model, orchestrator_model_source, origin, rule_fingerprint,
+created_at, updated_at, comments, history, artifacts
 ```
+
+`final_recovery` is the task's last final-recovery decision (`run_id`,
+`decision`, `outcome`, `fault`, `fault_evidence`, `fault_judged_by`, `at`),
+or `null`. `fault` says whose fault the failed run was: `implementer`,
+`specification`, `review`, `infrastructure`, `orbit`, `external` or `unknown`
+(also how a decision recorded before faults reads). `fault_judged_by` is the
+model, or else the provider, of the agent that judged it, as Orbit observed
+it; it is `null` when Orbit decided without an agent. The field has no
+member for the implementer's crew or model.
 
 Show without a projection returns the full task. A projection returns only
 the requested fields as JSON: a single field returns its value, and multiple

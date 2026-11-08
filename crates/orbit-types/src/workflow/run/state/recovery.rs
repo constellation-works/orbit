@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::task::TaskStatus;
-use crate::workflow::final_recovery::FinalRecoveryDecision;
+use crate::workflow::final_recovery::{FaultAttribution, FinalRecoveryDecision};
 
 /// Durable result of a job-level terminal failure activity.
 ///
@@ -134,6 +134,10 @@ pub struct FinalRecoveryCheckpoint {
     /// as the `escalate` they became.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<FinalRecoveryDecision>,
+    /// Whose fault the failure was, recorded with the decision. A checkpoint
+    /// written before faults were recorded reads as `unknown`.
+    #[serde(default)]
+    pub fault: FaultAttribution,
     /// A repair committed during recovery, recorded with the resume decision.
     /// Older run states carry no permission to accept a moved HEAD.
     #[serde(default, skip_serializing_if = "Option::is_none")]

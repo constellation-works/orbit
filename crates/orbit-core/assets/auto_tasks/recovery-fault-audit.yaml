@@ -1,0 +1,121 @@
+schemaVersion: 1
+name: recovery-fault-audit
+description: Weekly blind re-judgement of ten final-recovery fault attributions by a different model family; reports the disagreement rate per season and flags a season above 20% without changing any recorded decision
+enabled: false
+schedule:
+  cron: 0 7 * * 1
+template:
+  title: Audit final-recovery fault attribution
+  description: |-
+    Re-judge a sample of final-recovery fault attributions and report how
+    often an independent judge disagrees. Final recovery records a `fault`
+    (implementer, specification, review, infrastructure, orbit, external or
+    unknown) and a one-line `fault_evidence` on every decision. A measure
+    built on those faults is only as good as their agreement. The durable
+    output is recovery-fault-audit.json on this chore. Recorded decisions,
+    tasks, crews and routing stay as they are.
+
+    ## Stay blind to the implementer
+
+    Never learn which crew, provider or model implemented a sampled task.
+    Do not read task history, `orbit.task.show` without `fields`, run show,
+    run logs, crew assignments or experiment readouts for a sampled task,
+    and do not search for its crew. Read a task only through
+    `orbit.task.show` or `orbit.task.list` with `fields` limited to `id`,
+    `title`, `description`, `acceptance_criteria`, `context_files` and
+    `final_recovery`. If a field you read names the implementer's crew or
+    model anyway, exclude that decision, record it as a blindness breach
+    and draw a replacement.
+
+    ## Sample
+
+    Enumerate decisions with `orbit.task.list` and
+    `fields: ["id", "title", "final_recovery"]` across every status,
+    exhausting pages. Keep rows whose `final_recovery` is not null, has a
+    `fault` other than `unknown` and a non-empty `fault_evidence`. Drop rows
+    already judged by a previous audit (read its artifact below). Drop rows
+    whose `fault_judged_by` names your own model family (Claude, GPT/Codex,
+    Gemini, Grok and so on), so a different family re-judges each decision;
+    a row without `fault_judged_by` is eligible only when you record that
+    its judge is unknown. Draw 10 at random with a recorded seed. Fewer than
+    10 eligible rows is an evidenced short sample, never padding.
+
+    ## Re-judge
+
+    For each sampled decision, judge the fault from the task's title,
+    description, acceptance criteria and context files and from the
+    recorded `fault_evidence` and decision outcome only, before comparing
+    with the recorded fault. Use the shipped rubric, first supported fault
+    wins: specification (the task asked for something contradictory,
+    impossible or under-specified), review (review rejected or demanded
+    work the criteria do not support), infrastructure (host, network,
+    provider outage or quota), orbit (Orbit itself misbehaved), external
+    (a dependency or upstream change outside the workspace), implementer
+    (the delivered work was wrong or incomplete), unknown (the evidence
+    supports none). Record your fault, a one-line reason and agree or
+    disagree. An unknown re-judgement of a known recorded fault is a
+    disagreement.
+
+    ## Rate by season
+
+    A season is the model-ranking season the decision was recorded in. Until
+    ranking seasons are recorded, every decision is in `season-0`. Fetch the
+    previous completed audit's recovery-fault-audit.json: find done chores
+    with `orbit.task.list` (tag auto-task:recovery-fault-audit), exclude
+    this task, and read the newest artifact with `orbit.task.artifact.get`.
+    Missing prior evidence makes this a baseline; record why. Carry its
+    per-season judged and disagreed counts and its judged decision ids
+    forward, add this sample and report each season's cumulative
+    disagreement rate with its denominator. A season whose rate is above
+    20% suspends the fault measure for that season: report it as
+    `suspended`, never as a ranking input. A rate on fewer than 10 judged
+    decisions is reported with that caveat.
+
+    When a season is newly suspended, or the disagreements share a
+    pattern, file at most one proposed rubric-revision task. First
+    duplicate-check open and closed tasks with `orbit.search` (kind task,
+    all true, one distinctive token per query) and record any match
+    instead. Use `orbit.task.add` with type chore, explicit AC, the
+    disagreeing decision ids with both faults and reasons, and a
+    spawned_from relation to this chore. Read it back with
+    `orbit.task.show`.
+
+    ## Persist
+
+    Attach .orbit/tmp/recovery-fault-audit.json with schema_version: 1,
+    the audit time, your own model family, the eligible population size,
+    seed, exclusions with reasons (own family, already judged, blindness
+    breach), each sampled decision (task id, run id, recorded fault and
+    evidence, `fault_judged_by`, your fault and reason, agree or disagree),
+    per-season cumulative counts, rates and suspended flags, the prior
+    artifact reference, all judged decision ids and any filed or matched
+    task. Attach it with `orbit.task.artifact.put` (id this chore,
+    source_path the scratch file, path recovery-fault-audit.json). The
+    execution summary reports the sample size, per-season rates, suspended
+    seasons and gaps. A short sample or a baseline still persists the
+    artifact and succeeds.
+  acceptance_criteria:
+  - Up to 10 final-recovery decisions not judged by a previous audit and not judged by the auditor's own model family were sampled with a recorded seed, or a short sample was evidenced with the eligible population size
+  - Each sampled decision was re-judged from its task fields, recorded fault evidence and outcome only, without reading the implementer's crew, provider or model, and recorded with the auditor's fault, reason and agreement
+  - recovery-fault-audit.json is attached with per-season cumulative judged and disagreed counts carried from the prior audit artifact fetched through tools (or an evidenced baseline), each season's disagreement rate and a season above 20% reported as suspended
+  - At most 1 duplicate-checked proposed rubric-revision task was filed with a spawned_from relation to this chore and read back with `orbit.task.show`, or recovery-fault-audit.json records why none was filed
+  - No recorded decision, task status, crew, routing or configuration was changed
+  task_type: chore
+  tags:
+  - recovery-fault-audit
+  - no-diff-expected
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-11-08T00:00:00Z
+updated_by: system
+updated_at: 2026-11-08T00:00:00Z

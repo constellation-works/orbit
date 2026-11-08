@@ -473,6 +473,24 @@ re-init does not overwrite a workspace-authored definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
+- `recovery-fault-audit` — disabled-by-default weekly bias check [ORB-23301]
+  of the `fault` every final-recovery decision records
+  ([model ranking §5.2](../model-ranking/2_design.md#52-fault-on-final-recoveries)).
+  It enumerates decisions through the blind `final_recovery` task-field
+  projection, samples 10 not audited before and not judged by the
+  auditor's own model family (`fault_judged_by`), and re-judges each from
+  the task's title, description, criteria, context files and the recorded
+  evidence, never reading the implementer's crew, provider or model. It
+  carries per-season judged and disagreed counts forward from the previous
+  `recovery-fault-audit.json`, reports each season's disagreement rate and
+  marks a season above 20% `suspended`, and files at most one proposed
+  rubric-revision task. Seasons are `season-0` until model ranking records
+  them. It ships with the fault record it audits rather than after proven
+  yield (see [Promotion](#promotion-to-the-shipped-defaults)): the design
+  makes the audit a condition of using the fault, so no workspace could
+  run it earlier. `auto-task-yield-review` measures it like any other
+  default. The minted chore is tagged `no-diff-expected`.
+
 The former `blocked-task-triage` default (an hourly reader of escalated blocks,
 shipped by [ORB-17245]) is retired and is not seeded. [ORB-17744] had moved it
 to an event trigger on the escalation job, and [ORB-20629] made final recovery
@@ -702,5 +720,7 @@ encode this repository's branches and gates. Re-init preserves them:
   `ENABLED_BY_DEFAULT_AUTO_TASKS`.
 - [ORB-21840] — separated follower review-decision holds from failure
   accounting, with a separate `held_7d` counter.
+- [ORB-23301] — Shipped the disabled weekly `recovery-fault-audit` default
+  with the fault final recovery records.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

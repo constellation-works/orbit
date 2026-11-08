@@ -267,6 +267,7 @@ impl OrbitRuntime {
             run_id,
             decision,
             outcome,
+            ..
         }) = &entry.decision
         else {
             return None;
