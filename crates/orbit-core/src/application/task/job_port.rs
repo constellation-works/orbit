@@ -20,7 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use orbit_common::OrbitError;
 use orbit_types::identity::{AutoEffortChoice, Crew};
-use orbit_types::task::{DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::task::{
+    CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
+};
 use orbit_types::workflow::{
     CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
     ShipMode, SourceRepairBinding,
@@ -139,7 +141,7 @@ pub(in crate::application) trait TaskJobPort {
     /// The provenance `task`'s crew was assigned with: its recorded
     /// `crew_source`, else the latest assignment history entry naming its
     /// current crew; `None` for a task with no crew or no such evidence.
-    fn recorded_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError>;
+    fn recorded_crew_source(&self, task: &Task) -> Result<Option<CrewSource>, OrbitError>;
 
     /// Whether `task`, last delivered by an owner PR run, has a pull request
     /// or a publication-preservation record that no failure-handoff receipt

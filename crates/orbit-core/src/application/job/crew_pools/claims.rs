@@ -3,7 +3,7 @@ use super::draw::weighted_draw;
 use crate::OrbitRuntime;
 use crate::application::job::JobExperimentPort;
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
+use orbit_types::task::{CrewSource, Task};
 use serde_json::Value;
 
 impl OrbitRuntime {
@@ -54,7 +54,7 @@ impl OrbitRuntime {
         let mut view = task.clone();
         view.crew = Some(selected.crew.name.clone());
         if source != "task.crew" {
-            view.crew_source = Some(source);
+            view.crew_source = Some(CrewSource::parse(&source));
         }
         Ok(view)
     }

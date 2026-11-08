@@ -955,7 +955,13 @@ fn a_backlog_return_that_selects_the_crew_keeps_the_candidate_resumable() {
         .unwrap();
     assert_eq!(status(&f), TaskStatus::Backlog);
     assert_eq!(
-        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        f.runtime
+            .get_task(&f.task)
+            .unwrap()
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit")
     );
     assert_eq!(recorded(&f, "published_owner_requeued"), 1);
@@ -978,7 +984,13 @@ fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
         )
         .unwrap();
     assert_eq!(
-        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        f.runtime
+            .get_task(&f.task)
+            .unwrap()
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit")
     );
     f.runtime
@@ -995,7 +1007,10 @@ fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
     let task = f.runtime.get_task(&f.task).unwrap();
     assert_eq!(task.status, TaskStatus::Backlog);
     assert_ne!(
-        task.crew_source.as_deref(),
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit"),
         "the clear redrew the crew"
     );

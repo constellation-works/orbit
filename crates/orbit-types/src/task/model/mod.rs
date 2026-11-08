@@ -35,6 +35,7 @@ use crate::task::artifacts::{
 };
 use crate::task::{RegressionClassification, TaskDecision, TaskError};
 
+mod crew_source;
 mod status;
 mod support;
 mod task;
@@ -43,6 +44,7 @@ pub use status::*;
 
 pub use support::*;
 
+pub use crew_source::{CrewSource, RedrawReason};
 pub use task::*;
 pub(crate) use task::{
     LazyTaskReferenceIndex, resolve_task_dependencies_lazily, resolve_task_relations_lazily,

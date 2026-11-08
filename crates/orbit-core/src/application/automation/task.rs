@@ -13,7 +13,9 @@ use orbit_automation::{
     },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    CrewSource, DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
@@ -30,7 +32,7 @@ pub(super) fn mint(
     // whose executor can run under the task's `os:` tags.
     if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {
         params.crew = Some(crew);
-        params.crew_source = Some(orbit_config::REVIEW_CREW_KEY.to_string());
+        params.crew_source = Some(CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()));
     }
 
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());

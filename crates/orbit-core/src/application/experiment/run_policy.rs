@@ -50,9 +50,9 @@ impl OrbitRuntime {
             job_run_id: None,
             job_run_machine: None,
             crew: None,
-            crew_source: Some(format!(
-                "pool:{}",
-                task.complexity.map_or("medium", |tier| tier.as_str())
+            crew_source: Some(orbit_types::task::CrewSource::Pool(
+                task.complexity
+                    .unwrap_or(orbit_types::task::TaskComplexity::Medium),
             )),
             orchestrator: None,
             orchestrator_model: None,

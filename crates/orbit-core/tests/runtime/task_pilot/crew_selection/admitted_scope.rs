@@ -152,7 +152,14 @@ fn admitted_type_edits_keep_crew_until_fresh_admission_and_explicit_correction()
             )
             .unwrap();
         assert_eq!(routed.crew.as_deref(), Some("low_lane"));
-        assert_eq!(routed.crew_source.as_deref(), Some("type:ui/hard"));
+        assert_eq!(
+            routed
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("type:ui/hard")
+        );
         let task = workspace
             .runtime
             .update_task_with_identity(
@@ -295,7 +302,14 @@ fn admitted_type_edits_keep_crew_until_fresh_admission_and_explicit_correction()
                 "human:fixture".into(),
             )
             .unwrap();
-        assert_eq!(corrected.crew_source.as_deref(), Some("explicit"));
+        assert_eq!(
+            corrected
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
         assert_eq!(
             workspace
                 .runtime

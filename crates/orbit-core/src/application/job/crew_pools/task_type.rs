@@ -10,10 +10,10 @@
 
 use orbit_common::OrbitError;
 use orbit_config::{OTHER_TYPE, canonical_crew_pool, type_complexity_crews_key};
-use orbit_types::task::{Task, TaskComplexity, TaskOsRequirement};
+use orbit_types::task::{CrewSource, Task, TaskComplexity, TaskOsRequirement};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{CrewCandidate, parse_type_crew_source, type_crew_source};
+use crate::application::contracts::CrewCandidate;
 
 /// The type pool a task routes to: its classified type and its tier.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,9 +23,12 @@ pub(crate) struct TypePoolRoute {
 }
 
 impl TypePoolRoute {
-    /// The `type:<type>/<tier>` provenance a draw from this pool records.
-    pub(crate) fn crew_source(&self) -> String {
-        type_crew_source(&self.task_type, self.tier)
+    /// The provenance a draw from this pool records.
+    pub(crate) fn crew_source(&self) -> CrewSource {
+        CrewSource::Type {
+            task_type: self.task_type.clone(),
+            tier: self.tier,
+        }
     }
 }
 
@@ -86,7 +89,7 @@ impl OrbitRuntime {
         let Some(source) = self.task_crew_source(task)? else {
             return Ok(None);
         };
-        let Some((task_type, tier)) = parse_type_crew_source(&source) else {
+        let Some((task_type, tier)) = source.type_route() else {
             return Ok(None);
         };
         self.type_pool_candidates(

@@ -248,11 +248,25 @@ fn static_selection_draws_and_records_as_before() {
     let fx = Fixture::new(&config(r#"["sol"]"#, "[]", ""));
     let assigned = fx.task("assigned.txt", TaskComplexity::Hard, None, &[]);
     assert_eq!(assigned.crew.as_deref(), Some("sol"));
-    assert_eq!(assigned.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        assigned
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
     // Created before the pool exists, this task draws the whole pool.
     fx.configure(&config("[]", "[]", ""));
     let unpooled = fx.task("unpooled.txt", TaskComplexity::Hard, None, &[]);
-    assert_eq!(unpooled.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        unpooled
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
     read_example_week(&fx);
 
     for extra in ["", "crew_selection = \"static\""] {
@@ -295,7 +309,12 @@ fn static_selection_draws_and_records_as_before() {
         assert_eq!(current.crew.as_deref(), Some(drawn.as_str()), "[{extra}]");
         assert!(
             current.crew_source == unpooled.crew_source
-                || current.crew_source.as_deref() == Some("redraw:pool"),
+                || current
+                    .crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref()
+                    == Some("redraw:pool"),
             "[{extra}] {:?}",
             current.crew_source
         );
@@ -314,7 +333,13 @@ fn usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment() {
     let fx = Fixture::new(&config(r#"["sol"]"#, "[]", ""));
     let task = fx.task("pool.txt", TaskComplexity::Hard, None, &[]);
     assert_eq!(task.crew.as_deref(), Some("sol"));
-    assert_eq!(task.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
     fx.configure(&config(POOL, "[]", "crew_selection = \"usage_pressure\""));
     read_example_week(&fx);
 
@@ -354,7 +379,14 @@ fn usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment() {
         Some(drawn),
         "the draw is persisted"
     );
-    assert_eq!(current.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        current
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
     let redraws = fx.redraws(&task.id);
     if drawn == "sol" {
         assert!(
@@ -390,11 +422,22 @@ fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
             &["baseline-red-repair"],
         );
         assert_eq!(
-            purpose.crew_source.as_deref(),
+            purpose
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("purpose:baseline_red_repair")
         );
         let explicit = fx.task("explicit.txt", TaskComplexity::Hard, Some("sol"), &[]);
-        assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+        assert_eq!(
+            explicit
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
         fx.configure(&config(
             r#"["opus", "sol"]"#,
             r#"["opus", "sol"]"#,
@@ -417,7 +460,11 @@ fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
             let current = fx.runtime().get_task(&task.id).unwrap();
             assert_eq!(current.crew.as_deref(), Some("opus"));
             assert_eq!(
-                current.crew_source.as_deref(),
+                current
+                    .crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
                 Some(source),
                 "the automatic source is kept"
             );
@@ -452,13 +499,27 @@ fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
         }
         let current = fx.runtime().get_task(&explicit.id).unwrap();
         assert_eq!(current.crew.as_deref(), Some("sol"));
-        assert_eq!(current.crew_source.as_deref(), Some("explicit"));
+        assert_eq!(
+            current
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
         assert!(fx.redraws(&explicit.id).is_empty());
         // The task records the run crew it ran [ORB-19416] under an automatic
         // source, so a later admission draws the pool again.
         let current = fx.runtime().get_task(&pooled.id).unwrap();
         assert_eq!(current.crew.as_deref(), Some("sol"));
-        assert_eq!(current.crew_source.as_deref(), Some("redraw:run_crew"));
+        assert_eq!(
+            current
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("redraw:run_crew")
+        );
     });
 }
 
@@ -477,7 +538,14 @@ fn a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure() {
             Some("opus"),
             "creation weighs pressure"
         );
-        assert_eq!(created.crew_source.as_deref(), Some("pool:hard"));
+        assert_eq!(
+            created
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("pool:hard")
+        );
 
         let task = fx.task("rerated.txt", TaskComplexity::Medium, None, &[]);
         assert_eq!(task.crew.as_deref(), Some("sol"));
@@ -493,7 +561,14 @@ fn a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure() {
             Some("opus"),
             "the re-rate draw weighs pressure"
         );
-        assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+        assert_eq!(
+            rerated
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("pool:hard")
+        );
         assert_eq!(
             fx.redraws(&task.id),
             [
@@ -510,7 +585,13 @@ fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
     substitute_worker();
     let fx = Fixture::new(&config("[]", "[]", ""));
     let task = fx.task("floor.txt", TaskComplexity::Hard, None, &[]);
-    assert_eq!(task.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
 
     fx.configure(&config(r#"["opus:0", "sol:1"]"#, "[]", DECISIVE));
     fx.week("claude", 0.0, Duration::hours(6));

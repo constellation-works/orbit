@@ -472,7 +472,11 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
     let created = fx.filed_task(None, &["baseline-red-repair"], "file:purpose.txt");
     assert_eq!(created.crew.as_deref(), Some("opus"), "{created:?}");
     assert_eq!(
-        created.crew_source.as_deref(),
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair"),
         "{created:?}"
     );
@@ -527,7 +531,14 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
 
     // An explicit crew on a purpose-tagged task is still a pin.
     let explicit = fx.filed_task(Some("opus"), &["baseline-red-repair"], "file:explicit.txt");
-    assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        explicit
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
     let entry = fx.readiness(&explicit.id);
     assert_eq!(entry["eligible"], false, "{entry}");
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
@@ -698,7 +709,14 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
         &["auto-task:ux-review-ui"],
         "file:auto-reassigned.txt",
     );
-    assert_eq!(created.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
     let task = created.id.clone();
     fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
 
@@ -711,7 +729,11 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
     let stored = runtime.get_task(&task).unwrap();
     assert_eq!(stored.crew.as_deref(), Some("sol"), "{stored:?}");
     assert_eq!(
-        stored.crew_source.as_deref(),
+        stored
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("pool:hard"),
         "{stored:?}"
     );
@@ -803,7 +825,11 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
         "{stored:?}"
     );
     assert_eq!(
-        stored.crew_source.as_deref(),
+        stored
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("redraw:provider_limit"),
         "{stored:?}"
     );
@@ -979,7 +1005,10 @@ fn allowlist_redraws_a_purpose_assignment() {
         .unwrap();
     assert_eq!(task.crew.as_deref(), Some("opus"));
     assert_eq!(
-        task.crew_source.as_deref(),
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("workflow.purpose_crews.review")
     );
     let explicit = fx.filed_task(
@@ -1013,7 +1042,11 @@ fn allowlist_redraws_a_purpose_assignment() {
     let updated = fx.runtime().get_task(&task.id).unwrap();
     assert_eq!(updated.crew.as_deref(), admitted["crew"].as_str());
     assert_eq!(
-        updated.crew_source.as_deref(),
+        updated
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("workflow.purpose_crews.review")
     );
 }
@@ -1095,10 +1128,24 @@ fn creation_pool_draws_skip_provider_limited_crews() {
         let runtime = configure("[\"implementer:100\", \"orchestration:1\"]");
         let available = add(&runtime, None);
         assert_eq!(available.crew.as_deref(), Some("orchestration"), "{source}");
-        assert_eq!(available.crew_source.as_deref(), Some(source));
+        assert_eq!(
+            available
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source)
+        );
         let pinned = add(&runtime, Some("implementer".into()));
         assert_eq!(pinned.crew.as_deref(), Some("implementer"));
-        assert_eq!(pinned.crew_source.as_deref(), Some("explicit"));
+        assert_eq!(
+            pinned
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
 
         reading.resets_at = Some(Utc::now() - Duration::minutes(1));
         runtime
@@ -1107,7 +1154,14 @@ fn creation_pool_draws_skip_provider_limited_crews() {
         let runtime = configure("[\"implementer\"]");
         let reset = add(&runtime, None);
         assert_eq!(reset.crew.as_deref(), Some("implementer"));
-        assert_eq!(reset.crew_source.as_deref(), Some(source));
+        assert_eq!(
+            reset
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source)
+        );
     }
 }
 

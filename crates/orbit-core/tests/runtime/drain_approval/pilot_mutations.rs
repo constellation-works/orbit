@@ -194,7 +194,11 @@ fn pilot_routing_and_crew_redraw_are_approved_once_and_preserve_host_holds() {
             Some(if redraw { "sol" } else { "fixture" })
         );
         assert_eq!(
-            routed.crew_source.as_deref(),
+            routed
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some(if redraw { "pool:medium" } else { "default" })
         );
         let replay = workspace.action("apply_task_pilot_results", input).unwrap();

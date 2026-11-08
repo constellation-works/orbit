@@ -228,7 +228,7 @@ fn mismatches_for(
 
 fn crew_of(fx: &Fixture, task: &str) -> (Option<String>, Option<String>) {
     let task = fx.runtime.get_task(task).unwrap();
-    (task.crew, task.crew_source)
+    (task.crew, task.crew_source.map(|source| source.to_string()))
 }
 
 fn last_crew_note(fx: &Fixture, task: &str) -> String {
@@ -336,7 +336,14 @@ fn a_provider_hold_redraw_is_written_back_to_the_task() {
     let fx = fixture(HOLD_CREWS);
     let job = delivery_job(&fx);
     let created = fx.tagged_task(&[], None);
-    assert_eq!(created.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
     let held = created.crew.clone().unwrap();
     let other = if held == "sol" { "luna" } else { "sol" };
     let run = fx.admit(&created.id, &held);

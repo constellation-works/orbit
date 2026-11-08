@@ -890,7 +890,13 @@ fn a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew() {
     );
     let kept = workspace.runtime.get_task(&task.id).unwrap();
     assert_eq!(kept.crew.as_deref(), Some("fixture"));
-    assert_eq!(kept.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        kept.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
     assert_eq!(kept.complexity, Some(TaskComplexity::Medium));
     assert_eq!(kept.tags, ["os:linux"]);
     assert_ne!(kept, before);

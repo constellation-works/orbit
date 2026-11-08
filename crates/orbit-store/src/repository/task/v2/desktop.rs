@@ -2,7 +2,7 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
-use orbit_types::task::{DesktopMutationReceipt, TaskDecision};
+use orbit_types::task::{CrewSource, DesktopMutationReceipt, TaskDecision};
 
 fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     let bytes = serde_json::to_vec(&(
@@ -156,7 +156,7 @@ impl TaskV2Store {
             }
             if let Some(v) = &p.fields.crew {
                 b.envelope.crew = (!v.is_empty()).then(|| v.clone());
-                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| "explicit".to_string());
+                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| CrewSource::Explicit);
             }
             if let Some(source) = &p.crew_source {
                 b.envelope.crew_source = source.clone();

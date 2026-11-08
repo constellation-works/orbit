@@ -13,7 +13,9 @@ use orbit_store::contracts::{
     EXECUTOR_CENSUS_LIVENESS_SECONDS, ExecutorCapability, ExecutorCensus, ExecutorCensusEntry,
     TaskDocumentUpdateParams,
 };
-use orbit_types::task::{AdmissionAffinityReach, ExecutorOsLimit, HostOs, Task, TaskComplexity};
+use orbit_types::task::{
+    AdmissionAffinityReach, CrewSource, ExecutorOsLimit, HostOs, Task, TaskComplexity,
+};
 
 use super::*;
 
@@ -482,7 +484,7 @@ fn pressure_orders_tied_candidates_below_priority_and_expiry() {
                     priority: Some(priority),
                     complexity: Some(complexity),
                     crew: Some(Some("codex".to_string())),
-                    crew_source: Some(Some(source.to_string())),
+                    crew_source: Some(Some(CrewSource::parse(source))),
                     ..Default::default()
                 },
             )
@@ -576,8 +578,12 @@ fn pressure_orders_tied_candidates_below_priority_and_expiry() {
         let summary = receipt.task.as_ref().expect("task summary");
         assert_eq!(summary.id, expected.id, "{name}");
         assert_eq!(
-            summary.crew_source.as_deref(),
-            Some(if takes_older { "pool:low" } else { "pool:hard" }),
+            summary.crew_source,
+            Some(CrewSource::Pool(if takes_older {
+                TaskComplexity::Low
+            } else {
+                TaskComplexity::Hard
+            })),
             "{name}: the receipt carries the automatic source"
         );
         assert_eq!(

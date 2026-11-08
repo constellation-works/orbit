@@ -535,7 +535,11 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
     let recorded = linux.get_task(&task.id).unwrap();
     assert_eq!(recorded.crew.as_deref(), Some("sol"));
     assert_eq!(
-        recorded.crew_source.as_deref(),
+        recorded
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("redraw:run_crew"),
         "run override does not pin the task"
     );
@@ -896,7 +900,11 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         "a macOS follower serves the workspace, so the draw may pick muse-wonder"
     );
     assert_eq!(
-        drawn.crew_source.as_deref(),
+        drawn
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("pool:medium"),
         "the draw records pool provenance"
     );
@@ -968,7 +976,14 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         Some("muse-wonder"),
         "the re-rate draw counts the macOS follower as serving"
     );
-    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        rerated
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
 
     let plain = add(&rerate_linux, "rerated-plain", None, &[]).expect("medium draw");
     rerate_linux
@@ -1091,11 +1106,25 @@ fn serving_host_draws_respect_effective_task_os_tags() {
     let fallback = add(&owner, "linux-fallback", None, &[" OS:LiNuX "])
         .expect("a macOS-only pool must fall back for a Linux-only task");
     assert_eq!(fallback.crew.as_deref(), Some("sol"));
-    assert_eq!(fallback.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        fallback
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
 
     let untagged = add(&owner, "unrestricted-draw", None, &[]).unwrap();
     assert_eq!(untagged.crew.as_deref(), Some("muse-wonder"));
-    assert_eq!(untagged.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        untagged
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
     let either = add(&owner, "either-os", None, &["os:linux", "os:macos"]).unwrap();
     assert_eq!(either.crew.as_deref(), Some("muse-wonder"));
 
@@ -1116,7 +1145,14 @@ fn serving_host_draws_respect_effective_task_os_tags() {
             .expect("clearing uses the effective tags and compatible fallback");
         let cleared = owner.get_task(&task.id).unwrap();
         assert_eq!(cleared.crew.as_deref(), Some("sol"));
-        assert_eq!(cleared.crew_source.as_deref(), Some("default"));
+        assert_eq!(
+            cleared
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("default")
+        );
         assert_eq!(cleared.tags, vec!["os:linux"]);
     }
 
@@ -1144,7 +1180,15 @@ fn serving_host_draws_respect_effective_task_os_tags() {
         };
         assert_eq!(rerated.complexity, Some(TaskComplexity::Hard));
         assert_eq!(rerated.crew.as_deref(), Some(crew), "{title}");
-        assert_eq!(rerated.crew_source.as_deref(), Some(source), "{title}");
+        assert_eq!(
+            rerated
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source),
+            "{title}"
+        );
         assert_eq!(rerated.tags.is_empty(), title == "removed-linux", "{title}");
     }
 }

@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
 use crate::task::{
-    ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority, TaskStatus,
-    TaskType,
+    CrewSource, ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority,
+    TaskStatus, TaskType,
 };
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -97,10 +97,10 @@ pub struct TaskEnvelopeV2 {
     pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
-    /// Absent on legacy records; assignment history can recover it.
+    /// Assignment provenance; see [`CrewSource`]. Absent on legacy records;
+    /// assignment history can recover it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,

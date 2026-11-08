@@ -144,17 +144,37 @@ fn auto_task_templates_without_a_crew_draw_the_pool_for_their_complexity() {
 
     let hard = fx.mint("hard-review", TaskComplexity::Hard, None);
     assert_eq!(hard.crew.as_deref(), Some("hard_lane"));
-    assert_eq!(hard.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        hard.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
 
     // A template still naming the retired crew routes the same way.
     let retired = fx.mint("retired-lane", TaskComplexity::Hard, Some("system"));
     assert_eq!(retired.crew.as_deref(), Some("hard_lane"));
-    assert_eq!(retired.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        retired
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
 
     // An explicit template crew still wins over the pool.
     let pinned = fx.mint("pinned-review", TaskComplexity::Hard, Some("low_codex"));
     assert_eq!(pinned.crew.as_deref(), Some("low_codex"));
-    assert_eq!(pinned.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        pinned
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
 }
 
 fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews() {

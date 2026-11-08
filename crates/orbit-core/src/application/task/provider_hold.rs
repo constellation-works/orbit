@@ -22,11 +22,11 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::ProviderLimitExplicitCrews;
-use orbit_types::task::Task;
+use orbit_types::task::{CrewSource, Task};
 use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold};
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{CrewCandidate, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX};
+use crate::application::contracts::CrewCandidate;
 use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::task::provider_hold::same_provider;
 
@@ -126,8 +126,10 @@ impl OrbitRuntime {
         // A collapsed `purpose:` or `type:` assignment names only the chosen
         // member. Retry the pool's other enabled members before the
         // complexity pool.
-        if (source.starts_with(PURPOSE_SOURCE_PREFIX) || source.starts_with(TYPE_SOURCE_PREFIX))
-            && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
+        if matches!(
+            CrewSource::parse(source),
+            CrewSource::Purpose(_) | CrewSource::Type { .. }
+        ) && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
         {
             let pool = permitted(&pool);
             if drawable(&pool) {

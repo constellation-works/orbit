@@ -5,7 +5,7 @@ use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExperimentAssignment, ExperimentRecord, ExperimentStoreBackend as _};
-use orbit_types::task::Task;
+use orbit_types::task::{CrewSource, Task};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -30,7 +30,7 @@ impl OrbitRuntime {
             .crew
             .as_deref()
             .is_some_and(|crew| !crew.trim().is_empty())
-            && self.task_crew_source(task)?.as_deref() == Some("explicit");
+            && self.task_crew_source(task)? == Some(CrewSource::Explicit);
         self.sqlite_store()?.assign_experiments(
             &self.workspace_id()?,
             &task.id,

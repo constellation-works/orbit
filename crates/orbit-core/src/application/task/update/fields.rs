@@ -1,8 +1,8 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{
-    LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus, is_system_identity_tag,
-    is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
+    CrewSource, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus,
+    is_system_identity_tag, is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
@@ -236,7 +236,7 @@ impl OrbitRuntime {
                 }
                 crew_assignment = crew.as_ref().map(|crew| CreationCrewAssignment {
                     crew: crew.clone(),
-                    source: "explicit".to_string(),
+                    source: CrewSource::Explicit,
                 });
             }
         }

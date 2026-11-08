@@ -1,7 +1,9 @@
 use orbit_common::OrbitError;
 use orbit_config::ComplexityCrewPools;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    CrewSource, Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -53,7 +55,7 @@ impl AdmissionTaskWrites {
 /// A usage-pressure re-draw of the task's automatic crew [ORB-17770].
 struct UsagePressureRedraw {
     original: String,
-    source: String,
+    source: CrewSource,
     replacement: String,
     note: String,
 }
@@ -616,7 +618,7 @@ impl OrbitRuntime {
                 TaskRecordUpdateParams {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     crew: Some(Some(replacement.to_string())),
-                    crew_source: Some(Some(format!("pool:{}", plan.complexity.as_str()))),
+                    crew_source: Some(Some(CrewSource::Pool(plan.complexity))),
                     expected_status: Some(vec![current.status]),
                     append_comments: vec![TaskComment {
                         at: now,
@@ -704,7 +706,7 @@ impl OrbitRuntime {
         &self,
         task_id: &str,
         original: &str,
-        source: &str,
+        source: &CrewSource,
         replacement: &str,
         note: &str,
     ) -> Result<(), OrbitError> {
@@ -714,7 +716,7 @@ impl OrbitRuntime {
             .with_task_write_lock(task_id, &mut || {
                 let current = self.get_task(task_id)?;
                 if current.crew.as_deref() != Some(original)
-                    || self.task_crew_source(&current)?.as_deref() != Some(source)
+                    || self.task_crew_source(&current)?.as_ref() != Some(source)
                 {
                     return Ok(());
                 }
@@ -723,7 +725,7 @@ impl OrbitRuntime {
                     TaskRecordUpdateParams {
                         actor: SYSTEM_ACTOR_LABEL.to_string(),
                         crew: Some(Some(replacement.to_string())),
-                        crew_source: Some(Some(source.to_string())),
+                        crew_source: Some(Some(source.clone())),
                         expected_status: Some(vec![current.status]),
                         append_history: vec![TaskHistoryEntry {
                             at: now,
@@ -747,7 +749,7 @@ impl OrbitRuntime {
 /// moved from and to, with the pressure that drew each one.
 fn usage_pressure_redraw_note(
     original: &str,
-    source: &str,
+    source: &CrewSource,
     replacement: &str,
     weighting: &DrawWeighting,
 ) -> String {
