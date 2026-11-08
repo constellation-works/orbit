@@ -124,6 +124,7 @@ source scan, enforces the runtime direction.
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
+| Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `task/mod.rs` keeps a two-line re-export shim | [ORB-22287] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
@@ -306,7 +307,7 @@ moved the backlog forecast out of `task` to its own place in the order:
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
-  `workspace_auto`, `experiment`, `search` or `notice` by path, grouped tree or `super::` chain,
+  `workspace_auto`, `experiment`, `search`, `notice` or `evolution` by path, grouped tree or `super::` chain,
   when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
   `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
@@ -464,6 +465,20 @@ checks, owner fencing and closure timing stay in notice. The guard's `task`
 upper-module list names `notice`, so a path, grouped tree, `super::` chain
 or call to a notice-defined inherent method from `task` is refused.
 
+`evolution` (the capability-gap ledger) sits outside the order but above
+`task` [ORB-23018]. It reads tasks for cost validation and proposal state and
+replays task comments for recovery. Task writes project checkpoint costs only
+through `task::TaskEvolutionPort::project_task_checkpoint_costs`, implemented
+on `OrbitRuntime` in `evolution/operations.rs` by forwarding to the existing
+`ingest_checkpoint_costs`. The call stays immediately after the durable task
+mutation under the task lock: ingestion errors still propagate after the
+comment commits. Proposal refresh, coordination authority checks, source-key
+deduplication and persisted occurrences stay unchanged, as does the public
+`reconcile_evolution_checkpoint` replay path for interrupted ingestion. The
+guard's `task` upper-module list names `evolution`, refusing task paths,
+grouped trees, `super::` chains and evolution-owned inherent calls. All public
+evolution APIs remain available.
+
 The remaining back-edges among the unordered modules (`resident`,
 `experiment`, `codebase`) and the rest of the application still keep the
 core strongly connected component and await a later audit. [ORB-22708] cut
@@ -502,5 +517,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 - [ORB-22807] — removed visual review: `visual_delivery`, `review::ReviewVisualPort`, `distributed::DistributedVisualPort`, `task::mock_admission` and `task::visual_review_json` are gone, `landing` calls down into `task`, `job` and `distributed` only, and the guard's `visual_delivery` rule is dropped.
 - [ORB-23017] — cut task's done-transition notice closure through `task::TaskNoticePort`, implemented by `notice`, and added `notice` to the guarded `task` upper modules.
+- [ORB-23018] — cut task's post-commit checkpoint cost projection through `task::TaskEvolutionPort`, implemented by `evolution`, and added `evolution` to the guarded `task` upper modules without changing ingestion or replay.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

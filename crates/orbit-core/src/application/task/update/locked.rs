@@ -28,7 +28,7 @@ use super::entry::{
     LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
 };
 use crate::OrbitRuntime;
-use crate::application::task::{TaskJobPort, TaskResidentPort, TaskReviewPort};
+use crate::application::task::{TaskEvolutionPort, TaskJobPort, TaskResidentPort, TaskReviewPort};
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -589,7 +589,7 @@ impl OrbitRuntime {
             Ok((updated.clone(), event))
         })?;
 
-        self.ingest_checkpoint_costs(&append_comments)?;
+        self.project_task_checkpoint_costs(&append_comments)?;
 
         if evidence_attached {
             self.resume_review_evidence(id)?;

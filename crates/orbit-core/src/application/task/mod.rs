@@ -28,6 +28,7 @@ pub(crate) use decision::rules as decision_rules;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
+mod evolution_port;
 mod executor_host_os;
 mod experiment_port;
 mod external_merge;
@@ -137,6 +138,7 @@ pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
 pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
+pub(in crate::application) use evolution_port::TaskEvolutionPort;
 pub(in crate::application) use experiment_port::TaskExperimentPort;
 pub(crate) use final_recovery::TERMINAL_REFUSAL_MARK;
 pub use final_recovery::{
