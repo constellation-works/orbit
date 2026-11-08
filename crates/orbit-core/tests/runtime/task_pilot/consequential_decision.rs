@@ -4,8 +4,8 @@
 //! that leaves an ownership or policy choice, or an unenumerated surface a
 //! stop rule reaches, and a description whose only open choices are ordinary
 //! implementation choices. The incidents are an open ownership policy
-//! [ORB-21111] and a surface the stop rule reaches that the spec did not
-//! enumerate [ORB-21174].
+//! [ORB-21111], a later resolution of that same choice [ORB-23274], and a
+//! surface the stop rule reaches that the spec did not enumerate [ORB-21174].
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
@@ -107,6 +107,49 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
         "ORB-21111: a stated ownership policy must not hold",
     );
     assert_public_clear(&workspace, &settled_ownership);
+
+    let resolved_after_open = filed(
+        &workspace,
+        "The ownership policy was undecided. Preserve the current ownership policy.",
+    );
+    assert_no_consequential_hold(
+        &assess(&workspace, &resolved_after_open, json!([])),
+        "ORB-23274: a later preserve of the same ownership policy must not hold",
+    );
+    assert_public_clear(&workspace, &resolved_after_open);
+
+    let resolved_before_open = filed(
+        &workspace,
+        "Preserve the current ownership policy. The ownership policy was undecided.",
+    );
+    assert_holds(
+        &assess(&workspace, &resolved_before_open, json!([])),
+        "the ownership policy",
+        "a resolution before the open marker must not clear the hold",
+    );
+    assert_public_hold(&workspace, &resolved_before_open, "the ownership policy");
+
+    let negated_resolution = filed(
+        &workspace,
+        "The ownership policy was undecided. Do not preserve the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &negated_resolution, json!([])),
+        "the ownership policy",
+        "do not preserve must not count as a resolution",
+    );
+    assert_public_hold(&workspace, &negated_resolution, "the ownership policy");
+
+    let different_choice = filed(
+        &workspace,
+        "The retry policy is undecided. Preserve the current ownership policy.",
+    );
+    assert_holds(
+        &assess(&workspace, &different_choice, json!([])),
+        "the policy choice",
+        "preserving a different choice must not clear an open policy",
+    );
+    assert_public_hold(&workspace, &different_choice, "the policy choice");
 
     let split_sentence = filed(
         &workspace,

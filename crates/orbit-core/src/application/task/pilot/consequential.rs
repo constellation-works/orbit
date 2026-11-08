@@ -39,6 +39,21 @@ const OWNERSHIP_NEGATIONS: [&str; 6] = [
     "ordinary implementation",
 ];
 
+/// Later-sentence verbs that state which ownership or policy to keep.
+/// A same-sentence open marker still wins. A negated verb ("do not
+/// preserve", "doesn't keep") is not a resolution [ORB-23274].
+const OWNERSHIP_RESOLUTION_VERBS: [&str; 9] = [
+    "preserve",
+    "preserves",
+    "preserving",
+    "keep",
+    "keeps",
+    "keeping",
+    "retain",
+    "retains",
+    "retaining",
+];
+
 const UNLISTED_CUES: [&str; 9] = [
     "unlisted",
     "does not enumerate",
@@ -181,38 +196,81 @@ fn utility_warnings_mut(assessment: &mut Value) -> Option<&mut Vec<Value>> {
         .and_then(Value::as_array_mut)
 }
 
-/// Ownership or policy left open in one sentence. An open marker wins over
-/// settlement words in that sentence: "choose whether to preserve the current
-/// ownership policy" is still undecided. A later sentence that only says
-/// "undecided" does not attach the choice named in a different sentence.
+/// Ownership or policy left open in one sentence, unless a later sentence
+/// resolves that same choice. An open marker wins over settlement words in
+/// that sentence: "choose whether to preserve the current ownership policy"
+/// is still undecided. A later sentence that only says "undecided" does not
+/// attach the choice named in a different sentence. A later keep, preserve
+/// or retain of the same choice, with no open marker of its own, clears that
+/// choice [ORB-23274]. A resolution that precedes the open marker does not,
+/// and a negated verb ("do not preserve") is not a resolution.
 fn ownership_name(description: &str) -> Option<&'static str> {
-    let mut found: Option<&'static str> = None;
+    let mut open = Vec::new();
     for sentence in sentences(description) {
         let lower = sentence.to_ascii_lowercase();
         if OWNERSHIP_NEGATIONS.iter().any(|cue| lower.contains(cue)) {
             continue;
         }
-        let ownership = contains_term(&lower, "ownership");
-        let policy = contains_term(&lower, "policy");
-        if !ownership && !policy {
+        let Some(name) = ownership_choice_name(&lower) else {
             continue;
-        }
-        if !OPEN_MARKERS.iter().any(|cue| lower.contains(cue)) {
-            continue;
-        }
-        let name = if lower.contains("ownership policy") {
-            "the ownership policy"
-        } else if ownership {
-            "the ownership choice"
-        } else {
-            "the policy choice"
         };
-        found = Some(match found {
-            Some(current) if rank(current) >= rank(name) => current,
-            _ => name,
-        });
+        if OPEN_MARKERS.iter().any(|cue| lower.contains(cue)) {
+            if !open.contains(&name) {
+                open.push(name);
+            }
+            continue;
+        }
+        if ownership_resolution(&lower) {
+            open.retain(|current| *current != name);
+        }
     }
-    found
+    open.into_iter().max_by_key(|name| rank(name))
+}
+
+fn ownership_choice_name(lower: &str) -> Option<&'static str> {
+    let ownership = contains_term(lower, "ownership");
+    let policy = contains_term(lower, "policy");
+    if !ownership && !policy {
+        return None;
+    }
+    Some(if lower.contains("ownership policy") {
+        "the ownership policy"
+    } else if ownership {
+        "the ownership choice"
+    } else {
+        "the policy choice"
+    })
+}
+
+/// A keep, preserve or retain that is not itself negated. "do not preserve"
+/// and "doesn't keep" leave the choice open.
+fn ownership_resolution(lower: &str) -> bool {
+    OWNERSHIP_RESOLUTION_VERBS
+        .iter()
+        .any(|verb| resolution_verb_applies(lower, verb))
+}
+
+fn resolution_verb_applies(lower: &str, verb: &str) -> bool {
+    let mut from = 0;
+    while let Some(relative) = lower[from..].find(verb) {
+        let at = from + relative;
+        let end = at + verb.len();
+        let word = (at == 0 || !lower.as_bytes()[at - 1].is_ascii_alphanumeric())
+            && (end >= lower.len() || !lower.as_bytes()[end].is_ascii_alphanumeric());
+        if word && !resolution_verb_negated(lower, at) {
+            return true;
+        }
+        from = end;
+        if from >= lower.len() {
+            break;
+        }
+    }
+    false
+}
+
+fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
+    let prefix = lower[..verb_at].trim_end();
+    prefix.ends_with("not") || prefix.ends_with("n't")
 }
 
 fn rank(name: &str) -> u8 {
