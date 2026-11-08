@@ -142,6 +142,9 @@ pub struct DispatchOutcome {
     pub success: bool,
     pub output: Value,
     pub message: Option<String>,
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub failure_code: Option<orbit_types::workflow::StepFailureCode>,
     pub invocation: Option<DispatchInvocationTrace>,
 }
 
@@ -175,6 +178,15 @@ pub enum DispatchError {
 
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
+
+    /// A deterministic action failed because it could not reach the
+    /// claimed task's owner. Displays exactly as
+    /// [`DispatchError::DeterministicActionFailed`]; the variant carries
+    /// the typed step-failure code parsed from the underlying
+    /// `OrbitError` at ingestion, so recovery branches on the code
+    /// instead of a marker in the message.
+    #[error("deterministic action `{action}` failed: {message}")]
+    OwnerRouteUnavailable { action: String, message: String },
 
     /// A command failed after it ran. Its bounded diagnostic is retained
     /// independently of successful checkpoints, so resume still reruns it.
@@ -441,6 +453,9 @@ impl DispatchError {
     /// its text; anything else is `pipeline_step_failed`.
     pub fn failure_code(&self) -> &'static str {
         use orbit_types::workflow as wf;
+        if matches!(self, DispatchError::OwnerRouteUnavailable { .. }) {
+            return wf::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE;
+        }
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
@@ -468,6 +483,17 @@ impl DispatchError {
             // [ORB-14266] The handoff preserves the candidate for the next run.
             _ => wf::ProviderFailureClass::of(None, Some(&text()))
                 .map_or("pipeline_step_failed", wf::ProviderFailureClass::as_str),
+        }
+    }
+
+    /// The typed step-failure code this error carries, when it was parsed
+    /// at ingestion rather than left for text classification.
+    pub fn step_failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        match self {
+            DispatchError::OwnerRouteUnavailable { .. } => {
+                Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+            }
+            _ => None,
         }
     }
 
@@ -516,6 +542,16 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         } => OrbitError::DeliveryRefused {
             refusal,
             message: format!("deterministic action `{action}` refused: {message}"),
+        },
+        // The typed step-failure code survives the boundary as the
+        // remote-tool wire code, so the caller's step record keeps it.
+        DispatchError::OwnerRouteUnavailable { action, message } => OrbitError::RemoteTool {
+            code: orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.into(),
+            payload: serde_json::json!({
+                "code": orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+                "message": message,
+            }),
+            message: format!("deterministic action `{action}` failed: {message}"),
         },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
@@ -761,6 +797,16 @@ fn run_deterministic(
                         message: error.to_string(),
                     }
                 }
+                error
+                    if error
+                        .step_failure_code()
+                        .is_some_and(|code| code.is_owner_route_unavailable()) =>
+                {
+                    DispatchError::OwnerRouteUnavailable {
+                        action: spec.action.clone(),
+                        message: error.to_string(),
+                    }
+                }
                 error => DispatchError::DeterministicActionFailed {
                     action: spec.action.clone(),
                     message: error.to_string(),
@@ -778,6 +824,7 @@ fn run_deterministic(
         success: true,
         output,
         message: None,
+        failure_code: None,
         invocation: None,
     })
 }

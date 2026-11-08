@@ -171,15 +171,114 @@ pub fn is_validation_route_unavailable(error_code: Option<&str>, message: Option
 pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
 
 /// The bracketed marker form of [`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`].
+///
+/// Legacy only: records written before the typed step-failure code existed
+/// carry this marker in their message text and no code field. No producer
+/// stamps it into new messages; [`is_owner_route_unavailable`] is its single
+/// remaining classification reader, for those old records.
 pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
 
+/// The typed code a step failure carries beside its message.
+///
+/// Parsed once where a step failure is ingested — from the declared
+/// envelope's `error.code` or from an `OrbitError` — and recorded on the
+/// step record, so recovery and classification branch on the code instead
+/// of recovering it from message text. Serializes as its plain code
+/// string, so persisted and wire shapes keep the code's existing form.
+/// New named codes join this enum as their markers are converted; an
+/// arbitrary agent-declared code is preserved verbatim by
+/// [`Self::Other`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StepFailureCode {
+    /// A claimed leaf could not reach its task's owner
+    /// ([`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`]).
+    OwnerRouteUnavailable,
+    /// Any other agent- or host-declared code, preserved as declared.
+    Other(String),
+}
+
+impl StepFailureCode {
+    /// Parse a declared code string into its typed form, once, at the
+    /// boundary where a step failure is ingested.
+    #[must_use]
+    pub fn parse(code: &str) -> Self {
+        match code {
+            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    /// The code's string form, as the broker wire and agent envelope carry it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+            Self::Other(code) => code,
+        }
+    }
+
+    /// Whether this code says a claimed worker could not reach its owner.
+    #[must_use]
+    pub const fn is_owner_route_unavailable(&self) -> bool {
+        matches!(self, Self::OwnerRouteUnavailable)
+    }
+}
+
+impl std::fmt::Display for StepFailureCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for StepFailureCode {
+    fn from(code: &str) -> Self {
+        Self::parse(code)
+    }
+}
+
+impl From<String> for StepFailureCode {
+    fn from(code: String) -> Self {
+        match code.as_str() {
+            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            _ => Self::Other(code),
+        }
+    }
+}
+
+impl From<StepFailureCode> for String {
+    fn from(code: StepFailureCode) -> Self {
+        code.as_str().to_string()
+    }
+}
+
+impl Serialize for StepFailureCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for StepFailureCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
+
 /// Whether a step failure says a claimed worker could not reach its owner.
+///
+/// A present typed code decides alone. The bracketed-marker check is the
+/// documented legacy fallback for a record with no code field, written
+/// before the typed code existed; it lives only here.
 #[must_use]
-pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
+pub fn is_owner_route_unavailable(
+    error_code: Option<&StepFailureCode>,
+    message: Option<&str>,
+) -> bool {
+    match error_code {
+        Some(code) => code.is_owner_route_unavailable(),
+        None => message.is_some_and(|message| {
             failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
-        })
+        }),
+    }
 }
 
 /// Leads the failure Orbit raises when it refuses an implementer's handoff
@@ -347,6 +446,21 @@ impl ClaimFailureClass {
     /// [hold](super::super::BaselineRedHold), which the owner needs to lift it.
     #[must_use]
     pub fn of_step_failure(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        // Parse the string code once at this boundary; typed callers use
+        // [`Self::of_step_failure_code`] directly.
+        Self::of_step_failure_code(error_code.map(StepFailureCode::parse).as_ref(), message)
+    }
+
+    /// [`Self::of_step_failure`] for a failure that already carries its
+    /// typed [`StepFailureCode`]. The owner-route branch matches on the
+    /// typed code; the sibling codes not yet converted keep their
+    /// string/marker classification.
+    #[must_use]
+    pub fn of_step_failure_code(
+        failure_code: Option<&StepFailureCode>,
+        message: Option<&str>,
+    ) -> Option<Self> {
+        let error_code = failure_code.map(StepFailureCode::as_str);
         let typed = |code: &str, marker: &str| {
             error_code == Some(code)
                 || message
@@ -356,7 +470,7 @@ impl ClaimFailureClass {
             Some(Self::Provider)
         } else if is_validation_environment_failure(error_code, message) {
             Some(Self::Environment)
-        } else if is_owner_route_unavailable(error_code, message) {
+        } else if is_owner_route_unavailable(failure_code, message) {
             Some(Self::OwnerRoute)
         } else if super::super::is_baseline_red_failure(error_code, message)
             && message

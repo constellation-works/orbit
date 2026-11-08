@@ -778,8 +778,9 @@ owns delivery:
   provider in [ORB-14262].
   A claimed worker whose owner call could not cross the run's broker (missing or gone) gets the
   typed `owner_route_unavailable` and ends its step on that `error.code` [ORB-14260]. The runner
-  stamps `[owner_route_unavailable]`, step and final recovery are skipped (nothing inside the
-  sandbox can open the route), and the leaf settles as the `owner_route` class below. The code
+  records that code as the step's typed failure code, step and final recovery are skipped
+  (nothing inside the sandbox can open the route), and the leaf settles as the `owner_route`
+  class below. The code
   grants nothing an agent could abuse: declaring it withholds repair and holds the task
   for an operator decision.
 - *Typed failure class* ([ORB-14257]). Every launched leaf's settlement carries a

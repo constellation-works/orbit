@@ -793,6 +793,39 @@ impl Pair {
         self.leaf_fails_at(leaf, error, Utc::now());
     }
 
+    /// [`Self::leaf_fails_with`] recording the typed step-failure code a
+    /// new step record carries beside its message.
+    fn leaf_fails_with_code(
+        &self,
+        leaf: &str,
+        error: &str,
+        code: &orbit_types::workflow::StepFailureCode,
+    ) {
+        let now = Utc::now();
+        self.follower_jobs
+            .complete_job_run_step(
+                leaf,
+                &JobRunStepParams {
+                    lock_wait_ms: None,
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "implement_one".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: Some(code.as_str().to_string()),
+                    error_message: Some(error.into()),
+                },
+            )
+            .expect("failed step");
+        self.follower_jobs
+            .finalize_job_run(leaf, JobRunState::Failed, now, None)
+            .expect("leaf failed");
+    }
+
     /// [`Self::leaf_fails_with`], the leaf ending at `now`.
     fn leaf_fails_at(&self, leaf: &str, error: &str, now: chrono::DateTime<Utc>) {
         self.follower_jobs

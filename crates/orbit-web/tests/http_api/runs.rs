@@ -838,6 +838,7 @@ fn save_step(fixture: &Fixture, run: &JobRun, message: &str) {
         agent_response_json: None,
         state: JobRunState::Cancelled,
         error_code: None,
+        failure_code: None,
         error_message: Some(message.into()),
     };
     fixture
@@ -917,6 +918,7 @@ fn run_detail_steps_follow_the_shared_rule_and_name_their_source() {
                 agent_response_json: None,
                 state,
                 error_code: (state == JobRunState::Interrupted).then(|| "worker_terminated".into()),
+                failure_code: None,
                 error_message: None,
             };
 

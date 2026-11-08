@@ -25,6 +25,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     ctx: &ExecCtx<'_>,
     step_index: usize,
     error: &DispatchError,
+    failure_code: Option<&orbit_types::workflow::StepFailureCode>,
     budget: &mut types::FinalRecoveryBudget,
 ) -> types::FinalRecoveryVerdict {
     let error_text = error.to_string();
@@ -111,7 +112,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     }
     // [ORB-14260] Nor can a recovery agent in the same sandbox reach the
     // claimed task's owner its step could not; the claim is released.
-    if orbit_types::workflow::is_owner_route_unavailable(None, Some(error_message)) {
+    // Branch on the typed code the step failure carried (or the dispatch
+    // error's own); only a failure with no code reaches the legacy
+    // marker fallback inside the classifier.
+    let typed_code = failure_code.cloned().or_else(|| error.step_failure_code());
+    if orbit_types::workflow::is_owner_route_unavailable(typed_code.as_ref(), Some(error_message)) {
         return skip(
             "the claimed worker could not reach its owner through the run's coordinator; the \
              candidate was not judged",

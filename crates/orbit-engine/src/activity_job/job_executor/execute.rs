@@ -164,6 +164,7 @@ pub fn execute_job_with_resume(
     let mut steering_round: Option<(usize, Value)> = None;
     let mut overall_ok = true;
     let mut overall_message = None;
+    let mut overall_failure_code: Option<orbit_types::workflow::StepFailureCode> = None;
     let mut evidence_hold = None;
     let mut forge_hold = None;
     let mut child_cancelled = false;
@@ -262,16 +263,24 @@ pub fn execute_job_with_resume(
         let failure = match ran {
             Ok(outcome) if outcome.success => Ok(outcome),
             Ok(outcome) => {
+                let failure_code = outcome.failure_code.clone();
                 let message = outcome
                     .message
                     .unwrap_or_else(|| format!("step `{}` completed with success=false", step.id));
-                Err((DispatchError::JobExecution(message.clone()), Some(message)))
+                Err((
+                    DispatchError::JobExecution(message.clone()),
+                    Some(message),
+                    failure_code,
+                ))
             }
-            Err(error) => Err((error, None)),
+            Err(error) => {
+                let failure_code = error.step_failure_code();
+                Err((error, None, failure_code))
+            }
         };
         let mut outcome = match failure {
             Ok(outcome) => outcome,
-            Err((DispatchError::ReviewEvidenceHold(hold), _)) => {
+            Err((DispatchError::ReviewEvidenceHold(hold), _, _)) => {
                 record_pipeline(
                     &ctx,
                     &step.id,
@@ -284,7 +293,7 @@ pub fn execute_job_with_resume(
                 evidence_hold = Some(*hold);
                 break;
             }
-            Err((DispatchError::ForgeUnavailableHold(hold), _)) => {
+            Err((DispatchError::ForgeUnavailableHold(hold), _, _)) => {
                 let hold = lineage_forge_hold(*hold, &step.id, resume);
                 record_pipeline(
                     &ctx,
@@ -306,7 +315,7 @@ pub fn execute_job_with_resume(
                 forge_hold = Some(hold);
                 break;
             }
-            Err((DispatchError::AutoTaskParked(park), _)) => {
+            Err((DispatchError::AutoTaskParked(park), _, _)) => {
                 // Not a failure: no final recovery or failure handoff runs.
                 // The park must be durable before the worker lets go.
                 ctx.host.park_job_run(run_id, &park).map_err(|error| {
@@ -320,7 +329,7 @@ pub fn execute_job_with_resume(
                 parked = Some(*park);
                 break;
             }
-            Err((error @ DispatchError::ChildRunCancelled { .. }, _)) => {
+            Err((error @ DispatchError::ChildRunCancelled { .. }, _, _)) => {
                 overall_ok = false;
                 overall_message = Some(format!("step `{}` {error}", step.id));
                 child_cancelled = true;
@@ -328,9 +337,16 @@ pub fn execute_job_with_resume(
             }
             // A parked delivery already recorded its stop. Neither repair nor
             // failure handoff may change its task or candidate on this run.
-            Err((error @ DispatchError::DeliveryRefused { .. }, _)) => return Err(error),
-            Err((error, unsuccessful)) => {
-                let verdict = attempt_final_recovery(job, &ctx, index, &error, &mut final_recovery);
+            Err((error @ DispatchError::DeliveryRefused { .. }, _, _)) => return Err(error),
+            Err((error, unsuccessful, failure_code)) => {
+                let verdict = attempt_final_recovery(
+                    job,
+                    &ctx,
+                    index,
+                    &error,
+                    failure_code.as_ref(),
+                    &mut final_recovery,
+                );
                 if let FinalRecoveryVerdict::Resume(target, context) = verdict {
                     resume_context = Some(*context);
                     forget_step_outputs_from(&ctx, job, target);
@@ -362,6 +378,7 @@ pub fn execute_job_with_resume(
                     Some(message) => {
                         overall_ok = false;
                         overall_message = Some(message);
+                        overall_failure_code = failure_code;
                         break;
                     }
                     None => return Err(error),
@@ -400,6 +417,7 @@ pub fn execute_job_with_resume(
         child_cancelled,
         pipeline: ctx.pipeline_value(),
         message: (!overall_ok).then_some(overall_message).flatten(),
+        failure_code: overall_failure_code,
         audit_failures: audit.audit_failure_count(),
         degraded_audit: audit.degraded_audit(),
         telemetry_failures: audit.telemetry_failure_count(),

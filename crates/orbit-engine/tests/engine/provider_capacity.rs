@@ -726,9 +726,19 @@ fn a_declared_owner_route_failure_skips_recovery() {
     );
 
     let message = failure_message(&run.outcome);
+    let outcome = run.outcome.as_ref().expect("the run fails as an outcome");
+    assert_eq!(
+        outcome.failure_code,
+        Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable),
+        "the run keeps the typed code for pull-drain settlement: {message}"
+    );
     assert!(
-        is_owner_route_unavailable(None, Some(&message)),
-        "the run keeps the typed marker for pull-drain settlement: {message}"
+        !message.contains("[owner_route_unavailable]"),
+        "no bracketed marker is stamped into new messages: {message}"
+    );
+    assert!(
+        is_owner_route_unavailable(outcome.failure_code.as_ref(), Some(&message)),
+        "the typed code classifies the run: {message}"
     );
     assert!(!is_provider_failure(None, Some(&message)), "{message}");
     assert_eq!(fake.invocations(), 1, "the step is not rerun");

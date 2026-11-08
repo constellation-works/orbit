@@ -74,6 +74,9 @@ pub struct V2JobRunResult {
     pub child_cancelled: bool,
     pub pipeline: Value,
     pub message: Option<String>,
+    /// The typed step-failure code of the step the run failed on, when it
+    /// declared one.
+    pub failure_code: Option<orbit_types::workflow::StepFailureCode>,
     pub events_emitted: u64,
     /// [ORB-20158] The run parked on an `auto-task:` step: it stays live,
     /// holds no worker, and the owner clock resumes it. Never finalized.
@@ -483,6 +486,7 @@ impl OrbitRuntime {
                 child_cancelled: o.child_cancelled,
                 pipeline: o.pipeline,
                 message: o.message,
+                failure_code: o.failure_code,
                 events_emitted: events_count,
                 parked: o.parked,
             }),
@@ -668,7 +672,11 @@ impl OrbitRuntime {
             Ok(result) => {
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let held = held_failure(&run.job_id, None, Some(message));
+                let held = held_failure(
+                    &run.job_id,
+                    result.failure_code.as_ref().map(|code| code.as_str()),
+                    Some(message),
+                );
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message =
                     held.map_or_else(|| message.to_string(), |held| held.diagnostic(message));
@@ -688,7 +696,12 @@ impl OrbitRuntime {
                         run,
                         started_at,
                         finished_at,
-                        held.map(HeldFailure::error_code),
+                        held.map(HeldFailure::error_code).or_else(|| {
+                            result
+                                .failure_code
+                                .as_ref()
+                                .map(orbit_types::workflow::StepFailureCode::as_str)
+                        }),
                         &message,
                         final_state,
                     ),
@@ -701,9 +714,11 @@ impl OrbitRuntime {
                 // decision kept its candidate: the run holds, it did not fail.
                 // So do local provider capacity/limit holds and a claimed
                 // leaf its provider's usage limit stopped [ORB-15517].
+                let typed_code = error.step_failure_code();
                 let held = held_failure(
                     &run.job_id,
-                    delivery_refusal_code(error),
+                    delivery_refusal_code(error)
+                        .or_else(|| typed_code.as_ref().map(|code| code.as_str())),
                     Some(&error.to_string()),
                 );
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
@@ -713,7 +728,9 @@ impl OrbitRuntime {
                 );
                 let code = match held {
                     Some(held) => Some(held.error_code()),
-                    None => matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
+                    None => matches!(error, OrbitError::ProtocolSkew(_))
+                        .then_some("protocol_skew")
+                        .or_else(|| typed_code.as_ref().map(|code| code.as_str())),
                 };
                 log_best_effort(
                     "record failure step",

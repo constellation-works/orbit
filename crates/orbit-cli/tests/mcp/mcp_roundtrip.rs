@@ -2008,6 +2008,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
                     agent_response_json: None,
                     state: JobRunState::Success,
                     error_code: None,
+                    failure_code: None,
                     error_message: None,
                 },
             )

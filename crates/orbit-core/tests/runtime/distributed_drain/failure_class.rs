@@ -1144,6 +1144,9 @@ fn host_failures_hold_the_task_and_suppress_the_host_for_the_window() {
             "[validation_route_unavailable] required check needs the owner validation lane",
             "environment",
         ),
+        // An old-shape step record: no typed code field, only the
+        // bracketed marker in its message. It still classifies through
+        // the documented legacy fallback at this public boundary.
         (
             "[owner_route_unavailable] owner unavailable: the owner could not be reached from \
              the sandboxed worker",
@@ -1990,13 +1993,26 @@ fn a_lost_owner_route_fails_the_step_as_owner_route() {
         "the variant is kept: {error:?}"
     );
     let message = error.to_string();
+    assert!(
+        !message.contains("[owner_route_unavailable]"),
+        "no bracketed marker is stamped into new messages: {message}"
+    );
+    let code = error
+        .step_failure_code()
+        .expect("a typed step-failure code");
     assert_eq!(
-        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        code,
+        orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable,
+        "{message}"
+    );
+    assert_eq!(
+        ClaimFailureClass::of_step_failure_code(Some(&code), Some(&message)),
         Some(ClaimFailureClass::OwnerRoute),
         "{message}"
     );
 
-    fail_and_settle(&pair, &drain, &leaf, &message);
+    pair.leaf_fails_with_code(&leaf, &message, &code);
+    settle_only(&pair, &drain);
     let failure = &settlement_of(&pair, &leaf)["Release"]["failure"];
     assert_eq!(failure["class"], "owner_route", "{failure}");
     assert_eq!(pair.owner_status(&task), "blocked");

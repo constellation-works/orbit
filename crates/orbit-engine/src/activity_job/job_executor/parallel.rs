@@ -73,6 +73,7 @@ pub(super) fn run_parallel(
     let mut failures = 0u32;
     let mut first_error: Option<DispatchError> = None;
     let mut first_failure: Option<String> = None;
+    let mut first_failure_code: Option<orbit_types::workflow::StepFailureCode> = None;
     // [ORB-20158] Branches waiting on an auto-task step: neither a success
     // nor a failure. The join decides once they settle.
     let mut parks = Vec::new();
@@ -96,6 +97,7 @@ pub(super) fn run_parallel(
                         && !provider_failure(first_failure.as_deref()))
                 {
                     first_failure.clone_from(&o.message);
+                    first_failure_code.clone_from(&o.failure_code);
                 }
             }
             Err(e) => {
@@ -166,6 +168,7 @@ pub(super) fn run_parallel(
     record_pipeline(ctx, &step.id, out.clone());
 
     Ok(StepOutcome {
+        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
         success: block_ok,
         output: out,
         // A failed join keeps the first branch message, preferring a provider
@@ -263,6 +266,7 @@ fn restored_branch(
     }
     record(&branch.id, output.clone());
     Ok(Some(StepOutcome {
+        failure_code: None,
         success: true,
         output,
         message: None,

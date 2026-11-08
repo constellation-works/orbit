@@ -40,6 +40,15 @@ impl StepFailure {
         }
     }
 
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub(super) fn failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        match self {
+            Self::Error(error) => error.step_failure_code(),
+            Self::Outcome(outcome) => outcome.failure_code.clone(),
+        }
+    }
+
     /// Hand the original failure back unchanged when recovery is absent,
     /// refused, or fails.
     fn into_result(self) -> Result<StepOutcome, DispatchError> {
@@ -65,6 +74,7 @@ impl StepFailure {
                 success: false,
                 output: outcome.output,
                 message: Some(message),
+                failure_code: outcome.failure_code,
             }),
         }
     }
@@ -85,6 +95,7 @@ impl StepFailure {
                 success: false,
                 output: outcome.output,
                 message: Some(message),
+                failure_code: outcome.failure_code,
             }),
         }
     }
@@ -130,9 +141,10 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     }
     // [ORB-14260] Nor can it reach a claimed task's owner when the step's
     // own coordinator could not: its sandbox masks the same credentials.
-    // Preserve the marker for claimed-leaf settlement.
+    // Branch on the typed code; a failure with no code falls back to the
+    // legacy marker inside the classifier.
     if stops(orbit_types::workflow::is_owner_route_unavailable(
-        None,
+        failure.failure_code().as_ref(),
         Some(&failure.diagnostic()),
     )) {
         return failure.into_result();
