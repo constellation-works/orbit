@@ -34,9 +34,12 @@ use crate::command::CommandOut;
                   routines; its other routines are listed as owner-only. Pauses are\n\
                   host-local and never synced. `enable` and `disable` edit the definition's\n\
                   versioned `enabled` field like the dashboard toggle, are operator-only\n\
-                  and are audited; most seeded routines stay off until enabled, except\n\
-                  `crew-performance-refresh`, which is seeded enabled. The host\n\
-                  scheduler is controlled through `orbit clock`."
+                  and are audited. A newly initialized workspace seeds `task-pilot` and\n\
+                  `worktree-gc` enabled and the other shipped routines (`ci-failure-sweep`,\n\
+                  `dependabot-alert-sweep`, `resident-cycle`, `store-gc`, `task-publication`)\n\
+                  off until enabled. A workspace initialized earlier keeps the `enabled`\n\
+                  value its definitions already hold. The host scheduler is controlled\n\
+                  through `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]
