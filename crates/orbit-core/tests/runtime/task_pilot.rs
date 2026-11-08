@@ -994,6 +994,21 @@ fn instruction_edits_change_the_preparation_fingerprint() {
         "spaced directory rules\n",
         "spaced directory instructions",
     );
+    let spaced = pending_fingerprint(&workspace, &routine, &task.id, now);
+    assert_ne!(
+        spaced, empty,
+        "a leading-space instruction path alone enters the snapshot"
+    );
+    workspace.commit_file(
+        " instructions/AGENTS.md",
+        "spaced directory rules revised\n",
+        "edit spaced directory instructions",
+    );
+    let spaced_edited = pending_fingerprint(&workspace, &routine, &task.id, now);
+    assert_ne!(
+        spaced_edited, spaced,
+        "editing a leading-space instruction path changes the fingerprint"
+    );
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
     workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
     workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
@@ -1002,7 +1017,7 @@ fn instruction_edits_change_the_preparation_fingerprint() {
     let listed = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(1));
     assert_ne!(
         listed, empty,
-        "tracked instruction files, including a leading-space path, enter the snapshot"
+        "tracked root and nested instruction files enter the snapshot"
     );
 
     workspace.commit_file("AGENTS.md", "root rules revised\n", "edit root");
