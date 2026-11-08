@@ -400,7 +400,7 @@ class VerifiedDownloadTests(unittest.TestCase):
         return json.loads((self.root / "calls.json").read_text())
 
     def invoke(self, *, budget=60, digest=None, url=URL, deadline=False, stage="R",
-               hang_quiet=None, step="verified download"):
+               hang_quiet=None, step="verified download", cache_file=None, destination=None):
         env = self.env
         if deadline:
             deadline_bin = self.root / "deadline-bin"
@@ -413,9 +413,11 @@ class VerifiedDownloadTests(unittest.TestCase):
             env = dict(env, PATH=f"{deadline_bin}:{env['PATH']}",
                        DOWNLOAD_EXPECT_READY=stage,
                        ORBIT_CI_DOWNLOAD_FAKE_CLOCK=str(clock))
-        return run_step([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
-                         str(self.destination), "--budget-seconds", str(budget)],
-                        env=env, text=True, step=step, hang_quiet=hang_quiet)
+        argv = [str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
+                str(destination or self.destination), "--budget-seconds", str(budget)]
+        if cache_file is not None:
+            argv += ["--cache-file", str(cache_file)]
+        return run_step(argv, env=env, text=True, step=step, hang_quiet=hang_quiet)
 
     def deadline_events(self, *, active_limit=2):
         events = json.loads((self.root / "deadline-events.json").read_text())
@@ -483,6 +485,55 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
+
+    def test_cache_hit_restores_verified_archive_without_network(self):
+        cache_file = self.root / "tool-cache" / "archive"
+        self.configure([response()])
+        result = self.invoke(cache_file=cache_file)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(cache_file.read_bytes(), BODY, "a verified download must populate the cache")
+        self.assertEqual(len(self.calls()), 1)
+        self.destination.unlink()
+        restored = self.root / "restored"
+        result = self.invoke(cache_file=cache_file, destination=restored)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(restored.read_bytes(), BODY)
+        self.assertEqual(len(self.calls()), 1, "a cache hit must not reach the network")
+        self.assertIn("cache=hit", result.stderr)
+
+    def test_tampered_cached_archive_fails_without_network_or_publish(self):
+        cache_file = self.root / "tool-cache" / "archive"
+        cache_file.parent.mkdir(parents=True)
+        cache_file.write_bytes(b"tampered archive bytes")
+        self.configure([response()])
+        result = self.invoke(cache_file=cache_file)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SHA-256 mismatch; refusing cached archive", result.stderr)
+        self.assertEqual(self.calls(), [], "a tampered cache entry must fail closed, not download")
+        self.assertFalse(self.destination.exists())
+        self.assert_clean()
+
+    def test_github_release_installs_restore_before_download_and_save_only_on_push(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        checked = 0
+        for job in workflow["jobs"].values():
+            steps = job["steps"]
+            for index, step in enumerate(steps):
+                run = step.get("run") or ""
+                if "releases/download" not in run:
+                    continue
+                checked += 1
+                self.assertIn("--cache-file", run, step.get("name"))
+                restore = steps[index - 1]
+                self.assertTrue(restore.get("uses", "").startswith("actions/cache/restore@"),
+                                step.get("name"))
+                self.assertIn("LINUX_SHA256", restore["with"]["key"])
+                save = steps[index + 1]
+                self.assertTrue(save.get("uses", "").startswith("actions/cache/save@"),
+                                step.get("name"))
+                self.assertIn("github.event_name == 'push'", save["if"])
+                self.assertEqual(restore["with"], save["with"])
+        self.assertGreaterEqual(checked, 5)
 
     def test_invalid_public_inputs_are_refused_before_transport(self):
         for kwargs in ({"url": "http://example.invalid/x"}, {"url": "https://u:p@example.invalid/x"},
