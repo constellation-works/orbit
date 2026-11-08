@@ -231,6 +231,27 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
                     .to_string(),
             });
         }
+        if action == "test_stub_post_recovery_owner_route" {
+            // The current call was recorded above: the first attempt is an
+            // ordinary failure, the post-recovery attempt loses its owner route.
+            let count = self
+                .actions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, _)| name == action)
+                .count();
+            if count >= 2 {
+                return Err(DispatchError::OwnerRouteUnavailable {
+                    action: action.to_string(),
+                    message: "the coordinator could not be reached".to_string(),
+                });
+            }
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "tests failed".to_string(),
+            });
+        }
         Ok(match action {
             "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
             _ => json!({ "action": action }),
@@ -760,6 +781,132 @@ fn a_declared_owner_route_failure_skips_recovery() {
     assert_eq!(host.calls("handoff").len(), 1);
 }
 
+/// [ORB-23470] An ordinary failure reaches recovery; the post-recovery
+/// attempt then loses its owner route, in either shape a step can return
+/// it. Both keep `owner_route_unavailable`, skip final recovery, and keep
+/// the original diagnostic, instead of collapsing to a code-less failure.
+fn post_recovery_owner_route_failures_keep_their_code() {
+    // Unsuccessful agent outcome carrying the typed code.
+    {
+        let worktree = tempfile::tempdir().unwrap();
+        let counter = worktree.path().join("attempts");
+        let before = format!(
+            "n=$(cat '{}' 2>/dev/null || echo 0); n=$((n+1)); printf '%s' \"$n\" > '{}'; \
+             if [ \"$n\" -ge 2 ]; then \
+             printf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{{}},\"error\":{{\"code\":\"owner_route_unavailable\",\"message\":\"the coordinator could not be reached\"}}}}'; \
+             exit 0; fi",
+            counter.display(),
+            counter.display()
+        );
+        let fake = FakeProvider::new(
+            "claude",
+            r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"red","message":"tests failed"}}"#,
+            "",
+            0,
+            &before,
+        );
+        let host = CapacityHost::new(&fake.path, worktree.path());
+        let run = run_job(
+            &implementation_job(agent_spec(Provider::Claude)),
+            &host,
+            "post-recovery-owner-route-outcome",
+        );
+        let message = failure_message(&run.outcome);
+        let outcome = run.outcome.as_ref().expect("the run fails as an outcome");
+        assert_eq!(
+            outcome.failure_code,
+            Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable),
+            "the post-recovery code is retained: {message}"
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure_code(outcome.failure_code.as_ref(), Some(&message)),
+            Some(ClaimFailureClass::OwnerRoute),
+            "a claimed leaf classifies as owner_route, not candidate: {message}"
+        );
+        assert!(
+            message.contains("the coordinator could not be reached")
+                && message.contains("tests failed"),
+            "both diagnostics are retained: {message}"
+        );
+        assert_eq!(
+            fake.invocations(),
+            2,
+            "one attempt before and one after recovery"
+        );
+        assert_eq!(host.calls("step_fix").len(), 1, "step recovery ran once");
+        assert_eq!(*host.final_recovery_admissions.lock().unwrap(), 0);
+        assert!(host.calls("decide").is_empty(), "no final recovery runs");
+        assert_eq!(
+            count(&run.events, |kind| matches!(
+                kind,
+                V2AuditEventKind::FinalRecoveryAttempted { outcome, .. } if outcome == "skipped"
+            )),
+            1,
+            "the final-recovery skip is audited"
+        );
+        assert_eq!(host.calls("handoff").len(), 1);
+    }
+    // Typed `DispatchError` from a deterministic action.
+    {
+        let worktree = tempfile::tempdir().unwrap();
+        let fake = FakeProvider::new("claude", "", "", 0, "");
+        let host = CapacityHost::new(&fake.path, worktree.path());
+        let mut job = implementation_job(agent_spec(Provider::Claude));
+        let JobV2StepBody::Target(target) = &mut job.steps[1].body else {
+            panic!("the deterministic fixture is a target step");
+        };
+        target.spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: "test_stub_post_recovery_owner_route".to_string(),
+            config: json!({}),
+        });
+        let run = run_job(&job, &host, "post-recovery-owner-route-error");
+        let Err(error) = &run.outcome else {
+            panic!("the typed error is retained as an error: {:?}", run.outcome);
+        };
+        assert!(
+            matches!(error, DispatchError::OwnerRouteUnavailable { .. }),
+            "the typed variant is retained: {error}"
+        );
+        assert_eq!(
+            error.step_failure_code(),
+            Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+        );
+        assert_eq!(
+            ClaimFailureClass::of_step_failure_code(
+                error.step_failure_code().as_ref(),
+                Some(&error.to_string())
+            ),
+            Some(ClaimFailureClass::OwnerRoute),
+            "a claimed leaf classifies as owner_route, not candidate: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("the coordinator could not be reached")
+                && error.to_string().contains("tests failed"),
+            "both diagnostics are retained: {error}"
+        );
+        assert_eq!(host.calls("test_stub_post_recovery_owner_route").len(), 2);
+        assert_eq!(host.calls("step_fix").len(), 1, "step recovery ran once");
+        assert_eq!(*host.final_recovery_admissions.lock().unwrap(), 0);
+        assert!(host.calls("decide").is_empty(), "no final recovery runs");
+        assert_eq!(
+            count(&run.events, |kind| matches!(
+                kind,
+                V2AuditEventKind::FinalRecoveryAttempted { outcome, .. } if outcome == "skipped"
+            )),
+            1,
+            "the final-recovery skip is audited"
+        );
+        let handoff = host.calls("handoff");
+        assert_eq!(handoff.len(), 1);
+        assert_eq!(
+            handoff[0]["error_code"], "owner_route_unavailable",
+            "{handoff:?}"
+        );
+    }
+}
+
 /// [ORB-19224] A Mac worker whose `orbit plugin test` was refused because its
 /// own Seatbelt profile refuses the backend's declares
 /// `validation_route_unavailable`. Before the typed route that envelope
@@ -1156,6 +1303,10 @@ fn provider_failure_contracts_2() {
             (
                 "a_declared_owner_route_failure_skips_recovery",
                 a_declared_owner_route_failure_skips_recovery,
+            ),
+            (
+                "post_recovery_owner_route_failures_keep_their_code",
+                post_recovery_owner_route_failures_keep_their_code,
             ),
             (
                 "a_declared_validation_route_failure_skips_recovery",

@@ -417,6 +417,35 @@ fn post_recovery_attempt(
                 message: format!("{message}; original error before recovery: {original}"),
             }))
         }
+        // [ORB-23470] A post-recovery owner-route failure keeps its typed
+        // variant, as an initial one does: final recovery must skip it and
+        // core must classify a claimed leaf as `owner_route`, not as a
+        // candidate failure. The original diagnostic stays on the message.
+        Err(DispatchError::OwnerRouteUnavailable { action, message }) => {
+            PostRecovery::Settled(Err(DispatchError::OwnerRouteUnavailable {
+                action,
+                message: format!("{message}; original error before recovery: {original}"),
+            }))
+        }
+        // The unsuccessful-outcome form of the same failure: keep the
+        // outcome shape (and its typed code) so `execute` records
+        // `owner_route_unavailable` instead of a code-less `JobExecution`.
+        Ok(failed)
+            if failed
+                .failure_code
+                .as_ref()
+                .is_some_and(|code| code.is_owner_route_unavailable()) =>
+        {
+            PostRecovery::Settled(Ok(StepOutcome {
+                success: false,
+                output: failed.output,
+                message: Some(format!(
+                    "post-recovery attempt {outcome}: {}; original error before recovery: {original}",
+                    error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+                )),
+                failure_code: failed.failure_code,
+            }))
+        }
         Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
             PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {
                 candidate,
