@@ -163,6 +163,13 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
         return failure.into_result();
     }
     let Some(declared) = recovery_activity_for_step(step, ctx) else {
+        // The watcher writes this handoff only after admitting an in-budget
+        // repair. A step and job with no declared recovery cannot run it, so
+        // the run holds here just as it does for a declared conflict leaf
+        // with no `step_failure_recovery` below.
+        if check_repair {
+            return hold_absent_check_repair(failure);
+        }
         return failure.into_result();
     };
 
