@@ -498,6 +498,14 @@ fn readiness_snapshot_with_detail(
             "build_budget_warnings": build_budget_warnings,
             "build_budget_error": build_budget_error,
             "max_active_leaf_runs": max_active_leaf_runs,
+            "default_max_active_leaf_runs": runtime.job_default_input(DRAIN_JOB_NAME)?.as_ref()
+                .and_then(|input| input.get("max_active_leaf_runs")).and_then(Value::as_u64).unwrap_or(5),
+            "last_drain_max_active_leaf_runs": active_drain.as_ref().map(|drain| u64::from(drain.effective_max_active_leaf_runs()))
+                .or_else(|| recent_drain.as_ref().map(|run| {
+                    let submitted = run.input.as_ref().and_then(|input| input.get("max_active_leaf_runs"))
+                        .and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(5);
+                    u64::from(status_state.as_ref().map_or(submitted, |state| state.effective_max_active_leaf_runs(submitted)))
+                })),
             "active_leaf_runs": shared_occupancy.occupied,
             // [ORB-12617] The wrapper subset of that occupancy, and what the
             // rest of it is: a legacy drain reporting no free slots with no

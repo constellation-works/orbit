@@ -44,7 +44,8 @@ function renderAutoDrainHead(payload) {
   const when = $("auto-drain-when");
   if (when) when.textContent = !pulling && phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
-  if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
+  if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement
+      && !$('auto-drain-operation-feedback')?.matches(".pending, .success, .error")) {
     feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}${phase === "winding_down" ? ` · this window: ${running} still running` : ""}.`);
   }
   announcedDrainState = stateKey;
