@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use super::{ConditionDefinition, condition_consumer, condition_refusal, facts};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::automation::consumer_states;
 
 /// Most fires and subjects one status lists.
@@ -629,10 +630,10 @@ impl OrbitRuntime {
                 }))
             }
             ConditionCarrier::AutoTask => {
-                let Some((_, path)) = self.auto_task_read_source(name)? else {
+                let Some(path) = self.auto_task_discovery_path(name)? else {
                     return Ok(None);
                 };
-                let definition = self.auto_task_show(name)?.ok_or_else(|| {
+                let definition = self.validated_auto_task_definition(name)?.ok_or_else(|| {
                     OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
                 })?;
                 Ok(Some(LoadedCarrier {

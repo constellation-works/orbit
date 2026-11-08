@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::facts::{self, FactInputs, natural_id_order};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
 /// Longest rendering of one `{{subject.*}}` placeholder value.
@@ -275,8 +276,7 @@ impl Host<'_> {
         definition: &AutoTaskDefinition,
         fire: &ConditionFire,
     ) -> Result<String, OrbitError> {
-        let mut params =
-            crate::application::auto_tasks::scheduler::mint_params(self.runtime, definition);
+        let mut params = self.runtime.auto_task_mint_task_params(definition);
         params.title = render_placeholders(&params.title, Some(fire));
         params.description = render_placeholders(&params.description, Some(fire));
         let captured = serde_json::to_string_pretty(&fire.captured)
@@ -348,7 +348,7 @@ impl ConditionHost for Host<'_> {
     fn admission_deferral(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
         if let Target::Mint(definition) = self.target
             && definition.dedupe == DedupePolicy::SkipIfOpen
-            && let Some(open) = self.runtime.open_auto_task_instance(definition)?
+            && let Some(open) = self.runtime.open_auto_task_instance_id(definition)?
         {
             return Ok(Some(format!("open_instance {open}")));
         }

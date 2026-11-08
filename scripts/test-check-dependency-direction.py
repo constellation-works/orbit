@@ -447,6 +447,62 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::application::distributed::claim_receipt;\n",
         }, rejected=False)
 
+    def test_automation_reaches_auto_tasks_only_through_its_port(self):
+        # [ORB-23334] Automation read the catalog, accepted history, dedupe and
+        # template/mint parameters straight from auto_tasks, whose scheduler
+        # evaluates delivery and conditions through automation: a cycle.
+        owner = {
+            "auto_tasks/scheduler.rs":
+                "impl OrbitRuntime {\n"
+                "    pub fn fresh_listing_method(&self) {}\n}\n"
+                "pub(crate) fn fresh_mint_params(runtime: &OrbitRuntime) {}\n",
+        }
+        self.check_rows(
+            [("automation/condition/facts.rs",
+              "impl OrbitRuntime {\n    pub(crate) fn read_facts(&self) {\n"
+              f"        {call};\n    }}\n}}\n") for call in (
+                "self.fresh_listing_method()",
+                "OrbitRuntime::fresh_listing_method(self)",
+                "<crate::OrbitRuntime>::fresh_listing_method(self)",
+                "Self::fresh_listing_method(self)",
+            )],
+            rejected=True, shared=owner)
+        for relative, source in (
+            ("automation/task.rs",
+             "fn mint(runtime: &OrbitRuntime) {\n"
+             "    crate::application::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
+            ("automation/task.rs", "use crate::application::auto_tasks::Probe;\n"),
+            ("automation/task.rs", "use crate::application::{auto_tasks::Probe};\n"),
+            ("automation/task.rs", "use crate::application::{\n    task, auto_tasks::Probe,\n};\n"),
+            ("automation/task.rs", "use super::super::auto_tasks::Probe;\n"),
+            ("automation/condition/host.rs", "use super::super::super::{auto_tasks::Probe};\n"),
+            ("automation/condition/host.rs",
+             "fn mint(runtime: &OrbitRuntime) {\n"
+             "    super::super::super::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
+        ):
+            with self.subTest(relative=relative, source=source):
+                self.check_files({**owner, relative: source}, rejected=True)
+        # A distinct port method name passes, and auto_tasks keeps its
+        # downward edges into automation.
+        self.check_files({
+            **owner,
+            "automation/auto_task_port.rs":
+                "pub(in crate::application) trait AutomationAutoTaskPort {\n"
+                "    fn listed_auto_task_definitions(&self);\n}\n",
+            "auto_tasks/port.rs":
+                "use crate::application::automation::AutomationAutoTaskPort;\n"
+                "impl AutomationAutoTaskPort for OrbitRuntime {\n"
+                "    fn listed_auto_task_definitions(&self) {\n"
+                "        self.fresh_listing_method();\n    }\n}\n",
+            "automation/inspect.rs":
+                "use crate::application::automation::AutomationAutoTaskPort;\n"
+                "fn inspect(runtime: &OrbitRuntime) {\n"
+                "    runtime.listed_auto_task_definitions();\n}\n",
+            "auto_tasks/projection.rs":
+                "fn project(runtime: &OrbitRuntime) {\n"
+                "    crate::application::automation::evaluate_auto_task(runtime);\n}\n",
+        }, rejected=False)
+
     def test_tag_instructions_reaches_experiment_only_through_its_port(self):
         # [ORB-23019] tag_instructions.rs called experiment's overlay query,
         # and experiment reads tag-instruction helpers back. The module is one

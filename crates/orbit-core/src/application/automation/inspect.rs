@@ -1,6 +1,7 @@
 //! Read-only diagnostics share persisted scheduler state; inspection never ticks.
 
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, delivery};
 use orbit_common::OrbitError;
@@ -35,8 +36,7 @@ pub fn unresolvable_delivery_branches(
 ) -> Result<Vec<UnresolvableBranch>, OrbitError> {
     let source = Source::new(&runtime.paths().repo_root);
     let mut unresolvable = Vec::new();
-    for listed in runtime.auto_task_listing(false)? {
-        let definition = listed.definition;
+    for definition in runtime.listed_auto_task_definitions()? {
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
             ..
@@ -173,9 +173,9 @@ pub fn unadmittable_delivery_definitions(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnadmittableDefinition>, OrbitError> {
     Ok(runtime
-        .auto_task_listing(false)?
+        .listed_auto_task_definitions()?
         .iter()
-        .filter_map(|listed| delivery_ownership_refusal(runtime, &listed.definition))
+        .filter_map(|definition| delivery_ownership_refusal(runtime, definition))
         .collect())
 }
 
@@ -206,8 +206,7 @@ pub fn wedged_delivery_consumers(
     }
     let store = runtime.automation_store()?;
     let mut wedged = Vec::new();
-    for listed in runtime.auto_task_listing(false)? {
-        let definition = listed.definition;
+    for definition in runtime.listed_auto_task_definitions()? {
         if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
             continue;
         }

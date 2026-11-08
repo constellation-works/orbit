@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use super::super::AutomationBoardPort;
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 
 /// The board-independent inputs: the definition's own minted tasks, which
 /// `board` leaves out, and its `self` history.
@@ -41,7 +42,7 @@ pub(crate) fn with_accepted_history(
     let Some(definition) = definition.filter(|definition| definition.completion.is_some()) else {
         return facts;
     };
-    match runtime.auto_task_accepted_history(&definition.name) {
+    match runtime.auto_task_completion_history(&definition.name) {
         AutoTaskAcceptedHistory::Latest(receipt) => {
             facts.last_succeeded_at = Some(receipt.accepted_at)
         }
@@ -82,7 +83,7 @@ fn accepted_history_of(runtime: &OrbitRuntime, name: &str) -> AcceptedHistoryFac
         last_succeeded_at: None,
         unavailable: Some(why),
     };
-    let definition = match runtime.auto_task_show(name) {
+    let definition = match runtime.validated_auto_task_definition(name) {
         Ok(Some(definition)) => definition,
         Ok(None) => return unavailable(format!("no auto-task `{name}` is defined here")),
         Err(error) => return unavailable(format!("auto-task `{name}` does not load: {error}")),
@@ -92,7 +93,7 @@ fn accepted_history_of(runtime: &OrbitRuntime, name: &str) -> AcceptedHistoryFac
             "auto-task `{name}` declares no completion contract, so it has no accepted results"
         ));
     }
-    match runtime.auto_task_accepted_history(name) {
+    match runtime.auto_task_completion_history(name) {
         AutoTaskAcceptedHistory::Latest(receipt) => AcceptedHistoryFacts {
             last_succeeded_at: Some(receipt.accepted_at),
             unavailable: None,

@@ -17,7 +17,7 @@ use orbit_types::workflow::{
 };
 use std::path::PathBuf;
 
-use crate::application::automation::SourceCache;
+use crate::application::automation::{AutomationAutoTaskPort, SourceCache};
 use crate::application::plugin::InactivePlugin;
 
 struct CachedDispatch<'a> {
@@ -295,6 +295,48 @@ impl OrbitRuntime {
         definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
         open_auto_task_instance(self, definition)
+    }
+}
+
+/// The catalog reads automation makes, forwarded to this module's policy and
+/// discovery [ORB-23334]: `auto_tasks` sits above `automation`.
+impl AutomationAutoTaskPort for OrbitRuntime {
+    fn listed_auto_task_definitions(&self) -> Result<Vec<AutoTaskDefinition>, OrbitError> {
+        Ok(self
+            .auto_task_listing(false)?
+            .into_iter()
+            .map(|listed| listed.definition)
+            .collect())
+    }
+
+    fn validated_auto_task_definition(
+        &self,
+        name: &str,
+    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+        self.auto_task_show(name)
+    }
+
+    fn auto_task_discovery_path(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
+        Ok(self.auto_task_read_source(name)?.map(|(_, path)| path))
+    }
+
+    fn auto_task_completion_history(&self, name: &str) -> AutoTaskAcceptedHistory {
+        self.auto_task_accepted_history(name)
+    }
+
+    fn open_auto_task_instance_id(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        open_auto_task_instance(self, definition)
+    }
+
+    fn auto_task_template_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+        template_params(self, definition)
+    }
+
+    fn auto_task_mint_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+        mint_params(self, definition)
     }
 }
 

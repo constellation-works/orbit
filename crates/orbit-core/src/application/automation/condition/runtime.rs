@@ -5,6 +5,7 @@ use orbit_types::workflow::automation::ConditionAudit;
 use super::enable::{ConditionEnablePreview, ConditionStallCleared, enable_preview};
 use super::evaluate::{ConditionDefinition, condition_consumer, condition_refusal};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 
 impl OrbitRuntime {
     /// The enable dry run of a condition auto-task (§9): what enabling it now
@@ -15,7 +16,7 @@ impl OrbitRuntime {
         name: &str,
     ) -> Result<ConditionEnablePreview, OrbitError> {
         let definition = self
-            .auto_task_show(name)?
+            .validated_auto_task_definition(name)?
             .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
         let condition = ConditionDefinition::of_auto_task(&definition).ok_or_else(|| {
             OrbitError::InvalidInput(format!(

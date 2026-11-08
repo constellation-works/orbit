@@ -2,6 +2,7 @@
 
 use super::{COVERAGE_ARTIFACT, consumer_states, source::Source};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
@@ -23,8 +24,7 @@ pub(super) fn mint(
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
-    let mut params =
-        crate::application::auto_tasks::scheduler::template_params(runtime, definition);
+    let mut params = runtime.auto_task_template_task_params(definition);
     // [ORB-13896] After-landing review is reviewed by `workflow.purpose_crews.review`,
     // one crew drawn per batch when it is a pool [ORB-15195], from the members
     // whose executor can run under the task's `os:` tags.
