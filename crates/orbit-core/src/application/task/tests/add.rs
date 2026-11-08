@@ -285,3 +285,52 @@ fn filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift() {
     assert_eq!(task.required_tools, ["orbit.task.show"]);
     assert_eq!(task.granted_tools, ["orbit.task.show"]);
 }
+
+/// A malformed global activity file must not block filing a task with no
+/// `required_tools`, while a task naming a requirement still fails closed
+/// with the catalog error and stores nothing. [ORB-23413]
+#[test]
+fn filing_without_required_tools_survives_a_malformed_global_activity() {
+    if !enter_isolated_child(
+        module_path!(),
+        "filing_without_required_tools_survives_a_malformed_global_activity",
+    ) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    seed_implement_activity(&runtime);
+    let broken = runtime
+        .global_root()
+        .join("resources/activities/malformed-activity.yaml");
+    std::fs::write(&broken, "{{{\n  not: [valid, yaml\n").expect("write malformed activity");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "No requirements to check".into(),
+            ..Default::default()
+        })
+        .expect("an unreadable catalog must not block filing without required_tools");
+    assert!(
+        task.required_tools.is_empty(),
+        "the filed task carries no requirements"
+    );
+
+    let before = runtime.list_tasks().expect("tasks").len();
+    let error = runtime
+        .add_task(TaskAddParams {
+            title: "Requirement still needs the catalog".into(),
+            required_tools: vec!["orbit.task.show".into()],
+            ..Default::default()
+        })
+        .expect_err("a requirement cannot be checked while the catalog fails to load");
+    let message = error.to_string();
+    assert!(
+        message.contains("malformed-activity.yaml"),
+        "the catalog error names the file: {message}"
+    );
+    assert_eq!(
+        runtime.list_tasks().expect("tasks").len(),
+        before,
+        "a refused requirement is not stored"
+    );
+}

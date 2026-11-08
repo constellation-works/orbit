@@ -54,6 +54,14 @@ impl OrbitRuntime {
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
+        // The activity catalog is fail-closed for the global and explicit
+        // layers: one malformed file makes `v2_activity_catalog` return
+        // `Err`. Nothing below needs the catalog when there is no
+        // requirement to check, so skip the read entirely and keep filing
+        // tasks with no `required_tools` working. [ORB-23413]
+        if normalize_required_tools(required_tools.to_vec()).is_empty() {
+            return Ok(Vec::new());
+        }
         let warnings = self.validate_task_tool_names("required_tools", required_tools)?;
         let Some(disallow_list) = self.required_tool_implementer_disallow_list()? else {
             return Ok(warnings);
