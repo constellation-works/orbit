@@ -7,6 +7,7 @@
 //! refusal leaves (target type `notice`).
 
 mod authority;
+pub mod limits;
 mod post;
 #[cfg(feature = "test-support")]
 pub(crate) mod test_support;

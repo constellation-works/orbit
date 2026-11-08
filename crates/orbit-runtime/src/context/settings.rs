@@ -111,8 +111,6 @@ pub struct OrbitRuntimeSettings {
     lease_policy: crate::task::locks::LeasePolicy,
     /// `experiments.*`: the workspace's experiment policy.
     experiments: orbit_config::ExperimentSettings,
-    /// `notice.*`: fleet notice expiry, limits and brief delivery.
-    notice: orbit_config::NoticeSettings,
     /// Admitted `machine.labels`: the capability labels this host carries,
     /// beside its OS as an implicit label.
     machine_labels: Vec<String>,
@@ -174,7 +172,6 @@ impl OrbitRuntimeSettings {
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
-        notice: orbit_config::NoticeSettings,
         machine_labels: Vec<String>,
         application_consent_max_days: u32,
     ) -> Self {
@@ -227,7 +224,6 @@ impl OrbitRuntimeSettings {
             decision_channel_enabled,
             lease_policy,
             experiments,
-            notice,
             machine_labels,
             application_consent_max_days,
         }
@@ -255,10 +251,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn experiments(&self) -> &orbit_config::ExperimentSettings {
         &self.experiments
-    }
-
-    pub(crate) fn notice(&self) -> &orbit_config::NoticeSettings {
-        &self.notice
     }
 
     pub(crate) fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {

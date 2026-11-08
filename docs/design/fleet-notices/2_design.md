@@ -58,7 +58,7 @@ needed: every crate below already depends on the ones it would call.
 | Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
 | Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/`, called from the task resolves side effects on every transition into `done`, right after the transition rather than inside its transaction; reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `application/routines/sweep.rs`) materializes cross-workspace closures |
 | Brief block | the required `RuntimeHost` method `notices_for_agent_input`, implemented by Core in `actions/task_context.rs`, with its `NullRuntimeHost` default; attached in `dispatch/preparation.rs`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
-| `[notice]` configuration | `crates/orbit-config` registry settings |
+| Fixed limits | `crates/orbit-core/src/application/notice/limits.rs` |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice.rs` holds the CLI-only flag folding and the rendering |
 | Dashboard banner and view | `crates/orbit-web` (`assets/dashboard/js/notices.js`, `css/notices.css`) |
 | Attention kind `notice_open` | `crates/orbit-core/src/application/attention/notice_sources.rs` |
@@ -97,8 +97,7 @@ tools' descriptions say which is which ([references/glossary.md](./references/gl
 
 ## 4. Managed agents posting
 
-Opted-in managed activities can *read* notices through their brief when `notice.brief_delivery`
-is on (the default). Posting needs the tool:
+Opted-in managed activities *read* notices through their brief. Posting needs the tool:
 
 - Slice 3 (built) adds `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` to the
   tool baselines of `agent_implement`, `agent_review_repair` and `final_recovery` for closing the
@@ -111,13 +110,12 @@ is on (the default). Posting needs the tool:
   rules: home workspace = the task's, workspace scope only, `incident`/`info` only, linked task or
   evidence required, 24 h cap, per-task rate and open counts
   ([notice-authority](./specs/notice-authority.md#rights)).
-- A workspace can switch agent posting off with `notice.agent_posting = false`; the baseline then
-  omits the tools and the owner refuses agent-class posts and closes with
-  `notice_agent_posting_disabled`.
+- Agent posting is always on: the `notice.agent_posting` switch was removed [ORB-22808], so
+  `notice_agent_posting_disabled` comes only from an older owner.
 
 The activity instruction for posting is short: post only when the problem is outside your task, will
 affect other agents, and you have a linked task or evidence; prefer linking the fix task; check
-open notices first (the brief shows them when delivery is enabled); re-posting the same subject
+open notices first (the brief shows them); re-posting the same subject
 corroborates rather than duplicates.
 
 ## 5. Brief delivery
@@ -128,18 +126,20 @@ Delivery is specified in [notice-delivery](./specs/notice-delivery.md). The desi
   the engine stays free of store reads.
 - It is rebuilt at every prompt build, so a notice posted or closed mid-run takes effect at the next
   safe point.
-- Brief delivery is governed by the workspace switch `notice.brief_delivery`, not by the MCP
-  toolset ([4_decisions.md](./4_decisions.md#brief-delivery-is-a-workspace-switch-not-the-toolset)).
+- Brief delivery is independent of the MCP toolset
+  ([4_decisions.md](./4_decisions.md#brief-delivery-is-a-workspace-switch-not-the-toolset)) and
+  always on: its `notice.brief_delivery` switch was removed [ORB-22808].
 - Delivery is audited (`NoticesDelivered`) and fails open with an `unavailable` marker.
 
 ## 6. Configuration
 
-Workspace `[notice]` table, all keys optional:
+None. Every limit is a fixed constant in `application/notice/limits.rs`; the former `[notice]`
+keys were removed [ORB-22808] and load with a deprecation warning until 2026-12-08:
 
-| Key | Default | Meaning |
+| Former key | Fixed value | Meaning |
 |---|---|---|
-| `brief_delivery` | `true` | Quote open notices into opted-in activities' prompts |
-| `agent_posting` | `true` | Managed agents may post and close their own notices |
+| `brief_delivery` | always on | Quote open notices into opted-in activities' prompts |
+| `agent_posting` | always on | Managed agents may post and close their own notices |
 | `brief_max_items` | `5` | Notices per brief |
 | `brief_body_chars` | `600` | Body characters per brief entry |
 | `brief_read_timeout_ms` | `2000` | Bound on the brief's notice read |
@@ -152,9 +152,8 @@ Workspace `[notice]` table, all keys optional:
 
 Machine configuration gains only the new `notice` value in `machine.mcp.toolsets`.
 
-Configuration tunes bounds and switches delivery. It does not add kinds, change who may post or
-close, or change the brief's trust marking; those are code and spec, so every workspace's notices
-mean the same thing.
+Kinds, who may post or close, the brief's trust marking and these bounds are code and spec, so
+every workspace's notices mean the same thing.
 
 ## 7. Extension point: maintenance dispatch hold
 

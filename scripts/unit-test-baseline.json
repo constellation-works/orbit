@@ -166,7 +166,6 @@
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_reviewer_scope_decides_on_and_forwards_the_canonical_path",
-        "adapter/command/dispatch/claimed/tests/owner/notices.rs::claimed_follower_notice_post_is_refused_when_agent_posting_is_off",
         "adapter/command/dispatch/claimed/tests/owner/notices.rs::claimed_follower_posts_shows_and_closes_its_notice_on_the_owner_through_the_broker",
         "adapter/command/dispatch/claimed/tests/owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation",
         "adapter/command/dispatch/claimed/tests/owner/workspace_reads.rs::a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refusals",

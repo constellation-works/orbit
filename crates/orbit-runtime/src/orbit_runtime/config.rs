@@ -281,12 +281,6 @@ impl RuntimeKernel {
     pub fn experiment_settings(&self) -> &orbit_config::ExperimentSettings {
         self.context.settings().experiments()
     }
-
-    /// `notice.*`: fleet notice expiry defaults and caps, limits and brief
-    /// delivery.
-    pub fn notice_settings(&self) -> &orbit_config::NoticeSettings {
-        self.context.settings().notice()
-    }
 }
 
 /// The shared wording for pass-listed variables missing from the launching

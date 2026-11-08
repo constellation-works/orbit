@@ -323,10 +323,64 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     // deletes these entries after 2026-12-08, when it becomes an ordinary
     // unknown setting.
     ("assistance", ASSISTANCE_REMOVED_NOTE),
+    // [ORB-22808] Fleet notice limits were fixed on 2026-11-08. Each key loads,
+    // warns and is ignored; code-health-sweep deletes these entries after
+    // 2026-12-08, when they become ordinary unknown settings.
+    ("notice.agent_posting", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.agent_posts_per_task_per_day",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.brief_body_chars", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_delivery", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_max_items", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.brief_read_timeout_ms", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.default_expiry_hours.incident",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.default_expiry_hours.info", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.default_expiry_hours.maintenance",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.max_body_bytes", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_evidence", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_expiry_hours.agent", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_expiry_hours.operator", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.max_expiry_hours.orchestrator.incident",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    (
+        "notice.max_expiry_hours.orchestrator.info",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    (
+        "notice.max_expiry_hours.orchestrator.maintenance",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.max_open_global_per_owner", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_open_per_agent_task", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_open_per_workspace", NOTICE_LIMITS_FIXED_NOTE),
+    ("notice.max_title_chars", NOTICE_LIMITS_FIXED_NOTE),
+    (
+        "notice.orchestrator_posts_per_hour",
+        NOTICE_LIMITS_FIXED_NOTE,
+    ),
+    ("notice.retention_days", NOTICE_LIMITS_FIXED_NOTE),
 ];
 
 const ASSISTANCE_REMOVED_NOTE: &str = "ignored: decision assistance was removed; delete the \
      [assistance] table. This key stops being recognised after 2026-12-08";
+
+const NOTICE_LIMITS_FIXED_NOTE: &str = "ignored: fleet notice limits are fixed at the former \
+     defaults (expiry 72/12/168 hours by kind, caps 720 operator, 168/72/168 orchestrator, 24 \
+     agent; 120-character titles, 4096-byte bodies, 8 evidence; 20 open per workspace, 10 \
+     global per owner, 2 per agent task; 5 agent posts per task per day, 30 orchestrator posts \
+     per hour; 30-day retention; agent posting and brief delivery on, 5 notices of 600 \
+     characters within 2000 ms). Delete the [notice] table. This key stops being recognised \
+     after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
      removed; resident.evolution.window_days and decline_suppress_days still apply to the \

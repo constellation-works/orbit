@@ -584,6 +584,8 @@ pub enum NoticeRefusalCode {
     CloseRefused,
     NotFound,
     InvalidField,
+    /// Raised only by owners older than ORB-22808, whose `notice.agent_posting`
+    /// switch could refuse agent posts; kept so their refusals still parse.
     AgentPostingDisabled,
 }
 

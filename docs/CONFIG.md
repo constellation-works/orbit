@@ -2621,6 +2621,19 @@ failure_streak_warn = 5
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 
+### Fleet notices — fixed limits
+
+Fleet notices have no settings [ORB-22808]. Their limits are fixed:
+
+- **Expiry.** A post that names none lasts 72 hours (incident), 12 (maintenance) or 168 (info). The longest expiry is 720 hours for an operator, 168/72/168 for an orchestrator, and 24 for a managed agent, which is also an agent notice's default.
+- **Size.** Titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most 8 evidence references.
+- **Open notices.** 20 per workspace, 10 global per owner host, 2 per managed task.
+- **Post rates.** 5 per managed task in 24 hours, corroborations included; 30 per orchestrator crew per hour.
+- **Retention.** Closed and expired notices stay listable for 30 days, then are purged.
+- **Agents and briefs.** Managed agents always may post and close their own notices through their bound task. An opted-in activity's prompt quotes at most 5 open notices, each body cut to 600 characters; a notice read that takes over 2000 ms gives an `unavailable` brief instead of delaying dispatch.
+
+The former `notice.*` keys are deprecated and ignored ([validation and errors](#validation-and-errors) lists them).
+
 ### `[security_alert_sweep]` — security finding severity
 
 `security_alert_sweep.min_severity` (`low`, `moderate`, `high` or `critical`; default `moderate`) is the lowest severity `dependabot_alert_sweep_pipeline` files for Dependabot and Code scanning findings. Secret scanning findings are always filed.
@@ -2910,3 +2923,4 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `ux_rules.surfaces`, `runner`, `ui_base_url`, `max_new_tasks`, `file_at`, `disabled` | Ignored: the `ux-rules` routine, `ux_rules_pipeline` and its rule-findings filer were removed [ORB-22844]; nothing runs the rules on a schedule or files tasks from them, and no `ux_rules_runner` script grant is needed. Delete the `[ux_rules]` table. Recognised until 2026-12-07. |
 | `review.verify_findings` | Ignored: the `finding_verification` routine and `finding_verification_pipeline` were removed [ORB-22844], and nothing holds a review-filed bug as `unverified_review_finding`; it is approved and promoted like any other task. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding with a REJECTED verdict, and verdicts the removed job wrote still load. Delete the key. Recognised until 2026-12-07. |
 | `assistance` | Ignored: decision assistance was removed [ORB-22808]: its model service, the task-quality, delivery-quality and precedent-decision consumers, precedent retrieval and `orbit decision assist`. Nothing calls the OpenAI Decisions endpoint. Delete the global `[assistance]` table. Recognised until 2026-12-08; after that it is an unknown key. |
+| `notice.default_expiry_hours.*`, `max_expiry_hours.*`, `max_title_chars`, `max_body_bytes`, `max_evidence`, `max_open_per_workspace`, `max_open_global_per_owner`, `max_open_per_agent_task`, `agent_posts_per_task_per_day`, `orchestrator_posts_per_hour`, `retention_days`, `agent_posting`, `brief_delivery`, `brief_max_items`, `brief_body_chars`, `brief_read_timeout_ms` | Ignored: fleet notice limits are fixed at the former defaults ([fleet notices](#fleet-notices--fixed-limits)); agent posting and brief delivery stay on. Delete the `[notice]` table. Recognised until 2026-12-08; after that they are unknown keys. |

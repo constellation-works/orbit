@@ -61,12 +61,6 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let poster = self.resolve_notice_poster(caller)?;
         audit.poster = Some(poster.class);
-        if poster.class == AuthorClass::Agent && !self.notice_settings().agent_posting {
-            return Err(refuse(
-                NoticeRefusalCode::AgentPostingDisabled,
-                "notice.agent_posting is false in this workspace, so a managed agent may not close notices",
-            ));
-        }
         let reason = reason.trim();
         if reason.is_empty()
             || reason.chars().count() > MAX_CLOSE_REASON_CHARS

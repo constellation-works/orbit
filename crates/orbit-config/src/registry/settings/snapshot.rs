@@ -42,95 +42,6 @@ pub struct ExperimentSettings {
     pub min_delivered_rate: f64,
 }
 
-/// Admitted `notice.*`: fleet-notice expiry defaults and caps, and the size,
-/// open-count and rate limits a post is held to. Who may post or close, and
-/// the kinds, are code, not configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoticeSettings {
-    /// `notice.default_expiry_hours.{incident,maintenance,info}` (72, 12, 168).
-    pub default_expiry_hours: NoticeKindHours,
-    /// `notice.max_expiry_hours.operator` (default 720).
-    pub max_expiry_hours_operator: u32,
-    /// `notice.max_expiry_hours.orchestrator.*` (168, 72, 168).
-    pub max_expiry_hours_orchestrator: NoticeKindHours,
-    /// `notice.max_expiry_hours.agent` (default 24): also the agent default.
-    pub max_expiry_hours_agent: u32,
-    /// `notice.max_title_chars` (default 120).
-    pub max_title_chars: u32,
-    /// `notice.max_body_bytes` (default 4096).
-    pub max_body_bytes: u32,
-    /// `notice.max_evidence` (default 8).
-    pub max_evidence: u32,
-    /// `notice.max_open_per_workspace` (default 20).
-    pub max_open_per_workspace: u32,
-    /// `notice.max_open_global_per_owner` (default 10).
-    pub max_open_global_per_owner: u32,
-    /// `notice.max_open_per_agent_task` (default 2).
-    pub max_open_per_agent_task: u32,
-    /// `notice.agent_posts_per_task_per_day` (default 5).
-    pub agent_posts_per_task_per_day: u32,
-    /// `notice.orchestrator_posts_per_hour` (default 30).
-    pub orchestrator_posts_per_hour: u32,
-    /// `notice.retention_days` (default 30).
-    pub retention_days: u32,
-    /// `notice.agent_posting` (default `true`): managed agents may post
-    /// and close their own notices through their bound task.
-    pub agent_posting: bool,
-    /// `notice.brief_delivery` (default `true`): quote open notices into
-    /// opted-in activities' prompts as untrusted data.
-    pub brief_delivery: bool,
-    /// `notice.brief_max_items` (default 5).
-    pub brief_max_items: u32,
-    /// `notice.brief_body_chars` (default 600).
-    pub brief_body_chars: u32,
-    /// `notice.brief_read_timeout_ms` (default 2000).
-    pub brief_read_timeout_ms: u32,
-}
-
-/// One hour value per notice kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoticeKindHours {
-    /// Hours for an `incident` notice.
-    pub incident: u32,
-    /// Hours for a `maintenance` notice.
-    pub maintenance: u32,
-    /// Hours for an `info` notice.
-    pub info: u32,
-}
-
-impl Default for NoticeSettings {
-    fn default() -> Self {
-        Self {
-            default_expiry_hours: NoticeKindHours {
-                incident: 72,
-                maintenance: 12,
-                info: 168,
-            },
-            max_expiry_hours_operator: 720,
-            max_expiry_hours_orchestrator: NoticeKindHours {
-                incident: 168,
-                maintenance: 72,
-                info: 168,
-            },
-            max_expiry_hours_agent: 24,
-            max_title_chars: 120,
-            max_body_bytes: 4096,
-            max_evidence: 8,
-            max_open_per_workspace: 20,
-            max_open_global_per_owner: 10,
-            max_open_per_agent_task: 2,
-            agent_posts_per_task_per_day: 5,
-            orchestrator_posts_per_hour: 30,
-            retention_days: 30,
-            agent_posting: true,
-            brief_delivery: true,
-            brief_max_items: 5,
-            brief_body_chars: 600,
-            brief_read_timeout_ms: 2000,
-        }
-    }
-}
-
 /// Which document an admission sees: a layered load (both files merged, or
 /// one effective layer), or one file read alone, whose cross-layer
 /// references the layered load checks instead.
@@ -547,38 +458,6 @@ impl ConfigSnapshot {
             max_running: self.experiments_max_running,
             config_keys: self.experiments_config_keys.clone(),
             min_delivered_rate: self.experiments_min_delivered_rate,
-        }
-    }
-
-    /// The admitted `notice.*` settings.
-    pub fn notice(&self) -> NoticeSettings {
-        NoticeSettings {
-            default_expiry_hours: NoticeKindHours {
-                incident: self.notice_default_expiry_hours_incident,
-                maintenance: self.notice_default_expiry_hours_maintenance,
-                info: self.notice_default_expiry_hours_info,
-            },
-            max_expiry_hours_operator: self.notice_max_expiry_hours_operator,
-            max_expiry_hours_orchestrator: NoticeKindHours {
-                incident: self.notice_max_expiry_hours_orchestrator_incident,
-                maintenance: self.notice_max_expiry_hours_orchestrator_maintenance,
-                info: self.notice_max_expiry_hours_orchestrator_info,
-            },
-            max_expiry_hours_agent: self.notice_max_expiry_hours_agent,
-            max_title_chars: self.notice_max_title_chars,
-            max_body_bytes: self.notice_max_body_bytes,
-            max_evidence: self.notice_max_evidence,
-            max_open_per_workspace: self.notice_max_open_per_workspace,
-            max_open_global_per_owner: self.notice_max_open_global_per_owner,
-            max_open_per_agent_task: self.notice_max_open_per_agent_task,
-            agent_posts_per_task_per_day: self.notice_agent_posts_per_task_per_day,
-            orchestrator_posts_per_hour: self.notice_orchestrator_posts_per_hour,
-            retention_days: self.notice_retention_days,
-            agent_posting: self.notice_agent_posting,
-            brief_delivery: self.notice_brief_delivery,
-            brief_max_items: self.notice_brief_max_items,
-            brief_body_chars: self.notice_brief_body_chars,
-            brief_read_timeout_ms: self.notice_brief_read_timeout_ms,
         }
     }
 

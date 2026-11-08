@@ -662,6 +662,13 @@ sets them. `resident.evolution.window_days` and `decline_suppress_days` still
 apply to the evolution ledger, and a review-filed bug is approved and promoted
 like any other task.
 
+Fleet notice limits are fixed. Every `[notice]` key (the expiry defaults and
+caps, size, open-count and rate limits, `retention_days`, `agent_posting`,
+`brief_delivery` and the `brief_*` bounds) loads with a deprecation warning and
+has no effect. They are recognised until 2026-12-08, after which they are
+reported as unknown settings; delete the `[notice]` table. See
+[fleet notices](../../how-to/fleet-notices/) for the fixed values.
+
 Explorer delegation has been removed. Existing `workflow.explore.*` and
 `workflow.purpose_crews.explorer` settings load with a deprecation warning
 and have no effect; remove them with `orbit doctor --fix-retired-config-keys`,
@@ -800,29 +807,7 @@ experiments.
 | `lease.listener.limits.header_timeout_seconds` | **Advanced. Global only.** integer · **Default:** `5`<br>Seconds allowed to receive HTTP headers or complete a TLS handshake. Valid range: `1`–`300`. |
 | `lease.listener.limits.request_timeout_seconds` | **Advanced. Global only.** integer · **Default:** `10`<br>Seconds allowed for a request handler and body receipt. Valid range: `1`–`300`. |
 | `lease.listener.limits.max_tracked_keys` | **Advanced. Global only.** integer · **Default:** `4096`<br>Maximum rate-limit identities, including two shared overflow buckets. Valid range: `3`–`65536`. |
-| `notice.default_expiry_hours.incident` | **Advanced.** integer · **Default:** `72`<br>Hours an incident notice lasts when its post names no expiry (1-720). |
-| `notice.default_expiry_hours.maintenance` | **Advanced.** integer · **Default:** `12`<br>Hours a maintenance notice lasts when its post names no expiry (1-720). |
-| `notice.default_expiry_hours.info` | **Advanced.** integer · **Default:** `168`<br>Hours an info notice lasts when its post names no expiry (1-720). |
-| `notice.max_expiry_hours.operator` | **Advanced.** integer · **Default:** `720`<br>Longest expiry, in hours, an operator may give a notice of any kind (1-720). |
-| `notice.max_expiry_hours.orchestrator.incident` | **Advanced.** integer · **Default:** `168`<br>Longest expiry, in hours, an orchestrator may give an incident notice (1-720). |
-| `notice.max_expiry_hours.orchestrator.maintenance` | **Advanced.** integer · **Default:** `72`<br>Longest expiry, in hours, an orchestrator may give a maintenance notice (1-720). |
-| `notice.max_expiry_hours.orchestrator.info` | **Advanced.** integer · **Default:** `168`<br>Longest expiry, in hours, an orchestrator may give an info notice (1-720). |
-| `notice.max_expiry_hours.agent` | **Advanced.** integer · **Default:** `24`<br>Longest expiry, and the default, in hours, of a managed agent's notice (1-720). |
-| `notice.max_title_chars` | **Advanced.** integer · **Default:** `120`<br>Longest notice title, in characters (1-120). |
-| `notice.max_body_bytes` | **Advanced.** integer · **Default:** `4096`<br>Longest notice body, in UTF-8 bytes (0-65536). |
-| `notice.max_evidence` | **Advanced.** integer · **Default:** `8`<br>Evidence references per notice (0-8). |
-| `notice.max_open_per_workspace` | **Advanced.** integer · **Default:** `20`<br>Open notices one workspace may hold, all poster classes (1-1000). |
-| `notice.max_open_global_per_owner` | **Advanced.** integer · **Default:** `10`<br>Open global notices across one owner host's workspaces (1-1000). |
-| `notice.max_open_per_agent_task` | **Advanced.** integer · **Default:** `2`<br>Open notices one managed task's runs may hold (1-100). |
-| `notice.agent_posting` | **Advanced.** bool · **Default:** `true`<br>Managed agents may post and close their own fleet notices through their bound task (default true). When false, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes. |
-| `notice.agent_posts_per_task_per_day` | **Advanced.** integer · **Default:** `5`<br>Posts, corroborations included, one managed task's runs may make in 24 hours (1-1000). |
-| `notice.orchestrator_posts_per_hour` | **Advanced.** integer · **Default:** `30`<br>Posts one orchestrator crew may make per hour on this owner (1-10000). |
-| `notice.retention_days` | **Advanced.** integer · **Default:** `30`<br>Days closed and expired notices stay listable before they are purged (1-3650). |
-| `notice.brief_delivery` | **Advanced.** bool · **Default:** `true`<br>Quote open fleet notices into opted-in managed activities' prompts as untrusted data (default true). Independent of the MCP toolsets. |
-| `notice.brief_max_items` | **Advanced.** integer · **Default:** `5`<br>Most open notices one agent brief quotes (1-50, default 5). |
-| `notice.brief_body_chars` | **Advanced.** integer · **Default:** `600`<br>Body characters per notice in an agent brief (0-4096, default 600). |
-| `notice.brief_read_timeout_ms` | **Advanced.** integer · **Default:** `2000`<br>Milliseconds a prompt build may wait reading notices before the brief says unavailable (1-60000, default 2000). |
-| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. A new `orbit init` seeds `true`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
+| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | **Advanced.** integer · **Default:** `3`<br>Experiments that may run at once in this workspace (`1`–`20`). Starting or resuming one beyond it is refused; a paused experiment does not count. |
 | `attention.cursor_ttl_hours` | integer · **Default:** `24`<br>Cursor validity in hours. Valid range: 1–8760. Read back with `orbit config get attention.cursor_ttl_hours --json`. |
 | `attention.age_bump_hours` | integer array · **Default:** `[24, 72]`<br>Severity age thresholds. Valid range: strictly increasing positive hours up to 87600; empty disables aging. Read back with `orbit config get attention.age_bump_hours --json`. |

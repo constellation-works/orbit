@@ -74,8 +74,8 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 All five slices ([ORB-21211], [ORB-21212], [ORB-21213], [ORB-21214], [ORB-21215]) are built: the notice store, the
 `orbit.notice.*` tools, `orbit notice`, the opt-in `notice` toolset, brief delivery of open
 notices into opted-in agent prompts as untrusted data, and managed-agent posting through a
-run's own task (the `notice.agent_posting` workspace switch, default on). Slice 4 makes notice
-tools `control_plane` so a replica refuses them, routes follower CLI and worker-bound calls to
+run's own task (always on since [ORB-22808] removed the `notice.agent_posting` switch). Slice 4
+makes notice tools `control_plane` so a replica refuses them, routes follower CLI and worker-bound calls to
 the owner by selector and owner route, aggregates a workspace-less list with one owner-local read
 per owner machine (an unreachable owner is a `degraded` entry), and has the scheduler sweep
 materialize same-owner cross-workspace linked-task closures. Slice 5 adds the dashboard banner and

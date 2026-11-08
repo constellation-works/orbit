@@ -94,10 +94,10 @@ fleet-wide one: it re-posts the same key with `scope: global`, which updates the
 
 ## Limits
 
-All values are `[notice]` configuration with these defaults; exceeding one refuses the post with
+All values are fixed (`application/notice/limits.rs`); exceeding one refuses the post with
 `notice_limit_exceeded` naming the limit, and writes nothing.
 
-| Limit | Default | Applies to |
+| Limit | Value | Applies to |
 |---|---|---|
 | `max_title_chars` | 120 | every post |
 | `max_body_bytes` | 4096 | every post |
@@ -122,9 +122,8 @@ the use case can resolve or create one. These core refusals do not partially app
 `notice_poster_unidentified`, `notice_scope_refused`, `notice_kind_refused`,
 `notice_evidence_required`, `notice_expiry_exceeds_cap`, `notice_expiry_invalid`,
 `notice_limit_exceeded`, `notice_close_refused`, `notice_not_found`, `notice_invalid_field`,
-`notice_agent_posting_disabled` (an agent-class post or close while the workspace sets
-`notice.agent_posting = false`, which also removes the notice tools from the agent
-activities' baselines), and the federated `capability_refused` when a replica receives a write
+`notice_agent_posting_disabled` (only from an owner older than [ORB-22808], whose
+`notice.agent_posting = false` refused agent-class posts and closes), and the federated `capability_refused` when a replica receives a write
 ([notice-federation](./notice-federation.md#writes)).
 
 ## Invariants

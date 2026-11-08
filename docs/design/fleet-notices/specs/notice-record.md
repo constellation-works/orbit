@@ -37,7 +37,7 @@ unattended, and dedupe keeps forty agents hitting one bug from producing forty n
 | `scope` | enum, required | `workspace` or `global` ([notice-federation](./notice-federation.md#scope)). |
 | `kind` | enum, required | `incident`, `maintenance` or `info`. |
 | `title` | string, required | One line, 1–120 characters after trimming, no control characters. |
-| `body` | string | Plain text (Markdown is stored verbatim and never rendered as HTML), at most `notice.max_body_bytes` (default 4096) UTF-8 bytes. Control characters other than newline and tab are refused. |
+| `body` | string | Plain text (Markdown is stored verbatim and never rendered as HTML), at most 4096 UTF-8 bytes. Control characters other than newline and tab are refused. |
 | `dedupe_key` | string, required | 1–128 characters of `[a-z0-9._:/-]`. Supplied or derived ([Dedupe](#dedupe)). |
 | `author` | object, required | `{class, crew, model, task_id, run_id, machine_id}`; `class` is `operator`, `orchestrator` or `agent` ([notice-authority](./notice-authority.md#poster-classes)). `task_id` and `run_id` are present exactly when `class` is `agent`. `crew` is the orchestrator crew for `orchestrator`, the run's crew for `agent`, absent for `operator`. |
 | `linked_task` | object | `{id, workspace_id}` of a task the notice is about, usually its fix. Same owner host as the home workspace ([notice-federation](./notice-federation.md#linked-tasks)). |
@@ -54,7 +54,7 @@ unattended, and dedupe keeps forty agents hitting one bug from producing forty n
 
 The owner store keeps the stored fields in a new table added by a store migration in slice 1
 ([2_design.md §2](../2_design.md#2-placement-in-the-code)). Closed and expired rows are kept for
-`notice.retention_days` (default 30) after they stop being in force, then purged by the existing
+30 days after they stop being in force, then purged by the existing
 retention sweep. Purge is the only delete.
 
 ## Effective state
@@ -94,8 +94,8 @@ not bump `revision`. A post that changed a content field still makes that write 
 
 ## Expiry
 
-Every notice has an `expires_at`; there is no "never". Defaults and caps, all in
-the `[notice]` configuration ([2_design.md §6](../2_design.md#6-configuration)):
+Every notice has an `expires_at`; there is no "never". Defaults and caps, all fixed
+([2_design.md §6](../2_design.md#6-configuration)):
 
 | | `incident` | `maintenance` | `info` |
 |---|---|---|---|
