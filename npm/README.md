@@ -34,7 +34,18 @@ needed; a denied or unsupported host receives a precise readiness error.
 - macOS arm64 / x64
 - Linux arm64 / x64
 
-Windows is not currently published. Use WSL or build from source.
+### Windows
+
+Open a WSL2 Linux shell first, then install Orbit inside it:
+
+```bash
+npm install -g @orbit-tools/cli
+```
+
+Windows via WSL2 has not yet been verified on a Windows host. Native Windows
+is not supported; building from source does not change that. Running the npm
+command in a native Windows shell fails with `EBADPLATFORM` because the package
+supports macOS and Linux only. See the [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md) for setup.
 
 ## Environment variables
 

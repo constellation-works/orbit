@@ -40,9 +40,16 @@ Agent:  Queues it, then runs plan → execute → review in a locked, isolated w
 
 Nothing starts without approval; PR runs stop for your review unless you authorize `--complete`. The task record keeps the prompt, plan, execution trace, and review. For larger specs, ask your agent to orchestrate: the bundled `orbit-orchestrate` skill splits the work, queues it once approved, runs it in parallel, and diagnoses failures ([delivery workflows](https://orbit-cli.com/getting-started/workflows/)).
 
+## Platforms
+
+| Platform | Support |
+|---|---|
+| macOS and Linux | Supported on x64 and arm64 |
+| Windows | Via [WSL2](docs/runbooks/windows-wsl2.md); not yet verified on a Windows host. Native Windows is not supported. |
+
 ## Quick start
 
-**You need:** macOS or Linux (x64 or arm64; Windows uses [WSL2](docs/runbooks/windows-wsl2.md)), Node 18+, an authenticated agent CLI, and authenticated `gh` for pull requests.
+**You need:** a [supported platform](#platforms), Node 18+, an authenticated agent CLI, and authenticated `gh` for pull requests.
 
 ```bash
 npm install -g @orbit-tools/cli
