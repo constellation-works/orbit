@@ -147,6 +147,7 @@
     "orbit-config": {
       "test_function_paths": [
         "crew/tests/pools.rs::malformed_pools_name_the_setting_they_came_from",
+        "resolved/tests/execution_env.rs::inherit_mode_omits_privilege_bearing_orbit_names",
         "tests/retired_providers.rs::crew_naming_a_retired_provider_fails_with_named_refusal",
         "tests/retired_providers.rs::retired_provider_refusal_is_case_insensitive",
         "tests/retired_providers.rs::supported_provider_crew_still_loads_and_defaults_have_no_retired_crews",

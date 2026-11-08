@@ -2,7 +2,7 @@
 
 use orbit_common::security::child_env::{
     allowlisted_child_env, allowlisted_child_env_from, apply_crew_env_from, inherited_child_env,
-    unset_crew_env_from, unset_pass_names_from,
+    inherited_child_env_from, unset_crew_env_from, unset_pass_names_from,
 };
 use orbit_types::identity::CrewEnvVar;
 use std::sync::Arc;
@@ -60,7 +60,8 @@ pub struct ExecutionEnvPolicy {
     /// because a workspace `config.toml` could flip it and replace the global
     /// value. The flag survives as the single seam that decides between full
     /// inheritance and the allowlist, so the two behaviors stay one branch in
-    /// one place rather than two spawn paths.
+    /// one place rather than two spawn paths. Inheritance still omits
+    /// privilege-bearing `ORBIT_*` names.
     pub(crate) inherit: bool,
     /// `execution.env.pass`: the names an operator admits by name.
     pub(crate) pass: Vec<String>,
@@ -174,14 +175,15 @@ impl ExecutionEnvPolicy {
     /// and every subprocess launcher starts from a cleared environment and
     /// applies exactly this — so `inherit = false` really is allowlist-based
     /// rather than a filter over ambient variables. `extras` carries the names
-    /// a provider declares it requires.
+    /// a provider declares it requires. `inherit = true` forwards the parent
+    /// environment except privilege-bearing `ORBIT_*` names, the same names
+    /// `allowlisted_child_env_from` refuses.
     pub fn agent_subprocess_env(&self, extras: &[&str]) -> Vec<(String, String)> {
         if self.inherit {
-            return self
-                .parent
-                .as_deref()
-                .cloned()
-                .unwrap_or_else(inherited_child_env);
+            return match &self.parent {
+                Some(parent) => inherited_child_env_from(parent),
+                None => inherited_child_env(),
+            };
         }
         if let Some(parent) = &self.parent {
             return allowlisted_child_env_from(parent, &self.pass, extras);

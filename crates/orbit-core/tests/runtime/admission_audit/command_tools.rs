@@ -435,6 +435,128 @@ fn oversized_argv_reports_actionable_size_limit() {
     );
 }
 
+fn child_env_pairs(stdout: &str) -> Vec<(String, String)> {
+    stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| match entry.split_once('=') {
+            Some((name, value)) => (name.to_string(), value.to_string()),
+            None => (entry.to_string(), String::new()),
+        })
+        .collect()
+}
+
+fn child_env_value<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+}
+
+fn command_exec_child_receives_only_the_allowlisted_environment() {
+    // [ORB-23049] The child is composed from the allowlist, not filtered by a
+    // denylist. Synthetic fixtures only; assertion messages name variables,
+    // never the fixture values.
+    const HOME: &str = "/home/command-exec-allowlist";
+    const AUTHOR_NAME: &str = "OrbitAuthorAllowlist";
+    const AUTHOR_EMAIL: &str = "orbit-author-allowlist@example.test";
+    const COMMITTER_NAME: &str = "OrbitCommitterAllowlist";
+    const COMMITTER_EMAIL: &str = "orbit-committer-allowlist@example.test";
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_TASK_ID", None),
+        ("ORBIT_ACTIVE_TASK_ID", None),
+        ("ORBIT_AGENT_NAME", None),
+        ("ORBIT_AGENT_MODEL", None),
+        ("ORBIT_RUN_ID", None),
+        ("ORBIT_ACTIVITY_ID", None),
+        ("ORBIT_STEP_INDEX", None),
+        ("ORBIT_OPERATOR", Some("1")),
+        (
+            "ORBIT_WORKSPACE_CLAIM_TOKEN",
+            Some("claim-token-not-forwarded"),
+        ),
+        (
+            "SSH_AUTH_SOCK",
+            Some("/tmp/orbit-command-exec-not-a-socket"),
+        ),
+        ("MCP_MANAGED_SECRET", Some("managed-fixture")),
+        ("DATABASE_URL", Some("postgres://svc:hunter2@db.internal")),
+        ("BILLING_ENDPOINT", Some("https://billing.internal.example")),
+        ("HOME", Some(HOME)),
+        ("GIT_AUTHOR_NAME", Some(AUTHOR_NAME)),
+        ("GIT_AUTHOR_EMAIL", Some(AUTHOR_EMAIL)),
+        ("GIT_COMMITTER_NAME", Some(COMMITTER_NAME)),
+        ("GIT_COMMITTER_EMAIL", Some(COMMITTER_EMAIL)),
+    ]);
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    let result = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["env", "-0"],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("claim holder executes");
+
+    assert_eq!(
+        result["success"],
+        json!(true),
+        "env -0 must run so the child environment can be read: {result}"
+    );
+    let stdout = result["stdout"].as_str().expect("stdout is a string");
+    let pairs = child_env_pairs(stdout);
+    let names: Vec<&str> = pairs.iter().map(|(name, _)| name.as_str()).collect();
+
+    for absent in [
+        "ORBIT_OPERATOR",
+        "ORBIT_WORKSPACE_CLAIM_TOKEN",
+        "SSH_AUTH_SOCK",
+        "MCP_MANAGED_SECRET",
+        "DATABASE_URL",
+        "BILLING_ENDPOINT",
+    ] {
+        assert!(
+            child_env_value(&pairs, absent).is_none(),
+            "{absent} must not reach the command.exec child"
+        );
+    }
+    assert!(
+        names.iter().all(|name| !name.starts_with("MCP_MANAGED_")),
+        "MCP_MANAGED_* must not reach the command.exec child"
+    );
+    assert_eq!(
+        child_env_value(&pairs, "HOME"),
+        Some(HOME),
+        "baseline HOME must reach the command.exec child"
+    );
+    assert!(
+        child_env_value(&pairs, "PATH").is_some(),
+        "baseline PATH must reach the command.exec child"
+    );
+    assert_eq!(
+        child_env_value(&pairs, "GIT_AUTHOR_NAME"),
+        Some(AUTHOR_NAME)
+    );
+    assert_eq!(
+        child_env_value(&pairs, "GIT_AUTHOR_EMAIL"),
+        Some(AUTHOR_EMAIL)
+    );
+    assert_eq!(
+        child_env_value(&pairs, "GIT_COMMITTER_NAME"),
+        Some(COMMITTER_NAME)
+    );
+    assert_eq!(
+        child_env_value(&pairs, "GIT_COMMITTER_EMAIL"),
+        Some(COMMITTER_EMAIL)
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     managed_run_environment_denies_command_exec_scenarios,
@@ -443,6 +565,11 @@ crate::scenario_table!(
     secret_argv_reaches_child_but_is_redacted_in_the_audit_record,
     working_directory_in_a_sibling_checkout_is_refused,
     zero_timeout_is_refused_before_the_command_runs
+);
+
+crate::scenario_table!(
+    command_exec_allowlist_scenarios,
+    command_exec_child_receives_only_the_allowlisted_environment
 );
 
 #[cfg(unix)]

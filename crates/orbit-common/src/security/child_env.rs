@@ -21,7 +21,9 @@
 //! uses, and treating them as a gate is what let the bypass exist.
 //!
 //! [`inherited_child_env`] is the explicit opt-out for an operator who really
-//! does want full inheritance.
+//! does want full inheritance. Privilege-bearing `ORBIT_*` names are still
+//! withheld: inheritance is not a way to hand `ORBIT_OPERATOR` or
+//! `ORBIT_WORKSPACE_CLAIM_TOKEN` to a child.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -320,13 +322,28 @@ pub fn crew_env_file_problem(entry: &CrewEnvVar) -> Option<String> {
     read_secret_file(path).err().map(|error| error.to_string())
 }
 
-/// Full inheritance of the parent environment.
+/// [`inherited_child_env`] over an explicit parent snapshot.
 ///
-/// The explicit opt-in behind `[execution.env] inherit = true`: every ambient
-/// variable, credentials included, reaches the child. Callers that do not opt
-/// in use [`allowlisted_child_env`].
+/// Every ambient name is forwarded, credentials included, except
+/// privilege-bearing `ORBIT_*` names: any `ORBIT_*` name outside the named
+/// execution envelope, such as `ORBIT_OPERATOR` and
+/// `ORBIT_WORKSPACE_CLAIM_TOKEN`. That is the same exclusion
+/// [`allowlisted_child_env_from`] applies when a pass list names one.
+pub fn inherited_child_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
+    parent
+        .iter()
+        .filter(|(name, _)| !is_privilege_bearing_orbit_name(name))
+        .cloned()
+        .collect()
+}
+
+/// Full inheritance of the parent environment, minus privilege-bearing
+/// `ORBIT_*` names.
+///
+/// The explicit opt-in behind `[execution.env] inherit = true`. Callers that
+/// do not opt in use [`allowlisted_child_env`].
 pub fn inherited_child_env() -> Vec<(String, String)> {
-    std::env::vars().collect()
+    inherited_child_env_from(&std::env::vars().collect::<Vec<_>>())
 }
 
 /// Ensure a child environment carries a login identity (`USER` / `LOGNAME`).

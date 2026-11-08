@@ -701,6 +701,16 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-config`'s `resolved/tests/execution_env.rs::inherit_mode_omits_privilege_bearing_orbit_names`
+  is a criterion 3 regression for ORB-23049. It drives the public
+  `ExecutionEnvPolicy::agent_subprocess_env` with the internal inherit seam
+  set, for both a captured parent snapshot and the live process environment,
+  and proves privilege-bearing `ORBIT_*` names are omitted while an envelope
+  name and ordinary ambient names are still forwarded. No config file can
+  enable inherit, so a crate-root integration test cannot reach this branch.
+  The command-exec allowlist is covered separately at the `orbit.command.exec`
+  boundary.
+
 - `orbit-runtime`'s `task/tests/pr_forge_rerun.rs` cases
   `rerun_waits_for_running_workflow_before_requesting_failed_jobs`,
   `rerun_refuses_after_bounded_wait_and_names_running_workflow` and
