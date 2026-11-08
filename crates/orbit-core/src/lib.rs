@@ -26,7 +26,9 @@
 //!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
-//! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`). Anything else must be
+//! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`), except `GlobalSearchParams`,
+//! which the `orbit-core` runtime integration test imports because its owning
+//! module `application::search` is `pub(crate)`. Anything else must be
 //! imported from its owning module (`orbit_core::application::…`,
 //! `orbit_core::runtime::…`) or its owning crate (`orbit_common`,
 //! `orbit_store`, `orbit_engine`).
@@ -174,7 +176,7 @@ pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord}
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
-pub use application::distributed::{DrainEntryRefusal, WorkspacePullRequest};
+pub use application::distributed::WorkspacePullRequest;
 pub use application::job::{
     CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWindowExtensionRequest,
     DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitStatus,
@@ -182,8 +184,11 @@ pub use application::job::{
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
+// Kept for the orbit-core runtime integration test: `application::search` is
+// `pub(crate)`, so an integration test cannot name `GlobalSearchParams` through
+// its owning module.
 pub use application::search::{
-    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+    GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
 };
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
@@ -200,10 +205,7 @@ pub use orbit_config::TaskTypeDefinition;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
-pub use application::auto_tasks::{
-    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskTemplatePatch,
-    AutoTaskUpdateParams,
-};
+pub use application::auto_tasks::{AutoTaskAddParams, AutoTaskDeleteParams};
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
@@ -212,8 +214,7 @@ pub use orbit_store::{
 };
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
-    TaskReferenceIndex, TaskStatus, TaskType, resolve_task_dependencies, resolve_task_relations,
-    task_dependencies_ready_with_index,
+    TaskStatus, TaskType,
 };
 pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 pub use orbit_types::workflow::{
@@ -224,18 +225,15 @@ pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident and audit-summary surfaces.
 pub use orbit_store::{
-    CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
-    FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    is_failure_only_diagnostic_surface,
+    DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
+    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
+    PropagationLink, is_failure_only_diagnostic_surface,
 };
-// Routine fire records surfaced by the dashboard's routine-health JSON API.
-pub use orbit_store::{RoutineFireRecord, RoutineFireState};
-// Reservation history behind the dashboard's codebase analytics.
-pub use orbit_store::contracts::TaskReservationRecord;
+// Lifecycle state of one routine fire attempt.
+pub use orbit_store::RoutineFireState;
 // Landed-delivery diff stats behind the dashboard's Metrics diff trend.
 pub use orbit_store::contracts::LandedDiffStats;
 // Stored backlog forecasts behind the dashboard's Analytics › Forecast.
 pub use orbit_store::contracts::StoredBacklogForecast;
-pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
+pub use runtime::engine::ResolvedCrewProjection;
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

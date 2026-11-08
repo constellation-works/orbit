@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_core::application::auto_tasks::{
-    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, cursor_state_path,
+    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, AutoTaskTemplatePatch,
+    AutoTaskUpdateParams, cursor_state_path,
 };
 use orbit_core::{
-    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, AutoTaskTemplatePatch,
-    AutoTaskUpdateParams, DedupePolicy, OrbitError, OrbitRuntime, TaskComplexity, TaskPriority,
-    TaskStatus, TaskType,
+    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitError, OrbitRuntime,
+    TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
 
 #[test]
