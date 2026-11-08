@@ -31,13 +31,10 @@ pub(super) fn current_block(history: &[TaskHistoryEntry]) -> Option<&TaskHistory
         .find(|entry| entry.to_status == Some(TaskStatus::Blocked) || is_escalation(entry))
 }
 
+/// The run the current block entry names: the final-recovery decision's run
+/// or the run that wrote the block, read through the one typed accessor.
 pub(super) fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
-    if let Some(TaskDecision::FinalRecovery { run_id, .. }) = &entry.decision {
-        return Some(run_id);
-    }
-    let rest = entry.note.as_deref()?.split_once("run_id=")?.1;
-    let id = rest.split([',', ' ', ';', ')']).next()?;
-    (!id.is_empty()).then_some(id)
+    entry.transition_run_id()
 }
 
 /// Additive show-only projection. No history or diagnosis parsing belongs in

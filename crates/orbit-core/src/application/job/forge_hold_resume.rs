@@ -18,7 +18,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskDecision, TaskStatus};
 use orbit_types::workflow::{
     FORGE_UNAVAILABLE_EXPIRED_EVENT, ForgeUnavailableHold, JobRun, JobRunState,
 };
@@ -163,6 +163,9 @@ impl OrbitRuntime {
                 status: Some(TaskStatus::Blocked),
                 status_event: Some(FORGE_UNAVAILABLE_EXPIRED_EVENT.to_string()),
                 status_note: Some(note),
+                status_decision: Some(TaskDecision::RunTransition {
+                    run_id: run.run_id.clone(),
+                }),
                 ..TaskAutomationUpdate::default()
             };
             // The admission binding can change after the run list was read.
@@ -192,14 +195,9 @@ impl OrbitRuntime {
                     }
                     // Task history also protects an already-applied expiry if
                     // recording the run acknowledgement failed or was interrupted.
-                    let expired_note_prefix =
-                        format!("{FORGE_UNAVAILABLE_EXPIRED_EVENT}: run={};", run.run_id);
                     if history.iter().any(|entry| {
                         entry.event == FORGE_UNAVAILABLE_EXPIRED_EVENT
-                            && entry
-                                .note
-                                .as_deref()
-                                .is_some_and(|note| note.starts_with(&expired_note_prefix))
+                            && entry.transition_run_id() == Some(run.run_id.as_str())
                     }) {
                         return Ok(());
                     }

@@ -1,7 +1,7 @@
 //! Workflow-failure / interruption status events and history-note helpers.
 
 use orbit_common::text::floor_char_boundary;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskDecision, TaskStatus};
 use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::hosts::TaskAutomationUpdate;
@@ -111,6 +111,9 @@ pub fn blocked_workflow_failure_update(
             error_code,
             error_message,
         )),
+        status_decision: Some(TaskDecision::RunTransition {
+            run_id: run_id.to_string(),
+        }),
         ..TaskAutomationUpdate::default()
     }
 }
@@ -130,6 +133,9 @@ pub fn blocked_workflow_interruption_update(
             error_code,
             error_message,
         )),
+        status_decision: Some(TaskDecision::RunTransition {
+            run_id: run_id.to_string(),
+        }),
         ..TaskAutomationUpdate::default()
     }
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComment, TaskStatus};
+use orbit_types::task::{TaskComment, TaskDecision, TaskStatus};
 use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateHistoryNote, ReviewGateRefusal};
 use serde_json::{Value, json};
 
@@ -215,6 +215,10 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             status: Some(status),
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
+            // Only the escalation that blocks names its run in the note.
+            status_decision: (event == REVIEW_GATE_EVENT).then(|| TaskDecision::RunTransition {
+                run_id: run_id.to_string(),
+            }),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),

@@ -263,6 +263,9 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
             status: Some(TaskStatus::Blocked),
             status_event: Some(VALIDATION_ENVIRONMENT_EVENT.to_string()),
             status_note: Some(note.clone()),
+            status_decision: Some(TaskDecision::RunTransition {
+                run_id: run_id.to_string(),
+            }),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),

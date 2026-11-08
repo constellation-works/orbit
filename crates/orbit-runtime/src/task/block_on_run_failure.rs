@@ -359,7 +359,6 @@ impl RuntimeKernel {
                 }
             }
         }
-        let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
         for task in tasks.into_values() {
             // Recovery and cleanup serialize the decision with the status
             // write. Re-read the binding too: another run may have admitted
@@ -401,12 +400,13 @@ impl RuntimeKernel {
                                     || entry.event == BASELINE_RED_HOLD_EVENT
                             })
                             .is_some_and(|entry| {
-                                let note = entry.note.as_deref().unwrap_or_default();
                                 (entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                    && note.starts_with(&requeue_note_prefix))
+                                    && entry.transition_run_id() == Some(run_id))
                                     || (entry.event == BASELINE_RED_HOLD_EVENT
-                                        && BaselineRedHold::from_text(note)
-                                            .is_some_and(|held| held.run_id == run_id))
+                                        && BaselineRedHold::from_text(
+                                            entry.note.as_deref().unwrap_or_default(),
+                                        )
+                                        .is_some_and(|held| held.run_id == run_id))
                             })
                     {
                         return Ok(());

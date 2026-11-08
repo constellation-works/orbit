@@ -20,6 +20,7 @@ mod publication;
 mod record;
 mod recovery;
 mod request;
+mod run_transition;
 
 pub use agent_request::{
     AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
