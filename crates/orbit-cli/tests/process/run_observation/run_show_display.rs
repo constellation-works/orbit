@@ -1202,6 +1202,90 @@ fn stale_workspace_auto_no_reconcile_preserves_state_and_default_reconciles() {
     );
 }
 
+/// `orbit run show` prints a leaf's terminal status once the admission pass
+/// has recorded it. Before that pass the same drain prints `phase=submitted`
+/// and no status. A live leaf and a finished pilot stay submitted: only a
+/// terminal `task_auto_pipeline` child is recorded here.
+#[test]
+fn run_show_prints_a_settled_leaf_terminal_status() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_prints_a_settled_leaf_terminal_status",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    const DRAIN: &str = "jrun-leaf-dispatch-drain";
+    const FAILED_LEAF: &str = "jrun-leaf-dispatch-failed";
+    const LIVE_LEAF: &str = "jrun-leaf-dispatch-live";
+    const PILOT: &str = "jrun-leaf-dispatch-pilot";
+    let (_seeded, mut state) =
+        fixture.seed_running(DRAIN, "workspace_auto_pipeline", serde_json::json!({}));
+    let runtime = fixture
+        .runtime()
+        .with_host_resource_probe(std::sync::Arc::new(CalmHost));
+    let now = chrono::Utc::now();
+    let stamp = now.to_rfc3339();
+    let workspace_id = fixture.workspace_id();
+    for (id, job, run_state) in [
+        (FAILED_LEAF, "task_auto_pipeline", "failed"),
+        (LIVE_LEAF, "task_auto_pipeline", "running"),
+        (PILOT, "task_pilot_pipeline", "success"),
+    ] {
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                scheduled_at, started_at, finished_at, created_at, pid)
+             VALUES (?1, ?2, ?3, 1, ?4, '{}', ?5, ?5, ?5, ?5, ?6)",
+                params![id, workspace_id, job, run_state, stamp, std::process::id()],
+            )
+            .unwrap();
+        dispatch(&mut state, id, job, "invoke_detached", now);
+    }
+    runtime.write_run_state(DRAIN, &state).unwrap();
+
+    let before = fixture.show_text(DRAIN);
+    let failed_before = dispatch_line(&before, FAILED_LEAF);
+    assert!(
+        failed_before.contains("phase=submitted") && !failed_before.contains("status="),
+        "{failed_before}"
+    );
+
+    run_det(
+        &runtime,
+        "classify_workspace_auto_tasks",
+        serde_json::json!({
+            "run_id": DRAIN,
+            "max_active_leaf_runs": 1,
+            "approve_proposed": false,
+        }),
+    );
+
+    let after = fixture.show_text(DRAIN);
+    let failed = dispatch_line(&after, FAILED_LEAF);
+    assert!(
+        failed.contains("phase=terminal") && failed.contains("status=failed"),
+        "a finished leaf stays phase=submitted with no status until the admission pass records it: {failed}\n{after}"
+    );
+    let live = dispatch_line(&after, LIVE_LEAF);
+    assert!(
+        live.contains("phase=submitted") && !live.contains("status="),
+        "{live}"
+    );
+    let pilot = dispatch_line(&after, PILOT);
+    assert!(
+        pilot.contains("phase=submitted") && !pilot.contains("status="),
+        "{pilot}"
+    );
+}
+
+fn dispatch_line(text: &str, run_id: &str) -> String {
+    text.lines()
+        .find(|line| line.contains(&format!("Child {run_id} ")))
+        .unwrap_or_else(|| panic!("no child line for {run_id} in {text}"))
+        .to_string()
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {

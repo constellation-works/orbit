@@ -16,11 +16,12 @@
 #   individual child finishes. It used to wait on the entire fan-out before
 #   re-listing, which meant one slow leaf held every other slot closed for as
 #   long as it ran, and nothing that arrived in the meantime could start.
-# - The cost of detaching is that this run no longer observes its leaves'
-#   outcomes and no longer cascades cancellation to them; each child records
-#   its own result and is durably linked either way. A terminal leaf was
-#   already explicitly not a failure of this sequencer
-#   (`allow_non_success: true`).
+# - The cost of detaching is that this sequencer does not fail itself when a
+#   leaf ends, and it does not cascade cancellation to a detached leaf. Each
+#   child records its own result. The admission pass writes that terminal
+#   status onto the child's dispatch, so a finished leaf is not left
+#   `submitted`. A terminal leaf was already explicitly not a failure of this
+#   sequencer (`allow_non_success: true`).
 # - Load-failure hold [ORB-22892]: `classify_workspace_auto_tasks` also
 #   excludes a task whose own leaf of this drain ended `failed` before any
 #   activity step started. A failed leaf's run record keeps only a

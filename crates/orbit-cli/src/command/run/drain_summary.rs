@@ -199,7 +199,7 @@ impl DrainLeafSummary {
         }
         if self.has_failed_leaves() {
             let note = if drain_state == JobRunState::Success {
-                " (the drain's own `success` only means it ran; it does not observe its leaves)"
+                " (the drain's own `success` only means the sequencer finished; it is not a leaf outcome)"
             } else {
                 ""
             };
