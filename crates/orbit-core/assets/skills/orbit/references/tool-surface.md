@@ -757,7 +757,7 @@ the owner by its federated selector instead, and a managed agent on a follower
 posts through its worker binding's owner route. A `linked_task` must be a task
 the home owner holds, in the home or another of its workspaces; a task on
 another host is `notice_invalid_field`. Every write and refusal leaves an
-audit row with target type `notice`. The limits and caps are `notice.*` config.
+audit row with target type `notice`. The limits and caps are fixed.
 
 A managed `agent_implement`, `agent_review_repair` or `final_recovery` run
 carries `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` in
@@ -765,10 +765,7 @@ its tool baseline, and its MCP server is stamped with the `notice` toolset
 when a notice tool is granted, whatever `machine.mcp.toolsets` says. Such a
 run posts only for a problem outside its task that affects other agents,
 with a linked task (prefer the fix) or evidence, after checking the brief's
-open notices; re-posting the same subject corroborates it. The workspace
-switch `notice.agent_posting = false` removes those tools from the
-baselines and the owner refuses agent-class posts and closes with
-`notice_agent_posting_disabled`.
+open notices; re-posting the same subject corroborates it.
 
 `orbit.notice.close` takes `id` or `dedupe_key` and a `reason`; a notice that is
 already closed or expired comes back with `already_inactive: true`. A notice

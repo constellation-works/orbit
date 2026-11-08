@@ -75,14 +75,7 @@ struct NoticeFixture {
 
 impl NoticeFixture {
     fn new() -> Self {
-        Self::with_owner_config(None)
-    }
-
-    fn with_owner_config(config: Option<&str>) -> Self {
         let mut fixture = Fixture::new();
-        if let Some(config) = config {
-            std::fs::write(fixture.worktree.join(".orbit/config.toml"), config).unwrap();
-        }
         let owner_runtime =
             OrbitRuntime::from_roots(&fixture.global_root, &fixture.worktree.join(".orbit"))
                 .unwrap()
@@ -285,23 +278,4 @@ fn claimed_follower_posts_shows_and_closes_its_notice_on_the_owner_through_the_b
             .contains("worker workspace binding mismatch"),
         "{error}"
     );
-}
-
-#[test]
-fn claimed_follower_notice_post_is_refused_when_agent_posting_is_off() {
-    if crate::application::run_isolated_test(std::any::type_name_of_val(
-        &claimed_follower_notice_post_is_refused_when_agent_posting_is_off,
-    )) {
-        return;
-    }
-    let notice = NoticeFixture::with_owner_config(Some("[notice]\nagent_posting = false\n"));
-    let broker = notice.serve();
-    let error = notice
-        .forwarded(
-            &broker,
-            POST,
-            json!({"kind": "info", "title": "Posting disabled", "linked_task": notice.claimed}),
-        )
-        .unwrap_err();
-    assert!(error.contains("agent_posting"), "{error}");
 }

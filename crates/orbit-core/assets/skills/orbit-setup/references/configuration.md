@@ -413,7 +413,7 @@ one file's values without inheriting the other layer.
 
 ## Fleet notices, attention, evolution ledger and failing jobs
 
-These settings are ordinary layered settings: a workspace value overrides
+Fleet notice limits are fixed (below). The other settings are ordinary layered settings: a workspace value overrides
 the global value, and the built-in default fills the rest. Set one for a
 workspace with `orbit config set <key> <value>`, or for every workspace on
 the host with `orbit config set --global <key> <value>`. Verify any one
@@ -460,44 +460,30 @@ In TOML the same values live under `[resident.evolution]`, for example
 with a deprecation warning, are ignored, and stop being recognised after
 2026-12-07. Delete them.
 
-### Fleet notices: `notice.*`
+### Fleet notices
 
-Fleet notices are short, expiring, attributed announcements. The limits
-below cap their size, lifetime, volume and how they are quoted into
-managed activities.
+Fleet notices are short, expiring, attributed announcements. Their limits
+are fixed; no key changes them:
 
-| Key | Type | Default | Range | What it changes |
-|---|---|---|---|---|
-| `notice.default_expiry_hours.incident` | integer | `72` | `1`–`720` | Hours an incident notice lasts when its post names no expiry. |
-| `notice.default_expiry_hours.maintenance` | integer | `12` | `1`–`720` | Hours a maintenance notice lasts when its post names no expiry. |
-| `notice.default_expiry_hours.info` | integer | `168` | `1`–`720` | Hours an info notice lasts when its post names no expiry. |
-| `notice.max_expiry_hours.operator` | integer | `720` | `1`–`720` | Longest expiry, in hours, an operator may give a notice of any kind. |
-| `notice.max_expiry_hours.orchestrator.incident` | integer | `168` | `1`–`720` | Longest expiry, in hours, an orchestrator may give an incident notice. |
-| `notice.max_expiry_hours.orchestrator.maintenance` | integer | `72` | `1`–`720` | Longest expiry, in hours, an orchestrator may give a maintenance notice. |
-| `notice.max_expiry_hours.orchestrator.info` | integer | `168` | `1`–`720` | Longest expiry, in hours, an orchestrator may give an info notice. |
-| `notice.max_expiry_hours.agent` | integer | `24` | `1`–`720` | Longest expiry, and the default, in hours, of a managed agent's notice. |
-| `notice.max_title_chars` | integer | `120` | `1`–`120` | Longest notice title, in characters. |
-| `notice.max_body_bytes` | integer | `4096` | `0`–`65536` | Longest notice body, in UTF-8 bytes. |
-| `notice.max_evidence` | integer | `8` | `0`–`8` | Evidence references per notice. |
-| `notice.max_open_per_workspace` | integer | `20` | `1`–`1000` | Open notices one workspace may hold, all poster classes. |
-| `notice.max_open_global_per_owner` | integer | `10` | `1`–`1000` | Open global notices across one owner host's workspaces. |
-| `notice.max_open_per_agent_task` | integer | `2` | `1`–`100` | Open notices one managed task's runs may hold. |
-| `notice.agent_posts_per_task_per_day` | integer | `5` | `1`–`1000` | Posts, corroborations included, one managed task's runs may make in 24 hours. |
-| `notice.orchestrator_posts_per_hour` | integer | `30` | `1`–`10000` | Posts one orchestrator crew may make per hour on this owner. |
-| `notice.retention_days` | integer | `30` | `1`–`3650` | Days closed and expired notices stay listable before they are purged. |
-| `notice.agent_posting` | bool | `true` | — | Managed agents may post and close their own fleet notices through their bound task. When `false`, the notice tools leave the agent activities' baselines and the owner refuses agent-class posts and closes. |
-| `notice.brief_delivery` | bool | `true` | — | Quote open fleet notices into opted-in managed activities' prompts as untrusted data. Independent of the MCP toolsets. |
-| `notice.brief_max_items` | integer | `5` | `1`–`50` | Most open notices one agent brief quotes. |
-| `notice.brief_body_chars` | integer | `600` | `0`–`4096` | Body characters per notice in an agent brief. |
-| `notice.brief_read_timeout_ms` | integer | `2000` | `1`–`60000` | Milliseconds a prompt build may wait reading notices before the brief says unavailable. |
+- Default expiry: 72 hours for an incident, 12 for maintenance, 168 for
+  info. A managed agent's notice defaults to, and is capped at, 24 hours.
+- Longest expiry: 720 hours for an operator; 168 (incident), 72
+  (maintenance) and 168 (info) for an orchestrator.
+- Size: titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most
+  8 evidence references.
+- Open notices: 20 per workspace, 10 global per owner host, 2 per managed
+  task.
+- Post rates: 5 per managed task in 24 hours (corroborations included), 30
+  per orchestrator crew per hour.
+- Retention: closed and expired notices stay listable for 30 days.
+- Agents: managed agents always may post and close their own notices
+  through their bound task.
+- Brief: opted-in managed activities always receive up to 5 open notices,
+  each body cut to 600 characters; a read that takes over 2000 ms gives an
+  unavailable brief.
 
-```bash
-orbit config set notice.max_open_per_workspace 20
-orbit config set --global notice.brief_max_items 5
-orbit config get notice.max_open_per_workspace
-orbit config get notice.brief_max_items
-orbit config show --all
-```
+The former `notice.*` keys load with a deprecation warning, are ignored, and
+stop being recognised after 2026-12-08. Delete the `[notice]` table.
 
 ### Attention: `attention.*`
 

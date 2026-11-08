@@ -79,7 +79,7 @@ impl OrbitRuntime {
             )?
         };
         let now = Utc::now();
-        let retention = Duration::days(i64::from(self.notice_settings().retention_days));
+        let retention = Duration::days(i64::from(super::limits::RETENTION_DAYS));
         let done = self.linked_done_tasks(&rows);
         let mut notices = Vec::new();
         for row in &rows {

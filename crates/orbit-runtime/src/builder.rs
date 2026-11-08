@@ -409,7 +409,6 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.decision_channel_enabled,
             crate::task::locks::LeasePolicy::admit(&runtime_config.snapshot)?,
             runtime_config.snapshot.experiments(),
-            runtime_config.snapshot.notice(),
             runtime_config.snapshot.machine_labels.clone(),
             runtime_config.snapshot.machine_application_consent_max_days,
         ),

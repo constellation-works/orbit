@@ -64,9 +64,7 @@ pub(super) struct FleetNoticeInstructions<'a> {
 /// block. The untrusted-data instruction rides only when the prompt
 /// carries the block; the posting instruction is independent of the brief
 /// and rides whenever the resolved callable set carries
-/// `orbit.notice.post` — the set the host already stripped when
-/// `notice.agent_posting` is off — so an empty board or disabled brief
-/// delivery never suppresses it.
+/// `orbit.notice.post`, so an empty board never suppresses it.
 #[allow(
     clippy::too_many_arguments,
     reason = "notice delivery needs the step identity, the mutable task context and the audit writer together"
