@@ -4,6 +4,7 @@ use crate::OrbitRuntime;
 use orbit_common::OrbitError;
 
 mod after_landing;
+mod auto_task_port;
 mod board_port;
 pub(crate) mod condition;
 mod consumer_states;
@@ -34,6 +35,7 @@ mod task_port;
 pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{AfterLandingHealth, AfterLandingSource};
 pub(crate) use after_landing::{after_landing_health, after_landing_switch};
+pub(in crate::application) use auto_task_port::AutomationAutoTaskPort;
 pub(in crate::application) use board_port::AutomationBoardPort;
 pub use condition::{
     ConditionChainLink, ConditionEnablePreview, ConditionFireView, ConditionListing,

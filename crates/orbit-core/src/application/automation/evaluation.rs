@@ -1,6 +1,7 @@
 //! Delivery evaluation of auto-tasks and routines against this host.
 
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use chrono::{DateTime, Utc};
 use orbit_automation::delivery::{self, ActionOutcome, DeliveryHost};
 use orbit_automation::{AutomationError, DeferredReason, automation_error_to_orbit};
@@ -369,7 +370,7 @@ pub(super) fn auto_task_admission_deferral(
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
     if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-        && runtime.open_auto_task_instance(definition)?.is_some()
+        && runtime.open_auto_task_instance_id(definition)?.is_some()
     {
         return Ok(Some("open_instance".into()));
     }

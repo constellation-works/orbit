@@ -895,6 +895,26 @@ guard_upper_layer admission 'workspace_auto|backlog_forecast|sweep_filing' 'read
 guard_upper_layer workspace_auto 'backlog_forecast|sweep_filing' ''
 guard_upper_layer backlog_forecast 'sweep_filing' ''
 
+# [ORB-23334] `auto_tasks` sits above `automation`: its scheduler evaluates
+# delivery and conditions through automation, its listing projection reads
+# automation inspection and its enable path uses automation's preview.
+# Automation reads the catalog, validated definitions, discovery paths,
+# accepted history, open-instance dedupe and template/mint parameters only
+# through `automation::AutomationAutoTaskPort`, which `auto_tasks` implements on
+# `OrbitRuntime` in `auto_tasks/scheduler.rs`. A path, a grouped tree, a
+# `super::` chain into `auto_tasks`, or a call to an inherent method it defines
+# (names derived, UFCS included, so the port methods keep distinct names) is a
+# reintroduced edge. The downward edges from `auto_tasks` stay legal.
+if dependency_matches -n 'crate::application::auto_tasks\b' \
+  "$app_src/automation" -g '*.rs' -g '!**/tests/**' ||
+  dependency_matches -n -U 'crate::application::\{[^}]*\bauto_tasks\b' \
+    "$app_src/automation" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$app_src" automation auto_tasks '' '' ||
+  ! super_chains_into "$app_src" automation auto_tasks; then
+  echo "orbit-core automation must reach auto_tasks through automation::AutomationAutoTaskPort and must not call its inherent methods"
+  fail=1
+fi
+
 # [ORB-22416] `experiment` sits outside the order, above `distributed`: its
 # readout reads the claim receipt `distributed` owns, so the owner's capture of a
 # claimed task's experiments reaches `distributed` only through

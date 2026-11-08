@@ -342,6 +342,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   its inherent methods [ORB-23019],
   when `automation`, `auto_tasks` or `resident` names `routines` or calls its
   inherent methods [ORB-22623, ORB-22956],
+  when `automation` names `auto_tasks` or calls its inherent methods
+  [ORB-23334],
   when `task`, `job`, `review` or `distributed` names `landing` or calls its
   inherent methods [ORB-22708],
   or when a shared contract is defined or imported anywhere but
@@ -431,6 +433,21 @@ resident-cycle target matching, and the versioned `!enabled` switch. The guard
 refuses resident paths, grouped trees, `super::` chains and calls to routines-owned
 inherent methods. Thus automation still reads resident, but resident no longer
 names routines, cutting `routines -> automation -> resident -> routines`.
+
+`auto_tasks` sits above `automation` [ORB-23334]: its scheduler evaluates
+delivery and conditions and renders condition placeholders through automation,
+its listing projection reads automation inspection, and its enable path uses
+automation's preview. Automation owns `automation::AutomationAutoTaskPort`, the
+way it reads the catalog back: the default listing projected to
+`AutoTaskDefinition` (same order, inactive-plugin definitions still hidden),
+the validated definition, its discovery path, accepted-result history, the
+first open instance for `skip_if_open` dedupe, and the template and mint task
+parameters (mint adds the seeding plugin's provenance tag; template does not).
+`auto_tasks/scheduler.rs` implements it on `OrbitRuntime` by forwarding to the
+existing functions, whose inherent and public entry points stay for other
+consumers. The guard refuses automation paths, grouped trees, `super::` chains
+and calls to auto_tasks-owned inherent methods, UFCS forms included, so the
+port methods keep distinct names.
 
 `tag_instructions` sits outside the order but above `task` [ORB-22289]. Task
 reads commit-pinned repository files through its own `task::base_revision`
@@ -542,5 +559,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-23017] — cut task's done-transition notice closure through `task::TaskNoticePort`, implemented by `notice`, and added `notice` to the guarded `task` upper modules.
 - [ORB-23018] — cut task's post-commit checkpoint cost projection through `task::TaskEvolutionPort`, implemented by `evolution`, and added `evolution` to the guarded `task` upper modules without changing ingestion or replay.
 - [ORB-23019] — cut tag instructions' overlay query through `tag_instructions::TagInstructionExperimentPort`, implemented by `experiment`, and guarded the single-file module's paths and inherent calls into `experiment` while leaving the helper reads legal.
+- [ORB-23334] — cut automation's catalog, history, dedupe and mint reads into `auto_tasks` through `automation::AutomationAutoTaskPort`, implemented by `auto_tasks`, and guarded automation paths and inherent calls into `auto_tasks`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

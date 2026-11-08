@@ -31,6 +31,7 @@ use super::{
     source::{RemoteObservation, Source},
 };
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use orbit_types::task::TaskOsRequirement;
 use orbit_types::workflow::ReviewCrewPoolMember;
@@ -96,7 +97,7 @@ fn eligible_review_pool(
 
 /// The tags a review task minted for `definition` carries.
 fn minted_tags(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
-    crate::application::auto_tasks::scheduler::template_params(runtime, definition).tags
+    runtime.auto_task_template_task_params(definition).tags
 }
 
 /// Why no review task can be minted for `definition` under the current
@@ -249,9 +250,8 @@ fn after_landing_definition(
     runtime: &OrbitRuntime,
 ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
     Ok(runtime
-        .auto_task_listing(false)?
+        .listed_auto_task_definitions()?
         .into_iter()
-        .map(|listed| listed.definition)
         .find(|definition| definition.name == AFTER_LANDING_CONSUMER))
 }
 
