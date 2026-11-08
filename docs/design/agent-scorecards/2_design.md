@@ -499,7 +499,7 @@ removed. **Rank within** offers All tiers, low, medium, hard and xhard.
 All tiers preserves the existing tier-mix score.
 A tier ranks each model-and-effort row by the matrix's `crew_mean`, sums its cell `n` for
 support, hides rows with no work there and leaves below-support rows unranked.
-Ties use support, model, effort and crew. The detail explicitly labels the profile,
+Ties use support, crew and model. This tier tie order differs from the general scorecard ordering, which uses support, model, effort and crew; the dashboard tier view follows the tier order, with no effort comparison. The detail explicitly labels the profile,
 breakdown and unscored context **All tiers**, and shows the selected tier's score
 and support separately. The existing **Score breakdown** shows the 100-point fleet reference
 and each term's actual and expected counts beside its contribution. It adds no
