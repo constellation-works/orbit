@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::BlobStore;
 use orbit_common::OrbitError;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 
 use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, ResolvedCliExecutor, ResolvedSandbox};
@@ -71,14 +71,11 @@ impl crate::test_support::NullRuntimeHost for TestHost {
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
         Ok(ResolvedActivityTools {
-            requested_tools: Vec::new(),
             effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
                 disallow_list,
                 TEST_REGISTERED_TOOLS.iter().copied(),
             ),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
-            suppressed_tools: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -140,33 +137,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         "grok" => Provider::Grok,
         other => panic!("unsupported provider for test: {other}"),
     };
-    AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: String::new(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider,
-        wall_clock_timeout_seconds: timeout.as_secs(),
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
-    }
+    AgentLoopSpec::for_provider(String::new(), provider, timeout.as_secs())
 }
 
 pub(in crate::activity_job::cli_runner) fn write_executable(path: &Path, contents: &str) {

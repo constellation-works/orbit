@@ -42,7 +42,7 @@ use orbit_tools::ToolContext;
 use orbit_types::telemetry::ProviderLimitObservation;
 #[cfg(unix)]
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, OnDenial, Provider,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, JobV2, Provider,
 };
 use orbit_types::workflow::{
     JobRunState, JobTargetType, PROVIDER_FAILURE_HOLD_EVENT, PipelineState, ProviderFailureClass,
@@ -862,33 +862,7 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 /// failure handoff, so a skipped recovery is the executor's own decision.
 #[cfg(unix)]
 pub(super) fn implementation_job(provider: Provider) -> JobV2 {
-    let spec = AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "implement the task".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: vec![],
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider,
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
-    };
+    let spec = AgentLoopSpec::for_provider("implement the task".to_string(), provider, 30);
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",

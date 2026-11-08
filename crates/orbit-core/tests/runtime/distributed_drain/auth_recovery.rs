@@ -4,7 +4,7 @@
 
 use super::*;
 use orbit_engine::{DispatchOutcome, V2AuditWriter};
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
 const CONFIG: &str = r#"
@@ -77,31 +77,12 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
     )
     .unwrap();
     let spec = AgentLoopSpec {
-        crew_name: None,
-        instruction: "Return a success envelope.".into(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: vec![],
-        tool_disallow_list: None,
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Claude,
-        wall_clock_timeout_seconds: 10,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return a success envelope.".to_string(),
+            Provider::Claude,
+            10,
+        )
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
         &pair.follower,

@@ -5,7 +5,7 @@ use orbit_engine::{RuntimeHost, V2AuditWriter};
 use orbit_store::contracts::JobRunStepParams;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::ExecutionLocation;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{
     ExecutorDef, ExecutorSandboxKind, JobRunState, PipelineState, V2AuditEventKind,
 };
@@ -159,29 +159,12 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
     let spec = AgentLoopSpec {
         crew_name: Some("credits".into()),
         crew_account: Some("credits".into()),
-        instruction: "Return a recovery decision.".into(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: vec![],
-        tool_disallow_list: None,
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Claude,
-        wall_clock_timeout_seconds: 10,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: vec![],
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return a recovery decision.".to_string(),
+            Provider::Claude,
+            10,
+        )
     };
     let outcome = orbit_engine::activity_job::cli_runner::run_cli_backend(
         &fx.runtime,

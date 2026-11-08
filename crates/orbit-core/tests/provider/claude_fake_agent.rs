@@ -16,7 +16,7 @@ use orbit_engine::{
 };
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::ExecutorDef;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
 const ENVELOPE: &str =
     r#"{"schemaVersion":1,"status":"success","result":{"edited":true},"error":null}"#;
@@ -172,31 +172,13 @@ fn try_dispatch_spec(
 
 fn spec() -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
         model: Some("claude-opus-4-8".to_string()),
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Claude,
-        wall_clock_timeout_seconds: 60,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Claude,
+            60,
+        )
     }
 }
 

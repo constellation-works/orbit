@@ -23,7 +23,7 @@ use orbit_engine::{
 };
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "muse-tenant-42-authorization-bearer-zzz";
@@ -172,31 +172,14 @@ fn seed_muse_executor(
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
         model: Some(MODEL.to_string()),
         reasoning_effort: Some(ReasoningEffort::High),
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Muse,
-        wall_clock_timeout_seconds: timeout_seconds,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Muse,
+            timeout_seconds,
+        )
     }
 }
 

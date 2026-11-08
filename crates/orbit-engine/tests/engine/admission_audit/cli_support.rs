@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::BlobStore;
 use orbit_types::workflow::ExperimentActivityOverlay;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 
 use orbit_engine::ResolvedActivityTools;
 use orbit_engine::V2AuditWriter;
@@ -98,9 +98,8 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
             effective_tools,
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
             suppressed_tools: self.suppressed_tools.clone(),
+            ..Default::default()
         })
     }
 
@@ -112,9 +111,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
             effective_tools: baseline_tools.to_vec(),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
-            suppressed_tools: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -188,33 +185,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         "grok" => Provider::Grok,
         other => panic!("unsupported provider for test: {other}"),
     };
-    AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: String::new(),
-        steering_instruction: None,
-        notice_instruction: None,
-        notice_posting_instruction: None,
-        fleet_notices: Default::default(),
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider,
-        wall_clock_timeout_seconds: timeout.as_secs(),
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-        incomplete_continuation: None,
-        response_correction: None,
-    }
+    AgentLoopSpec::for_provider(String::new(), provider, timeout.as_secs())
 }
 
 pub(super) fn write_executable(path: &Path, contents: &str) {
