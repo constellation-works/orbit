@@ -20,7 +20,7 @@ fn patch_config(fx: &Fixture, edit: impl FnOnce(&mut Value)) {
 
 /// The waiter's record as the producer emits it on the rerun attempt:
 /// same record, bound to the attempt's new job identities.
-fn rerun_waiter_log(fx: &Fixture, tamper_dependency: bool) -> String {
+fn rerun_waiter_log(fx: &Fixture, tamper_dependency: bool, attempt: u64) -> String {
     let original = fs::read_to_string(fx.forge.join("retry-log-1001")).unwrap();
     original
         .lines()
@@ -29,10 +29,14 @@ fn rerun_waiter_log(fx: &Fixture, tamper_dependency: bool) -> String {
                 return format!("{line}\n");
             };
             let mut record: Value = serde_json::from_str(body).unwrap();
-            record["run_attempt"] = json!(2);
-            record["source"]["job_id"] = json!(1011);
-            record["dependencies"][0]["job_id"] =
-                json!(if tamper_dependency { 1005 } else { 1010 });
+            let job_offset = 10 * (attempt - 1);
+            record["run_attempt"] = json!(attempt);
+            record["source"]["job_id"] = json!(1001 + job_offset);
+            record["dependencies"][0]["job_id"] = json!(if tamper_dependency {
+                1005
+            } else {
+                1000 + job_offset
+            });
             format!("lint\tWait\torbit-dependency-evidence:{record}\n")
         })
         .collect()
@@ -63,7 +67,6 @@ fn setup(fx: &Fixture, shard_log: &str, tamper_dependency: bool) {
         config["conclusions"] = json!({"independent": "success"});
     });
     fs::write(fx.forge.join("retry-log-1000"), shard_log).unwrap();
-    fs::write(fx.forge.join("retry-log-1010"), shard_log).unwrap();
     if tamper_dependency {
         // Tamper the first attempt's record too, so no attempt authenticates.
         let original = fs::read_to_string(fx.forge.join("retry-log-1001")).unwrap();
@@ -80,8 +83,16 @@ fn setup(fx: &Fixture, shard_log: &str, tamper_dependency: bool) {
             .collect::<String>();
         fs::write(fx.forge.join("retry-log-1001"), tampered).unwrap();
     }
-    let rerun_log = rerun_waiter_log(fx, tamper_dependency);
-    fs::write(fx.forge.join("retry-log-1011"), rerun_log).unwrap();
+    for attempt in 2..=3 {
+        let job_id = 1000 + 10 * (attempt - 1);
+        fs::write(fx.forge.join(format!("retry-log-{job_id}")), shard_log).unwrap();
+        let rerun_log = rerun_waiter_log(fx, tamper_dependency, attempt);
+        fs::write(
+            fx.forge.join(format!("retry-log-{}", job_id + 1)),
+            rerun_log,
+        )
+        .unwrap();
+    }
 }
 
 #[test]
@@ -91,6 +102,7 @@ fn waiter_folded_into_transient_shard_classifies_transient() {
         |sandbox| {
             let (fx, host, _) = fixture(sandbox);
             locked(&host.pr_config).ci_infrastructure_signatures = vec![SIGNATURE.to_string()];
+            locked(&host.pr_config).ci_infrastructure_retry.max_attempts = 2;
             setup(&fx, DOWNLOAD_504, false);
             let message = land(&fx, &host);
             assert!(
@@ -107,8 +119,13 @@ fn waiter_folded_into_transient_shard_classifies_transient() {
             );
             assert_eq!(
                 fx.forge_lines("retry-sends"),
-                vec!["run rerun 700 --failed".to_string()],
-                "the one rerun is still spent on the transient shard: {message}"
+                vec!["run rerun 700 --failed".to_string(); 2],
+                "the configured reruns are spent on the transient shard: {message}"
+            );
+            assert!(
+                message.contains("ci_infrastructure_retry_exhausted")
+                    && message.contains("classification=transient attempts=2"),
+                "the folded transient set records its bounded hold: {message}"
             );
         },
     );

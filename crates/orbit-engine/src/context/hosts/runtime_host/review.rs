@@ -75,6 +75,7 @@ macro_rules! review_methods {
             task_ids: &[String],
             handoff_id: Option<&str>,
             plan: &orbit_types::workflow::CiRerunPlan,
+            now_ms: u64,
         ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError>;
 
         /// Reserve the cumulative infrastructure rerun before mutation, under the
@@ -159,7 +160,8 @@ macro_rules! review_methods {
 
         /// Append a permitted CI observation owned by a live landing
         /// attempt. `event` is restricted by the owner store to
-        /// `ci_check_rerun`, `ci_base_suspect` or `ci_check_rerun_reserved`.
+        /// `ci_check_rerun`, `ci_base_suspect`, `ci_check_rerun_reserved`,
+        /// `ci_infrastructure_retry_backoff` or `ci_infrastructure_retry_exhausted`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,

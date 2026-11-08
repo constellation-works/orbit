@@ -5826,14 +5826,26 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         _tasks: &[String],
         _handoff: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        let decision = orbit_types::workflow::decide_ci_rerun(&self.history(TASK_ID), plan);
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &self.history(TASK_ID),
+            plan,
+            locked(&self.pr_config).ci_infrastructure_retry,
+            now_ms,
+        );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
             self.seed_reserved(
                 orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
                 plan,
                 "forge/retry-reserved",
             );
+            locked(&self.history)
+                .get_mut(TASK_ID)
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .at = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
         }
         let forge = self.repo.parent().unwrap().join("forge");
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)

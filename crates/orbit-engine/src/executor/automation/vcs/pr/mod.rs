@@ -24,6 +24,8 @@ mod merge_state;
 mod open;
 mod promote;
 mod recovery;
+mod review_retry;
+pub(in crate::executor::automation::vcs) use review_retry::{ReviewCiRetryStep, recover_review_ci};
 mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
 

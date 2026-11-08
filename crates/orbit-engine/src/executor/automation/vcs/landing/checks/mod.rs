@@ -23,7 +23,9 @@
 //!   `cancelled` or `timed_out` is transient from that conclusion alone,
 //!   even when its log cannot be read. A failure job whose log is only a
 //!   `ci-await` of those conclusions, or only a `ci-await` timeout, is the
-//!   same set. The landing reruns the failed jobs once and waits again.
+//!   same set. Conclusion-only stops retain one rerun. Logged transient
+//!   failures use the configured bounded infrastructure budget and exponential
+//!   backoff, then resume landing. Exhaustion records the class and count.
 //!   When that rerun is already spent and the jobs are still cancelled or
 //!   timed out, it records `required CI jobs keep cancelling or timing out`
 //!   and the job names, and dispatches no repair. A job that concluded
@@ -89,7 +91,8 @@
 //! A stale rollup entry for a job already rerun or updated can wait for its
 //! replacement to register, but never hides a separately failed aggregate.
 //!
-//! Reruns and repairs remain single-use. Inherited handoff updates share a
+//! Repairs remain single-use; logged infrastructure reruns use their configured
+//! durable budget. Inherited handoff updates share a
 //! persisted count across polls, restarts and retries; auto-fix and
 //! absent-emission recovery keep their one-update budget. Unreadable
 //! evidence stops in review without spending recovery.

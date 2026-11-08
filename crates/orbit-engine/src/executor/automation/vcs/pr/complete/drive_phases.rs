@@ -428,6 +428,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 let last_poll = waited_seconds.saturating_add(self.poll_interval_seconds)
                     >= self.max_wait_seconds;
                 let outcome = match &retry {
+                    Ok(CiRerunRecovery::BackingOff(reason)) => {
+                        CiRerunRecoveryOutcome::BackingOff(reason.as_str())
+                    }
                     Ok(CiRerunRecovery::Waiting(reason)) => {
                         CiRerunRecoveryOutcome::Waiting(reason.as_str())
                     }
@@ -491,25 +494,27 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     CiRerunHoldStep::PreserveHold => {}
                 }
             }
-            infrastructure_wait |= matches!(
-                super::super::infrastructure::recover(
-                    host,
-                    auto_fix,
-                    workspace_path,
-                    pr_number,
-                    status,
-                    diagnose,
-                    completion_deadline_ms.min(
-                        super::super::super::completion_deadline::now_ms()?.saturating_add(
-                            self.max_wait_seconds
-                                .saturating_sub(self.waited_seconds)
-                                .saturating_mul(1000)
-                        )
-                    ),
-                )
-                .map_err(observed)?,
-                super::super::infrastructure::InfrastructureStep::Wait
-            );
+            if !infrastructure_wait {
+                infrastructure_wait |= matches!(
+                    super::super::infrastructure::recover(
+                        host,
+                        auto_fix,
+                        workspace_path,
+                        pr_number,
+                        status,
+                        diagnose,
+                        completion_deadline_ms.min(
+                            super::super::super::completion_deadline::now_ms()?.saturating_add(
+                                self.max_wait_seconds
+                                    .saturating_sub(self.waited_seconds)
+                                    .saturating_mul(1000)
+                            )
+                        ),
+                    )
+                    .map_err(observed)?,
+                    super::super::infrastructure::InfrastructureStep::Wait
+                );
+            }
         }
         observed_poll.infrastructure_wait = infrastructure_wait;
         Ok(RecoveryFlow::Ready)
