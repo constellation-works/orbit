@@ -28,6 +28,13 @@ def outcome(name, is_base=False):
     return "success" if (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
 
 def refuse_log(job):
+    with (root / "retry-log-reads").open("a") as file:
+        file.write(f"{job}\n")
+    if str(job) in {str(item) for item in config.get("log_rate_limited_jobs", [])}:
+        print("HTTP 403: API rate limit exceeded for user ID 270255973.", file=sys.stderr)
+        print("X-RateLimit-Remaining: 0", file=sys.stderr)
+        print(f"X-RateLimit-Reset: {config['rate_limit_reset']}", file=sys.stderr)
+        raise SystemExit(1)
     if str(job) in {str(item) for item in config.get("log_404_jobs", [])}:
         print("gh: HTTP 404", file=sys.stderr)
         raise SystemExit(1)

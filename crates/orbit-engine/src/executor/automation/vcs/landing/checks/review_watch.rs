@@ -14,17 +14,21 @@ use std::path::Path;
 
 use crate::context::RuntimeHost;
 
+use super::super::super::completion_deadline::now_ms;
 use super::head::classify_logged_job;
 use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
 use super::log::job_log;
+use super::read_wait::ThrottledRead;
 use super::recovery::{CheckFailureClass, FailedJob, unreadable_job_text};
+use crate::executor::automation::read_throttle::{read_not_before, rfc3339_ms};
 
 /// The class deciding a watched pull request's failed checks, with the
 /// landing's wording of every failed job.
 pub(in crate::executor::automation::vcs) struct WatchedFailure {
     /// `transient`, `inherited`, `flaky`, `candidate`, `base-suspect` or
     /// `inconclusive`: the greatest class of the readable failed jobs, as the
-    /// landing orders them. A log that could not be read is unknown and does
+    /// landing orders them. `deferred` when the provider rate-limited a read;
+    /// the detail then names the reset. A log that could not be read is unknown and does
     /// not outrank those jobs; the detail names it. The set is inconclusive
     /// only when no readable job decides.
     pub(in crate::executor::automation::vcs) class: &'static str,
@@ -36,6 +40,22 @@ impl WatchedFailure {
         Self {
             class: CheckFailureClass::Inconclusive.as_str(),
             detail: format!("the failure was not classified ({why})"),
+        }
+    }
+
+    /// The provider rate-limited a read: the account's quota, not the
+    /// failure, is what stopped the read, so the watch names the reset
+    /// instead of an inconclusive class.
+    fn deferred(read: &ThrottledRead) -> Self {
+        let now = now_ms().unwrap_or_default();
+        let at = rfc3339_ms(read_not_before(&read.throttle, now, 1).at_ms);
+        Self {
+            class: "deferred",
+            detail: format!(
+                "the failure is not classified until the provider's rate limit resets (not \
+                 before {at}): {}",
+                read.reason
+            ),
         }
     }
 }
@@ -59,7 +79,11 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
     let head_jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
         Err(error) => {
-            return WatchedFailure::inconclusive(format!("its jobs could not be read: {error}"));
+            let reason = format!("its jobs could not be read: {error}");
+            return match ThrottledRead::of(&error, || reason.clone()) {
+                Some(read) => WatchedFailure::deferred(&read),
+                None => WatchedFailure::inconclusive(reason),
+            };
         }
     };
     if let Some((workflow, name)) = failed.iter().find(|check| {
@@ -102,6 +126,11 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
         let log = match job_log(host, workspace, run_id, job_id, job, deadline_ms) {
             Ok(log) => log,
             Err(error) => {
+                if let Some(read) = ThrottledRead::of(&error, || {
+                    format!("the log of '{label}' could not be read: {error}")
+                }) {
+                    return WatchedFailure::deferred(&read);
+                }
                 jobs.push(FailedJob {
                     run_id: Some(run_id),
                     job_id,
@@ -129,7 +158,12 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
             deadline_ms,
         ) {
             Ok(classified) => classified,
-            Err(deferred) => return WatchedFailure::inconclusive(deferred.reason),
+            Err(deferred) => {
+                return WatchedFailure::deferred(&ThrottledRead {
+                    reason: deferred.reason,
+                    throttle: deferred.throttle,
+                });
+            }
         };
         jobs.push(FailedJob {
             run_id: Some(run_id),

@@ -50,6 +50,11 @@
 # - No GitHub client or no credentials on this host: `collect` reports
 #   `capability_unavailable` and `file` passes that through unchanged. That is
 #   never reported as a no-current-failure and is never a CI pass.
+# - GitHub rate-limited the host's account: `collect` stops reading at the
+#   first rate-limited answer and reports `rate_limited` with the reset, and
+#   `file` reports `deferred` with that `rate_limit`, so the sweep succeeds and
+#   records a `pipeline.run.deferred` row. A sweep before the reset reads
+#   nothing from GitHub and defers again.
 # - Errors are separated by blast radius. One that names a run defers only that
 #   finding: it is reported in `file`'s `deferred` list with its reasons and
 #   left for a later sweep, while every complete finding in the same snapshot

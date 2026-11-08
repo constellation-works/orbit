@@ -17,6 +17,9 @@ use tempfile::TempDir;
 #[cfg(unix)]
 #[path = "ci_failure_goldens/sweep.rs"]
 mod sweep;
+#[cfg(unix)]
+#[path = "ci_failure_goldens/sweep_rate_limit.rs"]
+mod sweep_rate_limit;
 use chrono::Duration;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_engine::TaskAutomationUpdate;

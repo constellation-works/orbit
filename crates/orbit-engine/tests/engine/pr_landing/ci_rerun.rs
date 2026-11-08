@@ -182,6 +182,7 @@ mod cancelled;
 mod diagnostic;
 mod hold;
 mod infrastructure;
+mod rate_limit;
 mod unreadable_log;
 
 #[test]
@@ -408,8 +409,14 @@ struct ClaimedRetry<'a> {
     inner: &'a DeliveryHost,
     context: orbit_engine::HandoffLandingContext,
     steps: Mutex<Vec<orbit_engine::HandoffLandingStep>>,
+    /// The host data root; empty keeps no completed-job log cache.
+    data_root: PathBuf,
+    waits: Mutex<Vec<Value>>,
 }
 impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
+    fn data_root(&self) -> &Path {
+        &self.data_root
+    }
     fn repo_root(&self) -> Res<String> {
         Ok(self.inner.repo.to_string_lossy().into_owned())
     }
@@ -420,7 +427,8 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
         locked(&self.steps).push(update.step.clone());
         Ok(())
     }
-    fn record_handoff_landing_wait(&self, _: &str, _: &str) -> Res<()> {
+    fn record_handoff_landing_wait(&self, _: &str, note: &str) -> Res<()> {
+        locked(&self.waits).push(serde_json::from_str(note).unwrap_or(Value::Null));
         Ok(())
     }
     fn record_handoff_landing_history(&self, _: &str, event: &str, note: &str) -> Res<()> {
@@ -492,6 +500,8 @@ fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
             automatic_repair_spent: false,
         },
         steps: Mutex::default(),
+        data_root: PathBuf::new(),
+        waits: Mutex::default(),
     }
 }
 

@@ -9,11 +9,13 @@ use super::super::super::operations;
 use super::super::super::operations::{
     CiCommitJobEvidence, CiJobLogAnswer, CiLogReadThrottle, CiLogSource,
 };
+use super::log_cache::{self, JobLogKey};
 use crate::context::RuntimeHost;
 
-/// One failed job's log. A read that recovered no text, which the log
-/// reader reports beside an empty log, is a failed read; when the provider
-/// throttled it, the failure carries that typed throttle. `deadline_ms`, when
+/// One failed job's log. A completed job's readable answer is reused from
+/// the host's [`log_cache`] for its run attempt. A read that recovered no
+/// text, which the log reader reports beside an empty log, is a failed read;
+/// when the provider throttled it, the failure carries that typed throttle. `deadline_ms`, when
 /// set, bounds every read subprocess by the completion's absolute deadline.
 pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -31,9 +33,15 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     if let Some(deadline_ms) = deadline_ms {
         input["deadline_ms"] = json!(deadline_ms);
     }
-    let response = CiJobLogAnswer::decode_response(
-        host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?,
-    );
+    let cache_key = JobLogKey::for_completed_job(job, run_id, job_id);
+    let cached = cache_key
+        .as_ref()
+        .and_then(|key| log_cache::load(host.data_root(), key));
+    let reused = cached.is_some();
+    let response = CiJobLogAnswer::decode_response(match cached {
+        Some(answer) => answer,
+        None => host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?,
+    });
     if let Some(reason) = response.fallback_error.as_deref() {
         let message = format!("the log read recovered no text: {reason}");
         return Err(match response.read_throttle {
@@ -61,6 +69,13 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         return Err(OrbitError::Execution(
             "the job log source is unknown".to_string(),
         ));
+    }
+    // A completed job's readable answer never changes for its run attempt,
+    // so later passes reuse it instead of reading the provider again.
+    if let (false, Some(key)) = (reused, cache_key.as_ref())
+        && let Ok(answer) = serde_json::to_value(&response)
+    {
+        log_cache::store(host.data_root(), key, &answer);
     }
     let selected = response.diagnostic.as_deref();
     if selected.is_none() && response.failure_regions.is_some() {

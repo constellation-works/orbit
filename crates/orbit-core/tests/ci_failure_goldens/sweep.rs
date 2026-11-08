@@ -21,6 +21,13 @@ const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
 state=${ORBIT_FAKE_GH_STATE:?}
 printf '%s\n' "$*" >> "$state/calls"
+# `rate-limited` holds a reset epoch: every API read is GitHub's primary
+# rate-limit answer until the test removes it.
+if [ "$1" != auth ] && [ -f "$state/rate-limited" ]; then
+  echo "HTTP 403: API rate limit exceeded for user ID 270255973." >&2
+  printf 'X-RateLimit-Remaining: 0\nX-RateLimit-Reset: %s\n' "$(cat "$state/rate-limited")" >&2
+  exit 1
+fi
 case "$1 ${2:-}" in
   "auth status") exit 0 ;;
   "repo view") cat "$state/repo.json" ;;
@@ -106,7 +113,7 @@ pub(crate) struct Workspace {
     pub(crate) repo: PathBuf,
     pub(crate) head: String,
     pub(crate) runtime: OrbitRuntime,
-    state: PathBuf,
+    pub(crate) state: PathBuf,
     runs: Vec<Value>,
 }
 
@@ -320,7 +327,7 @@ fn unbindable_log() -> String {
     log
 }
 
-fn open_sweep_tasks(runtime: &OrbitRuntime) -> Vec<orbit_types::task::Task> {
+pub(crate) fn open_sweep_tasks(runtime: &OrbitRuntime) -> Vec<orbit_types::task::Task> {
     runtime
         .list_tasks()
         .unwrap()

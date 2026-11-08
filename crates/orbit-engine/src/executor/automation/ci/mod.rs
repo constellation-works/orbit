@@ -19,6 +19,8 @@
 //! not look), [`OUTCOME_NO_CURRENT_FAILURE`] (we looked and nothing is
 //! failing), [`OUTCOME_CURRENT_FAILURES`] (we looked and something is), and
 //! [`OUTCOME_RETRYABLE_ERROR`] (a bounded discovery or investigation failed).
+//! A sweep GitHub rate-limited reports `rate_limited` with the reset instead,
+//! which filing defers; see [`rate_limit`].
 //! A run-scoped retryable error that repeats across consecutive sweeps is
 //! reported as persistent rather than failing every sweep; see [`history`].
 
@@ -29,6 +31,7 @@ pub mod log_signature;
 mod partition;
 mod pending;
 mod query;
+mod rate_limit;
 mod refs;
 pub mod run_event;
 
@@ -96,6 +99,29 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let queries = query::HostCiQueries::new(&query_root(host, input)?);
+    // A sweep before the last rate limit's reset reads nothing from GitHub.
+    let now = chrono::Utc::now();
+    let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or_default();
+    let rate_limit_path = rate_limit::rate_limit_path(host.data_root());
+    if let Some(pending) = rate_limit_path
+        .as_deref()
+        .and_then(|path| rate_limit::pending_rate_limit(path, now_ms))
+    {
+        let capability = serde_json::json!({
+            "available": serde_json::Value::Null,
+            "authenticated": serde_json::Value::Null,
+            "detail": "not checked: the sweep waits for GitHub's rate-limit reset",
+        });
+        return Ok(serde_json::json!({
+            "phase": "collect_ci_evidence",
+            "ci_evidence": rate_limit::rate_limited_snapshot(
+                collect::CI_EVIDENCE_SCHEMA_VERSION,
+                capability,
+                pending,
+                &now.to_rfc3339(),
+            ),
+        }));
+    }
     let history_path = history::history_path(host.data_root());
     let mut history = history_path
         .as_deref()
@@ -103,6 +129,11 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
         .unwrap_or_default();
     let sweep_id = retryable_history_sweep_id(host, input);
     let evidence = collect::collect_for_sweep(&queries, input, &mut history, &sweep_id)?;
+    if evidence["outcome_hint"] == rate_limit::OUTCOME_RATE_LIMITED
+        && let Some(path) = rate_limit_path.as_deref()
+    {
+        rate_limit::save_rate_limit(path, &evidence["rate_limit"]);
+    }
     if let Some(path) = history_path
         && let Err(error) = history::save(&path, &history)
     {

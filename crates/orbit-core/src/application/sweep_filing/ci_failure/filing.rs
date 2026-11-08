@@ -87,6 +87,9 @@ const OUTCOME_CURRENT_FAILURES: &str = "current_failures";
 /// [ORB-15517] Current failures exist, but every one waits on evidence a
 /// later sweep can complete; nothing was filed and nothing failed.
 const OUTCOME_DEFERRED: &str = "deferred";
+/// Collection's hint that GitHub rate-limited its reads; its snapshot carries
+/// `rate_limit` with the not-before, and filing reports [`OUTCOME_DEFERRED`].
+const OUTCOME_HINT_RATE_LIMITED: &str = "rate_limited";
 
 /// Snapshot schema this step knows how to read.
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
@@ -118,15 +121,25 @@ pub(crate) fn file_ci_failure_tasks(
         let run_id = ["job_run_id", "run_id"]
             .into_iter()
             .find_map(|key| input.get(key).and_then(Value::as_str));
-        runtime.record_run_deferral(
-            run_id,
-            OUTCOME_DEFERRED,
-            "ci_failure_sweep deferred current failures with incomplete evidence to a later sweep",
-            json!({
-                "deferred_count": output["deferred_count"],
-                "deferred_failure_run_ids": output["audit"]["deferred_failure_run_ids"],
-            }),
-        );
+        if output["rate_limit"].is_object() {
+            runtime.record_run_deferral(
+                run_id,
+                OUTCOME_DEFERRED,
+                "ci_failure_sweep deferred to GitHub's rate-limit reset",
+                json!({"rate_limit": output["rate_limit"]}),
+            );
+        } else {
+            runtime.record_run_deferral(
+                run_id,
+                OUTCOME_DEFERRED,
+                "ci_failure_sweep deferred current failures with incomplete evidence to a later \
+                 sweep",
+                json!({
+                    "deferred_count": output["deferred_count"],
+                    "deferred_failure_run_ids": output["audit"]["deferred_failure_run_ids"],
+                }),
+            );
+        }
     }
     Ok(output)
 }
@@ -166,6 +179,36 @@ where
     }
     let capability = evidence.get("capability").cloned().unwrap_or(Value::Null);
 
+    // GitHub rate-limited the collection's reads: the sweep waits for the
+    // reset rather than failing over gaps that are about the quota.
+    if evidence.get("outcome_hint").and_then(Value::as_str) == Some(OUTCOME_HINT_RATE_LIMITED) {
+        let audit = audit_summary(evidence, &[]);
+        let rate_limit = evidence.get("rate_limit").cloned().unwrap_or(Value::Null);
+        let not_before = rate_limit
+            .get("not_before")
+            .and_then(Value::as_str)
+            .unwrap_or("the reset");
+        return Ok(json!({
+            "outcome": OUTCOME_DEFERRED,
+            "capability": capability,
+            "rate_limit": rate_limit,
+            "clusters": 0,
+            "filed_count": 0,
+            "filed": [],
+            "pilot_candidate_count": 0,
+            "pilot_candidates": [],
+            "skipped_existing": [],
+            "withheld": [],
+            "skipped_over_cap": [],
+            "deferred_count": 0,
+            "deferred": [],
+            "audit": audit,
+            "detail": format!(
+                "GitHub rate-limited this host's reads, so the sweep is deferred until \
+                 {not_before}; no task was filed and this is not a CI pass"
+            ),
+        }));
+    }
     // The collection stage could not look. Every list below would be empty and
     // would read exactly like "nothing is failing" — a conclusion that needs
     // queries this host never ran.

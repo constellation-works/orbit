@@ -17,7 +17,7 @@ const MAX_TOKEN_BYTES: usize = 64;
 
 /// [`check_exec_result`] for a read, typing GitHub's authenticated throttling
 /// answer so the caller can tell it from a refusal.
-pub(super) fn check_read_result(result: &ExecutionResult, label: &str) -> Result<(), OrbitError> {
+pub fn check_read_result(result: &ExecutionResult, label: &str) -> Result<(), OrbitError> {
     check_exec_result(result, label).map_err(|error| match read_throttle(&result.stderr) {
         Some(throttle) => OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
             operation: label.to_string(),

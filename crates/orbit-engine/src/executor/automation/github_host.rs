@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::{redact_all, redact_all_error};
 use orbit_exec::{NoSandbox, run_process};
-use orbit_tools::{check_exec_result, github_cli};
+use orbit_tools::github_cli;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -40,7 +40,8 @@ pub(super) fn run_gh(
 ) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
     let result = run_process(&request, &NoSandbox).map_err(redact_all_error)?;
-    check_exec_result(&result, label).map_err(redact_all_error)?;
+    // A rate limit stays typed, so the sweep can wait for its reset.
+    github_cli::check_gh_read_result(&result, label).map_err(redact_all_error)?;
     Ok(result.stdout)
 }
 
