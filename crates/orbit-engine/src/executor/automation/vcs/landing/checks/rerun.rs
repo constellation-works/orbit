@@ -279,8 +279,11 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                     })
                 }
                 CheckFailureClass::Candidate => {
-                    // A genuinely source-attributed sibling keeps its repair path.
-                    // A generic trailer or asserted dependency record proves none.
+                    // Any candidate-class sibling makes the set ineligible for a CI
+                    // rerun, whether or not its log cites a changed file. A
+                    // source-attributed sibling keeps its repair path; one whose log
+                    // is only a generic trailer or asserted dependency record gets
+                    // no infrastructure retry either.
                     independent_candidate = true;
                 }
                 _ => uncertain = true,
