@@ -641,6 +641,19 @@ fn readiness_reuses_validation_warning_across_processes() {
     }
     let fixture = Fixture::terminal();
     let warning_of = || fixture.readiness()["validation_env_warning"].clone();
+    // A fresh probe's shell stderr comes from the host's rc files and can
+    // differ run to run (Ubuntu's command-not-found orders its PATH hint by
+    // hash), so a reprobe is compared without it; `probes()` proves reuse.
+    let stable = |warning: &serde_json::Value| {
+        let text = warning.as_str().expect("login-shell warning");
+        let (head, _) = text
+            .split_once(" (")
+            .expect("warning names its probe error");
+        let (_, tail) = text
+            .rsplit_once("); it runs with")
+            .expect("warning names its PATH");
+        format!("{head} (…); it runs with{tail}")
+    };
     let marker = fixture.home.join("login-probes");
     let probes = || fs::read_to_string(&marker).unwrap().lines().count();
     fail_login_profiles(&fixture.home);
@@ -677,16 +690,19 @@ fn readiness_reuses_validation_warning_across_processes() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(expired))
         .unwrap();
-    assert_eq!(warning_of(), kept["validation_env_warning"]);
+    assert_eq!(
+        stable(&warning_of()),
+        stable(&kept["validation_env_warning"])
+    );
     assert_eq!(probes(), 6);
     configure(first_path);
     fs::write(&cache, "incomplete JSON").unwrap();
-    assert_eq!(warning_of(), first_warning);
+    assert_eq!(stable(&warning_of()), stable(&first_warning));
     assert_eq!(probes(), 8);
     fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
     fs::create_dir(&cache).unwrap();
     for expected in [10, 12] {
-        assert_eq!(warning_of(), first_warning);
+        assert_eq!(stable(&warning_of()), stable(&first_warning));
         assert_eq!(probes(), expected);
     }
 }

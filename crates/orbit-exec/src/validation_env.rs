@@ -367,7 +367,10 @@ impl LoginShell {
             ));
         }
         if !outcome.success {
-            let stderr = outcome.stderr.trim();
+            // One line: the excerpt lands in a warning that receipts join with
+            // newlines, and an interactive shell's job-control notices span
+            // several [ORB-23005].
+            let stderr = one_line(&outcome.stderr);
             return Err(format!(
                 "{label} `{shell}` exited with status {}{}",
                 outcome
@@ -376,7 +379,7 @@ impl LoginShell {
                 if stderr.is_empty() {
                     String::new()
                 } else {
-                    format!(": {}", bounded(stderr, 512))
+                    format!(": {}", bounded(&stderr, 512))
                 }
             ));
         }
@@ -778,6 +781,15 @@ fn lookup<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.as_str())
         .filter(|value| !value.is_empty())
+}
+
+/// `text`'s non-blank lines, trimmed and joined with `; `.
+fn one_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn bounded(text: &str, limit: usize) -> &str {
