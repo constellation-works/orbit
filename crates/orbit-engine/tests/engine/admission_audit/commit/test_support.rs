@@ -18,6 +18,7 @@ use super::git_success;
 
 pub struct CommitTestHost {
     tasks: Mutex<Vec<Task>>,
+    pr_config: orbit_engine::PrConfig,
     repo_root: PathBuf,
     data_root: PathBuf,
     /// The trusted claim binding a claimed leaf's host carries, if any.
@@ -31,11 +32,17 @@ impl CommitTestHost {
         let data_root = repo_root.join(".orbit-test-data");
         Self {
             tasks: Mutex::new(tasks),
+            pr_config: orbit_engine::PrConfig::default(),
             repo_root,
             data_root,
             worker: None,
             history: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_pr_config(mut self, config: orbit_engine::PrConfig) -> Self {
+        self.pr_config = config;
+        self
     }
 
     /// Every widening recorded for `task_id`, in order.
@@ -89,6 +96,10 @@ impl CommitTestHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        self.pr_config.clone()
+    }
+
     fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(None)
     }

@@ -66,6 +66,7 @@ mod draft_handoff;
 mod flaky;
 mod infrastructure;
 mod landing_transport;
+mod mentions;
 mod review_watch;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
@@ -6533,6 +6534,7 @@ create() {
         case "$1" in
             --base) printf '%s\n' "$2" > "$forge/pr-base"; shift 2 ;;
             --head) printf '%s\n' "$2" > "$forge/pr-head"; shift 2 ;;
+            --title) printf '%s' "$2" > "$forge/pr-title"; shift 2 ;;
             --body) printf '%s' "$2" > "$forge/pr-body"; shift 2 ;;
             --draft) touch "$forge/pr-draft"; shift ;;
             --label) printf '%s\n' "$2" >> "$forge/pr-labels"; shift 2 ;;
