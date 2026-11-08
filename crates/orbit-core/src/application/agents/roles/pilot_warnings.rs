@@ -38,10 +38,10 @@ use orbit_types::task::{
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Map, Value, json};
 
-use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::row_key;
 use crate::application::agents::records::spec_documents;
 use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
+use crate::application::agents::{AgentFacts, WindowBounds};
 use crate::application::codebase::PilotRun;
 use crate::application::task::{BLOCKED_TASK_TRIAGED_EVENT, warning_hold_findings};
 
@@ -223,13 +223,13 @@ impl ModeTally {
     }
 }
 
-/// Task-pilot runs split by mode over the assessments written since
-/// `since`: each mode's assessments, runs, run durations and tokens, and
+/// Task-pilot runs split by mode over the assessments written in the
+/// window: each mode's assessments, runs, run durations and tokens, and
 /// how many re-checks needed a full pilot: re-checks a later full
 /// assessment of the same task followed, and re-check attempts the pilot
 /// escalated to a full assessment. A run that assessed tasks in both modes
 /// counts under each.
-fn pilot_modes(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
+fn pilot_modes(facts: &AgentFacts, window: WindowBounds) -> Value {
     let mut full = ModeTally::default();
     let mut recheck = ModeTally::default();
     let mut followed_by_full = 0;
@@ -237,7 +237,7 @@ fn pilot_modes(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
     for task in &facts.tasks {
         let assessments = &task.warnings.assessments;
         for (index, assessment) in assessments.iter().enumerate() {
-            if assessment.at < since {
+            if !window.admits(assessment.at) {
                 continue;
             }
             let is_recheck = assessment.mode == MODE_RECHECK;
@@ -478,18 +478,21 @@ impl WarningRow<'_> {
     }
 }
 
-/// Each pilot row's warning tallies: assessments that settled since `since`
-/// count in the terms, and those written since then in the hold rate and
-/// the excluded count.
+/// Each pilot row's warning tallies: assessments that settled in the window
+/// count in the terms, and those written in it in the hold rate and the
+/// excluded count.
 pub(super) fn rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
 ) -> BTreeMap<(String, String), WarningRow<'_>> {
     let mut rows: BTreeMap<(String, String), WarningRow<'_>> = BTreeMap::new();
     for task in &facts.tasks {
         for assessment in &task.warnings.assessments {
-            let written = assessment.at >= since;
-            let settled = assessment.settled.as_ref().filter(|(at, _)| *at >= since);
+            let written = window.admits(assessment.at);
+            let settled = assessment
+                .settled
+                .as_ref()
+                .filter(|(at, _)| window.admits(*at));
             if !written && settled.is_none() {
                 continue;
             }
@@ -548,17 +551,17 @@ pub(super) fn rows(
 /// missed-scope-block source ran in the window. Block triage writes the
 /// markers it reads; with none in the window the term reads 0 because
 /// nothing measured it, not because no clean assessment missed a block.
-pub(super) fn header(facts: &AgentFacts, since: DateTime<Utc>) -> Map<String, Value> {
+pub(super) fn header(facts: &AgentFacts, window: WindowBounds) -> Map<String, Value> {
     let records = facts
         .tasks
         .iter()
         .flat_map(|task| &task.warnings.triaged)
-        .filter(|at| **at >= since)
+        .filter(|at| window.admits(**at))
         .count();
     let available = records > 0;
     let mut header = Map::new();
     header.insert("warning_min_support".to_string(), json!(MIN_SETTLED));
-    header.insert("pilot_modes".to_string(), pilot_modes(facts, since));
+    header.insert("pilot_modes".to_string(), pilot_modes(facts, window));
     header.insert(
         "sources".to_string(),
         json!({

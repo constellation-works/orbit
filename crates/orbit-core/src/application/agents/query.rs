@@ -43,6 +43,7 @@ impl AgentQuery {
             span,
             min_support,
             execution: ExecutionScope::Managed,
+            until: None,
         })
     }
 
@@ -68,19 +69,41 @@ impl AgentQuery {
         self.execution
     }
 
-    /// The window's start; it ends now. A count window starts at the newest
-    /// `n`th delivery attempt in the scan, or its oldest when the scan holds
-    /// fewer, and at the scan's reach when it holds none.
-    pub(super) fn since(&self, facts: &AgentFacts) -> DateTime<Utc> {
-        match self.span {
-            WindowSpan::Hours(hours) => Utc::now() - chrono::Duration::hours(hours),
+    /// Set the exclusive window end. `None` leaves it open. A blank string
+    /// is refused. An RFC 3339 instant, or a duration ago (`30d`, and the
+    /// `m`/`h`/`d`/`w` units a resident metrics window accepts), resolves to
+    /// an absolute instant. A future instant is refused.
+    pub fn with_until(mut self, until: Option<&str>) -> Result<Self, OrbitError> {
+        let Some(raw) = until else {
+            return Ok(self);
+        };
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(until_rejected(raw));
+        }
+        self.until = Some(parse_until(raw, Utc::now())?);
+        Ok(self)
+    }
+
+    /// The served bounds. A time window is `[until - span, until)` when
+    /// `until` is set, and `[now - span, ...)` with no upper filter when it
+    /// is not. A count window takes the newest `n` attempt starts before
+    /// `until` (or in the scan, when `until` is omitted). `since` is clamped
+    /// so it is not after a set `until`.
+    pub(super) fn bounds(&self, facts: &AgentFacts) -> WindowBounds {
+        let now = Utc::now();
+        let reported_until = self.until.unwrap_or(now);
+        let mut since = match self.span {
+            WindowSpan::Hours(hours) => reported_until
+                .checked_sub_signed(chrono::Duration::hours(hours))
+                .unwrap_or(reported_until),
             WindowSpan::Attempts(count) => {
                 let horizon = facts.computed_at - chrono::Duration::days(SCAN_DAYS);
                 let mut starts: Vec<DateTime<Utc>> = facts
                     .tasks
                     .iter()
                     .flat_map(|task| task.attempts.iter().map(|attempt| attempt.start))
-                    .filter(|start| *start >= horizon)
+                    .filter(|start| *start >= horizon && self.until.is_none_or(|end| *start < end))
                     .collect();
                 starts.sort_unstable_by(|a, b| b.cmp(a));
                 starts
@@ -88,6 +111,14 @@ impl AgentQuery {
                     .copied()
                     .unwrap_or(horizon)
             }
+        };
+        if let Some(end) = self.until {
+            since = since.min(end);
+        }
+        WindowBounds {
+            since,
+            until_exclusive: self.until,
+            reported_until,
         }
     }
 
@@ -95,7 +126,7 @@ impl AgentQuery {
     pub(super) fn header(
         &self,
         facts: &AgentFacts,
-        since: DateTime<Utc>,
+        bounds: WindowBounds,
         cache_ttl: Duration,
     ) -> Value {
         json!({
@@ -106,7 +137,8 @@ impl AgentQuery {
                 WindowSpan::Hours(_) => None,
                 WindowSpan::Attempts(count) => Some(count),
             },
-            "since": since.to_rfc3339_opts(SecondsFormat::Secs, true),
+            "since": bounds.since().to_rfc3339_opts(SecondsFormat::Secs, true),
+            "until": bounds.reported_until().to_rfc3339_opts(SecondsFormat::Secs, true),
             "min_support": self.min_support,
             // Which derived executions implementer metrics count.
             "execution": self.execution.as_str(),
@@ -115,4 +147,75 @@ impl AgentQuery {
             "tasks_scanned": facts.tasks_scanned,
         })
     }
+}
+
+/// The served window: inclusive `since`, optional exclusive `until`, and the
+/// `until` instant the payload reports. An omitted `until` leaves the upper
+/// bound open and reports the instant used as now.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WindowBounds {
+    since: DateTime<Utc>,
+    until_exclusive: Option<DateTime<Utc>>,
+    reported_until: DateTime<Utc>,
+}
+
+impl WindowBounds {
+    /// Whether `at` falls in the served window.
+    pub(crate) fn admits(self, at: DateTime<Utc>) -> bool {
+        at >= self.since && self.until_exclusive.is_none_or(|end| at < end)
+    }
+
+    /// The served inclusive start, after clamping it to `until` when set.
+    pub(crate) fn since(self) -> DateTime<Utc> {
+        self.since
+    }
+
+    /// The served end the payload reports. When `until` was omitted this is
+    /// the instant used as now, and [`Self::admits`] does not filter on it.
+    pub(crate) fn reported_until(self) -> DateTime<Utc> {
+        self.reported_until
+    }
+}
+
+fn until_rejected(raw: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "until must be an RFC 3339 instant or a duration ago such as 30d; got '{raw}'"
+    ))
+}
+
+/// An RFC 3339 instant, or a duration before `now`. Units match the resident
+/// metrics window: `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`,
+/// with whitespace ignored and a trailing `s` trimmed. A bare date is not
+/// accepted. `until` in the future is refused.
+fn parse_until(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitError> {
+    if let Ok(at) = DateTime::parse_from_rfc3339(raw) {
+        let at = at.with_timezone(&Utc);
+        if at > now {
+            return Err(OrbitError::InvalidInput(
+                "until must not be in the future".to_string(),
+            ));
+        }
+        return Ok(at);
+    }
+    let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact = compact.trim_end_matches('s');
+    let Some(split) = compact.find(|c: char| c.is_ascii_alphabetic()) else {
+        return Err(until_rejected(raw));
+    };
+    let (amount, unit) = compact.split_at(split);
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Err(until_rejected(raw));
+    };
+    if amount < 0 {
+        return Err(until_rejected(raw));
+    }
+    let span = match unit {
+        "m" | "min" | "minute" => chrono::Duration::try_minutes(amount),
+        "h" | "hour" => chrono::Duration::try_hours(amount),
+        "d" | "day" => chrono::Duration::try_days(amount),
+        "w" | "week" => chrono::Duration::try_weeks(amount),
+        _ => return Err(until_rejected(raw)),
+    };
+    span.and_then(|span| now.checked_sub_signed(span))
+        .ok_or_else(|| OrbitError::InvalidInput(format!("until is out of range: {raw}")))
 }

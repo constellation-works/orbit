@@ -218,6 +218,12 @@
         "required": false
       },
       {
+        "name": "until",
+        "description": "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "by_type",
         "description": "Split implementers into (crew, model, tier, type) cells using workflow.task_types, with two-level shrinkage; implementers only.",
         "param_type": "boolean",
@@ -279,6 +285,12 @@
       {
         "name": "execution",
         "description": "Which tasks implementer counts read, by how each was executed (derived from its runs): managed (a job worked its final implementation attempt), all (managed and interactive) or interactive (reached review or done in an interactive session, without a job) as a separate series. Tasks neither yet are in none. Cost and run time count managed tasks whatever this says. Other roles ignore it. Default: managed.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "until",
+        "description": "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now.",
         "param_type": "string",
         "required": false
       },

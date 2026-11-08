@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::{AgentFacts, AgentQuery, AgentRole, attribution, facts, roles, score};
+use super::{AgentFacts, AgentQuery, AgentRole, WindowBounds, attribution, facts, roles, score};
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -107,14 +107,17 @@ pub(super) fn role_header(
     facts: &AgentFacts,
     role: AgentRole,
     query: &AgentQuery,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     cache_ttl: Duration,
 ) -> Value {
     let spec = roles::spec(role);
-    let mut payload = query.header(facts, since, cache_ttl);
+    let mut payload = query.header(facts, window, cache_ttl);
     payload["role"] = json!(role.as_str());
     payload["effort_breakdown"] = json!(orbit_store::contracts::agent_effort_usage(
-        facts.invocations.iter().filter(|fact| fact.ts >= since)
+        facts
+            .invocations
+            .iter()
+            .filter(|fact| window.admits(fact.ts))
     ));
     payload["effort_population"] = json!("completed_workspace_invocations");
     payload["unit"] = json!(spec.unit);
@@ -125,7 +128,7 @@ pub(super) fn role_header(
     });
     payload["terms"] = json!(score::terms_json(spec.terms, spec.term_units));
     if let Some(header) = spec.header {
-        for (key, value) in header(facts, since) {
+        for (key, value) in header(facts, window) {
             payload[key] = value;
         }
     }
@@ -142,13 +145,13 @@ pub fn agent_scorecard(
     query: &AgentQuery,
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since(facts);
+    let window = query.bounds(facts);
     let spec = roles::spec(role);
-    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    let mut payload = role_header(facts, role, query, window, cache_ttl);
     let (fleet_average, scored) = match spec.rows {
         Some(rows) => score::score(
             spec.terms,
-            rows(facts, since, query.min_support, query.execution),
+            rows(facts, window, query.min_support, query.execution),
             query.min_support,
         ),
         None => (None, Vec::new()),
@@ -160,7 +163,7 @@ pub fn agent_scorecard(
         .map(|row| {
             let mut value = row.row(spec.terms);
             value["effort_breakdown"] =
-                row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
+                row_effort_breakdown(facts, role, window, &row.input.crew, &row.input.model);
             value
         })
         .collect();
@@ -176,9 +179,9 @@ pub fn agent_by_type_scorecard(
     types: &[orbit_config::TaskTypeDefinition],
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since(facts);
+    let window = query.bounds(facts);
     let role = AgentRole::Implementers;
-    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    let mut payload = role_header(facts, role, query, window, cache_ttl);
     payload["by_type"] = json!(true);
     payload["types"] = json!(
         types
@@ -192,7 +195,7 @@ pub fn agent_by_type_scorecard(
     );
     payload["cells"] = json!(roles::implementer_by_type_cells(
         facts,
-        since,
+        window,
         types,
         query.execution
     ));
@@ -220,10 +223,10 @@ pub fn agent_size_curves(
             roles::SIZE_CURVE_TIERS.join(", ")
         )));
     }
-    let since = query.since(facts);
-    let mut payload = query.header(facts, since, cache_ttl);
+    let window = query.bounds(facts);
+    let mut payload = query.header(facts, window, cache_ttl);
     payload["role"] = json!(AgentRole::Implementers.as_str());
-    for (key, value) in roles::implementer_size_curves(facts, since, complexity, query.execution) {
+    for (key, value) in roles::implementer_size_curves(facts, window, complexity, query.execution) {
         payload[key] = value;
     }
     Ok(payload)
@@ -239,9 +242,9 @@ pub fn agent_per_task_export(
     types: &[orbit_config::TaskTypeDefinition],
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since(facts);
+    let window = query.bounds(facts);
     let role = AgentRole::Implementers;
-    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    let mut payload = role_header(facts, role, query, window, cache_ttl);
     payload["per_task"] = json!(true);
     payload["types"] = json!(
         types
@@ -255,7 +258,7 @@ pub fn agent_per_task_export(
     );
     payload["tasks"] = json!(roles::implementer_per_task_rows(
         facts,
-        since,
+        window,
         types,
         query.execution
     ));
@@ -300,12 +303,12 @@ fn agent_detail_for_surface(
         return Err(OrbitError::InvalidInput("crew is required".to_string()));
     }
     let model = model.map(str::trim).filter(|model| !model.is_empty());
-    let since = query.since(facts);
+    let window = query.bounds(facts);
     let spec = roles::spec(role);
     let (fleet_average, scored) = match spec.rows {
         Some(rows) => score::score(
             spec.terms,
-            rows(facts, since, query.min_support, query.execution),
+            rows(facts, window, query.min_support, query.execution),
             query.min_support,
         ),
         None => (None, Vec::new()),
@@ -344,12 +347,12 @@ fn agent_detail_for_surface(
             )));
         }
     };
-    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    let mut payload = role_header(facts, role, query, window, cache_ttl);
     payload["fleet_average"] = json!(fleet_average.map(score::number));
     payload["provisional"] = json!(score::provisional(role, &scored));
     payload["row"] = row.row(spec.terms);
     payload["row"]["effort_breakdown"] =
-        row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
+        row_effort_breakdown(facts, role, window, &row.input.crew, &row.input.model);
     payload["terms"] = json!(row.terms(spec.terms));
     Ok(payload)
 }
@@ -358,8 +361,8 @@ fn agent_detail_for_surface(
 /// each role's problems by row. Its role totals are the problems behind the
 /// four scorecards.
 pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Duration) -> Value {
-    let since = query.since(facts);
-    let mut payload = attribution::strip(facts, since);
+    let window = query.bounds(facts);
+    let mut payload = attribution::strip(facts, window);
     payload["window"] = json!(query.window);
     payload["requested_window"] = json!(query.requested);
     payload["computed_at"] = json!(
@@ -374,7 +377,7 @@ pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Dura
 fn row_effort_breakdown(
     facts: &AgentFacts,
     role: AgentRole,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     crew: &str,
     model: &str,
 ) -> Value {
@@ -385,7 +388,7 @@ fn row_effort_breakdown(
     }
     let rows =
         orbit_store::contracts::agent_effort_usage(facts.invocations.iter().filter(|fact| {
-            fact.ts >= since
+            window.admits(fact.ts)
                 && fact
                     .execution
                     .as_ref()

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::performance::{counted, tier};
 use crate::application::agents::facts::{Attempt, TaskFacts};
-use crate::application::agents::{AgentFacts, CREW_UNKNOWN, ExecutionScope};
+use crate::application::agents::{AgentFacts, CREW_UNKNOWN, ExecutionScope, WindowBounds};
 
 /// Days after completion a regression link is looked for, and the follow-up
 /// a task needs before it counts.
@@ -62,11 +62,11 @@ fn wilson(k: usize, n: usize) -> (f64, f64) {
     ((centre - half).max(0.0), (centre + half).min(1.0))
 }
 
-/// The size curves for the window starting at `since`, narrowed to one
-/// tier when `complexity` names one and to the tasks `execution` admits.
+/// The size curves for the window, narrowed to one tier when `complexity`
+/// names one and to the tasks `execution` admits.
 pub(in crate::application::agents) fn size_curves(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     complexity: Option<&str>,
     execution: ExecutionScope,
 ) -> serde_json::Map<String, Value> {
@@ -86,7 +86,7 @@ pub(in crate::application::agents) fn size_curves(
         .iter()
         .filter(|task| execution.admits(task.execution))
     {
-        let Some((attempt, landed_at)) = final_counted(task, since) else {
+        let Some((attempt, landed_at)) = final_counted(task, window) else {
             continue;
         };
         if landed_at > mature_by {
@@ -182,7 +182,7 @@ pub(in crate::application::agents) fn size_curves(
 
 /// The task's final attempt and completion time, when it landed and that
 /// attempt counts for implementers in the window.
-fn final_counted(task: &TaskFacts, since: DateTime<Utc>) -> Option<(&Attempt, DateTime<Utc>)> {
+fn final_counted(task: &TaskFacts, window: WindowBounds) -> Option<(&Attempt, DateTime<Utc>)> {
     let attempt = &task.attempts[task.final_attempt?];
-    (task.landed && counted(attempt, since)).then_some((attempt, task.landed_at?))
+    (task.landed && counted(attempt, window)).then_some((attempt, task.landed_at?))
 }

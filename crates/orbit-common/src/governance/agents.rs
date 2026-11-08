@@ -99,6 +99,13 @@ const SELECTION: &[ParamSpec] = &[
         ),
         "managed",
     ),
+    both(
+        "until",
+        ParamType::String,
+        "End the window at this RFC 3339 instant, or this long ago (for example 30d; units m, h, d or w). The window is then [until - window, until). A count window (last50 and the other lastN values) takes the newest that many attempts before until. Omitted, the window ends now. A future instant is refused. Reviewer provisional counts stay measured against now.",
+        CliArgKind::flag("until"),
+        "End the window at this instant or duration ago (for example 30d)",
+    ),
 ];
 
 /// The by-type cell matrix switch, implementers only.

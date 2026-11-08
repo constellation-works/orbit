@@ -18,6 +18,7 @@
 //! above the fleet average, pulled down toward it with K = 30. Cost is never
 //! a term.
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 
 mod api;
@@ -144,8 +145,9 @@ impl ExecutionScope {
     }
 }
 
-/// A validated selection: the window, the units a row needs before it is
-/// ranked and which executions implementer metrics count.
+/// A validated selection: the window, its optional exclusive end, the units
+/// a row needs before it is ranked and which executions implementer metrics
+/// count.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentQuery {
     requested: &'static str,
@@ -153,12 +155,15 @@ pub struct AgentQuery {
     span: WindowSpan,
     min_support: usize,
     execution: ExecutionScope,
+    /// Exclusive end. `None` leaves the upper bound open, so an omitted
+    /// `until` counts the same work as a window that ends now.
+    until: Option<DateTime<Utc>>,
 }
 
 /// How far back a window reaches.
 #[derive(Debug, Clone, Copy)]
 enum WindowSpan {
-    /// This many hours ending now.
+    /// This many hours ending at `until`, or now when `until` is omitted.
     Hours(i64),
     /// Back to the start of the newest this many delivery attempts.
     Attempts(usize),
@@ -168,3 +173,4 @@ pub use api::{
     agent_attribution, agent_by_type_scorecard, agent_detail, agent_per_task_export,
     agent_scorecard, agent_size_curves,
 };
+pub(crate) use query::WindowBounds;

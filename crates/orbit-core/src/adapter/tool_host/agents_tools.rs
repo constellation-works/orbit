@@ -19,7 +19,8 @@ pub(super) fn dispatch(
         input.optional_string("window")?.as_deref(),
         input.optional_count("min_support")?,
     )?
-    .with_execution(input.optional_string("execution")?.as_deref())?;
+    .with_execution(input.optional_string("execution")?.as_deref())?
+    .with_until(input.optional_string("until")?.as_deref())?;
     let by_type = input.optional_bool("by_type")?.unwrap_or(false);
     let per_task = input.optional_bool("per_task")?.unwrap_or(false);
     match verb {

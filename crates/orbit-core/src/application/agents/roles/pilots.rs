@@ -32,7 +32,7 @@ use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
 };
-use crate::application::agents::{AgentFacts, ExecutionScope};
+use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -478,7 +478,7 @@ fn observed_tiers<'a>(
 /// window.
 fn rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     min_support: usize,
     _execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
@@ -490,7 +490,7 @@ fn rows(
     let assessed: Vec<(&Graded, &TaskFacts)> = facts
         .pilots
         .iter()
-        .filter(|graded| graded.at >= since)
+        .filter(|graded| window.admits(graded.at))
         .filter_map(|graded| Some((graded, *tasks.get(graded.task_id.as_str())?)))
         .collect();
     let tiers = observed_tiers(facts, &assessed);
@@ -505,7 +505,7 @@ fn rows(
     for (graded, task) in assessed {
         work.entry(graded.key()).or_default().push((graded, task));
     }
-    let mut warnings = pilot_warnings::rows(facts, since);
+    let mut warnings = pilot_warnings::rows(facts, window);
     for key in warnings.keys() {
         work.entry(key.clone()).or_default();
     }

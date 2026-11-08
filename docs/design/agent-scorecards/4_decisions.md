@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-11-03
-last_validated: 2026-11-03
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
 doc_role: decisions
@@ -177,7 +177,27 @@ their owners.
 - The `no_test` charge stays in the attribution strip's Implementers count even when a pre-landing verdict absorbed it.
 - Cost: crew differences in regression rate beyond size were not significant (p ≈ 0.1), so much of the term's spread is noise; shrinkage toward the fleet average and the −0.5 weight limit it. A sparse expected-size bucket served only by the row's own work sets its own expectation and cannot penalize it. Site matching depends on filers naming sites: a link without sites always counts, even when it repeats a pre-landing finding. The filer's severity stands until verification confirms or replaces it, and 95% of delivery-review findings arrived within 31 hours of landing, so the newest tasks can still pick up findings after they are first scored.
 
+## A scorecard window can end in the past
+
+**Recorded:** 2026-11-08 · ORB-23066
+
+### Context
+
+Every scorecard window ended at the scan's now. `--window 7d` meant the last 7 days, and a count window (`last50` and the other lastN values) meant the newest N attempts in the scan. Reviewer scores stay provisional for 30 days, because a review's missed regressions can surface that long after the review. A window that ends now is therefore mostly unsettled. The weekly crew-rankings note needs reviewer scores on a window of the same length that ends 30 days back.
+
+### Decision
+
+`orbit agents scorecard`, `orbit agents show`, the matching MCP tools and `GET /api/agents/{role}/scorecard` and `/detail` take an optional `until`: an RFC 3339 instant, or a duration ago such as `30d` (units `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`). The window is then `[until - window, until)` for a calendar window, and the newest N attempts with `start < until` for a count window. A bare date is not accepted. A future instant is refused. Omitted, selection is unchanged: a calendar window still starts `window` before now and does not drop work at or after that instant. The JSON payload always reports the served `since` and `until` (RFC 3339 UTC). When `until` was omitted, `until` is the instant used as now. Reviewer provisional counts and the other lookbacks stay measured against now, so a window ending 30 or more days before now reports `provisional: 0` for reviewers.
+
+### Consequences
+
+- A consumer can ask for settled reviewer scores without changing the provisional rule or the default window.
+- The human selection line does not gain an until label, so omitting the flag leaves that line unchanged. The JSON payload gains `until` on every response, including the deprecated orchestrator aliases, which do not grow their own flag.
+- Cost: a caller that compared whole JSON bytes of an omitted window must ignore the new `until` field. Parsing accepts the resident-metrics duration grammar, including a trailing `s` and ignored whitespace, and rejects a bare calendar date rather than guessing one.
+
 ## Task References
+
+- ORB-23066 — optional `until` window end on the agent scorecard CLI, MCP tools and API.
 
 - ORB-17118 — the unit-landed orchestrator principle this decision extends.
 - ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
