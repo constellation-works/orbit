@@ -762,8 +762,12 @@ fi
 # task writes, so a decision answer applies a resident grant, and a task
 # comment write admits a resident record and refuses one needing redaction,
 # only through `TaskResidentPort`, which `resident` implements on
+# `OrbitRuntime`. `experiment` sits outside the order but above `task`
+# [ORB-23015]: it reads tasks and their crew source back, so task show's
+# assignment readout and the provider-limit gate's experiment-pool check go
+# only through `TaskExperimentPort`, which `experiment` implements on
 # `OrbitRuntime`.
-task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
+task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
 task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
@@ -777,7 +781,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase and resident through its task ports, must not route through tag_instructions, and names backlog_forecast only in its two task/mod.rs re-exports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident and experiment through its task ports, must not route through tag_instructions, and names backlog_forecast only in its two task/mod.rs re-exports"
   fail=1
 fi
 
@@ -808,15 +812,19 @@ fi
 # tree, a `super::` chain out of `job` into any of them, or a call to an
 # inherent method they define (derived from their `impl OrbitRuntime`
 # blocks [ORB-22003]) is a reintroduced edge. Their free functions are
-# reachable only by the paths these checks refuse.
-job_upper_modules='admission|automation|backlog_forecast|review|sweep_filing|workspace_auto'
+# reachable only by the paths these checks refuse. `experiment` sits above
+# `job` [ORB-23015]: crew admission, fresh claim routing, claimed-leaf crew
+# installation and claimed-leaf capture validation reach it only through
+# `JobExperimentPort`, and the pool they read is the
+# `contracts::ExperimentCrewPool` value.
+job_upper_modules='admission|experiment|automation|backlog_forecast|review|sweep_filing|workspace_auto'
 if rg -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   rg -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
     "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" job "$job_upper_modules" '' '' ||
   ! super_chains_into "$app_src" job "$job_upper_modules"; then
-  echo "orbit-core job must reach review, automation, admission and workspace_auto through its job ports"
+  echo "orbit-core job must reach review, automation, admission, workspace_auto and experiment through its job ports"
   fail=1
 fi
 

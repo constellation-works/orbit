@@ -12,6 +12,7 @@ pub(crate) mod delivery;
 pub mod delivery_attention;
 mod drain_port;
 mod exec;
+mod experiment_port;
 mod final_recovery;
 mod forge_hold_resume;
 mod orphan_adoption;
@@ -64,6 +65,7 @@ pub use catalog::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_la
 pub use crew_pools::{TaskCrewBackfill, TaskCrewChange};
 pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
+pub(in crate::application) use experiment_port::JobExperimentPort;
 pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pilot_submit::{
     TaskPilotRefusal, TaskPilotSubmission, TaskPilotSubmissionDashboardView, TaskPilotSubmitError,

@@ -13,6 +13,7 @@ use crate::application::contracts::{
     CrewCandidate, INSPECTION_CREW_UNAVAILABLE, InspectionPool, PURPOSE_SOURCE_PREFIX,
     TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source, type_crew_source,
 };
+use crate::application::job::JobExperimentPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
@@ -461,7 +462,7 @@ impl OrbitRuntime {
                 })
                 .transpose()
         };
-        if include_experiment && let Some(pool) = self.experiment_crew_pool(&task.id)? {
+        if include_experiment && let Some(pool) = self.job_experiment_crew_pool(&task.id)? {
             return resolved(self.pool_member_candidates(&pool.entries, &pool.source, None)?)?
                 .ok_or_else(|| {
                     OrbitError::PolicyDenied(format!(

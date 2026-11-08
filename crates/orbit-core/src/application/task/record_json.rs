@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use super::{TaskOsReadout, TaskRow, task_pilot_warnings};
 use crate::OrbitRuntime;
-use crate::application::task::TaskReviewPort;
+use crate::application::task::{TaskExperimentPort, TaskReviewPort};
 
 impl OrbitRuntime {
     /// `task` with its comment, history and artifact sidecars read from this
@@ -126,7 +126,7 @@ pub fn task_show_json(
     let mut object = task_record_json(runtime, row, status_by_id)?;
     object.insert(
         "experiments".into(),
-        serde_json::to_value(runtime.task_experiments(&row.task.id)?)
+        serde_json::to_value(runtime.task_experiment_assignment_readout(&row.task.id)?)
             .map_err(serialize_error("experiments"))?,
     );
     if let Some(block) = super::blocked_recovery::block_json(row) {
@@ -192,8 +192,10 @@ pub fn task_show_field_json(
         "started_at" => Ok(serde_json::json!(orbit_types::task::task_started_at(
             &runtime.get_task_history(&task.id)?
         ))),
-        "experiments" => serde_json::to_value(runtime.task_experiments(&task.id)?)
-            .map_err(serialize_error("experiments")),
+        "experiments" => {
+            serde_json::to_value(runtime.task_experiment_assignment_readout(&task.id)?)
+                .map_err(serialize_error("experiments"))
+        }
         "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
             task.status,
             &runtime.get_task_comments(&task.id)?,

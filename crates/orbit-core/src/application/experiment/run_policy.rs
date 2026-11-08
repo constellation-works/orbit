@@ -6,16 +6,7 @@ use serde_json::Value;
 
 use super::definition::ExperimentOverlay;
 use crate::OrbitRuntime;
-
-pub(crate) struct ExperimentCrewPool {
-    pub(crate) entries: Vec<CrewPoolEntry>,
-    pub(crate) source: String,
-    pub(crate) digest: String,
-    /// The experiment and arm whose overlay this pool is, which a crew
-    /// written back to the task names.
-    pub(crate) experiment: String,
-    pub(crate) arm: String,
-}
+use crate::application::contracts::ExperimentCrewPool;
 
 impl OrbitRuntime {
     /// Freeze a claimed leaf's treatment once on the executing host. Its
