@@ -323,7 +323,6 @@ impl OrbitRuntime {
             let event = (!replayed).then(|| OrbitEvent::TaskAdded {
                 id: task.id.clone(),
             });
-            self.schedule_task_quality_after_commit(&task);
             let task = match &crew_assignment {
                 Some(assignment) if !replayed => {
                     self.record_creation_crew_provenance(task, assignment, digest)

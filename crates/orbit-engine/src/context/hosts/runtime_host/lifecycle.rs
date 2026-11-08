@@ -74,6 +74,15 @@ macro_rules! lifecycle_methods {
             task_id: &str,
             path: &str,
         ) -> Result<Option<TaskArtifact>, OrbitError>;
+        /// [`Self::get_task_artifact`] for a best-effort diagnostic read
+        /// that decides nothing. Its task-store sections pass queued
+        /// admissions instead of waiting behind them, and still wait for a
+        /// section that holds the store exclusively.
+        fn observe_task_artifact(
+            &self,
+            task_id: &str,
+            path: &str,
+        ) -> Result<Option<TaskArtifact>, OrbitError>;
         fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError>;
         fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError>;
         fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError>;

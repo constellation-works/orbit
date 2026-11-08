@@ -168,6 +168,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         NullRuntimeHost::get_task_artifact(self, task_id, path)
     }
+    fn observe_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        NullRuntimeHost::observe_task_artifact(self, task_id, path)
+    }
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         NullRuntimeHost::get_task_artifacts(self, task_id)
     }

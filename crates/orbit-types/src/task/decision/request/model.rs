@@ -23,6 +23,8 @@ pub const PRECEDENT_ACTOR: &str = "precedent";
 /// Writer label of an answer the decision model applied. It is an automation
 /// actor ([`crate::identity::is_automation_actor`]), so no guard that needs a
 /// human resolution accepts it, and the human apply path refuses it.
+/// [ORB-22808] Decision assistance was removed: nothing writes model answers
+/// any more, and the model-answer records stay so earlier history still reads.
 pub const MODEL_ANSWER_ACTOR: &str = "model";
 /// History event a human writes when confirming a model answer through its
 /// [`DecisionGate::ModelAnswerReview`] request. The note is a

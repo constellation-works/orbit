@@ -190,6 +190,15 @@ pub trait NullRuntimeHost: Send + Sync {
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         Ok(None)
     }
+    /// A host without a task store has no queued admission to pass, so the
+    /// observed read is its ordinary read.
+    fn observe_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        self.get_task_artifact(task_id, path)
+    }
     fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         Ok(Vec::new())
     }

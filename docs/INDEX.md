@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (10)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -121,7 +121,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auditability](./design/auditability/1_overview.md) | Develop tamper evidence and joined queries | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Operator evidence review before enabling any precedent category; rollout parked | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
@@ -208,7 +207,6 @@ a conservative title/status fallback.
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer. | Draft | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
@@ -257,6 +255,7 @@ They are reference only and are not authoritative.
 | --- | --- | --- | --- |
 | [Crew Ladder](./design/_archived/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Deprecated | claude |
 | [Crew Performance](./design/_archived/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Deprecated | claude |
+| [Decision Assistance](./design/_archived/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer. | Deprecated | codex |
 | [Explore Brief](./design/_archived/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Deprecated | claude |
 | [Finding Verification](./design/_archived/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Deprecated | claude |
 | [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |

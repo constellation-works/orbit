@@ -27,7 +27,7 @@ sidebar:
 | `orbit-store` | Generic YAML and SQLite stores, connection primitives, the namespaced feature-migration ledger, and immutable historical bootstrap migrations. Feature crates own their active schemas and queries. |
 | `orbit-mcp` | RMCP stdio and TCP transports, canonical discovery, server identity context, the direct SSH stdio proxy, and the federated mux. |
 | `orbit-search` | Workspace-local lexical task search: SQLite FTS5 chunks ranked by BM25, kept in sync as tasks change. |
-| `orbit-types` | Lowest contract layer: shared types grouped by domain (`assistance`, `identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`, `plugin`, `desktop`) and `OrbitId`. No I/O and no Orbit crate dependencies. |
+| `orbit-types` | Lowest contract layer: shared types grouped by domain (`identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`, `plugin`, `desktop`) and `OrbitId`. No I/O and no Orbit crate dependencies. |
 | `orbit-common` | Mechanism crate above `orbit-types`: `OrbitError` plus governance, filesystem, process, storage, protocol, observability, and security helpers. |
 
 ## Dependency direction

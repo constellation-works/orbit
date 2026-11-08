@@ -139,7 +139,7 @@ impl UnadmittableDefinition {
 ///
 /// A disabled definition is deliberately quiet: `disabled` already means the
 /// operator turned it off, and saying it is also unadmittable adds nothing.
-pub fn delivery_ownership_refusal(
+pub(crate) fn delivery_ownership_refusal(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Option<UnadmittableDefinition> {
@@ -254,7 +254,7 @@ pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<St
     })
 }
 
-pub fn inspect_auto_task(
+pub(crate) fn inspect_auto_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     now: DateTime<Utc>,
@@ -267,7 +267,7 @@ pub fn inspect_auto_task(
 /// Inspect a delivery auto-task using the shared open-instance rule's already
 /// computed result. Batch dashboard inspection reuses its request's metadata
 /// listing rather than querying task state again for every definition.
-pub fn inspect_auto_task_with_open_instance(
+pub(crate) fn inspect_auto_task_with_open_instance(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     now: DateTime<Utc>,

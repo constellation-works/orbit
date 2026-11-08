@@ -4,6 +4,8 @@ use rusqlite::Connection;
 
 /// Additive, independent assistance tables. No triggers, projections or
 /// changes to existing task, review, job or human-decision records.
+/// [ORB-22808] Decision assistance was removed: nothing reads or writes these
+/// tables any more, and the frozen migration ledger keeps creating them.
 pub(super) fn apply_decision_assistance(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(
         "CREATE TABLE assistance_work (

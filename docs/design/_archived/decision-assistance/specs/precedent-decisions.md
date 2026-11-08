@@ -3,7 +3,7 @@ title: "Proposal: precedent-answered human decisions"
 owner: claude
 last_updated: 2026-11-05
 last_validated: 2026-11-02
-status: Draft
+status: Deprecated
 feature: decision-assistance
 doc_role: spec
 type: design
@@ -16,7 +16,7 @@ tags: [decision-assistance, human-decision-channel]
 Status: **implemented and default-off.** The shadow consumer (packet, enqueue on raise, hidden seal, join export), model-answer provenance, review gate and veto ([ORB-21092]), the offline readout ([ORB-21096]), and category enablement, self-answer, holdback, notification wait and demotion ([ORB-21097]) are implemented. Nothing self-answers until the operator enables a category; see §As implemented.
 The [scope](../1_scope.md) keeps the older consumers parked. This consumer is a
 separate evaluation candidate. Its labels are real, structured human answers to
-[human decision channel](../../human-decision-channel/2_design.md) requests, not
+[human decision channel](../../../human-decision-channel/2_design.md) requests, not
 synthetic or agent-authored labels. Every mode defaults to `off`. Self-answering
 needs a measured pass per category and an explicit operator enablement. The
 implementation slices are recorded below; all seven have since been implemented.
@@ -39,7 +39,7 @@ It does not:
   whatever the confidence (§Risk tiers);
 - turn its own answers into precedent without human confirmation (§Feedback);
 - replace the existing curated-rule auto-answer
-  ([workspace agent corpus](../../workspace-agent-corpus/1_scope.md#curated-decision-rules)),
+  ([workspace agent corpus](../../../workspace-agent-corpus/1_scope.md#curated-decision-rules)),
   which keeps running first;
 - show its prediction to the human in a category under measurement, because a
   visible prediction would bias the label it is scored against.
@@ -194,7 +194,7 @@ fails. It never repairs a record.
 1. **Orbit decision history (built in).** Answered requests in the workspace's
    task histories whose `decision_answered` resolution was written by a human
    label, plus confirmed model answers. It reuses the bounded listing scans of the
-   [decision channel](../../human-decision-channel/2_design.md#23-storage).
+   [decision channel](../../../human-decision-channel/2_design.md#23-storage).
    Relevance ranks by same category, then same topic, then lexical overlap of the
    question with the request, then recency. A later reversal or veto marks a
    record `reversed`.
@@ -518,7 +518,7 @@ agent's flow changes.
 ## Configuration
 
 The implemented host configuration is documented in
-[CONFIG.md](../../../CONFIG.md#precedent-decision-shadow-consumer). The
+CONFIG.md (former CONFIG.md section, removed in ORB-22808). The
 `precedent_decision` assistance policy defaults to `off`; only `shadow`
 assesses requests, while `off` and `advisory` neither enqueue assessments nor
 consult precedent providers. The policy digest binds the granted question

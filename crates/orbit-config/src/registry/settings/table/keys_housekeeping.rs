@@ -75,14 +75,6 @@ macro_rules! with_housekeeping_keys {
         allowed: integers(1, 3650, "days"),
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, "resident.evolution.decline_suppress_days"),
     },
-    assistance_settings: crate::assistance::AssistanceSettings => crate::assistance::AssistanceSettings {
-        key: "assistance", value_type: "table",
-        description: "Host-only bounded decision assistance; off by default.",
-        section: ConfigSection::Machine, order: 90,
-        tier: ConfigKeyTier::Advanced,
-        detail: "Explicit workspace grants, modes, evidence and budgets.",
-        resolve: crate::assistance::resolve_assistance_settings,
-    },
     machine_mcp_toolsets: Vec<String> => Vec<String> {
         key: "machine.mcp.toolsets", value_type: "array<string>",
         description: "MCP toolsets orbit mcp serve and listen advertise beside the role or default surface.",

@@ -40,7 +40,7 @@ crew pool, read outcomes per arm (done rate, first-pass acceptance, repairs, rec
 escaped regressions, `cost_usd`) and file a proposed promotion task on an operator's
 conclusion. `exp-4e3e0399` (half of medium to luna, haiku and muse-spark) is the first crew
 experiment, run by hand, with a verdict expected around 2026-11-18. The proposed
-[delivery-quality grader](../../decision-assistance/specs/delivery-quality.md) ([ORB-20000],
+[delivery-quality grader](../decision-assistance/specs/delivery-quality.md) ([ORB-20000],
 design only) would grade each delivered code
 change on six anchored dimensions (scope fit, robustness, structure, standards, verification,
 maintainability), with abstention and coverage. It forbids any ranking or routing use until a
@@ -209,7 +209,7 @@ the experiment readout does by complexity.
 ### Code quality (opt-in, gated)
 
 The outcome score above cannot see code quality. When the workspace opts in, trials also
-read the [delivery-quality profile](../../decision-assistance/specs/delivery-quality.md) of
+read the [delivery-quality profile](../decision-assistance/specs/delivery-quality.md) of
 their tasks, as a **guardrail**, never as a score term:
 
 - **Per dimension, no composite.** For each of the six dimensions, the share of the arm's
@@ -234,7 +234,7 @@ their tasks, as a **guardrail**, never as a score term:
   is not 11% failed coverage. One missing selected control gives 90% control coverage.
   An arm below the threshold or a gap over 10 points makes an adopted guardrail
   inconclusive, blocks promotion and stops at `max_sample` without promotion. The
-  [offline evaluator protocol](../../decision-assistance/2_evaluation.md#frozen-sampling-and-ladder-joins)
+  [offline evaluator protocol](../decision-assistance/2_evaluation.md#frozen-sampling-and-ladder-joins)
   defines exact denominators and join/capture identities; it authorizes no routing action.
 - **Attribution.** Grades follow the implementation attempt the grader attributes, not the
   task's later crew. A task the reviewer repaired is graded on the implementer's attempt; a

@@ -23,7 +23,7 @@ use super::holds::{
     PilotAdmissionHold,
 };
 use crate::OrbitRuntime;
-use crate::application::task::{TaskPrecedentDecisionPort, TaskRecords};
+use crate::application::task::TaskRecords;
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
@@ -558,7 +558,6 @@ impl OrbitRuntime {
         if !self.decision_channel_enabled() {
             return Ok(());
         }
-        let mut raised = None;
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
@@ -603,12 +602,8 @@ impl OrbitRuntime {
                         ..Default::default()
                     },
                 )?;
-                raised = Some(request);
                 Ok(())
             })?;
-        if let Some(request) = raised {
-            self.enqueue_open_decision_for_precedent(&request);
-        }
         Ok(())
     }
 
