@@ -132,7 +132,10 @@ impl OrbitRuntime {
             if let Some(claim) = claim.filter(|claim| claim.at > run.created_at) {
                 return Ok(claim.delivered);
             }
-            let state = self.read_run_state(&run.run_id)?;
+            // An unreadable checkpoint leaves this run's state evidence
+            // unavailable rather than failing the readout; the run input
+            // below is still consulted.
+            let state = self.read_run_state(&run.run_id).ok().flatten();
             let selection = state
                 .as_ref()
                 .and_then(|state| state.crew_selection.as_ref())

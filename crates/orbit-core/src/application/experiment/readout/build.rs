@@ -586,6 +586,7 @@ impl OrbitRuntime {
             record.experiment.created_at,
             &enrolled,
             now,
+            record.experiment.mode == "shadow",
         )?;
         let dreaming = self.attribute_dreaming_cost(&record, &mut observed.tasks, now)?;
         let excluded = |reason: &str| {
