@@ -80,14 +80,233 @@ fn base_check_runs(fixture: &Fixture) -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(unix)]
+struct OwnedSubstitute {
+    run: String,
+    pid: u32,
+    control: std::net::TcpStream,
+    released: bool,
+}
+
+/// Owns every substitute worker dispatched for a fixture. On Unix the
+/// workers use the owned handshake: each connects, reports `run pid`, and
+/// blocks on a release byte before polling its marker. A worker is only
+/// released after the test writes its marker, and release waits until the
+/// startup observer has reaped it, so no worker can outlive its marker or
+/// the fixture root. Drop releases any worker left behind by a failed
+/// assertion on a best-effort basis without masking the original panic.
+struct WorkerGuard {
+    #[cfg(unix)]
+    listener: std::net::TcpListener,
+    #[cfg(unix)]
+    workers: std::sync::Mutex<Vec<OwnedSubstitute>>,
+    #[cfg(unix)]
+    accept_lock: std::sync::Mutex<()>,
+    root: PathBuf,
+    #[cfg(unix)]
+    repo_root: PathBuf,
+}
+
+impl WorkerGuard {
+    fn install(fixture: &Fixture) -> Self {
+        #[cfg(unix)]
+        {
+            let listener =
+                crate::worker_fixture::install_owned(&fixture._root.path().join("ran-{run_id}"));
+            Self {
+                listener,
+                workers: std::sync::Mutex::new(Vec::new()),
+                accept_lock: std::sync::Mutex::new(()),
+                root: fixture._root.path().to_path_buf(),
+                repo_root: fixture.runtime.paths().repo_root.clone(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            crate::worker_fixture::install(
+                fixture._root.path().join("ran-{run_id}").as_path(),
+                "created",
+            );
+            Self {
+                root: fixture._root.path().to_path_buf(),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn accept_one(&self) -> bool {
+        use std::io::{BufRead, BufReader};
+        let _accepting = self.accept_lock.lock().unwrap();
+        let (socket, _) = match self.listener.accept() {
+            Ok(accepted) => accepted,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+                return false;
+            }
+            Err(error) => panic!("substitute worker accept: {error}"),
+        };
+        socket.set_nonblocking(false).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut identity = String::new();
+        reader.read_line(&mut identity).unwrap();
+        let (run, pid) = identity
+            .trim()
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("substitute worker identity: {identity:?}"));
+        let pid: u32 = pid.parse().unwrap();
+        self.workers.lock().unwrap().push(OwnedSubstitute {
+            run: run.to_string(),
+            pid,
+            control: reader.into_inner(),
+            released: false,
+        });
+        true
+    }
+
+    fn own(&self, run: &str) {
+        #[cfg(unix)]
+        {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !self
+                .workers
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|worker| worker.run == run)
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "substitute worker for {run} did not connect"
+                );
+                self.accept_one();
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = run;
+    }
+
+    #[cfg(unix)]
+    fn release_owned(&self, run: &str) -> Result<(), String> {
+        use std::io::Write;
+        let pid = {
+            let mut workers = self.workers.lock().unwrap();
+            let worker = workers
+                .iter_mut()
+                .find(|worker| worker.run == run)
+                .ok_or_else(|| format!("substitute worker for {run} is not owned"))?;
+            if !worker.released {
+                std::fs::write(self.root.join(format!("ran-{run}")), "")
+                    .map_err(|error| format!("write release marker for {run}: {error}"))?;
+                worker
+                    .control
+                    .write_all(&[1])
+                    .map_err(|error| format!("release substitute worker {run}: {error}"))?;
+                worker.released = true;
+            }
+            worker.pid
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !orbit_core::test_support::pipeline_worker_observer_completed(
+            &self.repo_root,
+            run,
+            pid,
+        ) {
+            if Instant::now() >= deadline {
+                return Err(format!("substitute worker {run} pid={pid} was not reaped"));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+
+    fn release(&self, run: &str) {
+        #[cfg(unix)]
+        {
+            self.own(run);
+            self.release_owned(run).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            // Without the Unix handshake the marker is the only release
+            // channel; this platform is not exercised by the macOS check.
+            std::fs::write(self.root.join(format!("ran-{run}")), "").unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        // Drain any worker that connected but was never owned, then release
+        // every owned worker before the fixture root is deleted.
+        let drain_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < drain_deadline {
+            if !self.accept_one_best_effort() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let runs: Vec<String> = self
+            .workers
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|worker| !worker.released)
+            .map(|worker| worker.run.clone())
+            .collect();
+        for run in runs {
+            let _ = self.release_owned(&run);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl WorkerGuard {
+    fn accept_one_best_effort(&self) -> bool {
+        use std::io::{BufRead, BufReader};
+        let Ok(_accepting) = self.accept_lock.try_lock() else {
+            return false;
+        };
+        let (socket, _) = match self.listener.accept() {
+            Ok(accepted) => accepted,
+            Err(_) => return false,
+        };
+        if socket.set_nonblocking(false).is_err()
+            || socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .is_err()
+        {
+            return false;
+        }
+        let mut reader = BufReader::new(socket);
+        let mut identity = String::new();
+        if reader.read_line(&mut identity).is_err() {
+            return false;
+        }
+        let Some((run, pid)) = identity.trim().split_once(' ') else {
+            return false;
+        };
+        let Ok(pid) = pid.parse() else { return false };
+        self.workers.lock().unwrap().push(OwnedSubstitute {
+            run: run.to_string(),
+            pid,
+            control: reader.into_inner(),
+            released: false,
+        });
+        true
+    }
+}
+
 /// The shipped refresh job and activity, resolvable from the fixture's
 /// global catalog. Each dispatched run's substitute worker stays alive until
 /// the test has executed the run in process.
-fn install_refresh_job(fixture: &Fixture) {
-    crate::worker_fixture::install(
-        fixture._root.path().join("ran-{run_id}").as_path(),
-        "created",
-    );
+fn install_refresh_job(fixture: &Fixture) -> WorkerGuard {
+    let guard = WorkerGuard::install(fixture);
     let resources = fixture.runtime.paths().global_dir.join("resources");
     std::fs::create_dir_all(resources.join("activities")).unwrap();
     std::fs::create_dir_all(resources.join("jobs")).unwrap();
@@ -101,6 +320,7 @@ fn install_refresh_job(fixture: &Fixture) {
         SHIPPED_JOB,
     )
     .unwrap();
+    guard
 }
 
 /// An every-minute routine and a one-minute auto-task, the clock's own work.
@@ -180,9 +400,12 @@ fn verdicts(fixture: &Fixture) -> Vec<Value> {
 
 /// Run a dispatched refresh run's worker in process, then release its
 /// substitute.
-fn execute(fixture: &Fixture, run_id: &str) {
+fn execute(fixture: &Fixture, workers: &WorkerGuard, run_id: &str) {
+    workers.own(run_id);
     let executed = fixture.runtime.execute_pipeline_run_worker(run_id);
-    std::fs::write(fixture._root.path().join(format!("ran-{run_id}")), "").unwrap();
+    // Release and reap the substitute even when execution failed, before
+    // propagating the failure or checking the run state.
+    workers.release(run_id);
     executed.unwrap();
     assert_eq!(
         fixture.runtime.show_job_run(run_id).unwrap().state,
@@ -204,7 +427,7 @@ fn wait_for(path: &Path) {
 
 fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks() {
     let (fixture, _) = held_on_red_base();
-    install_refresh_job(&fixture);
+    let workers = install_refresh_job(&fixture);
     install_clock_work(&fixture);
     let common = common_dir(&fixture);
     // The new base passes once it reads a line from a FIFO the test holds
@@ -257,7 +480,7 @@ fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tas
     assert!(verdicts(&fixture).is_empty(), "nothing is judged yet");
 
     std::thread::scope(|scope| {
-        let worker = scope.spawn(|| execute(&fixture, &run_id));
+        let worker = scope.spawn(|| execute(&fixture, &workers, &run_id));
         wait_for(&common.join(STARTED));
 
         // While the check runs, the next minute's tick is not lock-busy:
@@ -279,7 +502,7 @@ fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tas
         assert_eq!(duty.action, "minted", "{duty:?}");
         assert_eq!(refresh_runs(&fixture), vec![run_id.clone()]);
         if let Some(fired) = &routine.run_id {
-            std::fs::write(fixture._root.path().join(format!("ran-{fired}")), "").unwrap();
+            workers.release(fired);
         }
 
         std::io::Write::write_all(&mut release, b"go\n").unwrap();
@@ -300,7 +523,7 @@ fn a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tas
 
 fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
     let (fixture, _) = held_on_red_base();
-    install_refresh_job(&fixture);
+    let workers = install_refresh_job(&fixture);
     move_base(&fixture, "echo 'test suite::other ... FAILED'\nexit 1\n");
     let deadline = || Instant::now() + Duration::from_secs(60);
 
@@ -308,7 +531,7 @@ fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
     assert_eq!(first.unchecked, vec![fixture.task_id.clone()], "{first:?}");
     let run_id = first.dispatched.clone().expect("a refresh run");
     assert_eq!(base_check_runs(&fixture), 0, "the tick ran the command");
-    execute(&fixture, &run_id);
+    execute(&fixture, &workers, &run_id);
     let output = fixture
         .runtime
         .read_run_state(&run_id)
@@ -339,7 +562,7 @@ fn a_checked_tip_is_judged_from_its_recorded_result_without_another_run() {
 /// sweeps keep the hold without submitting jobs until back-off or a new tip.
 fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
     let (fixture, _) = held_on_red_base();
-    install_refresh_job(&fixture);
+    let workers = install_refresh_job(&fixture);
     move_base(&fixture, "exit 127\n");
     let deadline = || Instant::now() + Duration::from_secs(60);
 
@@ -348,7 +571,7 @@ fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
     let first_run = first.dispatched.expect("an unattempted tip gets a refresh");
     let live = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
     assert_eq!(live.dispatched, None, "one refresh at a time: {live:?}");
-    execute(&fixture, &first_run);
+    execute(&fixture, &workers, &first_run);
     assert_eq!(base_check_runs(&fixture), 1);
     let recorded = verdicts(&fixture);
     assert_eq!(recorded.len(), 1, "{recorded:?}");
@@ -386,7 +609,7 @@ fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
     let retry = expired
         .dispatched
         .expect("expired back-off permits a retry");
-    execute(&fixture, &retry);
+    execute(&fixture, &workers, &retry);
     assert_eq!(base_check_runs(&fixture), 2);
     assert_eq!(verdicts(&fixture), recorded, "the verdict stays unchanged");
     let after_retry = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
@@ -397,7 +620,7 @@ fn an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh() {
     move_base(&fixture, "exit 0\n");
     let moved = fixture.runtime.run_baseline_hold_tick(deadline()).unwrap();
     let new_tip = moved.dispatched.expect("a new tip is checked immediately");
-    execute(&fixture, &new_tip);
+    execute(&fixture, &workers, &new_tip);
     assert_eq!(base_check_runs(&fixture), 3);
     assert_eq!(refresh_runs(&fixture).len(), 3);
     let recorded = verdicts(&fixture);
