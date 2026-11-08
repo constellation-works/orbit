@@ -451,11 +451,16 @@ spec:
       or to perform the bounded comment-led duplicate check below.
       A task's own description may direct read-only lookups of other tasks to
       select its footprint, such as an auto-task's batch selection from its
-      predecessors' artifacts or from open tasks' selectors. Make only those
+      predecessors' artifacts or from open tasks' selectors, when that
+      description assigns the selection to preparation. Make only those
       lookups, use them only to choose selectors and their reasons, and report
       no other task's content. Such a description may also name the exact
       `file:` selectors its footprint is; return those as `context_files_after`
-      in the order given, subject to the existence rule below.
+      in the order given, subject to the existence rule and the exclusion
+      rule below. When the description assigns selection to the executing
+      worker and the task already carries a bounded template footprint,
+      follow the worker-selected-batch rule in Selector rules and do not
+      perform that selection here.
     - Route Orbit task tools by the logical workspace, never by the checkout
       path.
 
@@ -512,11 +517,35 @@ spec:
     `dir:` or `symbol:` selectors for files the implementation will create,
     modify or delete as a substantive part of the change.
 
-    - Task-directed oldest-first batches: within the bounded footprint lookup
-      authority above, reconcile every predecessor source the task's selection
-      contract requires before declaring the batch verified. Enumerate the
-      required history (including all required statuses and any omitted list
-      pages), read the relevant summaries or artifacts in full, and establish
+    - Worker-selected batch inside a declared footprint: when the task's
+      brief assigns batch selection to the executing worker, and the task
+      already carries the bounded template footprint that brief names as
+      the lock (`dir:` and `file:` selectors present on the task), return
+      those selectors as `context_files_after` in that order. Do not
+      replace them with a guessed or reconciled subset, and do not run the
+      oldest-first selection below as the lock. An unread predecessor
+      ledger is not an unestablished footprint here: the worker reconciles
+      inside the kept bound. Say that in `assessment_rationale`.
+      Drop a template selector only when it itself names a path the
+      brief's exclusion rule removes. Never add a selector for such a
+      path: a historical record, a generated index or tree, an archive,
+      or a path on a list the brief tells the worker to consult (for
+      example a link-check or doc-index exclusion list, or another list
+      the repository's own guidance identifies). Read that list from the
+      repository. Do not invent a repository-specific path. A `dir:` bound
+      the brief declares as the lock is not such a path: files under it
+      that the worker must skip stay inside the lock, and the worker
+      applies the exclusion when it selects.
+    - Task-directed oldest-first batches: this applies when the brief assigns
+      selection to preparation — it says preparation returns the selected
+      `file:` selectors, or the template declares no footprint for a batch
+      known only after selection. It does not apply to a worker-selected
+      batch inside a declared footprint, above. Within the bounded footprint
+      lookup authority above, reconcile every predecessor source the task's
+      selection contract requires before declaring the batch verified.
+      Enumerate the required history (including all required statuses and any
+      omitted list pages), read the relevant summaries or artifacts in full,
+      and establish
       each eligible path's latest recorded validation date across that history.
       Use the contract's fallback only when complete history contains no
       validation for that path; an unread source is not evidence of absence.
@@ -531,7 +560,10 @@ spec:
       selectors are known: follow the unestablished-footprint rule in
       Assessment, naming the source IDs or artifact paths and the
       reconciliation needed before re-piloting. Do not present provisional
-      selectors as a verified batch. This grants no unrelated-task reads,
+      selectors as a verified batch. Before returning selectors, drop every
+      path the brief's exclusion rule removes, using the same lists as the
+      worker-selected rule above. An excluded path is never a selector,
+      even when a ledger names it. This grants no unrelated-task reads,
       task or definition writes, worker footprint widening, or exception to
       existing source, workspace and stale-assessment checks.
     - Granularity: declare `symbol:<path>#<name>:<kind>` for each existing
@@ -829,7 +861,10 @@ spec:
       authority. Name the unread source in `evidence_gaps`, and return a
       `utility_warnings` object with `holds_promotion: true` naming it. The task
       stays held on that finding whatever its tier or selectors. A consulted
-      reference document is not a verified footprint on its own.
+      reference document is not a verified footprint on its own. A
+      worker-selected batch inside a kept template footprint does not
+      direct that lookup: a missing ledger does not hold promotion and is
+      not an evidence gap for the footprint.
     - `evidence_gaps` holds unknowns that could change the rating or a
       criterion-relevant finding, such as unknown fixture semantics, an
       unresolved architecture choice, a missing failure signature, or the

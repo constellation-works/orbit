@@ -2,7 +2,7 @@
 title: Auto-tasks — Design
 owner: claude
 last_updated: 2026-11-08
-last_validated: 2026-11-03
+last_validated: 2026-11-08
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -51,11 +51,25 @@ See [the initial-status decision](4_decisions.md#implementation-auto-tasks-enter
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
+`doc-duties` declares a bounded template footprint (`dir:docs` plus the
+tracked top-level `README.md` and `CONTRIBUTING.md`). Its brief assigns
+batch selection to the executing worker, which drops generated indexes,
+archives and records the repository identifies as historical, including
+paths on the repository's link-check or doc-index exclusion list. The task
+pilot keeps that template footprint. It does not replace the bound with a
+guessed batch, and it does not add a selector that names a document the
+brief excludes. A directory bound the brief declares as the lock is kept
+even when some files under it are excluded from the batch: the worker
+applies that exclusion at selection time. Repository-specific exclusion
+lists stay in the brief's referenced lists and repository guidance. The
+pilot rule names no repository path.
 `comment-hygiene` (§4e) has a selector-free template: its batch is known only
 after selection, so it mints selector-free as `proposed` and its footprint
 is prepared before admission — the task pilot or an operator persists the
 selected selectors and the task is approved to `backlog` — rather than
-entering a drain as selector-free backlog work.
+entering a drain as selector-free backlog work. Preparation there follows
+the brief's selection steps, including its exclusion rule, and persists
+only the selected `file:` selectors.
 An explicit complexity must be an
 assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
@@ -408,7 +422,9 @@ the definition itself is proven by loading and seeding it through the
 existing loader.
 
 Unlike `doc-duties`, which locks `dir:docs` plus the tracked top-level
-`README.md` and `CONTRIBUTING.md`, `comment-hygiene` declares no
+`README.md` and `CONTRIBUTING.md` and keeps that bound through task-pilot
+preparation (the worker selects the batch inside it, and the pilot does
+not name a document the brief excludes), `comment-hygiene` declares no
 `context_files` and mints as `proposed`: a selector-free instance is not a
 backlog drain candidate, so it never becomes the unknown-footprint
 whole-tree holder that stalls unrelated editing work, with or without a
