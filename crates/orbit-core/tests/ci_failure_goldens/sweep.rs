@@ -569,6 +569,66 @@ fn declared_infrastructure_signature_files_no_sweep_task() {
 }
 
 #[test]
+fn dependency_waiter_folded_into_infrastructure_shard_files_no_sweep_task() {
+    if !super::isolated(
+        "sweep::dependency_waiter_folded_into_infrastructure_shard_files_no_sweep_task",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits(
+        "[workflow]\nci_infrastructure_signatures = \
+         [\"ci-download: outcome=failed class=transient\"]\n",
+        1,
+    );
+    let checkout = commits[0].clone();
+    let crafted = |job_id: u64, log: &str| {
+        let mut failure = super::failure(log, 0, &checkout);
+        failure["run_id"] = json!(8_200);
+        failure["job_id"] = json!(job_id);
+        failure["log_job_id"] = json!(job_id);
+        failure["checkout_identity"]["provenance"]["job_id"] = json!(job_id);
+        failure["failed_jobs"][0]["job_id"] = json!(job_id);
+        failure["url"] = json!("https://github.com/acme/orbit/actions/runs/8200");
+        failure
+    };
+    let shard = crafted(
+        9_300,
+        "ci-download: outcome=failed class=transient attempts=9 total_seconds=57.1 budget_seconds=60.0\n",
+    );
+    let record = json!({
+        "schema_version": 1, "kind": "dependency_failed", "run_id": 8_200,
+        "dependencies": [{"job_id": 9_300, "job_name": "Test shard 1/3", "status": "completed", "conclusion": "failure", "step": null}],
+    });
+    let waiter = crafted(
+        9_301,
+        &format!(
+            "orbit-dependency-evidence:{record}\nci-await-api: listings=1 not_modified=0 paginated=false\n"
+        ),
+    );
+    let filed = super::file(&runtime, vec![shard, waiter]);
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["audit"]["infrastructure"], json!(2), "{filed:#}");
+    let waiter_entry = filed["infrastructure"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["job_id"] == json!(9_301))
+        .expect("the waiter is reported as folded infrastructure");
+    assert_eq!(
+        waiter_entry["signature"],
+        json!("ci-download: outcome=failed class=transient"),
+        "{filed:#}"
+    );
+    assert_eq!(
+        waiter_entry["dependency_job_ids"],
+        json!([9_300]),
+        "{filed:#}"
+    );
+    assert!(open_sweep_tasks(&runtime).is_empty());
+}
+
+#[test]
 fn declared_infrastructure_signature_in_complete_diagnostic_suppresses_truncated_display() {
     if !isolated_with_fake_gh(
         "sweep::declared_infrastructure_signature_in_complete_diagnostic_suppresses_truncated_display",

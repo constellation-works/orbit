@@ -56,6 +56,12 @@
 //!   instead: the owner ends the claim and returns the task to the backlog,
 //!   keeping the candidate and this evidence for the task's next run, within
 //!   the task's landing repair budget.
+//! - **dependency waiter**: a failed job whose only diagnostic is an
+//!   authenticated `orbit-dependency-evidence:` dependency record (the same
+//!   authentication the rerun planner uses) takes no class of its own: it is
+//!   folded into the dependency jobs it names, and the deciding class comes
+//!   from them. A malformed or unauthenticated record keeps the class its
+//!   log classifies to today.
 //! - **unknown**: one failed job's log could not be read (including a
 //!   truncated log with no selected diagnostic). That job is recorded and
 //!   named, and it does not void a decision the readable jobs already make,

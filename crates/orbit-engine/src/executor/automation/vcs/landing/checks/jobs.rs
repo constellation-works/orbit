@@ -143,6 +143,41 @@ pub(super) fn exclusive_awaited_stop(log: &str) -> Option<AwaitedStop> {
     found
 }
 
+/// Whether a log's only emitted diagnostic is an `orbit-dependency-evidence:`
+/// record. Bookkeeping, command echo and `ci-await-api:` lines are not
+/// diagnostics; any other emitted line is the job's own failure. The
+/// producer's `ci-await:` narrative of the dependency it waited on is not
+/// a diagnostic of the waiter itself.
+pub(super) fn dependency_only_log(log: &str) -> bool {
+    let mut found = false;
+    for (kind, line) in classify_log_lines(log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand
+                | LineKind::CommandBody
+                | LineKind::ParamDump
+                | LineKind::EndGroup
+                | LineKind::GenericTrailer
+                | LineKind::Bookkeeping
+        ) {
+            continue;
+        }
+        let payload = log_payload(line).trim();
+        if payload.is_empty()
+            || payload.starts_with("ci-await:")
+            || payload.starts_with("ci-await-api:")
+        {
+            continue;
+        }
+        if payload.starts_with("orbit-dependency-evidence:") {
+            found = true;
+            continue;
+        }
+        return false;
+    }
+    found
+}
+
 /// A job the provider stopped, as opposed to one whose step failed.
 pub(super) fn concluded_stopped(job: &CiCommitJobEvidence) -> Option<&str> {
     job.conclusion.value().and_then(CiJobConclusion::stopped)

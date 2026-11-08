@@ -14,7 +14,9 @@ use super::super::super::pr::{CheckState, PullRequestStatus};
 use super::annotations::unanswered_required;
 use super::base_update::contains;
 use super::head::{classify_logged_job, onto_passing_tip};
-use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
+use super::jobs::{
+    answers, commit_jobs, dependency_only_log, describe, excerpt, job_label, unsuccessful,
+};
 use super::log::job_log;
 use super::read_wait::ThrottledRead;
 
@@ -79,6 +81,10 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     pub(in crate::executor::automation::vcs) throttled_read_waits: u64,
     /// The classification each action was taken on, for the evidence.
     actions: Vec<String>,
+    /// Dependency ids authenticated for a waiter job in this attempt, or
+    /// `None` when its record did not authenticate: one adapter read per
+    /// waiter, however often the attempt polls.
+    dependency_auth: BTreeMap<(u64, u64), Option<Vec<u64>>>,
     /// Latest required-check read during failure classification; diagnostics only.
     pub(in crate::executor::automation::vcs) required_observation: Option<Value>,
 }
@@ -242,6 +248,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let mut base_jobs = None;
     let mut tip_jobs = None;
     let mut jobs = Vec::new();
+    let mut waiter_logs: Vec<(u64, String)> = Vec::new();
     let answered_checks = failed
         .iter()
         .filter(|check| failed_jobs.iter().any(|job| answers(job, check)))
@@ -302,6 +309,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 continue;
             }
         };
+        if dependency_only_log(&log) {
+            waiter_logs.push((job_id, log.clone()));
+        }
         let (mut class, mut why, tip_passes, signature) = match classify_logged_job(
             host,
             workspace,
@@ -374,6 +384,20 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             excerpt: excerpt(&log),
             tip_passes,
         });
+    }
+    if !waiter_logs.is_empty() {
+        fold_dependency_waiters(
+            host,
+            workspace,
+            context,
+            pr,
+            head,
+            base,
+            &waiter_logs,
+            &mut jobs,
+            recovery.deadline_ms,
+            &mut recovery.dependency_auth,
+        );
     }
     let has_aggregates = !aggregates.is_empty();
     jobs.extend(aggregates);
@@ -631,6 +655,205 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         // is the same stop; this arm keeps the match exhaustive.
         CheckFailureClass::Unknown => Ok(unclassified(unreadable_job_text(&jobs))),
     }
+}
+
+/// Dependency job ids a waiter's record names, parsed without trusting
+/// them: only a gate for spending the authenticated read, never evidence.
+fn dependency_ids_in_log(log: &str) -> Vec<u64> {
+    let Some((_, body)) = log.split_once("orbit-dependency-evidence:") else {
+        return Vec::new();
+    };
+    let Some(record) = body
+        .lines()
+        .next()
+        .and_then(|line| serde_json::from_str::<Value>(line.trim()).ok())
+    else {
+        return Vec::new();
+    };
+    record["dependencies"]
+        .as_array()
+        .map(|deps| {
+            deps.iter()
+                .filter_map(|dep| dep["job_id"].as_u64())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Fold authenticated dependency waiters into the jobs they name: a waiter
+/// whose only diagnostic is an authenticated dependency record takes no
+/// class of its own, so the aggregate class comes from its dependencies.
+/// An unauthenticated or malformed record keeps its classified class.
+#[allow(clippy::too_many_arguments)]
+fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &std::path::Path,
+    context: &HandoffLandingContext,
+    pr: u64,
+    head: &str,
+    base: &str,
+    waiter_logs: &[(u64, String)],
+    jobs: &mut [FailedJob],
+    deadline_ms: u64,
+    dependency_auth: &mut BTreeMap<(u64, u64), Option<Vec<u64>>>,
+) {
+    let waiter_ids: BTreeSet<u64> = waiter_logs.iter().map(|(id, _)| *id).collect();
+    let mut folded: BTreeSet<u64> = BTreeSet::new();
+    for _ in 0..waiter_logs.len() {
+        let mut progressed = false;
+        for (waiter_id, waiter_log) in waiter_logs {
+            if folded.contains(waiter_id) {
+                continue;
+            }
+            // Authentication re-reads provider logs through the adapter, so
+            // only spend it when folding can change the deciding class: a
+            // dependency the waiter masks is transient or candidate. A
+            // waiter beside an inherited or otherwise waiting dependency
+            // keeps today's route and spends no extra read.
+            let named: Vec<u64> = dependency_ids_in_log(waiter_log);
+            let masks_deciding = jobs.iter().any(|job| {
+                named.contains(&job.job_id)
+                    && matches!(
+                        job.class,
+                        CheckFailureClass::Transient | CheckFailureClass::Candidate
+                    )
+            });
+            if !masks_deciding {
+                continue;
+            }
+            let Some(run_id) = jobs
+                .iter()
+                .find(|job| job.job_id == *waiter_id)
+                .and_then(|job| job.run_id)
+            else {
+                continue;
+            };
+            let dependency_ids = match dependency_auth.get(&(run_id, *waiter_id)) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let authenticated = authenticated_dependency_ids(
+                        host,
+                        workspace,
+                        context,
+                        pr,
+                        head,
+                        base,
+                        run_id,
+                        *waiter_id,
+                        jobs,
+                        deadline_ms,
+                    );
+                    dependency_auth.insert((run_id, *waiter_id), authenticated.clone());
+                    authenticated
+                }
+            };
+            let Some(dependency_ids) = dependency_ids else {
+                continue;
+            };
+            // A chained waiter folds only after its own dependencies have.
+            if dependency_ids.iter().any(|id| {
+                !jobs.iter().any(|job| job.job_id == *id)
+                    || (waiter_ids.contains(id) && !folded.contains(id))
+            }) {
+                continue;
+            }
+            let dependencies: Vec<&FailedJob> = jobs
+                .iter()
+                .filter(|job| dependency_ids.contains(&job.job_id))
+                .collect();
+            if dependencies.is_empty()
+                || dependencies
+                    .iter()
+                    .any(|job| job.class == CheckFailureClass::Unknown)
+            {
+                continue;
+            }
+            let class = dependencies
+                .iter()
+                .map(|job| job.class)
+                .max()
+                .unwrap_or(CheckFailureClass::Candidate);
+            let labels = dependencies
+                .iter()
+                .map(|job| format!("'{}'", job.label))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if let Some(waiter) = jobs.iter_mut().find(|job| job.job_id == *waiter_id) {
+                waiter.class = class;
+                waiter.why = format!(
+                    "folded into {labels}: its only diagnostic is an authenticated \
+                     dependency record naming that job, so it takes its dependencies' class"
+                );
+            }
+            folded.insert(*waiter_id);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+}
+
+/// Authenticate one waiter's dependency record through the same adapter the
+/// rerun planner uses, returning the dependency job ids it names. Any
+/// failure — malformed, forged or unproven closure — returns `None`.
+#[allow(clippy::too_many_arguments)]
+fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &std::path::Path,
+    context: &HandoffLandingContext,
+    pr: u64,
+    head: &str,
+    base: &str,
+    run_id: u64,
+    waiter_id: u64,
+    jobs: &[FailedJob],
+    deadline_ms: u64,
+) -> Option<Vec<u64>> {
+    let roots: Vec<orbit_types::workflow::CiRerunRoot> = jobs
+        .iter()
+        .filter(|job| {
+            job.run_id == Some(run_id)
+                && job.job_id != waiter_id
+                && job.class != CheckFailureClass::Unknown
+                && !job.signature.is_empty()
+        })
+        .map(|job| orbit_types::workflow::CiRerunRoot {
+            job_id: job.job_id,
+            check: job.label.clone(),
+            classification: "flaky".to_string(),
+            signature: job.signature.clone(),
+        })
+        .collect();
+    if roots.is_empty() {
+        return None;
+    }
+    let answer = host
+        .run_private_vcs_operation(
+            operations::CI_RERUN_PLAN,
+            json!({
+                "workspace_path": workspace,
+                "pr": pr.to_string(),
+                "head_sha": head,
+                "head_branch": context.candidate.source_branch,
+                "base_branch": context.candidate.base_branch,
+                "accepted_base": base,
+                "run_id": run_id,
+                "roots": roots,
+                "deadline_ms": deadline_ms,
+            }),
+        )
+        .ok()?;
+    let dependencies = answer["plan"]["authentication"]["dependencies"].as_array()?;
+    let record = dependencies
+        .iter()
+        .find(|record| record["job_id"].as_u64() == Some(waiter_id))?;
+    let ids: Vec<u64> = record["dependency_ids"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_u64)
+        .collect();
+    (!ids.is_empty()).then_some(ids)
 }
 
 /// The unclassified reason for logs that could not be read, one job at a time.
