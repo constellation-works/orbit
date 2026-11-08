@@ -181,6 +181,12 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
         let recovery = match check_repair_route(&declared, ctx, check_repair) {
             Some(recovery) => recovery,
+            // The watcher writes this handoff only after admitting an
+            // in-budget repair. A job with no `step_failure_recovery` cannot
+            // run it, so the run holds instead of recording the handoff as
+            // the terminal step failure. The watcher's exhausted-budget stop
+            // is not this handoff and still fails on the ordinary path.
+            None if check_repair => return hold_absent_check_repair(failure),
             None => return failure.into_result(),
         };
         let recovery_model = match attempt_recovery_activity(
@@ -246,8 +252,8 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
 }
 
 /// The recovery a failure goes to. An `--auto-fix` check repair, which the
-/// conflict leaf cannot address, goes to the job's `step_failure_recovery`;
-/// a job without one routes it nowhere.
+/// conflict leaf cannot address, goes to the job's `step_failure_recovery`.
+/// A job without one routes it nowhere; the caller holds that handoff.
 fn check_repair_route(
     declared: &ResolvedRecoveryActivity,
     ctx: &ExecCtx<'_>,
@@ -257,6 +263,28 @@ fn check_repair_route(
         return ctx.check_repair_activity.clone();
     }
     Some(declared.clone())
+}
+
+/// Hold an admitted check repair the job cannot route.
+///
+/// The original handoff stays in the message, including its attempt counter,
+/// so a reader can see the repair was still inside its budget.
+fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, DispatchError> {
+    let action = match &failure {
+        StepFailure::Error(DispatchError::DeterministicActionFailed { action, .. }) => {
+            action.clone()
+        }
+        _ => "pr_complete".to_string(),
+    };
+    let diagnostic = failure.diagnostic();
+    Err(DispatchError::DeliveryRefused {
+        action,
+        refusal: orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+        message: format!(
+            "admitted check repair has no step_failure_recovery on this job; the run holds \
+             and no repair agent runs. {diagnostic}"
+        ),
+    })
 }
 
 /// How the post-recovery attempt of a failed step ended.
