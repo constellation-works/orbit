@@ -30,7 +30,7 @@ transport:
     argv_shape: "orbit mcp listen [ADDR] [--allow-non-loopback]"
     implementation: crates/orbit-mcp/src/listener.rs
     default_bind: loopback; a non-loopback bind is refused unless requested explicitly
-    policy: unauthenticated transport serving agent authority; no placement, owner-routing, or checkout layer
+    policy: peer-uid admission (only a peer with the server uid is admitted, with differing, missing, ambiguous, or unreadable peer uids refused before any read [ORB-23052]) serving agent authority unchanged; no placement, owner-routing, or checkout layer
   forbidden:
     - shared broker process
     - client-side frame parsing or rewriting
