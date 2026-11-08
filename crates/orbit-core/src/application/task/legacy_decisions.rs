@@ -25,6 +25,12 @@
 //!   the approving drain only when the entry has no typed decision. Drains
 //!   record `DrainApproved` since; the note reader keeps the presence rule
 //!   it had, so attribution of an older approval does not change.
+//! - a `host_operational_held` or `operator_validation_held` event's
+//!   `{"operation_id": ..., "hold": ...}` JSON note names the handed-off
+//!   pilot receipt and hold only when the entry has no typed decision. Only
+//!   `system` and `task-pilot` write those events, so the note keeps the
+//!   rules it had: hold recovery trusts only those authors, and a recorded
+//!   handoff is not posted again.
 //!
 //! The boundary is per store: the first writable open of a store by a binary
 //! that writes typed decisions records when that happened, beside the task
@@ -43,6 +49,8 @@
 //! receipt and no supported older binary can still write marker-only records.
 //! Retire the undecided-pilot note reader once no live proposed or backlog
 //! task holds a `task_pilot_unresolved` entry without a typed decision.
+//! Retire the operator-handoff note reader once no live backlog task holds a
+//! handoff entry without a typed `PilotOperatorHandoff` decision.
 //! Retire the drain-approval note reader once no drain run still reports on
 //! a task approved without a typed `DrainApproved` decision.
 //!
@@ -329,6 +337,15 @@ pub(crate) fn drain_approval_note_names(entry: &TaskHistoryEntry, run_id: &str) 
         .note
         .as_deref()
         .is_some_and(|note| note.starts_with(&super::pilot::approval_note(run_id)))
+}
+
+/// The pilot receipt and hold an operator handoff entry written before its
+/// typed decision names in its JSON note. Callers consult it only for an
+/// entry without one.
+pub(crate) fn pilot_operator_handoff_note(entry: &TaskHistoryEntry) -> Option<(String, Value)> {
+    let record: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    let operation_id = record["operation_id"].as_str()?.to_string();
+    Some((operation_id, record["hold"].clone()))
 }
 
 /// The `key=value` token in a comment header.

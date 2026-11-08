@@ -19,8 +19,8 @@ use super::super::super::positive_validation_tools;
 use super::super::super::helpers::is_automation_actor;
 use super::super::super::legacy_decisions;
 use super::holds::{
-    HostOperationalHold, NativeOsHold, OperatorValidationHold, OperatorValidationRequirement,
-    PilotAdmissionHold,
+    HOST_OPERATIONAL_HELD, HostOperationalHold, NativeOsHold, OperatorValidationHold,
+    OperatorValidationRequirement, PilotAdmissionHold,
 };
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
@@ -192,6 +192,32 @@ fn operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<(String,
     }
 }
 
+/// The pilot receipt and hold an operator handoff `event` entry records: its
+/// typed decision, or the JSON note of an entry an older binary wrote.
+fn operator_handoff_record(entry: &TaskHistoryEntry, event: &str) -> Option<(String, Value)> {
+    if entry.event != event {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) => {
+            Some((operation_id.clone(), hold.clone()))
+        }
+        Some(_) => None,
+        None => legacy_decisions::pilot_operator_handoff_note(entry),
+    }
+}
+
+/// Whether `entry` already records the operator handoff `handoff` would
+/// append: the same event, pilot receipt and hold.
+fn records_operator_handoff(entry: &TaskHistoryEntry, handoff: &TaskHistoryEntry) -> bool {
+    let Some(TaskDecision::PilotOperatorHandoff { operation_id, hold }) = &handoff.decision else {
+        return false;
+    };
+    operator_handoff_record(entry, &handoff.event).is_some_and(|(recorded, recorded_hold)| {
+        recorded == *operation_id && recorded_hold == *hold
+    })
+}
+
 /// Whether an operator's `approve-anyway` or `clear` answers the pilot
 /// receipt `operation_id`, releasing its duplicate and already-landed findings.
 fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
@@ -303,14 +329,12 @@ impl OrbitRuntime {
                             {
                                 return (answered == operation_id).then_some(hold);
                             }
-                            if entry.event != "host_operational_held"
-                                || !matches!(entry.by.as_str(), "system" | "task-pilot")
-                            {
+                            if !matches!(entry.by.as_str(), "system" | "task-pilot") {
                                 return None;
                             }
-                            let record: Value =
-                                serde_json::from_str(entry.note.as_deref()?).ok()?;
-                            (record["operation_id"] == operation_id).then(|| record["hold"].clone())
+                            let (handed_off, hold) =
+                                operator_handoff_record(entry, HOST_OPERATIONAL_HELD)?;
+                            (handed_off == operation_id).then_some(hold)
                         })
                     });
                 let hold = match recorded {
@@ -470,13 +494,13 @@ impl OrbitRuntime {
                 let Some((current_event, _)) = current.operator_handoff(operation_id) else {
                     return Ok(());
                 };
-                if event.event != current_event.event || event.note != current_event.note {
+                if event.event != current_event.event || event.decision != current_event.decision {
                     return Ok(());
                 }
                 if self
                     .get_task_history(task_id)?
                     .iter()
-                    .any(|entry| entry.event == event.event && entry.note == event.note)
+                    .any(|entry| records_operator_handoff(entry, &event))
                 {
                     return Ok(());
                 }
@@ -524,7 +548,7 @@ impl OrbitRuntime {
         Ok(self
             .get_task_history(task_id)?
             .iter()
-            .any(|entry| entry.event == event.event && entry.note == event.note))
+            .any(|entry| records_operator_handoff(entry, &event)))
     }
 
     pub(crate) fn record_backlog_pilot_operator_handoffs(&self) -> Result<(), OrbitError> {

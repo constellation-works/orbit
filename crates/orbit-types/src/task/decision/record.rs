@@ -43,6 +43,15 @@ pub enum TaskDecision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hold: Option<Value>,
     },
+    /// The operator handoff admission recorded for a typed pilot hold, on
+    /// its `host_operational_held` or `operator_validation_held` event. It
+    /// names the hold once per pilot receipt, so the handoff is not re-posted.
+    PilotOperatorHandoff {
+        /// Operation id of the pilot receipt whose hold was handed off.
+        operation_id: String,
+        /// The typed hold handed off; the event names its kind.
+        hold: Value,
+    },
     /// A task-pilot run finished without deciding about the task, recorded
     /// on the `task_pilot_unresolved` event. It holds the task until the
     /// task changes, and keys replays of the same run's settlement.
