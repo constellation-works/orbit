@@ -1061,7 +1061,7 @@ impl Delivery {
         owner.create_task_in("typed handoff", selectors);
         let mut request = owner_request("first");
         request.ship = ship.clone();
-        request.review_gate = ship.before_pr;
+        request.review_gate = ship.before_pr || ship.before_landing;
         let claim = owner.pull(&request).claim.expect("claim");
         let unbound = claim_worker(&claim, false);
         owner.bind_claim(&unbound, &claim, ship).expect("bind");
