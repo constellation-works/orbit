@@ -2430,6 +2430,32 @@
     },
     {
       "comments": [
+        "# Preparation keeps these selectors. It does not replace them with the",
+        "# The executing worker selects the batch at run time inside this bound.",
+        "# batch or with a document the brief excludes. A dir:. lock starves on a",
+        "# busy drain, so the minted task locks just this scope.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "b9a0022fb1bbbfc561b25857e7a2476cc1783e2916179d62fc7203064a9e896a",
+      "revision": "dc97b0404ff2edd81331bd367d224ce1c238be3e",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# A batch edits only docs/ and the tracked top-level README/CONTRIBUTING",
         "# documents its brief validates, so the minted task locks just that scope",
         "# instead of the whole tree (a dir:. lock starves on a busy drain).",
