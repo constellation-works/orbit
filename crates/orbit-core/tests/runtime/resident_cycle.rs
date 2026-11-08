@@ -96,6 +96,16 @@ fn fixture() -> Fixture {
     }
 }
 
+/// Preserve the existing per-test child process, authority clearing and deadline.
+macro_rules! isolated_fixture {
+    ($name:ident) => {{
+        if !super::dispatch_admission::isolated(concat!("resident_cycle::", stringify!($name))) {
+            return;
+        }
+        fixture()
+    }};
+}
+
 fn session(capability: McpCapability) -> ToolSessionContext {
     ToolSessionContext {
         effective_capabilities: [capability].into(),
@@ -145,28 +155,19 @@ impl Fixture {
     }
 
     fn task(&self, title: &str) -> String {
-        self.runtime
-            .add_task(TaskAddParams {
-                title: title.into(),
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string()
+        self.add_task(TaskAddParams {
+            title: title.into(),
+            ..Default::default()
+        })
     }
 
     /// A tagged, in-progress assignment watching `watched`, floor 10 minutes.
     fn mandate(&self, watched: &str) -> String {
-        let id = self
-            .runtime
-            .add_task(TaskAddParams {
-                title: "[orchestration]: scribe v2 - sol".into(),
-                tags: vec!["resident".into()],
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
+        let id = self.add_task(TaskAddParams {
+            title: "[orchestration]: scribe v2 - sol".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        });
         let body = json!({
             "schema": "resident.mandate/v1",
             "goal": "Deliver the remaining scribe v2 slices",
@@ -176,31 +177,25 @@ impl Fixture {
             "crew": "sol",
             "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
         });
-        self.runtime
-            .update_task_as_human(
-                &id,
-                TaskUpdateParams {
-                    upsert_artifacts: vec![TaskArtifact::from_text(
-                        "resident/mandate.json",
-                        body.to_string(),
-                    )],
-                    ..Default::default()
-                },
-                "human:daniel".into(),
-            )
-            .unwrap();
+        self.update_task(
+            &id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    body.to_string(),
+                )],
+                ..Default::default()
+            },
+        );
         id
     }
 
     fn grant(&self, mandate: &str, rights: &[&str]) {
-        call(
-            &self.runtime,
+        self.operator_call(
             "orbit.resident.grant",
             json!({"task_id": mandate, "add": rights,
                    "workspaces": [self.runtime.workspace_id().unwrap()]}),
-            McpCapability::Operator,
-        )
-        .unwrap();
+        );
     }
 
     /// A pending `resident_cycle_pipeline` run for `mandate`, as the routine
@@ -240,78 +235,217 @@ impl Fixture {
             .unwrap();
     }
 
-    /// The agent's checkpoint for the cycle `brief` started.
-    fn checkpoint(&self, brief: &Value, run_id: &str) {
-        self.checkpoint_with_outcome(brief, run_id, "idle");
-    }
-
-    /// The agent's checkpoint naming `outcome`.
-    fn checkpoint_with_outcome(&self, brief: &Value, run_id: &str, outcome: &str) {
-        let mandate = brief["task_id"].as_str().unwrap();
-        self.runtime
-            .append_resident_checkpoint(
-                mandate,
-                json!({
-                    "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                    "cycle": brief["cycle"], "run_id": run_id, "crew": "sol",
-                    "recovery_of": brief["recovery_of"], "wake": brief["wake"],
-                    "authority": {"rights": brief["authority"]["rights"],
-                                  "observe_only": brief["authority"]["observe_only"],
-                                  "narrowed_by": brief["authority"]["narrowed_by"]},
-                    "actions": [], "decisions": [], "requests": [], "costs": [],
-                    "notes": "Nothing to do yet.",
-                    "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
-                    "continuity": "rebuilt", "outcome": outcome, "probe": false
-                }),
-                Some("codex".into()),
-                None,
-            )
-            .unwrap();
-    }
-
-    /// The agent's checkpoint written exactly as `resident_cycle.yaml`
-    /// instructs: `continuity` and `conversation_ref` are copied verbatim
-    /// from the brief, never a fresh or hand-chosen reference.
-    fn checkpoint_as_instructed(&self, brief: &Value, run_id: &str) -> Value {
-        let mandate = brief["task_id"].as_str().unwrap();
-        self.runtime
-            .append_resident_checkpoint(
-                mandate,
-                json!({
-                    "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                    "cycle": brief["cycle"], "run_id": run_id,
-                    "crew": brief["crew"],
-                    "recovery_of": brief["recovery_of"], "wake": brief["wake"],
-                    "authority": {"rights": brief["authority"]["rights"],
-                                  "observe_only": brief["authority"]["observe_only"],
-                                  "narrowed_by": brief["authority"]["narrowed_by"]},
-                    "actions": [], "decisions": [], "requests": [], "costs": [],
-                    "notes": "Checkpoint written as instructed.",
-                    "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
-                    "continuity": brief["continuity"],
-                    "conversation_ref": brief["conversation_ref"],
-                    "outcome": "idle", "probe": brief["mandate"]["probe"]
-                }),
-                Some("codex".into()),
-                None,
+    fn run_state(&self, run: &str) -> String {
+        rusqlite::Connection::open(self.global.join("orbit.db"))
+            .unwrap()
+            .query_row(
+                "SELECT state FROM job_runs WHERE run_id = ?1",
+                [run],
+                |row| row.get(0),
             )
             .unwrap()
     }
 
+    fn set_run_state(&self, run: &str, state: &str) {
+        rusqlite::Connection::open(self.global.join("orbit.db"))
+            .unwrap()
+            .execute(
+                "UPDATE job_runs SET state = ?1 WHERE run_id = ?2",
+                [state, run],
+            )
+            .unwrap();
+    }
+
+    fn delete_run(&self, run: &str) {
+        rusqlite::Connection::open(self.global.join("orbit.db"))
+            .unwrap()
+            .execute("DELETE FROM job_runs WHERE run_id = ?1", [run])
+            .unwrap();
+    }
+
+    fn agent_call(&self, tool: &str, input: Value) -> Result<Value, String> {
+        call(&self.runtime, tool, input, McpCapability::Agent)
+    }
+
+    fn operator_call(&self, tool: &str, input: Value) -> Value {
+        call(&self.runtime, tool, input, McpCapability::Operator).unwrap()
+    }
+
+    fn add_task(&self, params: TaskAddParams) -> String {
+        self.runtime.add_task(params).unwrap().id.to_string()
+    }
+
+    fn update_task(&self, id: &str, params: TaskUpdateParams) {
+        self.runtime
+            .update_task_as_human(id, params, "human:daniel".into())
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn install_codex(&self, program: &std::path::Path, script: String) {
+        use orbit_types::resource::ExecutorResource;
+        use orbit_types::workflow::ExecutorDef;
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(program, script).unwrap();
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let resource: ExecutorResource =
+            serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
+        let mut def = ExecutorDef::from_resource_spec(
+            resource.metadata.name.clone(),
+            resource.spec.clone(),
+            resource.spec.created_at,
+            resource.spec.updated_at,
+        );
+        def.command = Some(program.to_string_lossy().into_owned());
+        def.sandbox = None;
+        self.runtime.upsert_executor_def(&def).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn dispatch_cycle(&self, run: &str, brief: &Value) -> Result<bool, String> {
+        use orbit_engine::{
+            V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset,
+        };
+        let mut activity =
+            load_activity_asset(include_str!("../../assets/activities/resident_cycle.yaml"))
+                .unwrap();
+        if let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(ref mut spec) =
+            activity.spec.spec
+        {
+            spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
+            spec.crew_name = Some("sol".into());
+        }
+        let audit_dir = tempfile::tempdir().unwrap();
+        let audit = V2AuditWriter::with_disk_sinks(
+            audit_dir.path(),
+            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            "ws_test",
+            run,
+            "codex:test".to_string(),
+            None,
+        )
+        .unwrap();
+        dispatch_v2_activity(V2DispatchInput {
+            activity_name: "resident_cycle",
+            spec: &activity.spec.spec,
+            fs_profile: None,
+            input: json!({"brief": brief, "crew": "sol"}),
+            audit,
+            run_id: run,
+            host: Some(&self.runtime),
+        })
+        .map(|outcome| outcome.success)
+        .map_err(|error| error.to_string())
+    }
+
+    fn watched_mandate(&self, title: &str) -> (String, String) {
+        let watched = self.task(title);
+        let mandate = self.mandate(&watched);
+        (watched, mandate)
+    }
+
+    fn begin_cycle(&self, run: &str, at: DateTime<Utc>) -> Value {
+        self.runtime.begin_resident_cycle(run, at).unwrap()
+    }
+
+    fn finish_cycle(&self, run: &str) {
+        self.runtime.finish_resident_cycle(run).unwrap();
+        self.stop_run(run, JobRunState::Success);
+    }
+
+    /// Common checkpoint fields; overrides keep scenario-specific authority,
+    /// timestamps and continuity visible at each call site.
+    fn write_checkpoint(&self, brief: &Value, run: &str, overrides: Value) -> Value {
+        let mandate = brief["task_id"].as_str().unwrap();
+        let mut checkpoint = json!({
+            "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
+            "cycle": brief["cycle"], "run_id": run, "crew": "sol",
+            "recovery_of": brief["recovery_of"], "wake": brief["wake"],
+            "authority": {"rights": brief["authority"]["rights"],
+                          "observe_only": brief["authority"]["observe_only"],
+                          "narrowed_by": brief["authority"]["narrowed_by"]},
+            "actions": [], "decisions": [], "requests": [], "costs": [],
+            "notes": "Nothing to do yet.",
+            "next_wake": {"reason": "heartbeat", "not_before": Utc::now() + Duration::hours(2)},
+            "continuity": "rebuilt", "outcome": "idle", "probe": false
+        });
+        checkpoint
+            .as_object_mut()
+            .unwrap()
+            .extend(overrides.as_object().unwrap().clone());
+        self.runtime
+            .append_resident_checkpoint(mandate, checkpoint, Some("codex".into()), None)
+            .unwrap()
+    }
+
+    fn checkpoint(&self, brief: &Value, run: &str) {
+        self.checkpoint_with_outcome(brief, run, "idle");
+    }
+
+    fn checkpoint_with_outcome(&self, brief: &Value, run: &str, outcome: &str) {
+        self.write_checkpoint(brief, run, json!({"outcome": outcome}));
+    }
+
+    /// Echo continuity and conversation_ref exactly as resident_cycle.yaml instructs.
+    fn checkpoint_as_instructed(&self, brief: &Value, run: &str) -> Value {
+        self.write_checkpoint(
+            brief,
+            run,
+            json!({
+                "crew": brief["crew"], "notes": "Checkpoint written as instructed.",
+                "continuity": brief["continuity"], "conversation_ref": brief["conversation_ref"],
+                "probe": brief["mandate"]["probe"]
+            }),
+        )
+    }
+
+    fn seed_conversation(
+        &self,
+        mandate: &str,
+        key: &str,
+        now: DateTime<Utc>,
+        reference: &str,
+        notes: &str,
+        assert_rebuilt: bool,
+    ) {
+        let run = self.cycle_run(mandate, key);
+        let brief = self.begin_cycle(&run, now);
+        if assert_rebuilt {
+            assert_eq!(brief["continuity"], "rebuilt");
+            assert_eq!(brief["conversation_ref"], Value::Null);
+        }
+        self.write_checkpoint(
+            &brief,
+            &run,
+            json!({
+                "recovery_of": null,
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "notes": notes,
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
+                "conversation_ref": reference
+            }),
+        );
+        self.finish_cycle(&run);
+    }
+
     /// One complete cycle: observe, the agent's checkpoint, finalize.
     fn complete_cycle(&self, mandate: &str, key: &str) -> Value {
-        let run = self.cycle_run(mandate, key);
-        let brief = self.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
-        assert_eq!(brief["cycle_count"], 1, "{brief}");
-        self.checkpoint(&brief, &run);
-        let finished = self.runtime.finish_resident_cycle(&run).unwrap();
+        let (brief, finished) = self.complete_cycle_at(mandate, key, Utc::now());
         assert_eq!(finished["synthesized"], false, "{finished}");
-        self.stop_run(&run, JobRunState::Success);
         brief
     }
 
-    /// A clock-tick inspection of the routine at `now`: whether it would
-    /// start a cycle run.
+    fn complete_cycle_at(&self, mandate: &str, key: &str, at: DateTime<Utc>) -> (Value, Value) {
+        let run = self.cycle_run(mandate, key);
+        let brief = self.begin_cycle(&run, at);
+        assert_eq!(brief["cycle_count"], 1, "{brief}");
+        self.checkpoint(&brief, &run);
+        let finished = self.runtime.finish_resident_cycle(&run).unwrap();
+        self.stop_run(&run, JobRunState::Success);
+        (brief, finished)
+    }
+
     /// The mandates a clock tick at `now` would admit or hold as due.
     fn due_mandates(&self, now: DateTime<Utc>) -> Vec<String> {
         let due = evaluate_routine(&self.automation_runtime(), &routine(), true, now).unwrap();
@@ -344,14 +478,10 @@ fn routine() -> RoutineDefinition {
 
 #[test]
 fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(
+        a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle
+    );
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     let now = Utc::now();
     assert!(
         fx.would_fire(now + Duration::minutes(2)),
@@ -369,16 +499,13 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
     }
 
     // A watched task changes: held by the 10-minute floor, then due.
-    fx.runtime
-        .update_task_as_human(
-            &watched,
-            TaskUpdateParams {
-                description: Some("Narrowed to the export path.".into()),
-                ..Default::default()
-            },
-            "human:daniel".into(),
-        )
-        .unwrap();
+    fx.update_task(
+        &watched,
+        TaskUpdateParams {
+            description: Some("Narrowed to the export path.".into()),
+            ..Default::default()
+        },
+    );
     assert!(
         !fx.would_fire(now + Duration::minutes(5)),
         "the floor holds it"
@@ -403,16 +530,13 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
         !fx.due_mandates(later).contains(&quiet),
         "nothing changed yet"
     );
-    fx.runtime
-        .update_task_as_human(
-            &quiet,
-            TaskUpdateParams {
-                comment: Some("Hold slice 5 until Monday.".into()),
-                ..Default::default()
-            },
-            "human:daniel".into(),
-        )
-        .unwrap();
+    fx.update_task(
+        &quiet,
+        TaskUpdateParams {
+            comment: Some("Hold slice 5 until Monday.".into()),
+            ..Default::default()
+        },
+    );
     assert!(
         fx.due_mandates(later).contains(&quiet),
         "the comment wakes it"
@@ -420,18 +544,13 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
 
     // A decision request on a watched task: the cycle that sees it raised
     // is not woken again until the human answers it.
-    let asked = fx
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Choose the export format".into(),
-            description: "Daniel decides the export format.".into(),
-            acceptance_criteria: vec!["A format is chosen".into()],
-            crew: Some("dk".into()),
-            ..Default::default()
-        })
-        .unwrap()
-        .id
-        .to_string();
+    let asked = fx.add_task(TaskAddParams {
+        title: "Choose the export format".into(),
+        description: "Daniel decides the export format.".into(),
+        acceptance_criteria: vec!["A format is chosen".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    });
     let asking = fx.mandate(&asked);
     let request = fx
         .runtime
@@ -470,16 +589,10 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
 
     // While one cycle is live, a second run for the mandate starts none.
     let first = fx.cycle_run(&mandate, "resident-cycle-2");
-    let started = fx
-        .runtime
-        .begin_resident_cycle(&first, now + Duration::minutes(11))
-        .unwrap();
+    let started = fx.begin_cycle(&first, now + Duration::minutes(11));
     assert_eq!(started["cycle_count"], 1, "{started}");
     let second = fx.cycle_run(&mandate, "resident-cycle-3");
-    let refused = fx
-        .runtime
-        .begin_resident_cycle(&second, now + Duration::minutes(11))
-        .unwrap();
+    let refused = fx.begin_cycle(&second, now + Duration::minutes(11));
     assert_eq!(refused["cycle_count"], 0, "{refused}");
     assert_eq!(refused["skip_reason"], "cycle_live");
     assert!(
@@ -491,51 +604,42 @@ fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle(
 
 #[test]
 fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_cycle_reaches_only_its_granted_rights_and_workspaces",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(a_cycle_reaches_only_its_granted_rights_and_workspaces);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-1");
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = fx.begin_cycle(&run, Utc::now());
     assert_eq!(brief["authority"]["rights"], json!(["dispatch"]), "{brief}");
 
     fx.as_cycle_agent(&run, || {
         // No merge right: completing a task is refused before it runs.
-        let error = call(
-            &fx.runtime,
-            "orbit.task.update",
-            json!({"id": watched, "status": "done", "model": "codex"}),
-            McpCapability::Agent,
-        )
-        .expect_err("a cycle without merge cannot land");
+        let error = fx
+            .agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "status": "done", "model": "codex"}),
+            )
+            .expect_err("a cycle without merge cannot land");
         assert!(error.contains("resident_right_refused"), "{error}");
         assert!(error.contains("merge"), "{error}");
 
         // A workspace outside the mandate's authority is refused by core.
-        let error = call(
-            &fx.runtime,
-            "orbit.task.add",
-            json!({"title": "Elsewhere", "description": "Out of scope.",
+        let error = fx
+            .agent_call(
+                "orbit.task.add",
+                json!({"title": "Elsewhere", "description": "Out of scope.",
                    "acceptance_criteria": ["Done."], "complexity": "low", "type": "chore",
                    "workspace": "ws_not_granted", "model": "codex"}),
-            McpCapability::Agent,
-        )
-        .expect_err("a foreign workspace is refused");
+            )
+            .expect_err("a foreign workspace is refused");
         assert!(error.contains("resident_scope_refused"), "{error}");
 
         // A comment needs no right; its key comes back for the checkpoint.
-        let commented = call(
-            &fx.runtime,
-            "orbit.task.update",
-            json!({"id": watched, "comment": "Checked CI.", "model": "codex"}),
-            McpCapability::Agent,
-        )
-        .unwrap();
+        let commented = fx
+            .agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "comment": "Checked CI.", "model": "codex"}),
+            )
+            .unwrap();
         let cycle = brief["cycle"].as_str().unwrap();
         assert_eq!(
             commented["resident_action_key"],
@@ -546,13 +650,12 @@ fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
     // Outside its run binding, the same caller is not a resident cycle.
     fx.runtime.finish_resident_cycle(&run).unwrap();
     fx.as_cycle_agent(&run, || {
-        let error = call(
-            &fx.runtime,
-            "orbit.task.update",
-            json!({"id": watched, "comment": "Late.", "model": "codex"}),
-            McpCapability::Agent,
-        )
-        .expect_err("a finished cycle may only read");
+        let error = fx
+            .agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "comment": "Late.", "model": "codex"}),
+            )
+            .expect_err("a finished cycle may only read");
         assert!(error.contains("resident_cycle_stale"), "{error}");
     });
 }
@@ -610,12 +713,8 @@ fn leaf_diagnostics(fx: &Fixture, run_id: &str) -> String {
 /// is its own run, so it does not inherit the cycle's run binding.
 #[test]
 fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused",
-    ) {
-        return;
-    }
-    let fx = fixture();
+    let fx =
+        isolated_fixture!(a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused);
     orbit_core::bootstrap::init::init_workspace_at_root(
         &fx.global,
         orbit_core::bootstrap::init::InitOptions {
@@ -638,25 +737,18 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
         worker_binding.to_string_lossy().into_owned(),
     ]);
     let leaf = |title: &str| {
-        fx.runtime
-            .add_task(TaskAddParams {
-                title: title.into(),
-                status: Some(TaskStatus::Backlog),
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string()
+        fx.add_task(TaskAddParams {
+            title: title.into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
     };
     let workspace = fx.runtime.workspace_id().unwrap();
-    let ship = |task: &str, workspace: &str| {
-        call(
-            &fx.runtime,
-            "orbit.workflow.ship",
-            json!({"task_ids": [task], "mode": "local", "workspace": workspace, "model": "codex"}),
-            McpCapability::Agent,
-        )
-    };
+    let ship =
+        |task: &str, workspace: &str| {
+            fx.agent_call("orbit.workflow.ship",
+            json!({"task_ids": [task], "mode": "local", "workspace": workspace, "model": "codex"}))
+        };
     let leaf_runs = || {
         fx.runtime
             .list_job_runs(orbit_core::application::job::JobRunListParams::default())
@@ -671,7 +763,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     let mandate = fx.mandate(&task);
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-ship");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    fx.begin_cycle(&run, Utc::now());
     let shipped = fx.as_cycle_agent(&run, || {
         let error = ship(&task, "ws_not_granted").expect_err("a foreign workspace is refused");
         assert!(error.contains("resident_scope_refused"), "{error}");
@@ -732,7 +824,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     let promote_only = fx.mandate(&later);
     fx.grant(&promote_only, &["promote"]);
     let run = fx.cycle_run(&promote_only, "resident-cycle-no-dispatch");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    fx.begin_cycle(&run, Utc::now());
     fx.as_cycle_agent(&run, || {
         let error = ship(&later, &workspace).expect_err("promote does not dispatch");
         assert!(error.contains("resident_right_refused"), "{error}");
@@ -760,12 +852,8 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
 /// Restoring lint is context maintenance, not a resident read (ORB-21580).
 #[test]
 fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::restoring_lint_refuses_resident_cycles_without_partial_context_writes",
-    ) {
-        return;
-    }
-    let fx = fixture();
+    let fx =
+        isolated_fixture!(restoring_lint_refuses_resident_cycles_without_partial_context_writes);
     let named = fx.task("Restore named context");
     let swept = fx.task("Restore swept context");
     std::fs::write(fx.repo.join("pruned.rs"), "pub fn restored() {}\n").unwrap();
@@ -821,7 +909,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
         &["dispatch", "promote", "merge", "plugin_upgrade"],
     );
     let run = fx.cycle_run(&mandate, "resident-restoring-lint");
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = fx.begin_cycle(&run, Utc::now());
 
     // The native `orbit task lint` command uses this public registry API.
     // Lint is intentionally inactive on MCP / `orbit tool run`.
@@ -921,27 +1009,20 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
 
 #[test]
 fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(
+        an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_it
+    );
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     fx.grant(&mandate, &["dispatch", "promote", "merge"]);
-    let posted = call(
-        &fx.runtime,
+    let posted = fx.operator_call(
         "orbit.notice.post",
         json!({"kind": "maintenance", "title": "Swap disks", "expires_in_hours": 24}),
-        McpCapability::Operator,
-    )
-    .unwrap();
+    );
     let notice = posted["notice"]["id"].as_str().unwrap().to_string();
 
     let now = Utc::now();
     let run = fx.cycle_run(&mandate, "resident-cycle-1");
-    let brief = fx.runtime.begin_resident_cycle(&run, now).unwrap();
+    let brief = fx.begin_cycle(&run, now);
     assert_eq!(brief["authority"]["observe_only"], true, "{brief}");
     assert_eq!(brief["authority"]["rights"], json!([]));
     assert_eq!(
@@ -963,26 +1044,23 @@ fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_i
                 json!({"id": watched, "status": "done", "model": "codex"}),
             ),
         ] {
-            let error = call(&fx.runtime, tool, input, McpCapability::Agent)
+            let error = fx
+                .agent_call(tool, input)
                 .expect_err("observe-only refuses every right");
             assert!(error.contains("observe-only"), "{tool}: {error}");
         }
     });
     fx.checkpoint(&brief, &run);
-    fx.runtime.finish_resident_cycle(&run).unwrap();
-    fx.stop_run(&run, JobRunState::Success);
+    fx.finish_cycle(&run);
 
     assert!(
         !fx.would_fire(now + Duration::minutes(11)),
         "nothing changed"
     );
-    call(
-        &fx.runtime,
+    fx.operator_call(
         "orbit.notice.close",
         json!({"id": notice, "reason": "disks swapped"}),
-        McpCapability::Operator,
-    )
-    .unwrap();
+    );
     assert!(
         fx.would_fire(now + Duration::minutes(11)),
         "the close wakes it"
@@ -991,28 +1069,13 @@ fn an_open_maintenance_notice_makes_the_cycle_observe_only_and_its_close_wakes_i
 
 #[test]
 fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_killed_cycle_is_recovered_without_repeating_its_completed_actions",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(a_killed_cycle_is_recovered_without_repeating_its_completed_actions);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     let dead_run = fx.cycle_run(&mandate, "resident-cycle-1");
-    let dead = fx
-        .runtime
-        .begin_resident_cycle(&dead_run, Utc::now())
-        .unwrap();
+    let dead = fx.begin_cycle(&dead_run, Utc::now());
     let comment = json!({"id": watched, "comment": "Checked CI.", "model": "codex"});
     let key = fx.as_cycle_agent(&dead_run, || {
-        call(
-            &fx.runtime,
-            "orbit.task.update",
-            comment.clone(),
-            McpCapability::Agent,
-        )
-        .unwrap()["resident_action_key"]
+        fx.agent_call("orbit.task.update", comment.clone()).unwrap()["resident_action_key"]
             .as_str()
             .unwrap()
             .to_string()
@@ -1022,10 +1085,7 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
 
     let run = fx.cycle_run(&mandate, "resident-cycle-2");
-    let brief = fx
-        .runtime
-        .begin_resident_cycle(&run, Utc::now() + Duration::minutes(11))
-        .unwrap();
+    let brief = fx.begin_cycle(&run, Utc::now() + Duration::minutes(11));
     assert_eq!(brief["cycle_count"], 1, "{brief}");
     assert_eq!(brief["recovery_of"], dead["cycle"]);
     let synthesized = fx
@@ -1049,13 +1109,7 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     assert_eq!(synthesized.actions[0].result, "ok");
 
     let retried = fx.as_cycle_agent(&run, || {
-        call(
-            &fx.runtime,
-            "orbit.task.update",
-            comment,
-            McpCapability::Agent,
-        )
-        .unwrap()
+        fx.agent_call("orbit.task.update", comment).unwrap()
     });
     assert_eq!(retried["resident_action"], "already_done", "{retried}");
     assert_eq!(retried["key"], key);
@@ -1071,35 +1125,17 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
 
 #[test]
 fn a_status_request_wake_survives_later_wakes_until_the_next_cycle() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_status_request_wake_survives_later_wakes_until_the_next_cycle",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(a_status_request_wake_survives_later_wakes_until_the_next_cycle);
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     let now = Utc::now();
     fx.complete_cycle(&mandate, "resident-cycle-status-seed");
 
     let control = |action: &str, status_request: bool| {
-        call(
-            &fx.runtime,
+        fx.operator_call(
             "orbit.resident.control",
             json!({"task_id": mandate.as_str(), "action": action,
                    "reason": "Manager control", "status_request": status_request}),
-            McpCapability::Operator,
-        )
-        .unwrap();
-    };
-    let admitted_cycle = |key: &str, at: DateTime<Utc>| -> Value {
-        let run = fx.cycle_run(&mandate, key);
-        let brief = fx.runtime.begin_resident_cycle(&run, at).unwrap();
-        assert_eq!(brief["cycle_count"], 1, "{brief}");
-        fx.checkpoint(&brief, &run);
-        fx.runtime.finish_resident_cycle(&run).unwrap();
-        fx.stop_run(&run, JobRunState::Success);
-        brief
+        );
     };
     let reasons = |brief: &Value| -> Vec<String> {
         brief["wake"]["reasons"]
@@ -1110,81 +1146,57 @@ fn a_status_request_wake_survives_later_wakes_until_the_next_cycle() {
             .collect()
     };
 
-    // A plain wake after the status-request wake must not overwrite it.
-    control("wake", true);
-    control("wake", false);
-    let brief = admitted_cycle(
-        "resident-cycle-status-plain-wake",
-        now + Duration::minutes(11),
-    );
-    assert_eq!(brief["status_request"], true, "{brief}");
-    assert!(
-        reasons(&brief).contains(&"status_request".to_string()),
-        "{brief}"
-    );
-
-    // A pause/resume pair intervening before the cycle must not lose it.
-    control("wake", true);
-    control("pause", false);
-    control("resume", false);
-    let brief = admitted_cycle(
-        "resident-cycle-status-pause-resume",
-        now + Duration::minutes(22),
-    );
-    assert_eq!(brief["status_request"], true, "{brief}");
-    assert!(
-        reasons(&brief).contains(&"status_request".to_string()),
-        "{brief}"
-    );
-
-    // That cycle consumed the request: a later plain wake carries none.
-    control("wake", false);
-    let brief = admitted_cycle(
-        "resident-cycle-status-consumed",
-        now + Duration::minutes(33),
-    );
-    assert_eq!(brief["status_request"], false, "{brief}");
-    assert!(
-        !reasons(&brief).contains(&"status_request".to_string()),
-        "{brief}"
-    );
+    for (case, actions, minutes, status_request) in [
+        ("plain-wake", &["wake"][..], 11, true),
+        ("pause-resume", &["pause", "resume"][..], 22, true),
+        ("consumed", &["wake"][..], 33, false),
+    ] {
+        // The first two rows introduce a status request; the last observes its consumption.
+        if status_request {
+            control("wake", true);
+        }
+        for action in actions {
+            control(action, false);
+        }
+        let (brief, _) = fx.complete_cycle_at(
+            &mandate,
+            &format!("resident-cycle-status-{case}"),
+            now + Duration::minutes(minutes),
+        );
+        assert_eq!(brief["status_request"], status_request, "{case}: {brief}");
+        assert_eq!(
+            reasons(&brief).contains(&"status_request".to_string()),
+            status_request,
+            "{case}: {brief}"
+        );
+    }
 }
 
 #[test]
 fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
-    fx.runtime
-        .update_task_as_human(
-            &mandate,
-            TaskUpdateParams {
-                plan: Some("Run resident cycles until stopped.".into()),
-                status: Some(TaskStatus::InProgress),
-                ..Default::default()
-            },
-            "human:daniel".into(),
-        )
-        .unwrap();
+    let fx = isolated_fixture!(
+        a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_cycle
+    );
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    fx.update_task(
+        &mandate,
+        TaskUpdateParams {
+            plan: Some("Run resident cycles until stopped.".into()),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        },
+    );
 
     // A cycle is live when the mandate is stopped: the stop defers to its
     // finalizer.
     let run = fx.cycle_run(&mandate, "resident-cycle-stopped");
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = fx.begin_cycle(&run, Utc::now());
     assert_eq!(brief["cycle_count"], 1, "{brief}");
     let dead_cycle = brief["cycle"].as_str().unwrap().to_string();
-    let stopped = call(
-        &fx.runtime,
+    let stopped = fx.operator_call(
         "orbit.resident.control",
         json!({"task_id": mandate, "action": "stop", "reason": "Work is done for now"}),
-        McpCapability::Operator,
-    )
-    .unwrap();
+    );
     assert_eq!(stopped["handoff"], "cycle_live", "{stopped}");
     assert_eq!(
         fx.runtime.get_task(&mandate).unwrap().status,
@@ -1197,10 +1209,7 @@ fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_
     // The next observe for the mandate starts no agent cycle, but recovers
     // the handoff.
     let recovery_run = fx.cycle_run(&mandate, "resident-cycle-recovery");
-    let recovered = fx
-        .runtime
-        .begin_resident_cycle(&recovery_run, Utc::now() + Duration::minutes(11))
-        .unwrap();
+    let recovered = fx.begin_cycle(&recovery_run, Utc::now() + Duration::minutes(11));
     assert_eq!(recovered["cycle_count"], 0, "{recovered}");
     assert_eq!(
         recovered["skip_reason"], "mandate_not_active",
@@ -1245,61 +1254,41 @@ fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_
 
 #[test]
 fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx =
+        isolated_fixture!(a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     fx.grant(&mandate, &["merge"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-1");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    fx.begin_cycle(&run, Utc::now());
 
     // A run id that does not exist is not a resident cycle: the call
     // proceeds as an ordinary call, as before.
     fx.as_cycle_agent("jrun-no-such-run", || {
-        call(
-            &fx.runtime,
+        fx.agent_call(
             "orbit.task.update",
             json!({"id": watched, "comment": "Not a resident run.", "model": "codex"}),
-            McpCapability::Agent,
         )
         .unwrap();
     });
 
     // Corrupt the stored run so its lookup fails with a store error,
     // not `NotFound`: the row no longer parses as a job run.
-    let connection = rusqlite::Connection::open(fx.global.join("orbit.db")).unwrap();
-    connection
-        .execute(
-            "UPDATE job_runs SET state = 'not-a-state' WHERE run_id = ?1",
-            rusqlite::params![run],
-        )
-        .unwrap();
-    drop(connection);
+    fx.set_run_state(&run, "not-a-state");
 
     let comments_before = fx.runtime.get_task_comments(&watched).unwrap().len();
     fx.as_cycle_agent(&run, || {
         // A write must fail closed rather than bypass the guard.
-        let error = call(
-            &fx.runtime,
-            "orbit.task.update",
-            json!({"id": watched, "comment": "Should not land.", "model": "codex"}),
-            McpCapability::Agent,
-        )
-        .expect_err("a write is refused when the run lookup errors");
+        let error = fx
+            .agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "comment": "Should not land.", "model": "codex"}),
+            )
+            .expect_err("a write is refused when the run lookup errors");
         assert!(error.contains("resident_lookup_refused"), "{error}");
 
         // Reads still pass: they change nothing.
-        call(
-            &fx.runtime,
-            "orbit.task.show",
-            json!({"id": watched}),
-            McpCapability::Agent,
-        )
-        .unwrap();
+        fx.agent_call("orbit.task.show", json!({"id": watched}))
+            .unwrap();
     });
     assert_eq!(
         fx.runtime.get_task_comments(&watched).unwrap().len(),
@@ -1310,40 +1299,22 @@ fn a_write_is_refused_when_the_run_lookup_errors_but_a_missing_run_proceeds() {
 
 #[test]
 fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 4");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(
+        a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_run_recovers
+    );
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
     let now = Utc::now();
 
     // A live cycle holds the mandate.
     let live_run = fx.cycle_run(&mandate, "resident-cycle-live");
-    let started = fx.runtime.begin_resident_cycle(&live_run, now).unwrap();
+    let started = fx.begin_cycle(&live_run, now);
     assert_eq!(started["cycle_count"], 1, "{started}");
     let live_cycle = started["cycle"].as_str().unwrap().to_string();
 
     // Corrupt the live run's row so its lookup fails with a store error,
     // not `NotFound`: the row no longer parses as a job run.
-    let db = fx.global.join("orbit.db");
-    let connection = rusqlite::Connection::open(&db).unwrap();
-    let state: String = connection
-        .query_row(
-            "SELECT state FROM job_runs WHERE run_id = ?1",
-            rusqlite::params![live_run],
-            |row| row.get(0),
-        )
-        .unwrap();
-    connection
-        .execute(
-            "UPDATE job_runs SET state = 'not-a-state' WHERE run_id = ?1",
-            rusqlite::params![live_run],
-        )
-        .unwrap();
-    drop(connection);
+    let state = fx.run_state(&live_run);
+    fx.set_run_state(&live_run, "not-a-state");
 
     // The lookup error surfaces instead of marking the live cycle dead:
     // no takeover, no synthesized checkpoint.
@@ -1351,48 +1322,25 @@ fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_ru
     fx.runtime
         .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
         .expect_err("a lookup error is not a dead cycle");
-    let connection = rusqlite::Connection::open(&db).unwrap();
-    connection
-        .execute(
-            "UPDATE job_runs SET state = ?1 WHERE run_id = ?2",
-            rusqlite::params![state, live_run],
-        )
-        .unwrap();
-    drop(connection);
+    fx.set_run_state(&live_run, &state);
 
     // The cycle survived the error: the same run is still refused as live.
-    let refused = fx
-        .runtime
-        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
-        .unwrap();
+    let refused = fx.begin_cycle(&takeover_run, now + Duration::minutes(11));
     assert_eq!(refused["cycle_count"], 0, "{refused}");
     assert_eq!(refused["skip_reason"], "cycle_live", "{refused}");
 
     // A missing run is dead: the next run recovers the cycle.
-    let connection = rusqlite::Connection::open(&db).unwrap();
-    connection
-        .execute(
-            "DELETE FROM job_runs WHERE run_id = ?1",
-            rusqlite::params![live_run],
-        )
-        .unwrap();
-    drop(connection);
-    let recovered = fx
-        .runtime
-        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
-        .unwrap();
+    fx.delete_run(&live_run);
+    let recovered = fx.begin_cycle(&takeover_run, now + Duration::minutes(11));
     assert_eq!(recovered["cycle_count"], 1, "{recovered}");
     assert_eq!(recovered["recovery_of"], live_cycle, "{recovered}");
     let takeover_cycle = recovered["cycle"].as_str().unwrap().to_string();
 
     // An expired lease is dead too, without touching the store.
-    let expired = fx
-        .runtime
-        .begin_resident_cycle(
-            &fx.cycle_run(&mandate, "resident-cycle-expired"),
-            now + Duration::minutes(60),
-        )
-        .unwrap();
+    let expired = fx.begin_cycle(
+        &fx.cycle_run(&mandate, "resident-cycle-expired"),
+        now + Duration::minutes(60),
+    );
     assert_eq!(expired["cycle_count"], 1, "{expired}");
     assert_eq!(expired["recovery_of"], takeover_cycle, "{expired}");
 }
@@ -1400,25 +1348,15 @@ fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_ru
 #[test]
 fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref()
  {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Ship scribe v2 slice 5".into(),
-            description: "Slice 5.".into(),
-            acceptance_criteria: vec!["Green".into()],
-            tags: vec!["scribe-v2".into()],
-            crew: Some("dk".into()),
-            ..Default::default()
-        })
-        .unwrap()
-        .id
-        .to_string();
+    let fx = isolated_fixture!(brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_without_conversation_ref);
+    let watched = fx.add_task(TaskAddParams {
+        title: "Ship scribe v2 slice 5".into(),
+        description: "Slice 5.".into(),
+        acceptance_criteria: vec!["Green".into()],
+        tags: vec!["scribe-v2".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    });
     let mandate = fx.mandate(&watched);
     fx.grant(&mandate, &["dispatch", "promote"]);
     let now = Utc::now();
@@ -1427,43 +1365,28 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
     for index in 1..=6 {
         let step_time = now + Duration::minutes(index * 15);
         if index > 1 {
-            fx.runtime
-                .update_task_as_human(
-                    &watched,
-                    TaskUpdateParams {
-                        comment: Some(format!("Progress update {index}")),
-                        ..Default::default()
-                    },
-                    "human:daniel".into(),
-                )
-                .unwrap();
+            fx.update_task(
+                &watched,
+                TaskUpdateParams {
+                    comment: Some(format!("Progress update {index}")),
+                    ..Default::default()
+                },
+            );
         }
         let run = fx.cycle_run(&mandate, &format!("resident-brief-cycle-{index}"));
-        let brief = fx.runtime.begin_resident_cycle(&run, step_time).unwrap();
+        let brief = fx.begin_cycle(&run, step_time);
         assert_eq!(brief["cycle_count"], 1, "{brief}");
-        fx.runtime
-            .append_resident_checkpoint(
-                &mandate,
-                json!({
-                    "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                    "cycle": brief["cycle"], "run_id": run, "crew": "sol",
-                    "recovery_of": brief["recovery_of"], "wake": brief["wake"],
-                    "authority": {"rights": brief["authority"]["rights"],
-                                  "observe_only": brief["authority"]["observe_only"],
-                                  "narrowed_by": brief["authority"]["narrowed_by"]},
-                    "actions": [], "decisions": [], "requests": [], "costs": [],
-                    "notes": format!("Note from cycle {index}."),
-                    "next_wake": {"reason": "heartbeat", "not_before": step_time + Duration::hours(2)},
-                    "continuity": "rebuilt", "outcome": "idle", "probe": false,
-                    // Cycle 6 leaves conversation_ref removed (None).
-                    "conversation_ref": (index < 6).then(|| format!("conv-{index}")),
-                }),
-                Some("codex".into()),
-                None,
-            )
-            .unwrap();
-        fx.runtime.finish_resident_cycle(&run).unwrap();
-        fx.stop_run(&run, JobRunState::Success);
+        fx.write_checkpoint(
+            &brief,
+            &run,
+            json!({
+                "notes": format!("Note from cycle {index}."),
+                "next_wake": {"reason": "heartbeat", "not_before": step_time + Duration::hours(2)},
+                // Cycle 6 leaves conversation_ref removed (None).
+                "conversation_ref": (index < 6).then(|| format!("conv-{index}")),
+            }),
+        );
+        fx.finish_cycle(&run);
     }
 
     // Raise two decision requests (one answered by the human, one still open) and post an in-scope notice.
@@ -1493,19 +1416,14 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
         )
         .unwrap();
 
-    let watched_open = fx
-        .runtime
-        .add_task(TaskAddParams {
-            title: "Decide workspace B widening".into(),
-            description: "Slice 5 widening.".into(),
-            acceptance_criteria: vec!["Decided".into()],
-            tags: vec!["scribe-v2".into()],
-            crew: Some("dk".into()),
-            ..Default::default()
-        })
-        .unwrap()
-        .id
-        .to_string();
+    let watched_open = fx.add_task(TaskAddParams {
+        title: "Decide workspace B widening".into(),
+        description: "Slice 5 widening.".into(),
+        acceptance_criteria: vec!["Decided".into()],
+        tags: vec!["scribe-v2".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    });
     let open_req = fx
         .runtime
         .run_tool(
@@ -1523,8 +1441,7 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
         .unwrap();
     let open_id = open_req["id"].as_str().unwrap().to_string();
 
-    let notice_id = call(
-        &fx.runtime,
+    let notice_id = fx.operator_call(
         "orbit.notice.post",
         json!({
             "kind": "info",
@@ -1532,18 +1449,13 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
             "body": "Expect slower fetches.",
             "expires_in_hours": 24
         }),
-        McpCapability::Operator,
-    )
-    .unwrap()["notice"]["id"]
+    )["notice"]["id"]
         .as_str()
         .unwrap()
         .to_string();
 
     let run7 = fx.cycle_run(&mandate, "resident-brief-cycle-7");
-    let brief = fx
-        .runtime
-        .begin_resident_cycle(&run7, now + Duration::minutes(120))
-        .unwrap();
+    let brief = fx.begin_cycle(&run7, now + Duration::minutes(120));
     assert_eq!(brief["cycle_count"], 1, "{brief}");
     assert_eq!(brief["continuity"], "rebuilt");
     assert_eq!(brief["conversation_ref"], Value::Null);
@@ -1598,17 +1510,9 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
 #[cfg(unix)]
 #[test]
 fn continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired",
-    ) {
-        return;
-    }
-    use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset};
-    use orbit_types::resource::ExecutorResource;
-    use orbit_types::workflow::ExecutorDef;
-    use std::os::unix::fs::PermissionsExt;
-
-    let fx = fixture();
+    let fx = isolated_fixture!(
+        continuity_adapter_resumes_live_reference_and_records_rebuilt_when_reference_expired
+    );
     let bin_dir = tempfile::tempdir().unwrap();
     let program = bin_dir.path().join("codex");
     let invocations_log = bin_dir.path().join("invocations.jsonl");
@@ -1637,164 +1541,66 @@ PY
 "#,
         log = invocations_log.display()
     );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    fx.install_codex(&program, script);
 
-    let resource: ExecutorResource =
-        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
-    let mut def = ExecutorDef::from_resource_spec(
-        resource.metadata.name.clone(),
-        resource.spec.clone(),
-        resource.spec.created_at,
-        resource.spec.updated_at,
-    );
-    def.command = Some(program.to_string_lossy().into_owned());
-    def.sandbox = None;
-    fx.runtime.upsert_executor_def(&def).unwrap();
-
-    let watched = fx.task("Ship scribe v2 slice 5");
-    let mandate = fx.mandate(&watched);
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
 
     // Cycle 1: establishes a live conversation_ref ("conv-live").
-    let run1 = fx.cycle_run(&mandate, "resident-continuity-1");
-    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
-    assert_eq!(brief1["continuity"], "rebuilt");
-    assert_eq!(brief1["conversation_ref"], Value::Null);
-    fx.runtime
-        .append_resident_checkpoint(
-            &mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
-                "recovery_of": null, "wake": brief1["wake"],
-                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [],
-                "notes": "Cycle 1 seeded conv-live.",
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
-                "continuity": "rebuilt", "outcome": "idle", "probe": false,
-                "conversation_ref": "conv-live"
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    fx.runtime.finish_resident_cycle(&run1).unwrap();
-    fx.stop_run(&run1, JobRunState::Success);
-
-    // Cycle 2: live reference ("conv-live") -> provider resumes conversation and still receives brief.
-    let run2 = fx.cycle_run(&mandate, "resident-continuity-2");
-    let brief2 = fx
-        .runtime
-        .begin_resident_cycle(&run2, now + Duration::minutes(130))
-        .unwrap();
-    assert_eq!(brief2["continuity"], "resumed");
-    assert_eq!(brief2["conversation_ref"], "conv-live");
-
-    let mut activity_asset =
-        load_activity_asset(include_str!("../../assets/activities/resident_cycle.yaml")).unwrap();
-    if let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(ref mut loop_spec) =
-        activity_asset.spec.spec
-    {
-        loop_spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
-        loop_spec.crew_name = Some("sol".into());
-    }
-    let audit_dir = tempfile::tempdir().unwrap();
-    let audit2 = V2AuditWriter::with_disk_sinks(
-        audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
-        "ws_test",
-        &run2,
-        "codex:test".to_string(),
-        None,
-    )
-    .unwrap();
-    let outcome2 = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "resident_cycle",
-        spec: &activity_asset.spec.spec,
-        fs_profile: None,
-        input: json!({"brief": brief2, "crew": "sol"}),
-        audit: audit2,
-        run_id: &run2,
-        host: Some(&fx.runtime),
-    })
-    .unwrap();
-    assert!(outcome2.success, "{outcome2:?}");
-    let cp2 = fx
-        .runtime
-        .append_resident_checkpoint(
-            &mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                "cycle": brief2["cycle"], "run_id": run2, "crew": "sol",
-                "recovery_of": null, "wake": brief2["wake"],
-                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [],
-                "notes": "Cycle 2 resumed conv-live and emitted conv-expired.",
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(4)},
-                "continuity": "resumed", "outcome": "idle", "probe": false,
-                "conversation_ref": "conv-expired"
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    assert_eq!(cp2["checkpoint"]["continuity"], "resumed");
-    fx.runtime.finish_resident_cycle(&run2).unwrap();
-    fx.stop_run(&run2, JobRunState::Success);
-
-    // Cycle 3: expired reference ("conv-expired") -> adapter falls back to brief alone and records continuity: rebuilt.
-    let run3 = fx.cycle_run(&mandate, "resident-continuity-3");
-    let brief3 = fx
-        .runtime
-        .begin_resident_cycle(&run3, now + Duration::minutes(260))
-        .unwrap();
-    assert_eq!(brief3["conversation_ref"], "conv-expired");
-    let audit3 = V2AuditWriter::with_disk_sinks(
-        audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
-        "ws_test",
-        &run3,
-        "codex:test".to_string(),
-        None,
-    )
-    .unwrap();
-    let outcome3 = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "resident_cycle",
-        spec: &activity_asset.spec.spec,
-        fs_profile: None,
-        input: json!({"brief": brief3, "crew": "sol"}),
-        audit: audit3,
-        run_id: &run3,
-        host: Some(&fx.runtime),
-    })
-    .unwrap();
-    assert!(outcome3.success, "{outcome3:?}");
-    let cp3 = fx
-        .runtime
-        .append_resident_checkpoint(
-            &mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                "cycle": brief3["cycle"], "run_id": run3, "crew": "sol",
-                "recovery_of": null, "wake": brief3["wake"],
-                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [],
-                "notes": "Cycle 3 fell back from expired ref.",
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(6)},
-                "continuity": "resumed", "outcome": "idle", "probe": false,
-                "conversation_ref": null
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    assert_eq!(
-        cp3["checkpoint"]["continuity"], "rebuilt",
-        "expired reference must record continuity: rebuilt in checkpoint"
+    fx.seed_conversation(
+        &mandate,
+        "resident-continuity-1",
+        now,
+        "conv-live",
+        "Cycle 1 seeded conv-live.",
+        true,
     );
-    fx.runtime.finish_resident_cycle(&run3).unwrap();
-    fx.stop_run(&run3, JobRunState::Success);
+
+    for (case, minutes, reference, next_reference, notes, hours, continuity) in [
+        (
+            "live",
+            130,
+            "conv-live",
+            Some("conv-expired"),
+            "Cycle 2 resumed conv-live and emitted conv-expired.",
+            4,
+            "resumed",
+        ),
+        (
+            "expired",
+            260,
+            "conv-expired",
+            None,
+            "Cycle 3 fell back from expired ref.",
+            6,
+            "rebuilt",
+        ),
+    ] {
+        let run = fx.cycle_run(&mandate, &format!("resident-continuity-{case}"));
+        let brief = fx.begin_cycle(&run, now + Duration::minutes(minutes));
+        if case == "live" {
+            assert_eq!(brief["continuity"], "resumed", "{case}: {brief}");
+        }
+        assert_eq!(brief["conversation_ref"], reference, "{case}: {brief}");
+        let outcome = fx.dispatch_cycle(&run, &brief).unwrap();
+        assert!(outcome, "{case}: dispatch failed");
+        let checkpoint = fx.write_checkpoint(
+            &brief,
+            &run,
+            json!({
+                "recovery_of": null,
+                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
+                "notes": notes,
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(hours)},
+                "continuity": "resumed", "conversation_ref": next_reference
+            }),
+        );
+        assert_eq!(
+            checkpoint["checkpoint"]["continuity"], continuity,
+            "{case}: expired reference must record continuity: rebuilt in checkpoint"
+        );
+        fx.finish_cycle(&run);
+    }
 
     let logged: Vec<Value> = std::fs::read_to_string(&invocations_log)
         .unwrap()
@@ -1834,42 +1640,22 @@ PY
 
 #[test]
 fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 5");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(
+        instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles
+    );
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
 
     // Setup only: establish the live provider conversation a later cycle
     // can resume. The cycles under test below write no fresh reference.
-    let run1 = fx.cycle_run(&mandate, "resident-instructed-seed");
-    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
-    assert_eq!(brief1["continuity"], "rebuilt");
-    assert_eq!(brief1["conversation_ref"], Value::Null);
-    fx.runtime
-        .append_resident_checkpoint(
-            &mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
-                "recovery_of": null, "wake": brief1["wake"],
-                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [],
-                "notes": "Seeded the live provider conversation.",
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
-                "continuity": "rebuilt", "outcome": "idle", "probe": false,
-                "conversation_ref": "conv-live"
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    fx.runtime.finish_resident_cycle(&run1).unwrap();
-    fx.stop_run(&run1, JobRunState::Success);
+    fx.seed_conversation(
+        &mandate,
+        "resident-instructed-seed",
+        now,
+        "conv-live",
+        "Seeded the live provider conversation.",
+        true,
+    );
 
     // Two consecutive cycles each write only the instructed checkpoint
     // shape (echoing brief.conversation_ref). Before the template carried
@@ -1880,30 +1666,22 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
         .enumerate()
     {
         let run = fx.cycle_run(&mandate, key);
-        let brief = fx
-            .runtime
-            .begin_resident_cycle(&run, now + Duration::minutes(130 * (index as i64 + 1)))
-            .unwrap();
+        let brief = fx.begin_cycle(&run, now + Duration::minutes(130 * (index as i64 + 1)));
         assert_eq!(brief["continuity"], "resumed", "cycle {index}: {brief}");
         assert_eq!(brief["conversation_ref"], "conv-live", "cycle {index}");
         let written = fx.checkpoint_as_instructed(&brief, &run);
         assert_eq!(written["checkpoint"]["continuity"], "resumed");
         assert_eq!(written["checkpoint"]["conversation_ref"], "conv-live");
-        fx.runtime.finish_resident_cycle(&run).unwrap();
-        fx.stop_run(&run, JobRunState::Success);
+        fx.finish_cycle(&run);
     }
 
     // The second instructed checkpoint still leaves a resumable reference.
     let run = fx.cycle_run(&mandate, "resident-instructed-3");
-    let brief = fx
-        .runtime
-        .begin_resident_cycle(&run, now + Duration::minutes(390))
-        .unwrap();
+    let brief = fx.begin_cycle(&run, now + Duration::minutes(390));
     assert_eq!(brief["continuity"], "resumed", "{brief}");
     assert_eq!(brief["conversation_ref"], "conv-live");
     fx.checkpoint_as_instructed(&brief, &run);
-    fx.runtime.finish_resident_cycle(&run).unwrap();
-    fx.stop_run(&run, JobRunState::Success);
+    fx.finish_cycle(&run);
 }
 
 /// Seeds a cycle whose checkpoint carries `conversation_ref`, then dispatches
@@ -1915,11 +1693,6 @@ fn dispatch_resumed_cycle_with_fake_codex(
     conversation_ref: &str,
     provider_body: &str,
 ) -> (Result<bool, String>, Vec<Vec<String>>, Value) {
-    use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity, load_activity_asset};
-    use orbit_types::resource::ExecutorResource;
-    use orbit_types::workflow::ExecutorDef;
-    use std::os::unix::fs::PermissionsExt;
-
     let fx = fixture();
     let bin_dir = tempfile::tempdir().unwrap();
     let program = bin_dir.path().join("codex");
@@ -1929,81 +1702,23 @@ fn dispatch_resumed_cycle_with_fake_codex(
         log = invocations_log.display(),
         body = provider_body
     );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let resource: ExecutorResource =
-        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
-    let mut def = ExecutorDef::from_resource_spec(
-        resource.metadata.name.clone(),
-        resource.spec.clone(),
-        resource.spec.created_at,
-        resource.spec.updated_at,
-    );
-    def.command = Some(program.to_string_lossy().into_owned());
-    def.sandbox = None;
-    fx.runtime.upsert_executor_def(&def).unwrap();
+    fx.install_codex(&program, script);
 
-    let watched = fx.task("Ship scribe v2 slice 5");
-    let mandate = fx.mandate(&watched);
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
-    let run1 = fx.cycle_run(&mandate, "resident-resume-seed");
-    let brief1 = fx.runtime.begin_resident_cycle(&run1, now).unwrap();
-    fx.runtime
-        .append_resident_checkpoint(
-            &mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1, "mandate": mandate,
-                "cycle": brief1["cycle"], "run_id": run1, "crew": "sol",
-                "recovery_of": null, "wake": brief1["wake"],
-                "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [],
-                "notes": "seed",
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
-                "continuity": "rebuilt", "outcome": "idle", "probe": false,
-                "conversation_ref": conversation_ref
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    fx.runtime.finish_resident_cycle(&run1).unwrap();
-    fx.stop_run(&run1, JobRunState::Success);
+    fx.seed_conversation(
+        &mandate,
+        "resident-resume-seed",
+        now,
+        conversation_ref,
+        "seed",
+        false,
+    );
 
     let run2 = fx.cycle_run(&mandate, "resident-resume-under-test");
-    let brief2 = fx
-        .runtime
-        .begin_resident_cycle(&run2, now + Duration::minutes(130))
-        .unwrap();
+    let brief2 = fx.begin_cycle(&run2, now + Duration::minutes(130));
     assert_eq!(brief2["conversation_ref"], conversation_ref);
-    let mut activity_asset =
-        load_activity_asset(include_str!("../../assets/activities/resident_cycle.yaml")).unwrap();
-    if let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(ref mut loop_spec) =
-        activity_asset.spec.spec
-    {
-        loop_spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
-        loop_spec.crew_name = Some("sol".into());
-    }
-    let audit_dir = tempfile::tempdir().unwrap();
-    let audit = V2AuditWriter::with_disk_sinks(
-        audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
-        "ws_test",
-        &run2,
-        "codex:test".to_string(),
-        None,
-    )
-    .unwrap();
-    let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "resident_cycle",
-        spec: &activity_asset.spec.spec,
-        fs_profile: None,
-        input: json!({"brief": brief2, "crew": "sol"}),
-        audit,
-        run_id: &run2,
-        host: Some(&fx.runtime),
-    })
-    .map(|outcome| outcome.success)
-    .map_err(|error| error.to_string());
+    let outcome = fx.dispatch_cycle(&run2, &brief2);
     let calls = std::fs::read_to_string(&invocations_log)
         .unwrap_or_default()
         .lines()
@@ -2014,69 +1729,62 @@ fn dispatch_resumed_cycle_with_fake_codex(
 
 #[cfg(unix)]
 #[test]
-fn resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt",
-    ) {
+fn resumed_codex_cycle_outcomes() {
+    if !super::dispatch_admission::isolated("resident_cycle::resumed_codex_cycle_outcomes") {
         return;
     }
-    let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
-        "conv-live",
-        r#"
+    for (case, provider_body, successful) in [
+        (
+            "resumed_codex_cycle_with_a_transient_error_frame_is_not_rerun_or_rebuilt",
+            r#"
 envelope = {"schemaVersion": 1, "status": "success", "result": {"outcome": "idle", "summary": "ok"}, "error": None}
 print(json.dumps({"type": "thread.started", "thread_id": "conv-live"}))
 print(json.dumps({"type": "error", "message": "Reconnecting... 1/5"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(envelope)}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
 "#,
-    );
-    assert_eq!(outcome, Ok(true));
-    assert_eq!(calls.len(), 1, "the successful cycle was re-run: {calls:?}");
-    assert!(
-        calls[0]
-            .windows(2)
-            .any(|pair| pair == ["resume", "conv-live"]),
-        "{calls:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun",
-    ) {
-        return;
-    }
-    let (outcome, calls, _) = dispatch_resumed_cycle_with_fake_codex(
-        "conv-live",
-        r#"
+            true,
+        ),
+        (
+            "resumed_codex_cycle_failing_for_a_non_session_reason_is_not_rerun",
+            r#"
 print(json.dumps({"type": "error", "message": "unexpected status 401 Unauthorized: token has expired"}))
 print(json.dumps({"type": "turn.failed", "error": {"message": "unexpected status 401 Unauthorized"}}))
 sys.stderr.write("authentication failed\n")
 sys.exit(1)
 "#,
-    );
-    assert_ne!(outcome, Ok(true), "the failure must surface");
-    assert_eq!(calls.len(), 1, "the brief was silently re-run: {calls:?}");
+            false,
+        ),
+    ] {
+        use std::io::Write;
+        writeln!(std::io::stderr(), "scenario: resident_cycle::{case}").unwrap();
+        let (outcome, calls, _) =
+            dispatch_resumed_cycle_with_fake_codex("conv-live", provider_body);
+        assert_eq!(calls.len(), 1, "{case}: the cycle was re-run: {calls:?}");
+        if successful {
+            assert_eq!(outcome, Ok(true), "{case}");
+            assert!(
+                calls[0]
+                    .windows(2)
+                    .any(|pair| pair == ["resume", "conv-live"]),
+                "{case}: {calls:?}"
+            );
+        } else {
+            assert_ne!(outcome, Ok(true), "{case}: the failure must surface");
+        }
+    }
 }
 
 /// The cycle agent runs the mandate's crew; the run's Resolved Run Crew and
 /// recorded model must name that crew, not the assignment task's own field.
 #[test]
 fn a_cycle_run_records_the_mandate_crew_that_runs() {
-    if !super::dispatch_admission::isolated(
-        "resident_cycle::a_cycle_run_records_the_mandate_crew_that_runs",
-    ) {
-        return;
-    }
-    let fx = fixture();
-    let watched = fx.task("Ship scribe v2 slice 5");
-    let mandate = fx.mandate(&watched);
+    let fx = isolated_fixture!(a_cycle_run_records_the_mandate_crew_that_runs);
+    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let run = fx.cycle_run(&mandate, "resident-cycle-crew");
     let before = fx.jobs.get_job_run(&run).unwrap().unwrap();
     assert_eq!(before.resolved_crew, None);
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = fx.begin_cycle(&run, Utc::now());
     assert_eq!(brief["crew"], "sol", "{brief}");
     let recorded = fx.jobs.get_job_run(&run).unwrap().unwrap();
     assert_eq!(recorded.resolved_crew.as_deref(), Some("sol"));
