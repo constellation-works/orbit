@@ -62,6 +62,55 @@ fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
 }
 
 #[test]
+fn audit_event_with_json_keyed_credentials_is_stored_redacted_and_valid() {
+    let store = Store::open_in_memory().unwrap();
+    let payload = r#"{"event_id":"keyed","body_kind":"step_failed","headers":{"authorization":"Basic dXNlcjpwYXNz"},"x-api-key":"bare-xapi-key-value-01","api_key":"12345678901234567890","my_api_key":"prefixed-api-key-value1","serviceApiKey":"camel-api-key-value-001","note":"visible-value","api_keyboard":"ordinarybuildvalue"}"#;
+    store
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: "ws".into(),
+            event_id: "keyed-row".into(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "step_failed".into(),
+            ts: chrono::Utc::now(),
+            run_id: "keyed".into(),
+            agent_identity: "agent".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: payload.into(),
+        })
+        .unwrap();
+    let rows = store
+        .list_v2_audit_events(&V2AuditEventFilter {
+            workspace_id: "ws".into(),
+            run_id: Some("keyed".into()),
+            source: Some("v2_envelope".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    let stored = &rows[0].payload_json;
+    for secret in [
+        "dXNlcjpwYXNz",
+        "bare-xapi-key-value-01",
+        "12345678901234567890",
+        "prefixed-api-key-value1",
+        "camel-api-key-value-001",
+    ] {
+        assert!(!stored.contains(secret), "secret leaked: {stored}");
+    }
+    let parsed: serde_json::Value = serde_json::from_str(stored)
+        .unwrap_or_else(|err| panic!("stored payload is not valid JSON: {err}: {stored}"));
+    assert_eq!(parsed["headers"]["authorization"], "[REDACTED_AUTH]");
+    assert_eq!(parsed["x-api-key"], "[REDACTED_AUTH]");
+    assert_eq!(parsed["api_key"], "[REDACTED_AUTH]");
+    assert_eq!(parsed["my_api_key"], "[REDACTED_AUTH]");
+    assert_eq!(parsed["serviceApiKey"], "[REDACTED_AUTH]");
+    assert_eq!(parsed["note"], "visible-value");
+    assert_eq!(parsed["api_keyboard"], "ordinarybuildvalue");
+}
+
+#[test]
 fn audit_event_with_url_query_key_stays_valid_json_and_hides_the_key() {
     let store = Store::open_in_memory().unwrap();
     // Raw secret, and the already-redacted form a step produces before the
