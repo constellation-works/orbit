@@ -141,7 +141,7 @@ routines were removed. `orbit workspace sync` retires a workspace's seeded copie
 and a definition that still targets one of their jobs, or the `pilot_warnings_held` trigger,
 loads as retired and never fires. Triage a task held on pilot warnings from the dashboard's
 Triage action, which still runs `escalation_triage_pipeline`. No routine or installed command
-runs the UX rules now. The leftover keys of these removals are listed in
+runs the UX rules now; Orbit runs no UI rule checks and files no tasks from them. The leftover keys of these removals are listed in
 [Maintenance — Retired features](maintenance.md#retired-features-and-their-keys).
 
 ## Built in: final recovery of blocked tasks
