@@ -40,9 +40,11 @@ pub mod plugin;
 mod registry;
 pub mod tool_suggestions;
 
+mod artifact_materialize;
 mod context;
 mod fs_audit;
 mod host;
+mod program_policy;
 mod tool;
 
 /// Default network operation timeout (15 s). Used for most GitHub API calls

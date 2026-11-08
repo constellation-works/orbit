@@ -12,7 +12,7 @@ Tool registry and built-in fs/exec/Orbit tool definitions; plugin loading (`plug
 
 ## Main modules and types
 
-`registry` (`ToolRegistry` in `crates/orbit-tools/src/registry.rs`), `builtin`, `plugin`, `github_cli`, `mcp` (`builtin_mcp_rules`), `external`, `tool` (`Tool`, `ToolContext`). See ``crates/orbit-tools/src/lib.rs``.
+`registry` (`ToolRegistry` in `crates/orbit-tools/src/registry.rs`), `builtin`, `plugin`, `github_cli`, `mcp` (`builtin_mcp_rules`), `external`, `tool` (`Tool`, `ToolContext`). Two shared mechanisms live in crate-root leaf modules so non-builtin surfaces need not depend on `crate::builtin`: `program_policy` (`enforce_program_allowlist`, called by `builtin/proc/spawn.rs`, `external` and the plugin backend) and `artifact_materialize` (`prepare_remote_payload` with its bounded/confinement helpers, called by `host::prepare_remote_task_artifact_put` and `builtin/orbit/task/operation.rs`; the `artifact_put` builtin's `preempt` imports `source_presence_error` back from the leaf). No file in `host.rs`, `external.rs` or `plugin/` names `crate::builtin`; only `registry` (through `register_builtins`), `lib.rs` and the documented `github_cli` re-exports do. See ``crates/orbit-tools/src/lib.rs``.
 
 ## Dependencies
 

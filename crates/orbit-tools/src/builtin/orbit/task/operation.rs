@@ -224,7 +224,7 @@ impl GuardedModes for TaskVerb {
     fn shape_input(self, ctx: &ToolContext, input: &mut Value) -> Result<(), OrbitError> {
         match self {
             TaskVerb::ArtifactPut => {
-                *input = super::artifact_put::prepare_remote_payload(input.take(), ctx)?;
+                *input = crate::artifact_materialize::prepare_remote_payload(input.take(), ctx)?;
                 Ok(())
             }
             TaskVerb::Add => {
