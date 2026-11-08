@@ -423,13 +423,18 @@ local build — use `--local-candidate` (below). `orbit update --check` checks r
 compatibility.
 
 Participating CLI/MCP processes hold a generation lock for their entire
-lifetime. Admission depends on the update: for a staged local candidate, a
-live long-lived participant that reports a handover capability the candidate
+lifetime. Admission depends on the update: for a staged local candidate, only
+a live long-lived participant that registered a resume capability the candidate
 resumes is admitted beside the updater and pinning waits for it to hand
-over, and short-lived participants are waited for; a participant that cannot
-hand over (unsupported, v1-owned, or the `mcp listen` listener) still blocks
-the update. Without a candidate, a live long-lived participant still blocks.
-Do not kill an idle handover-capable client to make room. Ordinary v2 runtime admission instead compares store,
+over — in this tree that is a non-remote stdio `mcp serve` whose stdin can be
+polled and whose capability is `mcp-stdio-v1` — and short-lived participants,
+including clock ticks and one-shot commands, are waited for; a live dashboard
+(`orbit web serve`), a drain (`orbit job run-pipeline-worker`), `orbit mcp listen`,
+an `mcp serve` that did not register a capability the candidate resumes, and a
+holder that never registered (a v1 binary or a sandboxed child that cannot write
+the Orbit root) still block the update and make it refuse before the installed
+executable is replaced. Without a candidate, a live long-lived participant still
+blocks. Do not kill an idle handover-capable client to make room. Ordinary v2 runtime admission instead compares store,
 layout and feature compatibility: compatible builds may run and apply additive
 migrations side by side despite different executable digests. A breaking newer
 writer records a pending switch and waits up to 120 seconds by default for
@@ -500,13 +505,17 @@ workspace, and use an isolated checkout as well as isolated `HOME` and install
 target for smoke checks. The JSON report's `workspace_root` and
 `admission_roots` show what was selected and held. The staged copy is what
 installs even if the candidate path changes, an equal version with a different
-digest replaces, and live MCP/dashboard/drain clients that report a
-handover capability the candidate resumes are admitted beside it and hand
-over after the swap, while short-lived clients, including clock ticks, are
-waited for — do not
-quiesce idle handover-capable clients. Only a client that cannot hand over
-(unsupported, v1-owned, or the `mcp listen` listener) makes it refuse before
-anything changes; quiesce that client, retry, then reconnect. Rerunning the
+digest replaces, and only a live long-lived client that registered a resume
+capability the candidate resumes is admitted beside it and hands over after the
+swap — in this tree that is a non-remote stdio `mcp serve` whose stdin can be
+polled and whose capability is `mcp-stdio-v1` — while short-lived clients,
+including clock ticks and one-shot commands, are waited for — do not
+quiesce idle handover-capable clients. A live dashboard (`orbit web serve`), a
+drain (`orbit job run-pipeline-worker`), `orbit mcp listen`, an `mcp serve` that
+did not register a capability the candidate resumes, and a holder that never
+registered (a v1 binary or a sandboxed child that cannot write the Orbit root)
+make it refuse before the installed executable is replaced; quiesce that holder,
+retry, then reconnect. Rerunning the
 same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
 See the upgrades runbook for the full procedure.
