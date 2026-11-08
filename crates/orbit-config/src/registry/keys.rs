@@ -335,7 +335,32 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "publication.routine_allow_unscanned_attachments",
         ROUTINE_ATTACHMENTS_REMOVED_NOTE,
     ),
+    // [ORB-22808] Selective before-landing review was removed on 2026-11-08.
+    // Each key loads, warns and is ignored; code-health-sweep deletes these
+    // entries after 2026-12-08, when they become ordinary unknown settings.
+    (
+        "review.selective_before_landing.mode",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.paths",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.risk_threshold",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
+    (
+        "review.selective_before_landing.unknown_risk",
+        SELECTIVE_REVIEW_REMOVED_NOTE,
+    ),
 ];
+
+const SELECTIVE_REVIEW_REMOVED_NOTE: &str = "ignored: selective before-landing review was \
+     removed, so no candidate is selected by path or risk (the former `off` mode); review \
+     before landing with review.timing = \"before_landing\" or review.before_landing_hosts. \
+     Delete the [review.selective_before_landing] table. This key stops being recognised \
+     after 2026-12-08";
 
 const ROUTINE_ATTACHMENTS_REMOVED_NOTE: &str = "ignored: the task-publication routine always \
      omits attachments (the former `omit` default); publish them by hand with `orbit task \

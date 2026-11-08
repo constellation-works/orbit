@@ -9,7 +9,7 @@ use orbit_store::contracts::ReviewReserveRequest;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
     ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewManifest,
-    ReviewReservation, SelectiveReviewReceipt,
+    ReviewReservation,
 };
 
 use super::super::super::evidence::{
@@ -33,7 +33,6 @@ pub(super) fn admit(
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
     host_step: Option<&str>,
-    selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 ) -> Result<ReviewGateAdmissionOutput, OrbitError> {
     let required_validation_commands = admission
         .required_validation_commands
@@ -241,7 +240,7 @@ pub(super) fn admit(
             budget: ledger.budget,
             remaining: manifest.remaining,
             started_at: attempt.started_at,
-            selective_receipt,
+            selective_receipt: None,
         },
     )))
 }

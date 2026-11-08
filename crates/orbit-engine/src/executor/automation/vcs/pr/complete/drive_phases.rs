@@ -30,9 +30,7 @@ use super::ci_rerun_hold::{CiRerunHold, CiRerunHoldStep, CiRerunRecoveryOutcome}
 use super::conflict::is_blocked_merge_state;
 use super::drive::Delivery;
 use super::mutation::{checked_required_check_observation_failure, observation_failure};
-use super::reviewed::{
-    ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_wait_timeout,
-};
+use super::reviewed::{ensure_pr_head_is_reviewed, merge_wait_timeout};
 
 /// One observed poll: the PR status and the state derived from it.
 pub(super) struct ObservedPoll {
@@ -90,7 +88,6 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) base_candidate: Option<HandoffCandidate>,
     pub(super) base_adopted: bool,
     pub(super) reviewed_head_sha: Option<String>,
-    pub(super) selective_head_sha: Option<String>,
     pub(super) watch_only: bool,
     pub(super) unsettled_polls: u32,
     pub(super) unreported: UnreportedChecks,
@@ -259,11 +256,6 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             self.pin.ensure_pinned_candidate(&status, pr_number)?;
             if !self.base_adopted {
                 ensure_pr_head_is_reviewed(&status, pr_number, self.reviewed_head_sha.as_deref())?;
-                ensure_pr_head_matches_selection(
-                    &status,
-                    pr_number,
-                    self.selective_head_sha.as_deref(),
-                )?;
             }
         }
         state = checked_pr_state(

@@ -1,7 +1,5 @@
 //! Review policy changes must select their own observed delivery distribution.
 
-use std::collections::BTreeMap;
-
 use chrono::{Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
@@ -11,9 +9,7 @@ use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use orbit_types::workflow::{
     JobRunState, JobTargetType, PipelineState, ReviewAdmission, ReviewBudget,
-    ReviewGateAdmissionOutput, ReviewGateNotApplicable, ReviewTiming, SelectiveBeforeLandingMode,
-    SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs, SelectiveUnknownRisk,
-    evaluate_selective_review,
+    ReviewGateAdmissionOutput, ReviewGateNotApplicable, ReviewTiming,
 };
 use serde_json::{Value, json};
 
@@ -185,38 +181,11 @@ fn pending(runtime: &OrbitRuntime, complexity: TaskComplexity, crew: &str) -> St
         .id
 }
 
-fn selective_off_admission() -> ReviewAdmission {
-    let mut admitted = admission(ReviewTiming::None);
-    admitted.selective_before_landing = Some(SelectiveBeforeLandingPolicy::new(
-        SelectiveBeforeLandingMode::Enforce,
-        None,
-        Vec::new(),
-        SelectiveUnknownRisk::Review,
-        BTreeMap::new(),
+fn write_gate_not_applicable(runtime: &OrbitRuntime, run_id: &str, admitted: &ReviewAdmission) {
+    let output = ReviewGateAdmissionOutput::NotApplicable(ReviewGateNotApplicable::new(
+        "review_before_landing_off",
+        Some(admitted),
     ));
-    admitted
-}
-
-fn write_selective_not_required(runtime: &OrbitRuntime, run_id: &str, admitted: &ReviewAdmission) {
-    let policy = admitted
-        .selective_before_landing
-        .as_ref()
-        .expect("selective admission");
-    let receipt = evaluate_selective_review(
-        policy,
-        "ws_forecast_modes",
-        run_id,
-        &[],
-        ("base", "base-tree"),
-        ("head", "head-tree"),
-        SelectiveEvaluationInputs::default(),
-    );
-    let output =
-        ReviewGateAdmissionOutput::NotApplicable(ReviewGateNotApplicable::with_selective_receipt(
-            "selective_not_required",
-            Some(admitted),
-            receipt,
-        ));
     let mut state = PipelineState::new(run_id.to_string(), "task_pr_pipeline".into(), json!({}));
     state.record_pipeline_output(
         "landing_review_gate_admit",
@@ -666,11 +635,10 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
         "agent_implement",
     );
     exempt_step(&runtime, &exempt_run);
-    let selective = selective_off_admission();
-    let selective_task = done_task(&runtime, "Selective skip");
-    let selective_run =
-        record_admitted(&runtime, &selective_task, &selective, 1, "agent_implement");
-    write_selective_not_required(&runtime, &selective_run, &selective);
+    let skipped = admission(ReviewTiming::None);
+    let skipped_task = done_task(&runtime, "Gate skip");
+    let skipped_run = record_admitted(&runtime, &skipped_task, &skipped, 1, "agent_implement");
+    write_gate_not_applicable(&runtime, &skipped_run, &skipped);
     let reviewed = done_task(&runtime, "Reviewed delivery");
     let reviewed_run = record_attempt(&runtime, &reviewed, ReviewTiming::BeforeLanding, 10);
     let empty_task = done_task(&runtime, "Empty checkpoint");
@@ -684,7 +652,7 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
     exempt_step(&runtime, &empty_run);
     plant_checkpoint(&runtime, &empty_run, "");
     let malformed_task = done_task(&runtime, "Malformed checkpoint");
-    let malformed_admission = selective_off_admission();
+    let malformed_admission = admission(ReviewTiming::None);
     let malformed_run = record_admitted(
         &runtime,
         &malformed_task,
@@ -808,7 +776,7 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
     );
     for run_id in quiet_runs
         .iter()
-        .chain([&exempt_run, &selective_run, &reviewed_run])
+        .chain([&exempt_run, &skipped_run, &reviewed_run])
     {
         assert!(
             !gap_ids.iter().any(|id| id == run_id),
@@ -816,7 +784,7 @@ fn unreadable_historical_checkpoint_keeps_forecast_and_marks_review_unknown() {
         );
     }
     assert!(runtime.read_run_state(&quiet_runs[0]).unwrap().is_none());
-    assert!(runtime.read_run_state(&selective_run).unwrap().is_some());
+    assert!(runtime.read_run_state(&skipped_run).unwrap().is_some());
     for run_id in [&empty_run, &malformed_run, &running_run] {
         let error = runtime.read_run_state(run_id).unwrap_err();
         assert!(

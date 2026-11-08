@@ -420,31 +420,6 @@ impl TaskRiskinessModel {
         }
     }
 
-    /// A stable identity of the fitted diff-lines model and its evidence
-    /// window, for freezing into a selection receipt: estimator version,
-    /// window, support, and the fit's observations and coefficients.
-    pub fn diff_model_identity(&self) -> String {
-        match self.diff.fit {
-            Some(fit) => format!(
-                "task-riskiness/v{} diff_lines window_days={} since={} observed_through={} \
-                 min_support={} observations={} regressed={} intercept={} slope={}",
-                TASK_RISKINESS_ESTIMATOR_VERSION,
-                self.window_days,
-                self.since.to_rfc3339_opts(SecondsFormat::Secs, true),
-                self.computed_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-                self.min_support,
-                fit.observations,
-                fit.regressed,
-                fit.intercept,
-                fit.slope,
-            ),
-            None => format!(
-                "task-riskiness/v{} diff_lines window_days={} min_support={} fit=none",
-                TASK_RISKINESS_ESTIMATOR_VERSION, self.window_days, self.min_support,
-            ),
-        }
-    }
-
     /// The riskiness of `task` from this model's facts.
     pub fn estimate(&self, task: &Task) -> TaskRiskiness {
         let population = self.regressed.len();
