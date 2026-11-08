@@ -1,4 +1,4 @@
-//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,turns_to_edit,diff_stats,delivery_friction,backlog_forecast}`
+//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,turns_to_edit,diff_stats,delivery_friction,backlog_forecast,resource_forecast}`
 //! aggregation endpoints, and the Analytics › Experiments list, show and
 //! readout endpoints.
 
@@ -13,6 +13,7 @@ mod errors;
 mod experiments;
 mod friction;
 mod metrics;
+mod resource_forecast;
 mod task_tokens;
 mod trend;
 mod turns_to_edit;
@@ -31,5 +32,6 @@ pub(super) use experiments::{
 };
 pub(super) use friction::list_diagnostics_friction;
 pub(super) use metrics::list_diagnostics_metrics;
+pub(super) use resource_forecast::diagnostics_resource_forecast;
 pub(super) use task_tokens::diagnostics_task_tokens;
 pub(super) use turns_to_edit::diagnostics_turns_to_edit;

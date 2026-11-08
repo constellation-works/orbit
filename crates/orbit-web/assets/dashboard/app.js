@@ -15,7 +15,7 @@ import { initLogTail, fitLogPanelToViewport, setDockMode, setDockRouteShown } fr
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
-import { fetchAndRenderForecast, forecastTabRoute, onForecastTabPick, placeholdForecastAggregate, setForecastTab } from './js/forecast.js';
+import { fetchForecastView, forecastTabRoute, onForecastTabPick, placeholdForecastAggregate, setForecastTab } from './js/forecast.js';
 import {
   fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute, onExperimentTabPick,
 } from './js/experiments.js';
@@ -357,7 +357,7 @@ function routerContext() {
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
-    fetchForecast: () => fetchAndRenderForecast().catch((e) => console.error("Failed to fetch the backlog forecast", e)),
+    fetchForecast: () => fetchForecastView().catch((e) => console.error("Failed to fetch the forecast", e)),
     forecastTabRoute,
     setForecastTab,
     onForecastTabPick,
@@ -1654,8 +1654,9 @@ function activeRefreshJobs({ poll = false } = {}) {
       return jobs;
     }
     if (activeAnalyticsSubtab === "forecast") {
-      // Backlog forecast quantiles, arrivals and calibration for the workspace.
-      add("Analytics › Forecast", fetchAndRenderForecast());
+      // The view on screen: the backlog forecast's quantiles, arrivals and
+      // calibration, or the admission resource forecast, for the workspace.
+      add("Analytics › Forecast", fetchForecastView());
       return jobs;
     }
     if (activeAnalyticsSubtab === "experiments") {

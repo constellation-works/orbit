@@ -277,6 +277,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/diagnostics/backlog_forecast",
             get(diagnostics::diagnostics_backlog_forecast),
         )
+        .route(
+            "/diagnostics/resource_forecast",
+            get(diagnostics::diagnostics_resource_forecast),
+        )
         // Analytics › Experiments: the list with each arm's enrollment, one
         // experiment with its events, and its per-arm readout (the JSON of
         // `orbit.experiment.readout` plus the primary metric's cumulative

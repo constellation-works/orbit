@@ -7,6 +7,10 @@
 // the Accuracy tab, forecast-gaps.js the Data gaps tab and forecast-summary.js
 // the formatting and drain-card summary.
 //
+// The view switches between this Backlog forecast and the Resource forecast
+// (resource-forecast.js). Each reads only when it is first shown and on its
+// own refresh, so switching never refetches the other.
+//
 // The forecast is per workspace; the aggregate view shows the usual
 // placeholder. The history select and the With new arrivals scenario refetch:
 // only the default view (30 days reaching back to at least the newest 50
@@ -36,6 +40,10 @@ import {
 import { dataGapsPanelNodes, openCoverageCount, otherChecksClearText } from './forecast-gaps.js';
 import { accuracyPanelNodes } from './forecast-accuracy.js';
 import * as forecastSummary from './forecast-summary.js';
+import {
+  fetchAndRenderResourceForecast, onResourceForecastTabPick, placeholdResourceForecastAggregate,
+  resourceForecastLoaded, resourceForecastRoute, setResourceForecastTab,
+} from './resource-forecast.js';
 
 export {
   backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, forecastBaselineFigures,
@@ -124,7 +132,69 @@ export function fetchBacklogForecast(options) {
 export function placeholdForecastAggregate() {
   clearForecast();
   renderPanelPlaceholder(BODY);
+  placeholdResourceForecastAggregate();
 }
+
+// ---- backlog / resource switch ----------------------------------------------
+
+const FORECAST_VIEWS = ["backlog", "resources"];
+let forecastViewShown = "backlog";
+
+/// Read the forecast view on screen: the Backlog or the Resource forecast.
+export function fetchForecastView() {
+  return forecastViewShown === "resources" ? fetchAndRenderResourceForecast() : fetchAndRenderForecast();
+}
+
+function applyForecastView() {
+  const resources = forecastViewShown === "resources";
+  const backlogPanel = $("forecast-panel");
+  const resourcePanel = $("resource-forecast-panel");
+  if (backlogPanel) backlogPanel.hidden = resources;
+  if (resourcePanel) resourcePanel.hidden = !resources;
+  for (const button of document.querySelectorAll("#forecast-switch [data-forecast-view]")) {
+    const on = button.dataset.forecastView === forecastViewShown;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
+  }
+}
+
+// A pick shows the other view, reading it only if it has not been read in
+// this workspace, and keeps the address in step without routing.
+function pickForecastView(name) {
+  if (!FORECAST_VIEWS.includes(name) || name === forecastViewShown) return;
+  forecastViewShown = name;
+  applyForecastView();
+  tabPickListener?.();
+  if (isAggregateView()) return;
+  if (name === "resources" && !resourceForecastLoaded()) {
+    fetchAndRenderResourceForecast().catch((error) => console.error("Failed to fetch the resource forecast", error));
+  } else if (name === "backlog" && !view.payload) {
+    refetch();
+  }
+}
+
+function bindForecastSwitch() {
+  const strip = $("forecast-switch");
+  if (!strip || strip.dataset.bound) return;
+  strip.dataset.bound = "true";
+  for (const button of strip.querySelectorAll("[data-forecast-view]")) {
+    button.addEventListener("click", () => pickForecastView(button.dataset.forecastView));
+  }
+  strip.addEventListener("keydown", (event) => {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    const index = FORECAST_VIEWS.indexOf(forecastViewShown);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? FORECAST_VIEWS.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + FORECAST_VIEWS.length) % FORECAST_VIEWS.length;
+    event.preventDefault();
+    pickForecastView(FORECAST_VIEWS[next]);
+    strip.querySelector(`[data-forecast-view="${FORECAST_VIEWS[next]}"]`)?.focus();
+  });
+  applyForecastView();
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindForecastSwitch);
+else bindForecastSwitch();
 
 // `refresh` recomputes live; the panel scope stays the view's path, so the
 // current forecast stays up while it runs. Default polls share an explicit
@@ -214,19 +284,29 @@ function refetch() {
 
 /// The route of the tab on screen, without the leading `#`.
 export function forecastTabRoute() {
+  if (forecastViewShown === "resources") return resourceForecastRoute();
   return view.tab === DEFAULT_FORECAST_TAB ? "analytics/forecast" : `analytics/forecast/${view.tab}`;
 }
 
-/// Show `tab` (an unknown or missing one is the Forecast tab).
-export function setForecastTab(tab) {
-  view.tab = FORECAST_TABS.some(([key]) => key === tab) ? tab : DEFAULT_FORECAST_TAB;
-  applyForecastTab();
+/// Show `tab` (an unknown or missing one is the Forecast tab). `resources`
+/// shows the Resource forecast instead, on its tab `subtab`.
+export function setForecastTab(tab, subtab) {
+  if (tab === "resources") {
+    forecastViewShown = "resources";
+    setResourceForecastTab(subtab);
+  } else {
+    forecastViewShown = "backlog";
+    view.tab = FORECAST_TABS.some(([key]) => key === tab) ? tab : DEFAULT_FORECAST_TAB;
+    applyForecastTab();
+  }
+  applyForecastView();
 }
 
-/// `listener` runs when the operator picks a tab, so the router can keep the
-/// address in step without routing, which would refetch.
+/// `listener` runs when the operator picks a tab or view, so the router can
+/// keep the address in step without routing, which would refetch.
 export function onForecastTabPick(listener) {
   tabPickListener = listener;
+  onResourceForecastTabPick(listener);
 }
 
 function pickForecastTab(tab) {

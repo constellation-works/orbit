@@ -585,15 +585,28 @@
           <div class="body resources-body" id="resources-body" tabindex="0" role="region" aria-label="Resource profiles"></div>
         </section>
       </main>
-      <!-- Analytics › Forecast: backlog time to drain, cost and tokens as p50
-           and p90 by scenario, with Accuracy and Data gaps tabs. -->
+      <!-- Analytics › Forecast: the Backlog forecast (time to drain, cost and
+           tokens as p50 and p90 by scenario, with Accuracy and Data gaps tabs)
+           or the Resource forecast (whether the next task fits this host's CPU
+           and memory, with Profiles, Accuracy and Decisions tabs). -->
       <main id="analytics-forecast-main" style="grid-template-columns: 1fr; display: none;">
+        <div class="mx-seg fc-switch" id="forecast-switch" role="tablist" aria-label="Forecast">
+          <button class="mx-seg-btn on" type="button" role="tab" aria-selected="true" aria-controls="forecast-panel" data-forecast-view="backlog">Backlog forecast</button>
+          <button class="mx-seg-btn" type="button" role="tab" aria-selected="false" aria-controls="resource-forecast-panel" tabindex="-1" data-forecast-view="resources">Resource forecast</button>
+        </div>
         <section class="panel" id="forecast-panel">
           <header>
             <span>Backlog forecast</span>
             <span class="count" id="forecast-count">-</span>
           </header>
           <div class="body forecast-body" id="forecast-body" tabindex="0" role="region" aria-label="Backlog forecast"></div>
+        </section>
+        <section class="panel" id="resource-forecast-panel" hidden>
+          <header>
+            <span>Resource forecast</span>
+            <span class="count" id="resource-forecast-count">-</span>
+          </header>
+          <div class="body forecast-body" id="resource-forecast-body" tabindex="0" role="region" aria-label="Resource forecast"></div>
         </section>
       </main>
       <!-- Analytics › Experiments: the list, or one experiment's readout. -->
