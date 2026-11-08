@@ -682,7 +682,10 @@ new execution or landing permission. The summary-only legacy handoff variant ref
 A published-PR claim whose ship contract captured a before-PR or before-landing `review` must
 hand off typed evidence from the corresponding gate:
 verdict, reviewed head and base SHAs, the reviewer's fix commit when it made one, reviewer crew and
-run, and digest-pinned certificate and reviewer artifacts. Acceptance re-reads the certificate from
+run, and digest-pinned certificate and reviewer artifacts. A stored claim whose review contract is only
+the removed selective policy (both timing flags false, `selective_before_landing` still present)
+is not that capture: acceptance treats it as no review requirement, keeps those bytes on the
+receipt, and accepts `not_required`. Review evidence on that claim is unexpected. Acceptance re-reads the certificate from
 the owner task bundle and refuses, with a typed reason, missing or unexpected evidence
 (`review_evidence_missing`, `review_evidence_unexpected`), a verdict that does not pass
 (`review_not_passed`), a reviewed head or reviewer commit other than the handed-off candidate
@@ -690,9 +693,11 @@ the owner task bundle and refuses, with a typed reason, missing or unexpected ev
 (`reviewed_base_not_ancestor`), a certificate that disagrees with the evidence, candidate, task or
 repository (`review_certificate_mismatch`), and a crew, certificate schema or required-command list
 other than the captured contract's (`review_contract_mismatch`). A legacy review contract without
-`required_validation_commands` is also refused with fresh-claim guidance. Acceptance requires the
-owner's current required-command list to equal the captured list: a change since admission refuses
-the handoff as `review_contract_mismatch` instead of rewriting the claim. Approval and landing
+`required_validation_commands` is also refused with fresh-claim guidance. When a before-PR or
+before-landing timing was captured, acceptance requires the owner's current required-command list
+to equal the captured list: a change since admission refuses the handoff as `review_contract_mismatch`
+instead of rewriting the claim. That comparison does not apply to a retained selective-only
+contract, whose current commands are still checked against the handoff's validation logs. Approval and landing
 recheck the pinned evidence. An
 accepted certificate is written to the owner's review store, so after-landing coverage excludes the
 reviewed tree instead of reviewing it again. A claim without a captured `review` refuses before-PR

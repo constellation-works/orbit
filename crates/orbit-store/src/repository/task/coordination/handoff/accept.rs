@@ -69,7 +69,12 @@ impl TaskCommitBoundary {
             ));
         }
         let ship = self.claim_ship(state)?;
-        if let Some(review) = &ship.review
+        // The captured command list binds a review the claim actually
+        // required. A retained selective-only contract keeps `review` with
+        // timing none and is not that requirement [ORB-22966]; the owner's
+        // current commands are still checked with the handoff logs.
+        if ship.review_timing() != orbit_types::workflow::ReviewTiming::None
+            && let Some(review) = &ship.review
             && review.required_validation_commands.as_deref()
                 != Some(observation.required_commands.as_slice())
         {

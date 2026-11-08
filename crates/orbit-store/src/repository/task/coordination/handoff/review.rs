@@ -49,17 +49,29 @@ impl TaskCommitBoundary {
         {
             return Ok(Vec::new());
         }
-        let Some(contract) = &ship.review else {
-            if ship.before_pr
-                || ship.before_landing
-                || handoff.review != HandoffReview::not_required()
-            {
+        // [ORB-22966] Timing none owes no review. A retained selective-only
+        // contract still carries `review` with both timing flags false; the
+        // selective policy is ignored, so `not_required` is accepted and
+        // evidence for no captured timing is refused. Before-PR and
+        // before-landing captures fall through and still require evidence.
+        if ship.review_timing() == ReviewTiming::None {
+            if handoff.review != HandoffReview::not_required() {
                 return Err(review_refused(
                     R::ReviewEvidenceUnexpected,
-                    "the claim captured no review contract",
+                    if ship.review.is_none() {
+                        "the claim captured no review contract"
+                    } else {
+                        "the claim captured no review timing"
+                    },
                 ));
             }
             return Ok(Vec::new());
+        }
+        let Some(contract) = &ship.review else {
+            return Err(review_refused(
+                R::ReviewEvidenceUnexpected,
+                "the claim captured no review contract",
+            ));
         };
         if contract.required_validation_commands.is_none() {
             return Err(review_refused(

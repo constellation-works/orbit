@@ -112,9 +112,12 @@ pub struct AdmissionShipContract {
     pub before_landing: bool,
     pub completion: String,
     pub authorization_reference: Option<String>,
-    /// The owner's captured review contract: present exactly when
-    /// `before_pr` [ORB-13895] or `before_landing` [ORB-14849] is on. A
-    /// handoff's review evidence is judged against it, never against the
+    /// The owner's captured review contract: present when `before_pr`
+    /// [ORB-13895] or `before_landing` [ORB-14849] is on, and also on a
+    /// claim an earlier owner captured for selective review alone (both
+    /// timing flags false). That retained contract is not a review
+    /// requirement [ORB-22966]. A handoff's review evidence is judged
+    /// against a before-PR or before-landing contract, never against the
     /// owner's settings at handoff time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<AdmissionReviewContract>,
@@ -178,12 +181,24 @@ impl AdmissionShipContract {
 
     /// Whether `review` matches the captured timing and is itself well
     /// formed.
+    ///
+    /// A retained selective-only contract — `review` present,
+    /// `selective_before_landing` present, and both timing flags false —
+    /// is well formed and is not a review requirement [ORB-22966].
+    /// Before-PR and before-landing still require exactly one of those
+    /// flags and a well-formed contract. A review contract with neither
+    /// timing nor a selective field is not consistent.
     #[must_use]
     pub fn review_contract_consistent(&self) -> bool {
         match &self.review {
             None => !self.before_pr && !self.before_landing,
             Some(review) => {
-                self.before_pr != self.before_landing
+                let retained_selective_only = !self.before_pr
+                    && !self.before_landing
+                    && review.selective_before_landing.is_some();
+                let timing_matches =
+                    retained_selective_only || self.before_pr != self.before_landing;
+                timing_matches
                     && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
                     && review
                         .crew

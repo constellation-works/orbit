@@ -44,7 +44,8 @@ records the selective risk-threshold and path rules [ORB-20087] that shipped
 default off and were never enabled. They were removed on 2026-11-08: the
 `review.selective_before_landing` keys load with a deprecation warning and are
 ignored until 2026-12-08, and the legacy admission, handoff and capability
-fields stay readable but are never produced, so the distributed protocol
+fields stay readable. A stored claim that captured only that policy is not a
+review requirement. The fields are never produced, so the distributed protocol
 fingerprint is unchanged.
 
 Review runs at three timings [ORB-13992] [ORB-14849]: `review.timing =
