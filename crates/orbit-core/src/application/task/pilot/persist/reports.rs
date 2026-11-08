@@ -3,13 +3,14 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{ContextCreationState, Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{ContextCreationState, Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::SUPERSEDED_BY_SOURCE;
 use crate::application::task::TaskAutomationPort;
+use crate::application::task::legacy_decisions;
 
 use super::super::apply::admission::PreparedTaskSnapshot;
 use super::apply_task::{CONTEXT_CREATION_CHANGED, CONTEXT_CREATION_CHANGED_DETAIL};
@@ -181,14 +182,7 @@ pub(in super::super) fn superseded_with_current(
     if matches!(current.status, TaskStatus::InProgress | TaskStatus::Review)
         && !structural_drift
         && !creation_drift
-        && newer.iter().any(|entry| {
-            entry.to_status == Some(TaskStatus::InProgress)
-                && entry.by == "system"
-                && entry
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| note.starts_with("workflow admission:"))
-        })
+        && newer.iter().any(records_workflow_admission)
         && (status_only_fingerprint(runtime, current, snapshot, policy).is_some()
             || (snapshot.material.is_none() && snapshot.history_len.is_some() && !edited))
     {
@@ -198,6 +192,19 @@ pub(in super::super) fn superseded_with_current(
         )));
     }
     Ok(None)
+}
+
+/// Whether a history entry is a workflow admission's `started` transition:
+/// its typed decision, or the note of an entry written before admission
+/// carried one.
+fn records_workflow_admission(entry: &TaskHistoryEntry) -> bool {
+    match &entry.decision {
+        Some(TaskDecision::WorkflowAdmission { .. }) => {
+            entry.to_status == Some(TaskStatus::InProgress)
+        }
+        Some(_) => false,
+        None => legacy_decisions::workflow_admission_note(entry),
+    }
 }
 
 pub(in super::super) fn task_outcome(task_id: &str, outcome: &str, error: Option<String>) -> Value {
