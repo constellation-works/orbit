@@ -207,9 +207,20 @@ def download():
         remaining()
         try:
             os.link(args.cache_file, args.destination)
+        except FileExistsError:
+            raise
         except OSError:
+            # Copy onto the destination filesystem, then publish atomically.
+            # Copying directly to destination would overwrite a racing file or
+            # follow a racing symlink after the preflight check.
             import shutil
-            shutil.copyfile(args.cache_file, args.destination)
+            with tempfile.TemporaryDirectory(prefix=".ci-download-", dir=args.destination.parent) as scratch:
+                candidate = Path(scratch) / "cached"
+                shutil.copyfile(args.cache_file, candidate)
+                if verified_digest(candidate) != args.sha256.lower():
+                    raise ValueError("SHA-256 mismatch; refusing cached archive")
+                remaining()
+                os.link(candidate, args.destination)
         log("cache=hit outcome=verified")
         return
 

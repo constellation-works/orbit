@@ -3878,20 +3878,6 @@ def self_test():
     retired_case_self_test()
     if scenario_decision(inventory, [], candidate)[0]:
         raise AssertionError("missing required scenario passed")
-    before = {"workspace":"qa-primary", "artifacts":[]}
-    wrong_workspace = {"workspace":"qa-other", "artifacts":[]}
-    unchanged = {"workspace":"qa-primary", "artifacts":[]}
-    if wrong_workspace["workspace"] == before["workspace"]:
-        raise AssertionError("wrong-workspace self-test fixture is invalid")
-    if unchanged["artifacts"] != before["artifacts"]:
-        raise AssertionError("unchanged-persistence self-test fixture is invalid")
-    for body, message in ((wrong_workspace, "wrong workspace"), (unchanged, "unchanged artifact")):
-        try:
-            if body["workspace"] != "qa-primary" or body["artifacts"] == before["artifacts"]:
-                raise ValueError(message)
-        except ValueError:
-            continue
-        raise AssertionError(f"{message} evidence passed")
     for stdout in ("", "{}", '{"wrong":true}'):
         evidence = {"exit_code":0, "stdout":stdout, "stderr":""}
         try:

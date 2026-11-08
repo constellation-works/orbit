@@ -253,10 +253,60 @@ qa.main()
                 output.unlink()
 
 
+def builtin_readback_self_test(harness, scratch):
+    """Drive the real builtins through independently corrupted command responses."""
+    namespace = runpy.run_path(str(harness))
+    builtins = namespace["run_builtins"]
+    scope = builtins.__globals__
+    original_finalize = scope["finalize_result"]
+
+    class StopFixture(Exception):
+        pass
+
+    for mode in ("valid", "wrong-workspace", "malformed-workspace", "unchanged-artifact"):
+        with tempfile.TemporaryDirectory(prefix="qa-readback-", dir=scratch) as tmp:
+            root = Path(tmp)
+            captured = []
+            def finalize(*args, **kwargs):
+                result = original_finalize(*args, **kwargs)
+                captured.append(result)
+                return result
+            def run(argv, **kwargs):
+                stdout = ""
+                if "workspace" in argv and "show" in argv:
+                    workspace = root / ("other-workspace" if mode == "wrong-workspace" else "workspace")
+                    stdout = "{}" if mode == "malformed-workspace" else json.dumps({"checkout": {"repo_root": str(workspace)}})
+                elif "task" in argv and "add" in argv:
+                    stdout = json.dumps({"id": "QAF-1", "title": "QA behavioral fixture"})
+                elif "task" in argv and "show" in argv:
+                    stdout = json.dumps({"id": "QAF-1", "title": "QA behavioral fixture", "acceptance_criteria": ["fixture round trip"]})
+                elif "artifact" in argv and "put" in argv:
+                    stdout = "{}"
+                elif "artifact" in argv and "get" in argv:
+                    stdout = "old persisted bytes\n" if mode == "unchanged-artifact" else "qa evidence payload\n"
+                elif "task" in argv and "list" in argv:
+                    raise StopFixture()
+                return {"command": argv, "exit_code": 0, "stdout": stdout, "stderr": "", "cleanup_verified": True}
+            scope["run"] = run
+            scope["finalize_result"] = finalize
+            scope["scenario_sandbox_probe"] = lambda *args: None
+            try:
+                builtins(root, "orbit", root, {}, "fixture")
+            except StopFixture:
+                pass
+            else:
+                raise AssertionError("fixture did not reach artifact readback")
+            workspace = next(row for row in captured if "workspace" in row["command"] and "show" in row["command"])
+            artifact = next(row for row in captured if "artifact" in row["command"] and "get" in row["command"])
+            assert workspace["outcome"] == ("FAIL" if mode in ("wrong-workspace", "malformed-workspace") else "PASS"), (mode, workspace)
+            assert artifact["outcome"] == ("FAIL" if mode == "unchanged-artifact" else "PASS"), (mode, artifact)
+
+
 def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    builtin_readback_self_test(harness, scratch)
     report_output_self_test(harness, scratch)
     candidate_build_report_self_test(harness, scratch)
     native_emitter_cleanup_self_test(harness, scratch)
