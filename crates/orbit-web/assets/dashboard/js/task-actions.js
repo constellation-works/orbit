@@ -1,6 +1,6 @@
 // Orbit dashboard task actions row: Ship, the comment and reject forms, Approve and the shared action runner.
 
-import { captureWorkspaceVisit, el, postJson, hostWriteRefusal, isAggregateView, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, el, postJson, hostWriteRefusal, isAggregateView, submissionNoticeLines, confirmForceOverride, forceOverrideGuardText } from './common.js';
 import { renderMarkdown } from './markdown.js';
 import { claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 import { $, taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, actionErrorNode } from './task-shared.js';
@@ -82,7 +82,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (window.confirm(`Archive task ${task.id}?`)) {
-        runAction(task, "archive", detail, null, btn, context);
+        archiveTaskWithForce(task, detail, btn, context);
       }
     });
     actions.appendChild(btn);
@@ -253,6 +253,59 @@ function showRejectForm(task, detail, actions, context) {
   form.appendChild(buttons);
   actions.replaceWith(form);
   ta.focus();
+}
+
+// Archive, with the force-override popup when a guard `--force`
+// overrides refuses it (a run still owns the task). Force retries the
+// same archive with `force: true`; Cancel leaves the task unchanged.
+async function archiveTaskWithForce(task, detail, btnNode, context) {
+  const visit = captureWorkspaceVisit();
+  const requestPath = visit.path(taskMutationPath(task, "/archive"));
+  if (!canMutateTask(task)) return;
+  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  const oldText = btnNode && btnNode.tagName === "BUTTON" ? btnNode.textContent : "";
+  if (btnNode && btnNode.tagName === "BUTTON") btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  const restore = () => {
+    for (const b of detail.querySelectorAll(".action")) b.disabled = false;
+    if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
+  };
+  try {
+    await postJson(requestPath, {});
+    if (!visit.isCurrent()) return;
+    collapseTask(task.id);
+    await refreshTasks(context);
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    if (!error || error.code !== "force_overridable") {
+      restore();
+      detail.prepend(actionErrorNode(`archive failed: ${error.message || String(error)}`));
+      return;
+    }
+    const confirmed = await confirmForceOverride({
+      heading: `Force archive ${task.id}?`,
+      guard: forceOverrideGuardText(error.body),
+      effect: "Forcing does not cancel the run. The task is archived and the change is recorded in task history as forced.",
+    });
+    if (!visit.isCurrent()) return;
+    if (!confirmed) {
+      restore();
+      detail.prepend(actionErrorNode("archive cancelled"));
+      return;
+    }
+    try {
+      await postJson(requestPath, { force: true });
+      if (!visit.isCurrent()) return;
+      collapseTask(task.id);
+      await refreshTasks(context);
+    } catch (retryError) {
+      if (!visit.isCurrent()) return;
+      restore();
+      const current = $(`detail-${task.id}`) || detail;
+      current.prepend(actionErrorNode(`archive failed: ${retryError.message || String(retryError)}`));
+    }
+  }
 }
 
 async function runAction(task, kind, detail, body, btnNode, context, opts = {}) {

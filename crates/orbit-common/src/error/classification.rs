@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForgePushHoldFailure, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
-    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForceOverridableKind,
+    ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
+    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
+    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -388,6 +389,48 @@ impl OrbitError {
             kind,
             message: kind.message().to_string(),
         }
+    }
+
+    /// A refusal `--force` overrides: a run still owns the task.
+    pub fn force_overridable_run_owned(
+        run_id: impl Into<String>,
+        run_state: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::ForceOverridable(Box::new(ForceOverridableRefusal {
+            kind: ForceOverridableKind::RunStillOwnsTask,
+            message: message.into(),
+            run_id: Some(run_id.into()),
+            run_state: Some(run_state.into()),
+            task_status: None,
+        }))
+    }
+
+    /// A refusal `--force` overrides: delete outside `proposed`/`rejected`.
+    pub fn force_overridable_delete(
+        task_status: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::ForceOverridable(Box::new(ForceOverridableRefusal {
+            kind: ForceOverridableKind::DeleteOutsideProposedOrRejected,
+            message: message.into(),
+            run_id: None,
+            run_state: None,
+            task_status: Some(task_status.into()),
+        }))
+    }
+
+    /// The force-overridable refusal, if this is one.
+    pub fn force_overridable(&self) -> Option<&ForceOverridableRefusal> {
+        match self {
+            Self::ForceOverridable(refusal) => Some(refusal),
+            _ => None,
+        }
+    }
+
+    /// Whether `--force` would override this refusal.
+    pub fn is_force_overridable(&self) -> bool {
+        self.force_overridable().is_some()
     }
 
     /// The kind of an owner claim or handoff refusal, if this is one.

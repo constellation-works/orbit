@@ -1221,6 +1221,111 @@ export function patchJson(path, body) {
   return requestJson(path, "PATCH", body);
 }
 
+// Plain words for a `force_overridable` refusal, from its structured
+// `guard` and facts — never from the refusal's message text.
+export function forceOverrideGuardText(body) {
+  if (!body || typeof body !== "object") return "A guard refused this change.";
+  if (body.guard === "run_still_owns_task") {
+    const run = body.run_id ? `Run ${body.run_id}` : "A run";
+    return body.run_state
+      ? `${run} is still ${body.run_state} and owns this task.`
+      : `${run} is still running and owns this task.`;
+  }
+  if (body.guard === "delete_outside_proposed_or_rejected") {
+    return body.task_status
+      ? `This task is in ${body.task_status}; only proposed or rejected tasks can be deleted without forcing.`
+      : "Only proposed or rejected tasks can be deleted without forcing.";
+  }
+  return "A guard refused this change and forcing would override it.";
+}
+
+let forceDialogSequence = 0;
+
+// Keyboard-accessible Force/Cancel confirmation for a force-overridable
+// refusal. Resolves true only on Force; Cancel, Escape and dismissal
+// resolve false. Focus moves into the dialog on open and back to the
+// previously focused control on close.
+export function confirmForceOverride({ heading, guard, effect }) {
+  const fallback = () =>
+    typeof window.confirm === "function"
+      ? window.confirm(`${heading}\n\n${guard}\n\n${effect}`)
+      : false;
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return Promise.resolve(fallback());
+  }
+  const dialog = document.createElement("dialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(fallback());
+  }
+  return new Promise((resolve) => {
+    forceDialogSequence += 1;
+    const headingId = `force-override-heading-${forceDialogSequence}`;
+    const bodyId = `force-override-body-${forceDialogSequence}`;
+    dialog.className = "force-override-dialog";
+    dialog.setAttribute("aria-labelledby", headingId);
+    dialog.setAttribute("aria-describedby", bodyId);
+    const title = el("h3", { text: heading });
+    title.id = headingId;
+    const copy = el("div", {}, [
+      el("p", { text: guard }),
+      el("p", { text: effect }),
+    ]);
+    copy.id = bodyId;
+    const forceButton = el("button", { class: "action force", text: "Force", type: "button" });
+    const cancelButton = el("button", { class: "action cancel", text: "Cancel", type: "button" });
+    const actions = el("div", { class: "force-override-actions" }, [forceButton, cancelButton]);
+    dialog.append(title, copy, actions);
+    const previouslyFocused = document.activeElement;
+    let settled = false;
+    // Escape cancels even when focus has left the dialog (a viewport
+    // resize can drop it to the page), where the dialog's own keydown
+    // and native cancel would never see the key.
+    const onDocumentEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      settle(false);
+    };
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onDocumentEscape, true);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        previouslyFocused.focus();
+      }
+      resolve(value);
+    };
+    forceButton.addEventListener("click", () => settle(true));
+    cancelButton.addEventListener("click", () => settle(false));
+    // Escape fires `cancel` then `close` natively; both mean Cancel.
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      settle(false);
+    });
+    dialog.addEventListener("close", () => settle(false));
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settle(false);
+        return;
+      }
+      if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
+      const controls = [forceButton, cancelButton].filter((node) => !node.disabled);
+      if (!controls.length) return;
+      const active = document.activeElement;
+      if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {
+        event.preventDefault();
+        (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
+      }
+    });
+    document.addEventListener("keydown", onDocumentEscape, true);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    cancelButton.focus();
+  });
+}
+
 // A control keeps its first class through state changes (`config-chip` gains
 // and loses `on`), so that is what identifies it across a rebuild.
 const firstClass = (node) => String(node.className || "").split(/\s+/)[0];

@@ -163,6 +163,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             kind,
             message: redact(&message),
         },
+        OrbitError::ForceOverridable(mut refusal) => {
+            refusal.message = redact(&refusal.message);
+            refusal.run_id = refusal.run_id.map(|id| redact(&id));
+            refusal.run_state = refusal.run_state.map(|state| redact(&state));
+            refusal.task_status = refusal.task_status.map(|status| redact(&status));
+            OrbitError::ForceOverridable(refusal)
+        }
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
             field: redact(&field),
             reason: redact(&reason),

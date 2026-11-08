@@ -40,6 +40,20 @@ fn error_payload(err: &OrbitError) -> Value {
     // [ORB-10544] A ship duplicate-dispatch refusal names the contended task and
     // the run holding it, so a tool caller can wait on or cancel that run
     // without parsing the message — the same pair the dashboard's 409 carries.
+    if let Some(refusal) = err.force_overridable()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("guard".to_string(), json!(refusal.kind.as_str()));
+        if let Some(run_id) = &refusal.run_id {
+            object.insert("run_id".to_string(), json!(run_id));
+        }
+        if let Some(run_state) = &refusal.run_state {
+            object.insert("run_state".to_string(), json!(run_state));
+        }
+        if let Some(task_status) = &refusal.task_status {
+            object.insert("task_status".to_string(), json!(task_status));
+        }
+    }
     if let Some((task_id, run_id)) = err.ship_run_in_flight()
         && let Some(object) = payload.as_object_mut()
     {
@@ -111,6 +125,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::HostConfiguration { .. } => {
             const { RemoteToolCode::HostConfiguration.as_str() }
         }
+        OrbitError::ForceOverridable(_) => "force_overridable",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
         | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },

@@ -48,9 +48,13 @@ pub(crate) fn ensure_status_change_not_run_owned(
     id: &str,
 ) -> Result<(), OrbitError> {
     if let Some((run_id, state)) = live_local_run_owning(runtime, id)? {
-        return Err(OrbitError::InvalidInput(format!(
-            "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
-        )));
+        return Err(OrbitError::force_overridable_run_owned(
+            run_id.clone(),
+            state.to_string(),
+            format!(
+                "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
+            ),
+        ));
     }
     Ok(())
 }

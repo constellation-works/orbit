@@ -1,7 +1,7 @@
 //! Task approval, rejection, recovery, settlement and archival.
 
 use super::DASHBOARD_ACTOR;
-use super::request::{ApproveBody, RejectBody, RequeueBody};
+use super::request::{ApproveBody, ArchiveBody, RejectBody, RequeueBody};
 use super::writes;
 use crate::api::routines::{authorization_denied, authorized_caller};
 use crate::api::{
@@ -142,6 +142,7 @@ pub(in crate::api) async fn settle_merged_task_action(
 pub(in crate::api) async fn archive_task_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
+    OptionalJson(body): OptionalJson<ArchiveBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
@@ -149,8 +150,9 @@ pub(in crate::api) async fn archive_task_action(
     };
     let archived_id = id.to_string();
     let runtime_clone = runtime.clone();
+    let force = body.force;
     match blocking("task archival", move || {
-        runtime_clone.archive_task(&archived_id)
+        runtime_clone.archive_task_for_dashboard(&archived_id, force)
     })
     .await
     {

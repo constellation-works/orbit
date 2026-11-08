@@ -22,8 +22,16 @@ fn delete_rechecks_a_status_changed_after_its_guard_and_preserves_force() {
         runtime.set_transition_read_hook_status(None, None);
 
         assert!(
-            matches!(result, Err(orbit_common::OrbitError::InvalidInput(_))),
+            matches!(result, Err(orbit_common::OrbitError::ForceOverridable(_))),
             "a stale deletion guard must refuse the newer status: {result:?}"
+        );
+        assert_eq!(
+            result
+                .unwrap_err()
+                .force_overridable()
+                .map(|refusal| refusal.kind),
+            Some(orbit_common::ForceOverridableKind::DeleteOutsideProposedOrRejected),
+            "the delete refusal carries its guard kind"
         );
         assert_eq!(
             runtime
