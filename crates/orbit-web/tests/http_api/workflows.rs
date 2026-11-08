@@ -721,6 +721,7 @@ wf_test!(failed_pull_protocol_is_visible_after_terminalization, {
         agent_response_json: None,
         state: Failed,
         error_code: Some("protocol_skew".into()),
+        failure_code: None,
         error_message: Some("caller and owner pull request fingerprints differ".into()),
     });
     fixture.save_run(&run);

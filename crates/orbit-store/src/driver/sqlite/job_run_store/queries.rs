@@ -130,6 +130,12 @@ impl Store {
         step: &JobRunStep,
     ) -> Result<(), OrbitError> {
         let agent_response_json = optional_json(&step.agent_response_json, "agent response")?;
+        // The typed code's storage is the existing `error_code` column: a
+        // step that carries only the typed form persists its string there.
+        let error_code = step
+            .error_code
+            .clone()
+            .or_else(|| step.failure_code.as_ref().map(ToString::to_string));
         let conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         conn.execute(
@@ -161,7 +167,7 @@ impl Store {
                 step.finished_at.map(|ts| ts.to_rfc3339()),
                 step.duration_ms.map(|value| value as i64),
                 step.exit_code,
-                step.error_code,
+                error_code,
                 step.error_message,
                 agent_response_json,
                 step.lock_wait_ms.map(|value| value as i64),
@@ -830,6 +836,7 @@ fn row_to_job_run_step_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::R
     let finished_raw: Option<String> = row.get(offset + 5)?;
     let duration_ms: Option<i64> = row.get(offset + 6)?;
     let agent_response_json: Option<String> = row.get(offset + 10)?;
+    let error_code: Option<String> = row.get(offset + 8)?;
     Ok(JobRunStep {
         lock_wait_ms: row
             .get::<_, Option<i64>>(offset + 11)?
@@ -842,7 +849,13 @@ fn row_to_job_run_step_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::R
         finished_at: parse_optional_timestamp(finished_raw)?,
         duration_ms: duration_ms.map(|value| value as u64),
         exit_code: row.get(offset + 7)?,
-        error_code: row.get(offset + 8)?,
+        // The `error_code` column is the typed code's storage; a record
+        // whose column is empty has no typed code and classifies through
+        // the legacy marker fallback.
+        failure_code: error_code
+            .as_deref()
+            .map(orbit_types::workflow::StepFailureCode::parse),
+        error_code,
         error_message: row.get(offset + 9)?,
         agent_response_json: parse_optional_json(agent_response_json, "agent_response_json")?,
     })

@@ -724,6 +724,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             agent_response_json: params.agent_response_json.clone(),
             state: params.state,
             error_code: params.error_code.clone(),
+            // The store's `error_code` column is the typed code's storage;
+            // parse it into its typed form at this boundary.
+            failure_code: params
+                .error_code
+                .as_deref()
+                .map(orbit_types::workflow::StepFailureCode::parse),
             error_message: params
                 .error_message
                 .as_deref()

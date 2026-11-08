@@ -9,6 +9,33 @@ use super::{
 };
 
 impl OrbitError {
+    /// The typed step-failure code this error carries, parsed once where a
+    /// step failure is ingested from an `OrbitError`.
+    ///
+    /// A remote-tool failure contributes its wire code verbatim. The
+    /// owner-route variants — a destination that cannot be reached, an
+    /// owner that is unavailable or cannot be negotiated with, a stale
+    /// route to it — are the [`StepFailureCode::OwnerRouteUnavailable`]
+    /// the claimed worker's owner route raises; their messages are kept
+    /// as they are, and the typing happens here instead of in a bracketed
+    /// marker stamped into the text.
+    ///
+    /// [`StepFailureCode::OwnerRouteUnavailable`]: orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable
+    pub fn step_failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        match self {
+            Self::RemoteTool { code, .. } => {
+                Some(orbit_types::workflow::StepFailureCode::parse(code.as_str()))
+            }
+            Self::UnreachableDestination(_)
+            | Self::OwnerUnavailable(_)
+            | Self::StaleRoute(_)
+            | Self::OwnerNegotiation(_) => {
+                Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+            }
+            _ => None,
+        }
+    }
+
     /// Construct a decision refusal without encoding its classification in prose.
     pub fn decision_refused(code: DecisionRefusalCode, message: impl Into<String>) -> Self {
         Self::DecisionRefused {

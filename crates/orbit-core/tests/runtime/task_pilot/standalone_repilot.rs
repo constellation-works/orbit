@@ -163,6 +163,7 @@ fn standalone_partition_failure_holds_only_task_dependent_repilots() {
                     target_id: "task_pilot".into(),
                     state: JobRunState::Failed,
                     error_code: Some(code.into()),
+                    failure_code: None,
                     error_message: Some(message.into()),
                     lock_wait_ms: None,
                     started_at: None,

@@ -1,7 +1,8 @@
 //! Ordered completion failure diagnostics.
 
 use super::super::super::response_diagnostics::{
-    bounded_diagnostic, declared_failure_diagnostic, with_sandbox_write_attribution,
+    bounded_diagnostic, declared_failure_code, declared_failure_diagnostic,
+    with_sandbox_write_attribution,
 };
 use super::super::super::spawn_diagnostics::{
     copilot_model_unavailable_diagnostic, macos_keychain_auth_diagnostic,
@@ -60,6 +61,7 @@ pub(super) struct CompletionFailureInput<'a> {
 pub(super) struct CompletionFailure {
     pub(super) message: Option<String>,
     pub(super) failure_class: Option<ProviderFailureClass>,
+    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
     pub(super) observed_limit: Option<(ProviderLimitFailure, String)>,
 }
 
@@ -409,6 +411,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     CompletionFailure {
         message,
         failure_class,
+        failure_code: declared_failure_code(declared_failure.as_ref()),
         observed_limit,
     }
 }

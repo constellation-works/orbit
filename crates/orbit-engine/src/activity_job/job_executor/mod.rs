@@ -98,6 +98,9 @@ pub struct JobOutcome {
     pub child_cancelled: bool,
     pub pipeline: Value,
     pub message: Option<String>,
+    /// The typed step-failure code of the step the run failed on, parsed
+    /// once at ingestion, when that failure declared one.
+    pub failure_code: Option<orbit_types::workflow::StepFailureCode>,
     /// [ORB-00414] Number of audit-write failures observed during the run.
     /// Non-zero means the audit trail is incomplete (see `degraded_audit`).
     pub audit_failures: u64,

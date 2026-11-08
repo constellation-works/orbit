@@ -78,6 +78,7 @@ fn save_step(
         agent_response_json: None,
         state: JobRunState::Failed,
         error_code: Some(class.as_str().to_string()),
+        failure_code: None,
         error_message: Some(provider_failure_text(class, provider, "fixture failure")),
     };
     workspace
@@ -455,6 +456,7 @@ fn an_old_pipeline_repair_failure_holds_until_its_finish_backoff() {
             duration_ms: None,
             exit_code: Some(1),
             error_code: Some(class.as_str().into()),
+            failure_code: None,
             error_message: Some(provider_failure_text(class, "codex", "repair failure")),
             agent_response_json: None,
             lock_wait_ms: None,

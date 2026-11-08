@@ -174,6 +174,9 @@ pub(super) struct StepOutcome {
     pub(super) success: bool,
     pub(super) output: Value,
     pub(super) message: Option<String>,
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
 }
 
 /// Record a step output. Mutates the map in place unless a snapshot handed

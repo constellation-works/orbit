@@ -580,7 +580,28 @@ pub struct JobRunStep {
     pub agent_response_json: Option<Value>,
     pub state: JobRunState,
     pub error_code: Option<String>,
+    /// The typed step-failure code, parsed once where the step failure was
+    /// ingested. Absent on records written before the typed code existed;
+    /// those classify through the legacy marker fallback in
+    /// `is_owner_route_unavailable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<crate::workflow::StepFailureCode>,
     pub error_message: Option<String>,
+}
+
+impl JobRunStep {
+    /// The step's typed failure code: the recorded
+    /// [`StepFailureCode`](crate::workflow::StepFailureCode), or the
+    /// legacy string `error_code` parsed at this read boundary for a
+    /// record written before the typed field existed.
+    #[must_use]
+    pub fn typed_failure_code(&self) -> Option<crate::workflow::StepFailureCode> {
+        self.failure_code.clone().or_else(|| {
+            self.error_code
+                .as_deref()
+                .map(crate::workflow::StepFailureCode::parse)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

@@ -64,7 +64,7 @@ use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact
 use orbit_types::tool::{
     CLAIMED_OWNER_TOOLS, ToolSessionContext, WorkerInvocation, is_claimed_owner_tool,
 };
-use orbit_types::workflow::{OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER};
+use orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE;
 use serde_json::{Map, Value, json};
 
 use super::super::execute::ToolEntryPoint;
@@ -211,7 +211,7 @@ pub(super) fn bridge_through(
 /// releases the claim, since nothing inside this sandbox can open the route.
 pub fn owner_route_unavailable(name: &str, cause: &str) -> OrbitError {
     let message = format!(
-        "{OWNER_ROUTE_UNAVAILABLE_MARKER} '{name}' for a claimed task reaches the owner only \
+        "'{name}' for a claimed task reaches the owner only \
          through this run's coordinator, and {cause}. The agent sandbox masks ~/.ssh, so there \
          is no other route: do not read SSH credentials or loosen the sandbox. End the step as \
          failed with error.code `{OWNER_ROUTE_UNAVAILABLE_ERROR_CODE}`; the run then releases \

@@ -154,6 +154,7 @@ pub(super) fn run_fan_out(
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
     let mut first_failure: Option<String> = None;
+    let mut first_failure_code: Option<orbit_types::workflow::StepFailureCode> = None;
     let mut sorted = results
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -183,6 +184,7 @@ pub(super) fn run_fan_out(
                         && !provider_failure(first_failure.as_deref()))
                 {
                     first_failure.clone_from(&o.message);
+                    first_failure_code.clone_from(&o.failure_code);
                 }
                 errors.push(Value::String(o.message.unwrap_or_else(|| {
                     format!("worker {idx} completed with success=false")
@@ -233,6 +235,7 @@ pub(super) fn run_fan_out(
     // first worker message. An ordinary failure earlier in the batch must
     // not hide a provider failure and leave the next routine tick unheld.
     Ok(StepOutcome {
+        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
         success: block_ok,
         output: collected_value,
         message: (!block_ok).then_some(first_failure).flatten(),

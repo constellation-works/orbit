@@ -429,6 +429,7 @@ pub(in super::super) fn project_completion(
     let failure::CompletionFailure {
         message,
         failure_class,
+        failure_code,
         observed_limit,
     } = failure::completion_failure(failure::CompletionFailureInput {
         provider: &provider,
@@ -660,6 +661,7 @@ pub(in super::super) fn project_completion(
         // Scrub the parsed fields as well as the bounded stdout preview.
         output: redact_all_json(Value::Object(output)),
         message,
+        failure_code,
         invocation: trace.map(|trace| DispatchInvocationTrace {
             provider,
             model,

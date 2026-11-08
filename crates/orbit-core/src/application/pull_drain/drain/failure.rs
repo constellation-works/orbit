@@ -109,7 +109,10 @@ pub(crate) fn leaf_run_report(
     let root_cause = crate::application::job::run_error_step(run)
         .map(|step| LeafRootCause {
             step: Some(step.target_id.to_string()),
-            code: step.error_code.clone(),
+            code: step
+                .error_code
+                .clone()
+                .or_else(|| step.failure_code.as_ref().map(ToString::to_string)),
             message: step.error_message.clone(),
         })
         .map(LeafRootCause::bounded)
@@ -365,14 +368,14 @@ fn leaf_failure(
     final_recovery: Option<&FinalRecoveryDecision>,
     state: Option<&PipelineState>,
 ) -> ClaimFailure {
-    let last_failed = run
-        .steps
-        .iter()
-        .rev()
-        .find(|step| step.error_code.is_some() || step.error_message.is_some());
+    let last_failed = run.steps.iter().rev().find(|step| {
+        step.error_code.is_some() || step.failure_code.is_some() || step.error_message.is_some()
+    });
     let step_class = |step: &orbit_types::workflow::JobRunStep| {
-        ClaimFailureClass::of_step_failure(
-            step.error_code.as_deref(),
+        // Branch on the step's typed failure code; a record with no code
+        // field falls back to the legacy marker inside the classifier.
+        ClaimFailureClass::of_step_failure_code(
+            step.typed_failure_code().as_ref(),
             step.error_message.as_deref(),
         )
         .map(|class| (class, step.error_message.clone().unwrap_or_default()))
@@ -400,8 +403,11 @@ fn leaf_failure(
             })
             .or_else(|| {
                 diagnostic.and_then(|(code, message)| {
-                    ClaimFailureClass::of_step_failure(Some(code), Some(message))
-                        .map(|class| (class, message.to_string()))
+                    ClaimFailureClass::of_step_failure_code(
+                        Some(&orbit_types::workflow::StepFailureCode::parse(code)),
+                        Some(message),
+                    )
+                    .map(|class| (class, message.to_string()))
                 })
             })
     };
@@ -520,6 +526,9 @@ fn leaf_failure(
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
+/// The owner-route entry cleans only the reason text of legacy records
+/// written before the typed step-failure code; classification branches
+/// on the typed code in [`leaf_failure`].
 const FAILURE_MARKERS: [&str; 10] = [
     FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,

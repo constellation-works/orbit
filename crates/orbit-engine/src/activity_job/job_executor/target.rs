@@ -186,6 +186,7 @@ pub(super) fn run_target(
         success,
         output: dispatch.output,
         message,
+        failure_code: dispatch.failure_code,
     })
 }
 

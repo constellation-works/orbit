@@ -5,8 +5,9 @@
 //! Final recovery classifies such a failure without an agent, and the task
 //! waits blocked on that condition until a probe shows it cleared (see
 //! `orbit task recheck-blocked`). A claimed worker that could not reach its
-//! owner (`[owner_route_unavailable]`) is not classified here: final
-//! recovery already skips it and its claim is released.
+//! owner (typed step-failure code `owner_route_unavailable`) is not
+//! classified here: final recovery already skips it and its claim is
+//! released.
 //!
 //! Classification reads the action's own error, never text an agent or a
 //! validation command produced: only a deterministic delivery action listed

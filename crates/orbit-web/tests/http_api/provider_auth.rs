@@ -454,6 +454,7 @@ fn save_failed(
         agent_response_json: None,
         state: JobRunState::Failed,
         error_code: Some(error_code.into()),
+        failure_code: None,
         error_message: Some(error_message.into()),
     };
     fixture
