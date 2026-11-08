@@ -59,6 +59,69 @@ If the workspace file does not exist yet, add `--fresh` to start it empty or
 For extra agent instructions selected by a task's tags, edit the
 [Tag instructions](#tag-instructions) tables directly.
 
+### What orbit init seeds
+
+`orbit init` writes a new global `config.toml` that sets the values below
+explicitly. Several differ from the built-in defaults in
+[Settable keys](#settable-keys), whose Default column stays the built-in
+value. Init writes the file only when it is absent, or after
+`orbit init --force` resets the global root. An existing config is never
+rewritten.
+
+- **Crews.** Every built-in crew. A crew is enabled when its provider CLI is
+  detected and disabled otherwise. `default_crew` is the default crew of the
+  first detected provider family in preference order.
+- **Complexity pools.** `low`, `medium`, `hard` and `xhard` start from the
+  detected families:
+
+  | Detected | `low` | `medium` | `hard` | `xhard` |
+  |---|---|---|---|---|
+  | Codex and Claude | `haiku, luna` | `terra, sonnet` | `sol, opus` | `opus, astra` |
+  | Codex only | `luna` | `terra` | `sol` | `astra` |
+  | Claude only | `haiku` | `sonnet` | `opus` | `opus` |
+
+  Other detected providers add to these pools. Grok appends `grok` to
+  `medium`, even when neither Codex nor Claude is detected. Antigravity (`agy`)
+  appends `gemini-flash` to `low` and `argon` to `hard`. Muse appends
+  `muse-spark` to `low`, `muse-wonder` to `medium` and `muse-wonder-full` to
+  `hard`. Copilot adds nothing, and an empty pool routes to `default_crew`.
+- **Purpose pools.** Init seeds these
+  [purpose pools](#purpose-pools). The members below are the full lists, and
+  init keeps only those whose crew it seeds enabled. A pool left empty is
+  omitted, so its purpose takes the built-in route. The exception is
+  `final_recovery`, which is written as `[]` and turns final recovery off.
+
+  | Purpose | Members |
+  |---|---|
+  | `review` | `sol`, `sonnet`, `muse-wonder`, `grok`, `opus@medium` |
+  | `task_pilot` | `luna@high`, `haiku@high`, `muse-spark@high` |
+  | `failure_recovery` | `luna`, `haiku`, `muse-spark`, `grok` |
+  | `auto_fix` | `luna`, `haiku`, `muse-spark` |
+  | `final_recovery` | `sol`, `muse-wonder`, `opus@medium` |
+  | `baseline_red_repair` | `terra`, `sonnet`, `muse-wonder`, `grok` |
+  | `pre_landing_review` | `luna`, `haiku`, `muse-spark` |
+
+  Init does not write `sweep_tasks` or `pilot_warning_triage`.
+- **Experiments and steering.** `experiments.enabled = true`, so experiments
+  can start without setting the key, and `workflow.mid_run_steering.enabled =
+  true`, so operator comments written during a run reach its later prompts.
+- **Workflow.** `workflow.crew_selection = "static"`, the built-in value.
+  `workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md",
+  "**/mod.rs", "**/*.toml"]`, where the built-in default is `["**/*.md"]`.
+  `workflow.task_pilot_freshness.material_fields = ["description",
+  "criteria"]`, where the built-in default also checks `title`, `plan` and
+  `selectors`.
+- **Machine.** When init creates this machine's identity, it sets
+  `machine.auto_concurrency.mode = "enforce"`, where the built-in default is
+  `off`. An existing machine keeps its mode.
+
+To use any of these values in a config that already exists, set the key
+yourself. For example:
+
+```bash
+orbit config set --global experiments.enabled true
+```
+
 ## Decision assistance
 
 The advanced `assistance` table is host-only. Workspace files and workspace
@@ -422,24 +485,9 @@ With no supported agent CLI detected, every crew is seeded disabled and
 `default_crew` stays unset, so nothing dispatches until you
 enable a crew.
 
-`orbit init` also seeds the four `workflow.*_complexity_crews` pools from the
-detected providers. Claude only: `haiku` / `sonnet` / `opus` / `opus`. Codex
-only: `luna` / `terra` / `sol` / `astra`. Both: `haiku, luna` / `terra, sonnet` /
-`sol, opus` / `opus, astra`. Grok adds `grok` to `medium`; a detected `agy` appends
-`gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder`,
-and `muse-wonder-full` to `low`, `medium`, and `hard`. Other
-providers leave the pools empty, which routes to `default_crew`.
-
-Init also seeds the `review`, `task_pilot`, `failure_recovery`, `auto_fix`,
-`final_recovery`, `baseline_red_repair` and `pre_landing_review`
-[purpose pools](#purpose-pools), keeping only crews it seeds enabled (an empty
-`final_recovery` is written as `[]`, which turns it off). It also writes
-`experiments.enabled = true`, `workflow.crew_selection = "static"`,
-`workflow.unlocked_context_paths`, `workflow.mid_run_steering.enabled = true`
-and `workflow.task_pilot_freshness.material_fields`, and, when it creates the
-machine identity, `machine.auto_concurrency.mode = "enforce"`. These override
-the built-in defaults in [Settable keys](#settable-keys). Init only seeds a new
-file; an existing config is not rewritten.
+`orbit init` also seeds the complexity pools and the purpose pools, and sets
+several workflow and experiment keys. [What `orbit init` seeds](#what-orbit-init-seeds)
+lists each seeded value, with the pool members for every detected provider.
 
 ### Human crews
 
@@ -786,7 +834,7 @@ experiments.
 | `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
 | `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
 | `workflow.admission_affinity` | **Advanced.** string · **Default:** `band`<br>How a distributed owner orders admission against its live executors, so each takes work only it can run first. `band` puts that work ahead of priority within a dispatch band, so critical and corrective work still leads; `priority` puts it first only within a priority; `off` keeps the plain band, priority, expiry and age order. Applies to followers' pulls and the owner's own drain. |
-| `workflow.unlocked_context_paths` | array&lt;string&gt; · **Default:** `["**/*.md"]`<br>Path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock. The agent still receives them as context; admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. `[]` locks every entry. |
+| `workflow.unlocked_context_paths` | array&lt;string&gt; · **Default:** `["**/*.md"]`<br>Path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock. The agent still receives them as context; admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. `[]` locks every entry. A new `orbit init` seeds a wider list; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `workflow.lock_modes` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[workflow.lock_modes]]` entries, each a `pattern` (a Rust regex searched for in the workspace-relative path; anchor it with `^` and `$`) and a `mode` of `exclusive` (default) or `shared`. The first matching entry wins. Two tasks whose context overlaps only at a shared path, judged at the narrower selector's path, run together, and a conflict between them is resolved when the second lands. `module:` and `command:` selectors stay exclusive. Empty locks every overlap. |
 | `workflow.unlocked_path_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands a repaired candidate runs instead of `workflow.required_validation_commands` when its tree differs from the last tree its run passed the full list on only in paths matching `workflow.unlocked_context_paths`, such as `["make ci-fast"]`. Any other change runs the full list. Each validation records which list ran and why as `validation_scope`. Empty always runs the full list. |
 | `workflow.generated_paths` | table&lt;string,string&gt; · **Default:** `{}`<br>Generated files, as path glob = regenerate command, such as `"docs/INDEX.md" = "make docs-index"`. When a stopped rebase conflicts on a match, conflict recovery takes one side, runs the command in the checkout and stages its output instead of merging it. A command that fails or leaves conflict markers fails the repair. |
@@ -794,9 +842,9 @@ experiments.
 | `workflow.test_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]`<br>Path globs (`*` within a component, `**` across components; a leading `!` excludes) whose changed lines count as tests in each landed delivery's diff stats, charted under Analytics › Metrics › Lines changed. Checked before `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
 | `workflow.non_code_paths` | **Advanced.** array&lt;string&gt; · **Default:** `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]`<br>Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats. A path matching neither this nor `workflow.test_paths` counts as code. |
 | `workflow.non_reviewable_paths` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Path globs left out of the reviewable-lines denominator (`cost_per_line` and `lead_time_per_line`). Docs and config stay reviewable. List lockfiles, goldens, snapshots and generated files here; empty counts every line that is not a pure rename. Distinct from `workflow.non_code_paths`. Changes apply to deliveries recorded afterwards. |
-| `workflow.task_pilot_freshness.material_fields` | **Advanced.** array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. |
+| `workflow.task_pilot_freshness.material_fields` | **Advanced.** array&lt;string&gt; · **Default:** `title`, `description`, `criteria`, `plan`, `selectors`<br>Task fields checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Also accepts `tags`, `crew`, `tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`. A new `orbit init` seeds only `description` and `criteria`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `workflow.task_pilot_freshness.source_sensitivity` | **Advanced.** string · **Default:** `ignore`<br>Whether branch-head changes are checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness. Values: `ignore`, `context_files` (only when the move changed a path the task's selectors name), or `any`. |
-| `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Record in each run's state the newest task comment every agent prompt with task context included, the run's steering watermark, and lead the run's later prompts with the operator comments written after it. The shipped delivery pipelines do not commit while one is undelivered. Claimed leaves read steering from their owner and fail closed before commit when it cannot answer. |
+| `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Record in each run's state the newest task comment every agent prompt with task context included, the run's steering watermark, and lead the run's later prompts with the operator comments written after it. The shipped delivery pipelines do not commit while one is undelivered. Claimed leaves read steering from their owner and fail closed before commit when it cannot answer. A new `orbit init` seeds `true`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `workflow.mid_run_steering.max_rounds` | **Advanced.** integer · **Default:** `2`<br>Steering rounds a run may spend at the promotion gate before it holds as `steering_unconsumed` (`1`–`10`). |
 | `workflow.ci_infrastructure_signatures` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Log-line prefixes a failed CI job prints when infrastructure, not the change, failed. A match gets one CI rerun, with no repair agent and no CI sweep task. The sweep itself reruns nothing, so a failed landing-branch run stays red until a rerun or a newer push. Empty declares none. |
 | `workflow.resource_throttle.enabled` | **Advanced.** bool · **Default:** `true`<br>Hold new task admission while host CPU, memory, disk space, or (on Linux) disk I/O pressure stays at or above its high mark. While CPU alone is held, a local drain may still admit eligible CPU-light auto-tasks if reserved slots remain. Memory, disk and I/O holds stop those tasks; pull drains do not use this budget and request no new claims while their executor is throttled. Disabled, pressure is still reported. |
@@ -830,7 +878,7 @@ experiments.
 | `machine.mcp.toolsets` | array&lt;string&gt; · **Default:** `[]`<br>Global only. MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one, such as `leases`, `experiments`, `analytics`, `decision-channel`, `notice`, `resident`, `tasks-write` or `all`. A server's `--toolset` replaces this list. A toolset changes only what MCP lists and dispatches; `orbit tool run`, activities and plugin callbacks reach every tool. See [MCP toolsets](../../how-to/mcp-integration/#toolsets). |
 | `machine.mcp.role` | string · **Default:** unset<br>Global only. The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it, and `machine.mcp.toolsets` adds to it. A role limits what MCP lists and dispatches; it grants no authority. See [MCP roles](../../how-to/mcp-integration/#roles). |
 | `machine.worker_cpu_quota` | **Advanced.** integer · **Default:** unset<br>Global only. Worker scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` or unset sets no CPU limit. Linux only. |
-| `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission mode: `off`, `shadow`, or `enforce`. `off` leaves admission unchanged. `shadow` records what gap fit would admit in each local drain pass and admits as `off`. `enforce` admits local candidates whose profile fits under the forecast. Under `orbit run auto --pull`, `enforce` sends the fit list with each pull request and requests nothing while nothing fits; `shadow` records that list and requests as with `off`. |
+| `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission mode: `off`, `shadow`, or `enforce`. `off` leaves admission unchanged. `shadow` records what gap fit would admit in each local drain pass and admits as `off`. `enforce` admits local candidates whose profile fits under the forecast. Under `orbit run auto --pull`, `enforce` sends the fit list with each pull request and requests nothing while nothing fits; `shadow` records that list and requests as with `off`. A new machine's `orbit init` seeds `enforce`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Forecast CPU utilization as a percentage of host cores (1–100); distinct from the default Linux load-based throttle signal (`workflow.resource_throttle.cpu_source = "load"`). |
 | `machine.auto_concurrency.admit_memory_percent` | integer · **Default:** `75`<br>Global only. Forecast non-reclaimable memory as a percentage of host memory (1–100), strictly below global `workflow.resource_throttle.memory_high_percent`. |
 | `machine.auto_concurrency.profile_window` | **Advanced.** integer · **Default:** `50`<br>Global only. Most recent completed deliveries retained per profile key; at least `min_profile_deliveries`. |
@@ -894,7 +942,7 @@ experiments.
 | `notice.brief_max_items` | **Advanced.** integer · **Default:** `5`<br>Most open notices one agent brief quotes (1-50, default 5). |
 | `notice.brief_body_chars` | **Advanced.** integer · **Default:** `600`<br>Body characters per notice in an agent brief (0-4096, default 600). |
 | `notice.brief_read_timeout_ms` | **Advanced.** integer · **Default:** `2000`<br>Milliseconds a prompt build may wait reading notices before the brief says unavailable (1-60000, default 2000). |
-| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
+| `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. A new `orbit init` seeds `true`; see [What `orbit init` seeds](#what-orbit-init-seeds). |
 | `experiments.max_running` | **Advanced.** integer · **Default:** `3`<br>Experiments that may run at once in this workspace (`1`–`20`). Starting or resuming one beyond it is refused; a paused experiment does not count. |
 | `attention.cursor_ttl_hours` | integer · **Default:** `24`<br>Cursor validity in hours. Valid range: 1–8760. Read back with `orbit config get attention.cursor_ttl_hours --json`. |
 | `attention.age_bump_hours` | integer array · **Default:** `[24, 72]`<br>Severity age thresholds. Valid range: strictly increasing positive hours up to 87600; empty disables aging. Read back with `orbit config get attention.age_bump_hours --json`. |
