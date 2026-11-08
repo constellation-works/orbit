@@ -309,13 +309,8 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
 
     let gate = fixture.guard(None, json!([{ "status": "cancelled", "run_id": leaf }]));
     assert_eq!(gate.state, JobRunState::Cancelled, "{:?}", gate.steps);
-    assert!(
-        step_codes(&gate)
-            .iter()
-            .any(|code| code == "child_cancelled"),
-        "{:?}",
-        gate.steps
-    );
+    assert!(step_codes(&gate).is_empty(), "{:?}", gate.steps);
+    assert!(!failure_text(&gate).is_empty(), "{:?}", gate.steps);
     assert_eq!(fixture.state(&gate.run_id).root_cause, None);
 
     let auto = fixture.guard(
@@ -323,6 +318,15 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
         json!([{ "status": "cancelled", "run_id": gate.run_id }]),
     );
     assert_eq!(auto.state, JobRunState::Cancelled, "{:?}", auto.steps);
+    assert!(step_codes(&auto).is_empty(), "{:?}", auto.steps);
+    for run in [&gate, &auto] {
+        let row = job_run_to_json(run, Some(&fixture.state(&run.run_id)));
+        assert!(row["error_code"].is_null(), "{row}");
+        assert!(!row["error_message"].is_null(), "{row}");
+        let counts_as_failure = matches!(row["state"].as_str(), Some("failed" | "interrupted"))
+            || (row["state"] == "cancelled" && !row["error_code"].is_null());
+        assert!(!counts_as_failure, "{row}");
+    }
 
     // A failure beside the cancellation is still a failure.
     let mixed = fixture.guard(

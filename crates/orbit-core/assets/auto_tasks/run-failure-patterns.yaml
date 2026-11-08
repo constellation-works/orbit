@@ -69,7 +69,7 @@ template:
     ## 2. Measure the rate
 
     For every job with owner-history runs or follower settlements in the window, compute runs,
-    failed (`failed` or `interrupted`, and `cancelled` runs that recorded an error), and failure
+    failed (`failed` or `interrupted`, and `cancelled` runs with a non-null `error_code`), and failure
     rate, for 7 days and 30 days. Owner-history runs supply the rate denominator; follower
     settlements add failure occurrences but do not supply run totals. For a job with follower
     failures and no owner-history runs, retain its raw and folded failure counts and set both

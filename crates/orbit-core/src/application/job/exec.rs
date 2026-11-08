@@ -23,8 +23,8 @@ use orbit_types::workflow::activity_job::{
     validate_job_retired_sessions,
 };
 use orbit_types::workflow::{
-    CHILD_CANCELLED_ERROR_CODE, HeldFailure, JobRun, JobRunStartOutcome, JobRunState,
-    JobRunTrigger, JobTargetType, PipelineState,
+    HeldFailure, JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobTargetType,
+    PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -635,7 +635,7 @@ impl OrbitRuntime {
                         run,
                         started_at,
                         finished_at,
-                        Some(CHILD_CANCELLED_ERROR_CODE),
+                        None,
                         result.message.as_deref().unwrap_or(fallback),
                         JobRunState::Cancelled,
                     ),
