@@ -360,8 +360,9 @@ fn reject_malformed_implementer_output(
     (success, message)
 }
 
-/// Return the first malformed claimed artifact array, preserving omitted and
-/// `null` fields for artifact-free and non-claimed implementations.
+/// Return the first malformed claimed artifact array or reserved path,
+/// preserving omitted and `null` fields for artifact-free and non-claimed
+/// implementations.
 fn claimed_artifact_array_shape_error(output: &Value) -> Option<(&'static str, String)> {
     for field in ["task_artifacts", "no_diff_artifacts"] {
         let Some(artifacts) = output.get(field).filter(|value| !value.is_null()) else {
@@ -381,6 +382,18 @@ fn claimed_artifact_array_shape_error(output: &Value) -> Option<(&'static str, S
                     field,
                     format!(
                         "`{field}[{index}]` must be an object with exactly string `path` and `source_path` fields"
+                    ),
+                ));
+            }
+            let path = entry.get("path").and_then(Value::as_str)?;
+            let canonical_path = orbit_types::task::canonical_artifact_path(path).ok();
+            if let Some(path) = canonical_path
+                && orbit_types::workflow::is_reserved_review_artifact(&path)
+            {
+                return Some((
+                    field,
+                    format!(
+                        "`{field}[{index}]` path '{path}' is in the reserved review- namespace; rename the artifact to a non-reserved path"
                     ),
                 ));
             }
