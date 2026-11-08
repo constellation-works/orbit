@@ -294,8 +294,8 @@ orbit clock set --cadence-seconds 300
 ```
 
 The `host-health` auto-task is the one shipped auto-task
-enabled by default: once the clock above is installed, it runs a daily
-host-health pass (`10 7 * * *`). Every other shipped auto-task is disabled by
+enabled by default: once the clock above is installed, it runs a weekly
+host-health pass (`10 7 * * 1`). Every other shipped auto-task is disabled by
 default. The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines
 seed enabled; every other shipped routine seeds disabled.
 `crew-memory-dream` mints nothing while `crew_memory.enabled` is false or

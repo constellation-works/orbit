@@ -3475,6 +3475,33 @@
         "## Bounded completion, report and cursor",
         "## Dedupe and routing",
         "## Inputs and service configuration",
+        "## Orbit version and migrations",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "615024e036c4c264acbf81dd744ff3076b9c6259b989c5956181ed623064888d",
+      "revision": "e18e0f91144a1bdd7f91fd6d66041f2f9742313a",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
         "## Resolve contract for every filing",
         "## Safe evidence",
         "## Windows, signatures and recurrence"
@@ -4642,7 +4669,32 @@
       }
     }
   ],
-  "recovery-fault-audit": [],
+  "recovery-fault-audit": [
+    {
+      "comments": [
+        "## Persist",
+        "## Rate by season",
+        "## Re-judge",
+        "## Sample",
+        "## Stay blind to the implementer"
+      ],
+      "digest": "2e7958a46ec06e34a00f0440758412b2c423efc080beffa585fc40fe9b0b3201",
+      "revision": "78050a9a9dc4dec4c00ab01598ac15dd9dab8c70",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 7 * * 1"
+        },
+        "tags": [
+          "recovery-fault-audit",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "run-failure-patterns": [
     {
       "comments": [

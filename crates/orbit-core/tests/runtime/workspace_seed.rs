@@ -1014,7 +1014,7 @@ fn fresh_workspace_seeds_only_host_health_enabled() {
             assert!(
                 matches!(
                     &definition.schedule,
-                    AutoTaskSchedule::Cron { cron, .. } if cron == "10 7 * * *"
+                    AutoTaskSchedule::Cron { cron, .. } if cron == "10 7 * * 1"
                 ),
                 "host-health keeps its shipped schedule: {:?}",
                 definition.schedule
@@ -1055,6 +1055,80 @@ fn reinit_and_sync_preserve_an_operator_edited_host_health_definition() {
     );
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
     assert!(!listed_enabled(&runtime, "host-health"));
+}
+
+#[test]
+fn sync_moves_unconfigured_host_health_to_weekly_and_keeps_operator_schedule() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("auto_tasks");
+    let path = catalog.join("host-health.yaml");
+    let shipped = std::fs::read_to_string(&path).expect("read host-health");
+    assert!(shipped.contains("cron: 10 7 * * 1"), "shipped is weekly");
+    // The copy an earlier (daily) release wrote and recorded, unedited.
+    let earlier = shipped.replacen("cron: 10 7 * * 1", "cron: 10 7 * * *", 1);
+    record_unedited_retired_default(&catalog, "host-health", &earlier);
+
+    // `orbit init` only creates absent defaults, so it leaves the copy alone.
+    seed_absent_workspace_managed_artifacts(&global, &workspace, &identity(), "main")
+        .expect("create-only seed");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), earlier);
+
+    // No operator configured it, so sync moves it to the weekly shipped bytes.
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read host-health"),
+        shipped,
+        "unconfigured host-health moves to the weekly schedule on sync"
+    );
+
+    // An operator-edited schedule is preserved by sync: the settings-only
+    // fork moves into the settings table, so the file returns to the shipped
+    // bytes but the effective schedule stays the operator's.
+    let edited = shipped.replacen("cron: 10 7 * * 1", "cron: 0 9 * * 2", 1);
+    std::fs::write(&path, &edited).expect("operator edit");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    let definition = runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .find(|definition| definition.name == "host-health")
+        .expect("host-health is listed");
+    assert!(
+        matches!(
+            &definition.schedule,
+            AutoTaskSchedule::Cron { cron, .. } if cron == "0 9 * * 2"
+        ),
+        "operator-edited host-health keeps its own schedule: {:?}",
+        definition.schedule
+    );
+
+    // Once toggled, the operator's schedule and flag survive another sync.
+    runtime
+        .auto_task_toggle("host-health", false)
+        .expect("toggle host-health off");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    assert!(!listed_enabled(&runtime, "host-health"));
+    let definition = runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .find(|definition| definition.name == "host-health")
+        .expect("host-health is listed");
+    assert!(
+        matches!(
+            &definition.schedule,
+            AutoTaskSchedule::Cron { cron, .. } if cron == "0 9 * * 2"
+        ),
+        "toggled host-health keeps its own schedule: {:?}",
+        definition.schedule
+    );
 }
 
 #[test]
