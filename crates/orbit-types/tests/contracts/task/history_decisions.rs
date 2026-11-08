@@ -11,8 +11,9 @@ use orbit_types::task::{
     TaskHistoryEntry,
 };
 use orbit_types::workflow::{
-    BaselineRedFailures, CANDIDATE_HELD_EVENT, FLAKY_VALIDATION_EVENT, FlakyValidation,
-    HeldCandidate, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    AgentBlocker, BaselineRedFailures, CANDIDATE_HELD_EVENT, FLAKY_VALIDATION_EVENT,
+    FlakyValidation, HeldCandidate, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER,
 };
 use serde_json::{Value, json};
 
@@ -174,6 +175,81 @@ fn each_history_record_is_read_from_its_decision_or_a_legacy_note() {
         read: FlakyValidation::from_entry,
     }
     .check();
+}
+
+/// An agent blocker is persisted under its own key, beside the decision's
+/// `kind` tag, and its kind is read from the decision; an entry written
+/// before the decision yields the kind from its note.
+#[test]
+fn an_agent_blocker_kind_is_read_from_its_decision_or_a_legacy_note() {
+    let blocker = AgentBlocker {
+        kind: "missing_acceptance_criteria".into(),
+        evidence: "criterion 2 names no command".into(),
+    };
+    let note = format!(
+        "{TASK_BLOCKED_BY_AGENT_MARKER} kind={} an agent declared a blocker: run=jrun-a, \
+         failed_step=implement, candidate=abc, branch=orbit/x; no PR was opened",
+        blocker.kind
+    );
+    let decision = TaskDecision::AgentBlocked {
+        blocker: blocker.clone(),
+    };
+    assert_eq!(
+        serde_json::to_value(&decision).unwrap(),
+        json!({
+            "kind": "agent_blocked",
+            "blocker": {"kind": "missing_acceptance_criteria", "evidence": "criterion 2 names no command"},
+        })
+    );
+
+    let typed: TaskHistoryEntry = serde_json::from_value(
+        serde_json::to_value(entry(
+            TASK_BLOCKED_BY_AGENT_EVENT,
+            "operator note without a marker".into(),
+            Some(decision.clone()),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(typed.decision, Some(decision));
+    assert_eq!(
+        typed.agent_blocker_kind(),
+        Some("missing_acceptance_criteria"),
+        "the decision, not the note, names the kind"
+    );
+
+    let mut legacy =
+        serde_json::to_value(entry(TASK_BLOCKED_BY_AGENT_EVENT, note.clone(), None)).unwrap();
+    legacy.as_object_mut().unwrap().remove("decision");
+    let legacy: TaskHistoryEntry = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        legacy.agent_blocker_kind(),
+        Some("missing_acceptance_criteria")
+    );
+
+    assert_eq!(
+        entry("workflow_run_failed", note.clone(), None).agent_blocker_kind(),
+        None,
+        "another event's note is not read for a blocker"
+    );
+    let other = entry(
+        TASK_BLOCKED_BY_AGENT_EVENT,
+        note,
+        Some(TaskDecision::RunTransition {
+            run_id: "jrun-a".into(),
+        }),
+    );
+    assert_eq!(
+        other.agent_blocker_kind(),
+        None,
+        "a decision of another kind is not read through the note"
+    );
+
+    assert_eq!(
+        AgentBlocker::from_step_failure_message(&blocker.step_failure_message()),
+        Some(blocker),
+        "the step failure text carries the blocker whole"
+    );
 }
 
 /// A flaky record that fails its own bounds is none, whichever shape

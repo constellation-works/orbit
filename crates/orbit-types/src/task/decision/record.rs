@@ -139,6 +139,17 @@ pub enum TaskDecision {
     /// The keyed job-step invocation a task was minted for, recorded on its
     /// `created` event. It resolves a lost creation reply to this task.
     JobStepInvocation(JobStepInvocation),
+    /// The blocker an agent declared, recorded on the
+    /// `task_blocked_by_agent` event that blocks the task or the
+    /// `upgrade_pending_requeued` event that returns it to the backlog.
+    /// Read its kind through
+    /// [`TaskHistoryEntry::agent_blocker_kind`](crate::task::TaskHistoryEntry::agent_blocker_kind).
+    /// The blocker sits under its own key because its `kind` field would
+    /// collide with this enum's tag.
+    AgentBlocked {
+        /// The declared blocker.
+        blocker: crate::workflow::AgentBlocker,
+    },
 }
 
 /// Creation receipt of a task an auto-task job step minted.

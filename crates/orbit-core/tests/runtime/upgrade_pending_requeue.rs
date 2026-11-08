@@ -4,6 +4,7 @@
 //! failure handoff held.
 
 use orbit_core::TaskStatus;
+use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{AgentBlocker, UPGRADE_PENDING_REQUEUED_EVENT};
 
 use super::dispatch_admission::isolated;
@@ -38,6 +39,17 @@ fn an_upgrade_refused_run_returns_its_task_to_the_backlog() {
     let entry = history.last().expect("the requeue is recorded");
     assert_eq!(entry.event, UPGRADE_PENDING_REQUEUED_EVENT, "{entry:?}");
     assert_eq!(entry.to_status, Some(TaskStatus::Backlog), "{entry:?}");
+    assert_eq!(
+        entry.decision,
+        Some(TaskDecision::AgentBlocked {
+            blocker: blocker.clone()
+        }),
+        "the requeue records the declared blocker typed"
+    );
+    assert_eq!(
+        entry.agent_blocker_kind(),
+        Some("orbit_upgrade_admission_refused")
+    );
     assert!(
         entry
             .note

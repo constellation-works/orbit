@@ -70,10 +70,11 @@ use orbit_engine::{
     TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass, ReviewGateHistoryNote,
-    UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure, is_upgrade_pending,
+    AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
+    ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
+    is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -465,6 +466,17 @@ impl RuntimeKernel {
                                      the held candidate once the upgrade settles",
                                     run.job_id
                                 )),
+                                status_decision: error_message
+                                    .as_deref()
+                                    .and_then(AgentBlocker::from_step_failure_message)
+                                    .map(|mut blocker| {
+                                        // Redacted like the status note beside it.
+                                        blocker.evidence =
+                                            orbit_common::security::redaction::redact_all(
+                                                &blocker.evidence,
+                                            );
+                                        TaskDecision::AgentBlocked { blocker }
+                                    }),
                                 ..TaskAutomationUpdate::default()
                             },
                         );

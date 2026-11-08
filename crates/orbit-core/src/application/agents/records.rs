@@ -10,7 +10,7 @@ use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT,
     TaskHistoryEntry, TaskStatus, task_fields_updated_documents,
 };
-use orbit_types::workflow::{TASK_BLOCKED_BY_AGENT_EVENT, task_blocked_by_agent_kind};
+use orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT;
 use serde_json::Value;
 
 use crate::application::codebase::{BlockCause, SettledFailure, actor_kind, classify_block};
@@ -141,7 +141,7 @@ pub(in crate::application) fn spec_blocker_kind(entry: &TaskHistoryEntry) -> Opt
     if entry.event != TASK_BLOCKED_BY_AGENT_EVENT {
         return None;
     }
-    let kind = task_blocked_by_agent_kind(entry.note.as_deref()?)?;
+    let kind = entry.agent_blocker_kind()?;
     kind.split(['_', '.', ':', '-'])
         .any(|word| SPEC_BLOCKER_WORDS.contains(&word.to_ascii_lowercase().as_str()))
         .then_some(kind)

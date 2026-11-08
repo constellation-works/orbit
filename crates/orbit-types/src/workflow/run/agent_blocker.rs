@@ -20,6 +20,8 @@
 //! at a step boundary by the same upgrade.
 
 use super::failure_classification_text;
+use crate::task::{TaskDecision, TaskHistoryEntry};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Error code of an implementer-declared blocker.
@@ -53,7 +55,11 @@ pub const UPGRADE_PENDING_REQUEUED_EVENT: &str = "upgrade_pending_requeued";
 const MAX_EVIDENCE_BYTES: usize = 4 * 1024;
 
 /// A well-formed implementer blocker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The failure handoff records it on the history entry it writes, as
+/// [`TaskDecision::AgentBlocked`], and readers take its kind from there
+/// through [`TaskHistoryEntry::agent_blocker_kind`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBlocker {
     /// Short token naming the blocker.
     pub kind: String,
@@ -103,6 +109,21 @@ impl AgentBlocker {
     #[must_use]
     pub fn class(&self) -> AgentBlockerClass {
         AgentBlockerClass::of_kind(&self.kind)
+    }
+
+    /// The blocker a [`step_failure_message`](Self::step_failure_message)
+    /// carries, behind either marker: the `kind=` token, and the text after
+    /// it as evidence. `None` when no well-formed kind or no evidence
+    /// follows the marker.
+    #[must_use]
+    pub fn from_step_failure_message(message: &str) -> Option<Self> {
+        let (kind, evidence) = kind_and_rest_after(message, TASK_BLOCKED_BY_AGENT_MARKER)
+            .or_else(|| kind_and_rest_after(message, UPGRADE_PENDING_MARKER))?;
+        let evidence = evidence.trim();
+        (!evidence.is_empty()).then(|| Self {
+            kind: kind.to_string(),
+            evidence: bounded_text(evidence, MAX_EVIDENCE_BYTES),
+        })
     }
 
     /// The step-failure text for this blocker: [`task_blocked_by_agent_message`]
@@ -183,12 +204,38 @@ pub fn upgrade_pending_kind(message: &str) -> Option<&str> {
     kind_after(message, UPGRADE_PENDING_MARKER)
 }
 
+impl TaskHistoryEntry {
+    /// The kind of the agent blocker this entry records.
+    ///
+    /// An entry written since [`TaskDecision::AgentBlocked`] carries the
+    /// blocker typed. A [`TASK_BLOCKED_BY_AGENT_EVENT`] entry written before
+    /// it (or by an older binary or replica) names the kind only in its note,
+    /// `[task_blocked_by_agent] kind=<kind> …`, which new entries keep
+    /// writing byte for byte; the legacy note reader reads that.
+    #[must_use]
+    pub fn agent_blocker_kind(&self) -> Option<&str> {
+        match &self.decision {
+            Some(TaskDecision::AgentBlocked { blocker }) => Some(&blocker.kind),
+            Some(_) => None,
+            None if self.event == TASK_BLOCKED_BY_AGENT_EVENT => {
+                task_blocked_by_agent_kind(self.note.as_deref()?)
+            }
+            None => None,
+        }
+    }
+}
+
 fn kind_after<'a>(message: &'a str, marker: &str) -> Option<&'a str> {
+    kind_and_rest_after(message, marker).map(|(kind, _)| kind)
+}
+
+/// The `kind=` token after `marker`, and the text that follows it.
+fn kind_and_rest_after<'a>(message: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
     let message = failure_classification_text(message);
     let (_, rest) = message.split_once(marker)?;
-    let rest = rest.trim_start().strip_prefix("kind=")?;
+    let rest = rest.trim_start().strip_prefix("kind=")?.trim_start();
     let kind = rest.split_whitespace().next()?;
-    is_blocker_kind(kind).then_some(kind)
+    is_blocker_kind(kind).then(|| (kind, &rest[kind.len()..]))
 }
 
 fn is_blocker_kind(kind: &str) -> bool {
