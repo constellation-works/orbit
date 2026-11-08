@@ -141,3 +141,21 @@ fn pr_open_leaves_at_signs_inside_urls_unchanged() {
         },
     );
 }
+
+#[test]
+fn pr_open_preserves_escaped_parentheses_in_relative_destinations() {
+    isolated(
+        "mentions::pr_open_preserves_escaped_parentheses_in_relative_destinations",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["body"] = json!(r"[pkg](/package/foo\)/@scope/pkg) @auto");
+            action_ok(&host, "pr_open", &input);
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(
+                body.contains("[pkg](/package/foo\\)/@scope/pkg) @\u{200d}auto"),
+                "{body}"
+            );
+        },
+    );
+}
