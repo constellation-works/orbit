@@ -47,11 +47,7 @@ pub(crate) fn failure_coupled(
 }
 
 /// Walk retry links to the run that started the episode, under a fixed budget.
-fn root(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-    session: &mut IncidentSession,
-) -> Result<String, AutomationError> {
+fn root(runtime: &OrbitRuntime, run: &JobRun) -> Result<String, AutomationError> {
     let mut current = run.clone();
     let mut seen = BTreeSet::new();
 
@@ -64,8 +60,8 @@ fn root(
         let Some(parent) = &current.retry_source_run_id else {
             return Ok(current.run_id);
         };
-        current = session
-            .backend_run(runtime, parent)?
+        current = runtime
+            .get_job_run_backend(parent)?
             .ok_or_else(|| AutomationError::Deferred(DeferredReason::IncidentLineageMissing))?;
     }
 
@@ -78,20 +74,9 @@ pub(crate) fn observe(
     runtime: &OrbitRuntime,
     task: &Task,
 ) -> Result<(String, Value), AutomationError> {
-    observe_with_settlement(runtime, task, true)
-}
-
-fn observe_with_settlement(
-    runtime: &OrbitRuntime,
-    task: &Task,
-    require_settled: bool,
-) -> Result<(String, Value), AutomationError> {
     let mut session = IncidentSession::new();
     let diagnosis = diagnose(runtime, task, &mut session)?;
-    Ok((
-        incident_key(&diagnosis.facts(require_settled))?,
-        diagnosis.evidence,
-    ))
+    Ok((incident_key(&diagnosis.facts())?, diagnosis.evidence))
 }
 
 struct Diagnosis {
@@ -106,13 +91,13 @@ struct Diagnosis {
 }
 
 impl Diagnosis {
-    fn facts(&self, require_settled: bool) -> IncidentFacts {
+    fn facts(&self) -> IncidentFacts {
         IncidentFacts {
             workspace: self.workspace.clone(),
             episode: Some(self.episode.clone()),
             cause: self.cause.clone(),
             failure: self.failure,
-            recovery_settled: !require_settled || self.recovery_settled,
+            recovery_settled: self.recovery_settled,
             current_failure_coupling: self.coupled,
             cancellation: self.cancelled,
         }
@@ -124,8 +109,6 @@ fn diagnose(
     task: &Task,
     session: &mut IncidentSession,
 ) -> Result<Diagnosis, AutomationError> {
-    session.stats.observes += 1;
-
     if !runtime.task_run_is_local(task) {
         return Err(AutomationError::Deferred(DeferredReason::ForeignRun));
     }
@@ -135,13 +118,13 @@ fn diagnose(
         .as_deref()
         .ok_or_else(|| AutomationError::Deferred(DeferredReason::HumanBlock))?;
 
-    let mut run = session.show_run(runtime, run_id)?;
+    let mut run = runtime.show_job_run(run_id)?;
     let coupled = failure_coupled(runtime, task, run_id)?;
     let cancelled = run.state == JobRunState::Cancelled;
     let failed = matches!(run.state, JobRunState::Failed | JobRunState::Timeout);
 
     let mut path_settled = true;
-    let mut episode = root(runtime, &run, session)?;
+    let mut episode = root(runtime, &run)?;
 
     // A blocking dispatch with a typed terminal child result is explicit
     // causality. Multiple failing children need separate obligations; ambiguous
@@ -155,10 +138,10 @@ fn diagnose(
             ));
         }
 
-        let liveness = session.probe_liveness(&run);
+        let liveness = run_owner_liveness(&run);
         path_settled &= run.state.is_terminal() && liveness == RunOwnerLiveness::Stopped;
 
-        let state = session.run_state(runtime, &run.run_id)?;
+        let state = runtime.read_run_state(&run.run_id)?;
         session.note_run(&run, liveness, &state);
         path_settled &= state
             .as_ref()
@@ -192,8 +175,8 @@ fn diagnose(
             break;
         };
 
-        run = session.show_run(runtime, &child.child_run_id)?;
-        episode = root(runtime, &run, session)?;
+        run = runtime.show_job_run(&child.child_run_id)?;
+        episode = root(runtime, &run)?;
     }
 
     if exhausted {
@@ -204,8 +187,8 @@ fn diagnose(
 
     // Collect the whole retry tree under the episode root: an incident is only
     // settled once every run in it has stopped.
-    let root_run = session
-        .backend_run(runtime, &episode)?
+    let root_run = runtime
+        .get_job_run_backend(&episode)?
         .ok_or_else(|| AutomationError::Deferred(DeferredReason::IncidentLineageMissing))?;
 
     let mut related = vec![root_run];
@@ -235,14 +218,14 @@ fn diagnose(
         if !lineage.contains(&related_run.run_id) {
             continue;
         }
-        let liveness = session.probe_liveness(related_run);
-        let state = session.run_state(runtime, &related_run.run_id)?;
+        let liveness = run_owner_liveness(related_run);
+        let state = runtime.read_run_state(&related_run.run_id)?;
         session.note_run(related_run, liveness, &state);
         settled &= related_run.state.is_terminal() && liveness == RunOwnerLiveness::Stopped;
     }
 
-    let cause_liveness = session.probe_liveness(&run);
-    let state = session.run_state(runtime, &run.run_id)?;
+    let cause_liveness = run_owner_liveness(&run);
+    let state = runtime.read_run_state(&run.run_id)?;
     session.note_run(&run, cause_liveness, &state);
     settled &= cause_liveness == RunOwnerLiveness::Stopped;
     let descendants_settled = state
@@ -282,19 +265,8 @@ fn diagnose(
 pub(crate) struct IncidentSession {
     cached: Option<IncidentMembers>,
     freshness: Option<FreshnessSnapshot>,
-    stats: IncidentWorkStats,
     building: FreshnessSnapshot,
     recording: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct IncidentWorkStats {
-    pub inventory_builds: usize,
-    pub inventory_reuses: usize,
-    pub task_reads: usize,
-    pub run_reads: usize,
-    pub liveness_probes: usize,
-    pub observes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -333,7 +305,6 @@ impl IncidentSession {
         if let Some(cached) = self.cached.clone()
             && self.fresh(runtime)?
         {
-            self.stats.inventory_reuses += 1;
             return Ok(cached);
         }
 
@@ -343,7 +314,6 @@ impl IncidentSession {
     }
 
     fn rebuild(&mut self, runtime: &OrbitRuntime) -> Result<IncidentMembers, AutomationError> {
-        self.stats.inventory_builds += 1;
         self.recording = true;
         self.building = FreshnessSnapshot::default();
 
@@ -354,11 +324,17 @@ impl IncidentSession {
         let mut unsettled = BTreeSet::new();
 
         for candidate in &listed.items {
-            let task = self.read_task(runtime, &candidate.id)?;
+            let task = runtime.get_task(&candidate.id)?;
             if let Ok(diagnosis) = diagnose(runtime, &task, self) {
-                if let Ok(key) = incident_key(&diagnosis.facts(true)) {
+                let facts = diagnosis.facts();
+                if let Ok(key) = incident_key(&facts) {
                     members.entry(key).or_default().push(task.id);
-                } else if let Ok(key) = incident_key(&diagnosis.facts(false)) {
+                } else if let Ok(key) = incident_key(&IncidentFacts {
+                    recovery_settled: true,
+                    ..facts
+                }) {
+                    // An unsettled member is keyed as if settled, so its whole
+                    // incident is withheld below.
                     unsettled.insert(key);
                 }
             }
@@ -388,10 +364,10 @@ impl IncidentSession {
         }
 
         for (run_id, expected) in &snapshot.runs {
-            let Some(run) = self.backend_run(runtime, run_id)? else {
+            let Some(run) = runtime.get_job_run_backend(run_id)? else {
                 return Ok(false);
             };
-            let liveness = self.probe_liveness(&run);
+            let liveness = run_owner_liveness(&run);
             if run.state != expected.state
                 || run.pid != expected.pid
                 || run.pid_start_time != expected.pid_start_time
@@ -400,7 +376,7 @@ impl IncidentSession {
                 return Ok(false);
             }
 
-            let state = self.run_state(runtime, run_id)?;
+            let state = runtime.read_run_state(run_id)?;
             if child_dispatch_token(state.as_ref()) != expected.child_dispatches {
                 return Ok(false);
             }
@@ -419,44 +395,11 @@ impl IncidentSession {
         Ok(true)
     }
 
-    fn read_task(&mut self, runtime: &OrbitRuntime, id: &str) -> Result<Task, AutomationError> {
-        self.stats.task_reads += 1;
-        Ok(runtime.get_task(id)?)
-    }
-
-    fn show_run(
-        &mut self,
-        runtime: &OrbitRuntime,
-        run_id: &str,
-    ) -> Result<JobRun, AutomationError> {
-        self.stats.run_reads += 1;
-        Ok(runtime.show_job_run(run_id)?)
-    }
-
-    fn backend_run(
-        &mut self,
-        runtime: &OrbitRuntime,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, AutomationError> {
-        self.stats.run_reads += 1;
-        Ok(runtime.get_job_run_backend(run_id)?)
-    }
-
-    fn run_state(
-        &mut self,
-        runtime: &OrbitRuntime,
-        run_id: &str,
-    ) -> Result<Option<PipelineState>, AutomationError> {
-        self.stats.run_reads += 1;
-        Ok(runtime.read_run_state(run_id)?)
-    }
-
     fn retries(
         &mut self,
         runtime: &OrbitRuntime,
         run_id: &str,
     ) -> Result<Vec<JobRun>, AutomationError> {
-        self.stats.run_reads += 1;
         let children = runtime.stores().jobs().job_run_retries(run_id, 51)?;
         if self.recording {
             let mut ids: Vec<String> = children.iter().map(|child| child.run_id.clone()).collect();
@@ -464,11 +407,6 @@ impl IncidentSession {
             self.building.retries.insert(run_id.to_string(), ids);
         }
         Ok(children)
-    }
-
-    fn probe_liveness(&mut self, run: &JobRun) -> RunOwnerLiveness {
-        self.stats.liveness_probes += 1;
-        run_owner_liveness(run)
     }
 
     fn note_run(
