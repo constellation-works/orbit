@@ -749,6 +749,7 @@ the same call, so authorized work lands with no drain, routine or schedule runni
 Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
 re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
 or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.
+A pending request whose dispatch fails stays pending and does not stop the other pending requests of that pass.
 `OrbitRuntime::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
 owner-domain seams alongside the handoff ones; landing a named handoff is how a stopped attempt is
 retried and an uncertain one reconciled.
