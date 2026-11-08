@@ -10,9 +10,10 @@
 
 use std::fmt;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, TaskPilotRefusalCode};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
+use serde::Serialize;
 use serde_json::json;
 
 use super::automation_port::JobAutomationPort;
@@ -42,15 +43,20 @@ pub enum TaskPilotRefusal {
 }
 
 impl TaskPilotRefusal {
+    /// The typed refusal code every surface reports.
+    pub fn refusal_code(&self) -> TaskPilotRefusalCode {
+        match self {
+            Self::UnsupportedStatus { .. } => TaskPilotRefusalCode::UnsupportedStatus,
+            Self::HumanCrew { .. } => TaskPilotRefusalCode::HumanCrew,
+            Self::PilotRunning { .. } => TaskPilotRefusalCode::AlreadyRunning,
+            Self::DeliveryRunning { .. } => TaskPilotRefusalCode::DeliveryRunning,
+            Self::ReplicaCheckout { .. } => TaskPilotRefusalCode::ReplicaCheckout,
+        }
+    }
+
     /// Stable machine-readable token for the refusal.
     pub fn code(&self) -> &'static str {
-        match self {
-            Self::UnsupportedStatus { .. } => "task_pilot_unsupported_status",
-            Self::HumanCrew { .. } => "task_pilot_human_crew",
-            Self::PilotRunning { .. } => "task_pilot_already_running",
-            Self::DeliveryRunning { .. } => "task_pilot_delivery_running",
-            Self::ReplicaCheckout { .. } => "task_pilot_replica_checkout",
-        }
+        self.refusal_code().as_str()
     }
 }
 
@@ -107,9 +113,84 @@ impl From<OrbitError> for TaskPilotSubmitError {
     }
 }
 
+/// The one error mapping every surface uses: a refusal becomes
+/// [`OrbitError::TaskPilotRefused`] carrying its stable code, and a runtime
+/// error keeps its own kind (an unknown task stays `NotFound`).
+impl From<TaskPilotSubmitError> for OrbitError {
+    fn from(error: TaskPilotSubmitError) -> Self {
+        match error {
+            TaskPilotSubmitError::Refused(refusal) => {
+                Self::task_pilot_refused(refusal.refusal_code(), refusal.to_string())
+            }
+            TaskPilotSubmitError::Runtime(error) => error,
+        }
+    }
+}
+
+/// The result of one explicit pilot submission, rendered by every surface.
+///
+/// `orbit.task.repilot` (CLI, MCP, remote) serializes it as is. The
+/// dashboard's `POST /api/tasks/<id>/pilot` renders [`Self::dashboard_view`],
+/// which publishes the same values under its own established names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskPilotSubmission {
+    pub task_id: String,
+    pub run_id: String,
+    /// The submitted job. Published as `job_name` by the tool and as its
+    /// alias `job_id` by the dashboard; both names are public contract.
+    pub job_name: String,
+    pub submitted_at: String,
+    /// Whether the run waits for a concurrency slot. The dashboard publishes
+    /// it as `state` (`queued` or `submitted`).
+    pub queued: bool,
+    /// One-based position among runs waiting for a concurrency slot.
+    pub queue_position: Option<usize>,
+}
+
+/// The dashboard's rendering of a [`TaskPilotSubmission`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskPilotSubmissionDashboardView<'a> {
+    pub task_id: &'a str,
+    /// Alias of [`TaskPilotSubmission::job_name`].
+    pub job_id: &'a str,
+    pub run_id: &'a str,
+    /// `queued` or `submitted`, from [`TaskPilotSubmission::queued`].
+    pub state: &'static str,
+    pub submitted_at: &'a str,
+    pub queue_position: Option<usize>,
+}
+
+impl TaskPilotSubmission {
+    fn from_invoke(task_id: &str, invoke: PipelineInvokeResult) -> Self {
+        Self {
+            task_id: task_id.to_string(),
+            run_id: invoke.run_id,
+            job_name: invoke.job_name,
+            submitted_at: invoke.submitted_at,
+            queued: invoke.queued,
+            queue_position: invoke.queue_position,
+        }
+    }
+
+    /// The dashboard's field names for this result.
+    pub fn dashboard_view(&self) -> TaskPilotSubmissionDashboardView<'_> {
+        TaskPilotSubmissionDashboardView {
+            task_id: &self.task_id,
+            job_id: &self.job_name,
+            run_id: &self.run_id,
+            state: if self.queued { "queued" } else { "submitted" },
+            submitted_at: &self.submitted_at,
+            queue_position: self.queue_position,
+        }
+    }
+}
+
 impl OrbitRuntime {
     /// Submit `task_pilot_pipeline` in explicit mode for exactly `task_id`,
     /// through the shared catalog submission path.
+    ///
+    /// The dashboard offers no full re-pilot control, so it submits through
+    /// this entry; that it never asks for `full` is intentional.
     ///
     /// Admission records `trigger` on the run. That host-owned provenance,
     /// not an agent-supplied flag, is how a later drain tells this request
@@ -119,7 +200,7 @@ impl OrbitRuntime {
         task_id: &str,
         actor: Option<&str>,
         trigger: JobRunTrigger,
-    ) -> Result<PipelineInvokeResult, TaskPilotSubmitError> {
+    ) -> Result<TaskPilotSubmission, TaskPilotSubmitError> {
         self.submit_explicit_task_pilot_in_mode(task_id, actor, trigger, false)
     }
 
@@ -131,7 +212,7 @@ impl OrbitRuntime {
         actor: Option<&str>,
         trigger: JobRunTrigger,
         full: bool,
-    ) -> Result<PipelineInvokeResult, TaskPilotSubmitError> {
+    ) -> Result<TaskPilotSubmission, TaskPilotSubmitError> {
         if let Some(owner) = self.replica_owner_machine() {
             return Err(TaskPilotSubmitError::Refused(
                 TaskPilotRefusal::ReplicaCheckout {
@@ -158,11 +239,12 @@ impl OrbitRuntime {
                 }));
                 Ok(())
             })?;
-        submitted.ok_or_else(|| {
+        let invoke = submitted.ok_or_else(|| {
             TaskPilotSubmitError::Runtime(OrbitError::Execution(
                 "pilot submission did not run".into(),
             ))
-        })?
+        })??;
+        Ok(TaskPilotSubmission::from_invoke(task_id, invoke))
     }
 
     /// Check an explicit request before its accompanying task edit is written.

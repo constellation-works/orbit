@@ -5,8 +5,8 @@ use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
     DependencyNotDelivered, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind,
     NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, WorkflowEvidenceUnavailable,
-    WorkspaceClaimHeld,
+    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -72,6 +72,13 @@ pub enum OrbitError {
     #[error("{code}: {message}")]
     NoticeRefused {
         code: NoticeRefusalCode,
+        message: String,
+    },
+    /// An explicit task-pilot submission refused before any run existed.
+    /// `code` is the stable token every surface reports; nothing was submitted.
+    #[error("{code}: {message}")]
+    TaskPilotRefused {
+        code: TaskPilotRefusalCode,
         message: String,
     },
     /// The owner's pull request contract differs from this executor's build.
