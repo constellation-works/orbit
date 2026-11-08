@@ -1,6 +1,6 @@
 use super::*;
 
-use super::toggle::RoutineToggleRefusal;
+use super::super::edit_contract::RoutineEditOutcome;
 
 /// A selected checkout is the entire discovery scope: never another store by
 /// cwd, never a client-supplied path.
@@ -60,10 +60,16 @@ pub(crate) fn toggle_checkout_routine(
     target: &str,
     expected_enabled: bool,
     enabled: bool,
-) -> Result<RoutineToggleOutcome, OrbitError> {
+) -> Result<RoutineEditOutcome, OrbitError> {
     let report = checkout_edit_report(runtime)?;
-    toggle_listed_routine(&report, name, None, target, expected_enabled, enabled)?
-        .map_err(checkout_refusal)
+    Ok(toggle_listed_routine(
+        &report,
+        name,
+        None,
+        target,
+        expected_enabled,
+        enabled,
+    )??)
 }
 
 /// The routine report a selected-checkout edit selects from, after the role
@@ -79,16 +85,4 @@ pub(crate) fn checkout_edit_report(
         runtime.ensure_coordination_task_write_permitted()?;
     }
     checkout_routine_statuses(runtime)
-}
-
-/// A selected-checkout selection refusal as the tool surface reports it.
-pub(crate) fn checkout_refusal(refusal: RoutineToggleRefusal) -> OrbitError {
-    match refusal {
-        RoutineToggleRefusal::OwnerAuthority { reason, .. } => {
-            OrbitError::CapabilityRefused(reason)
-        }
-        RoutineToggleRefusal::NotFound | RoutineToggleRefusal::WorkspaceMismatch { .. } => {
-            OrbitError::InvalidInput("routine unavailable in this workspace".into())
-        }
-    }
 }

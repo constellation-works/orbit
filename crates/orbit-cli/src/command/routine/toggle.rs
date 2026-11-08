@@ -3,9 +3,7 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::application::routines::{
-    RoutineToggleOutcome, RoutineToggleRefusal, toggle_listed_routine,
-};
+use orbit_core::application::routines::{RoutineEditRefusal, toggle_listed_routine};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
@@ -65,61 +63,42 @@ fn set_enabled(
     })?;
     let shared_root = runtime.shared_root();
     let report = routine_statuses(global_root)?;
-    // Observe the definition's current state and target, then hand both back as
-    // the expectation the atomic edit re-checks against the file it rewrites.
-    let Some(status) = report
+    // Observe the definition's current source, state and target, then hand them
+    // back as the expectation the atomic edit re-checks against the file it
+    // rewrites. An unlisted name observes nothing; the shared selection refuses it.
+    let (source_workspace, target, expected_enabled) = report
         .statuses
         .iter()
         .find(|status| status.routine.definition.name == name)
-    else {
-        return match report
-            .owner_only
-            .iter()
-            .find(|owned| owned.routine.definition.name == name)
-        {
-            Some(owned) => Err(OrbitError::CapabilityRefused(owned.reason.clone())),
-            None => Err(OrbitError::InvalidInput(format!(
-                "no routine named '{name}' (see `orbit routine list`)"
-            ))),
-        };
-    };
-    let routine = &status.routine;
-    if routine.source_orbit_dir != shared_root {
-        return Err(OrbitError::InvalidInput(format!(
-            "routine '{name}' belongs to workspace '{}', not the selected workspace; \
-             rerun with `--workspace {}`",
-            routine.source_workspace, routine.source_workspace
-        )));
-    }
-    let target = status.routine.definition.target.as_ref_string();
-    let expected_enabled = status.routine.definition.enabled;
-    let outcome = toggle_listed_routine(
+        .map(|status| {
+            let routine = &status.routine;
+            (
+                routine.source_workspace.clone(),
+                routine.definition.target.as_ref_string(),
+                routine.definition.enabled,
+            )
+        })
+        .unwrap_or_default();
+    let changed = toggle_listed_routine(
         &report,
         name,
-        Some((&routine.source_workspace, &shared_root)),
+        Some((&source_workspace, &shared_root)),
         &target,
         expected_enabled,
         enabled,
     )?
     .map_err(|refusal| match refusal {
-        RoutineToggleRefusal::OwnerAuthority { reason, .. } => {
-            OrbitError::CapabilityRefused(reason)
-        }
-        RoutineToggleRefusal::NotFound | RoutineToggleRefusal::WorkspaceMismatch { .. } => {
-            OrbitError::InvalidInput(format!(
-                "no routine named '{name}' (see `orbit routine list`)"
-            ))
-        }
-    })?;
-    let changed = match outcome {
-        RoutineToggleOutcome::Changed => true,
-        RoutineToggleOutcome::Unchanged => false,
-        RoutineToggleOutcome::Conflict { .. } | RoutineToggleOutcome::TargetConflict { .. } => {
-            return Err(OrbitError::Execution(format!(
-                "routine '{name}' changed while this command ran; re-check `orbit routine show {name}` and retry"
-            )));
-        }
-    };
+        RoutineEditRefusal::WorkspaceMismatch {
+            ref source_workspace,
+            ..
+        } => OrbitError::InvalidInput(format!(
+            "{}: routine '{name}' belongs to workspace '{source_workspace}', not the selected \
+             workspace; rerun with `--workspace {source_workspace}`",
+            refusal.code()
+        )),
+        other => other.into(),
+    })?
+    .changed;
     let state = if enabled { "enabled" } else { "disabled" };
     let text = if changed {
         format!("{state} '{name}'")

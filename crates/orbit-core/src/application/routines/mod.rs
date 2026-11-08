@@ -21,6 +21,7 @@ use orbit_store::contracts::RoutineStoreBackend;
 pub use orbit_clock as clock;
 mod leases;
 pub use orbit_automation::routines::due;
+pub mod edit_contract;
 pub mod loader;
 pub(crate) mod materialize;
 pub(crate) mod seed;
@@ -38,6 +39,7 @@ pub use clock::{
     set_clock_enabled,
 };
 pub use due::{DueDecision, due_decision, minimum_cron_interval, parse_cron};
+pub use edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 pub use loader::{
     DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
@@ -46,8 +48,8 @@ pub use loader::{
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     FireField, RoutineField, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome,
-    RoutineToggleRefusal, ScheduleDisplayState, pause_routine, project_fire, recent_fires,
-    resume_routine, routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
+    ScheduleDisplayState, pause_routine, project_fire, recent_fires, resume_routine,
+    routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
     toggle_listed_routine,
 };
 pub use sweep::{
