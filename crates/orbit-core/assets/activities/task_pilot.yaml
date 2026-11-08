@@ -925,6 +925,21 @@ spec:
       present, leave `duplicate_of` and `already_landed` null and return
       selectors for the current repair.
 
+    - **Undecided consequential decisions.** When the description leaves an
+      ownership or policy choice undecided, or inspection of the pinned source
+      shows a concrete surface or behavioural difference that a stop rule
+      (stop on an unlisted, unenumerated or not-listed difference) would reach
+      and the spec neither enumerates nor resolves, return a `utility_warnings`
+      object with `holds_promotion: true` whose text names that decision. A
+      resolved choice does not hold: the spec states which ownership or policy
+      to keep, or it states that a difference the table does not name keeps
+      current behavior and the implementer does not stop for it. A
+      stop-and-report that is itself the specified handling of an unknown
+      difference ("not a judgement call"), with no concrete omitted surface
+      you can name from the pinned source or the spec, does not hold. Ordinary
+      implementation choices do not hold: approach, file split, naming and
+      test placement. Do not treat this as the ambiguity exemption below.
+
     Set `holds_promotion: true` only for a hard blocker, one that makes correct
     delivery as written impossible: criteria that contradict each other; criteria the lane cannot satisfy or validate on
     its own host (every finding from Tool feasibility, Sandbox deferral, Owner
@@ -933,7 +948,8 @@ spec:
     criteria or status cannot be verified; a required contract absent from the
     base, uncovered by a dependency and outside this task's permitted scope to
     add; a lock footprint the task directs that you could not establish
-    (Assessment); or a target that does not exist. Set it to false, or omit
+    (Assessment); an undecided consequential decision named above; or a target
+    that does not exist. Set it to false, or omit
     the finding, for:
 
     - an empty or missing plan (the implementer fills plans; they are not a
@@ -941,7 +957,7 @@ spec:
     - details the implementer decides (approach, file split, naming, test
       placement);
     - ambiguity the task's own instructions already route (stop-and-report,
-      follow the code);
+      follow the code), except an undecided consequential decision above;
     - adjacent out-of-scope work or optional cleanup;
     - style or wording.
 
