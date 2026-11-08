@@ -131,6 +131,12 @@ pub struct RuntimeKernel {
     /// the deterministic first task ID.
     #[cfg(any(test, feature = "test-support"))]
     transition_read_hook: Arc<Mutex<Option<(String, orbit_types::task::TaskStatus)>>>,
+    /// Test-only seam for the dashboard archive race: when set to a task id,
+    /// the archive path inserts a non-terminal local run owning that task
+    /// after the outer ownership pre-check, so the under-lock recheck can
+    /// observe the lost race. Instance-scoped like the read hook above.
+    #[cfg(any(test, feature = "test-support"))]
+    transition_run_hook: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
