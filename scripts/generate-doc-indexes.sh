@@ -409,6 +409,11 @@ render_index() {
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
     render_guide_rows "$docs_dir"
+    printf '\n### Architecture\n\n'
+    printf 'Code map of the current tree: end-to-end data flow, store and federation, surfaces, and one page per crate. Design intent stays in `docs/design/`.\n\n'
+    printf '| Page | Purpose |\n'
+    printf '| --- | --- |\n'
+    render_guide_rows "$docs_dir/architecture"
     printf '\n### Design patterns\n\n'
     printf '| Pattern | Purpose |\n'
     printf '| --- | --- |\n'

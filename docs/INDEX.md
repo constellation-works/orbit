@@ -27,6 +27,34 @@ operational and contributor procedures, feature designs, and incident reviews.
 | [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |
 
+### Architecture
+
+Code map of the current tree: end-to-end data flow, store and federation, surfaces, and one page per crate. Design intent stays in `docs/design/`.
+
+| Page | Purpose |
+| --- | --- |
+| [Orbit architecture — code map](./architecture/README.md) | Orbit code map: end-to-end data flow, store and federation, MCP and dashboard surfaces, crate dependency diagram and per-crate pages. |
+| [orbit-agent](./architecture/orbit-agent.md) | Architecture map for orbit-agent: what it owns, main modules, dependencies and entry points. |
+| [orbit-auth](./architecture/orbit-auth.md) | Architecture map for orbit-auth: what it owns, main modules, dependencies and entry points. |
+| [orbit-automation](./architecture/orbit-automation.md) | Architecture map for orbit-automation: what it owns, main modules, dependencies and entry points. |
+| [orbit-cli](./architecture/orbit-cli.md) | Architecture map for orbit-cli: what it owns, main modules, dependencies and entry points. |
+| [orbit-clock](./architecture/orbit-clock.md) | Architecture map for orbit-clock: what it owns, main modules, dependencies and entry points. |
+| [orbit-cmd](./architecture/orbit-cmd.md) | Architecture map for orbit-cmd: what it owns, main modules, dependencies and entry points. |
+| [orbit-common](./architecture/orbit-common.md) | Architecture map for orbit-common: what it owns, main modules, dependencies and entry points. |
+| [orbit-config](./architecture/orbit-config.md) | Architecture map for orbit-config: what it owns, main modules, dependencies and entry points. |
+| [orbit-core](./architecture/orbit-core.md) | Architecture map for orbit-core: what it owns, main modules, dependencies and entry points. |
+| [orbit-engine](./architecture/orbit-engine.md) | Architecture map for orbit-engine: what it owns, main modules, dependencies and entry points. |
+| [orbit-exec](./architecture/orbit-exec.md) | Architecture map for orbit-exec: what it owns, main modules, dependencies and entry points. |
+| [orbit-mcp](./architecture/orbit-mcp.md) | Architecture map for orbit-mcp: what it owns, main modules, dependencies and entry points. |
+| [orbit-policy](./architecture/orbit-policy.md) | Architecture map for orbit-policy: what it owns, main modules, dependencies and entry points. |
+| [orbit-registry](./architecture/orbit-registry.md) | Architecture map for orbit-registry: what it owns, main modules, dependencies and entry points. |
+| [orbit-runtime](./architecture/orbit-runtime.md) | Architecture map for orbit-runtime: what it owns, main modules, dependencies and entry points. |
+| [orbit-search](./architecture/orbit-search.md) | Architecture map for orbit-search: what it owns, main modules, dependencies and entry points. |
+| [orbit-store](./architecture/orbit-store.md) | Architecture map for orbit-store: what it owns, main modules, dependencies and entry points. |
+| [orbit-tools](./architecture/orbit-tools.md) | Architecture map for orbit-tools: what it owns, main modules, dependencies and entry points. |
+| [orbit-types](./architecture/orbit-types.md) | Architecture map for orbit-types: what it owns, main modules, dependencies and entry points. |
+| [orbit-web](./architecture/orbit-web.md) | Architecture map for orbit-web: what it owns, main modules, dependencies and entry points. |
+
 ### Design patterns
 
 | Pattern | Purpose |
