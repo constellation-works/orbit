@@ -215,7 +215,7 @@ impl OrbitRuntime {
             identity,
             request,
             &AdmissionOrdering {
-                affinity: self.admission_affinity(),
+                affinity: crate::application::admission::census::ADMISSION_AFFINITY,
                 census,
                 expiring_tasks,
                 gates: Some(self.owner_validation_gates()),

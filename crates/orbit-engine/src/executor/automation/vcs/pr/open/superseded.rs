@@ -93,7 +93,7 @@ pub(super) fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
 /// body naming the task, and an author among `pr.delivery_authors` (when
 /// that is empty, the author of the pull request this run published). Only
 /// open pull requests are listed, so a merged one is never touched, and
-/// branches are kept. `pr.close_on_terminal = false` turns this off. Best
+/// branches are kept. A host bound to no workspace configuration skips it. Best
 /// effort: a failed lookup or close is reported and logged, never a step
 /// failure.
 pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<

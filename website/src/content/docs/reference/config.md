@@ -565,7 +565,6 @@ pool and the two review pools accept it, and only for a crew with bands in
 
 ```toml
 [workflow.auto_effort]
-explore_share = 0.1
 bands.opus = [
   { complexity = ["hard", "xhard"], effort = "xhigh" },
   { below_files = 4, effort = "medium" },
@@ -589,7 +588,7 @@ Implementers, Pilots and Reviewers analytics tables and experiment readouts
 record the resolved `<crew>@<effort>`, never `@auto`, and the run's crew
 selection or draw records which band chose it.
 
-`workflow.auto_effort.explore_share` sends that share of draws (default 10%) to
+A fixed 10% of draws goes to
 another effort the crew can run at, so both sides of each cutover keep getting
 data. Those draws are recorded with `explored: true` and the effort the bands
 would have chosen.
@@ -730,6 +729,33 @@ which backs up each affected file first, or delete the lines by hand from the
 `config.toml` that sets them. Historical run answers and concluded experiment
 readouts remain readable.
 
+Several former tuning keys are now fixed at their old defaults. These load
+with a deprecation warning and have no effect until 2026-12-08, after which
+they are reported as unknown settings; delete them from the `config.toml` that
+sets them:
+
+- `pr.close_on_terminal`, `pr.draft`, `pr.freshness_section`,
+  `pr.orchestration_trailer`, `pr.screenshot_section`, `pr.signature`,
+  `commit.orchestrated_by_trailer` and `commit.regression_trailers`: Orbit
+  closes a task's open pull requests when it ends, opens pull requests ready
+  for review (a draft only for a required-section gap), adds the Screenshots
+  table for `ui`-tagged tasks, the Branch Freshness section, the model
+  signature and the `Orchestrated-By` line, and adds the `Orchestrated-By` and
+  regression trailers to commits.
+- `workflow.admission_affinity`, `workflow.auto_effort.explore_share`,
+  `workflow.provider_limit_max_used_pct`, `workflow.usage_pressure_cap` and
+  `workflow.usage_pressure_strength`: admission affinity reaches across the
+  band, 10% of `@auto` draws explore, the provider-limit threshold is 90%
+  (`workflow.provider_limit_overrides` still changes it per provider), and the
+  usage-pressure multiplier is clamped to `[1/8, 8]`.
+- `workflow.resource_throttle.cpu_light_leaves`, `io_full_high_percent` and
+  `io_full_resume_percent`: two CPU-light leaves, and a disk I/O stall mark of
+  20% resuming below 10%.
+- `workflow.validation_env.shell_probe`, `path_mode` and `cargo_incremental`,
+  and the older `login_shell` and `interactive`: validation always probes the
+  interactive login shell, prepends `workflow.validation_env.path`, and sets
+  `CARGO_INCREMENTAL=0` for bound host validation.
+
 ## Settable keys
 
 `orbit config set` accepts these keys, except the two read-only `machine.*` identity keys. `orbit config keys` prints the same list, and the docs test suite fails when this table and that list diverge.
@@ -752,19 +778,14 @@ readouts remain readable.
 | `workflow.purpose_crews.review` | string or array · **Default:** Unset<br>Crew for automatic review: every review task the after-landing auto-task mints, and the reviewer `review.timing` runs while `workflow.purpose_crews.pre_landing_review` is unset. Unset, after-landing review uses that auto-task's template crew. An array is a pool written like the complexity pools (`["sol", "grok"]` or `["sol:3", "grok:1"]`, all bare or all weighted): each review draws one crew by weight, skipping crews that are disabled or at a provider usage limit and then preferring one that did not implement the reviewed work, each step falling back to the pool when it would leave none. A distributed owner resolves its pool to one crew per claim. `[]` unsets it; a crew the registry does not define fails the load. Replaces the deprecated `operation.review_crew`. |
 | `workflow.purpose_crews.sweep_tasks` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for every task a sweep files: the CI failure sweep, the Dependabot and code-scanning sweeps, and the merged-head repairs a review reconciliation files. Unset or `[]`, they draw from their matching type pool, then their complexity pool. Replaces the deprecated `ci_failure_sweep`, `dependabot` and `merged_head_repair` pools, which still load into it; a file whose old pools differ fails to load until you merge them here. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.task_pilot` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the task pilot. Unset or `[]`, it draws from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
-| `workflow.provider_limit_max_used_pct` | **Advanced.** integer · **Default:** `90`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above this percent. `100` skips only on exhaustion. |
-| `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Per-provider thresholds replacing `workflow.provider_limit_max_used_pct`, each `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`. |
+| `workflow.provider_limit_overrides` | array&lt;string&gt; · **Default:** `[]`<br>Delivery admission skips a crew while a live usage window of its provider, or of its model, is exhausted or used at or above 90%. Each entry replaces that threshold for one provider, `provider:percent` or `provider:off` (record readings without gating admission), such as `["claude:80", "grok:100", "codex:off"]`; `100` skips only on exhaustion. |
 | `workflow.provider_limit_budgets` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>`, such as `["grok:30usd/5h"]`. Counts this host's Orbit runs only. |
 | `workflow.provider_limit_explicit_crews` | **Advanced.** string · **Default:** `wait`<br>A task whose explicit crew is limited waits in the backlog (`wait`), or is drawn from the unlimited members of its complexity pool (`pool`). A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
-| `workflow.crew_selection` | **Advanced.** string · **Default:** `static`<br>How task creation, complexity re-rate and admission draws weigh pool members. `static` uses the configured weights. `usage_pressure` scales each member's weight by its crew's weekly usage pressure, clamped by `workflow.usage_pressure_cap`, and at admission draws a crew the system chose again from its whole pool, keeping the task's automatic crew source. Explicit crews are never re-drawn. The `crew_selection` object a run records is the draw itself, not this key. |
-| `workflow.usage_pressure_cap` | **Advanced.** number · **Default:** `8`<br>Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. At least `1`. |
-| `workflow.usage_pressure_strength` | **Advanced.** number · **Default:** `1.0`<br>Under `usage_pressure`, the exponent applied to pressure before the cap. At least `0`; `0` disables weighting. |
+| `workflow.crew_selection` | **Advanced.** string · **Default:** `static`<br>How task creation, complexity re-rate and admission draws weigh pool members. `static` uses the configured weights. `usage_pressure` scales each member's weight by its crew's weekly usage pressure, clamped to `[1/8, 8]`, and at admission draws a crew the system chose again from its whole pool, keeping the task's automatic crew source. Explicit crews are never re-drawn. The `crew_selection` object a run records is the draw itself, not this key. |
 | `workflow.task_types` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered task types that `workflow.type_complexity_crews` routes by and the implementer scorecard's by-type matrix splits by. Each `[[workflow.task_types]]` entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first type whose tags it carries or whose path globs match its context files, else `other`. Empty means every task is `other`. Read with `orbit agents scorecard --role implementers --by-type`. The former name `workflow.crew_performance_types` still loads into it with a deprecation warning until 2026-12-07. |
 | `workflow.auto_effort.bands` | **Advanced.** table · **Default:** `{}`<br>Per crew, the ordered bands a `<crew>@auto` pool entry resolves through. Each band has an `effort` the crew accepts and at least one of `complexity`, `below_files`, `below_lines`. See [effort chosen per draw](#effort-chosen-per-draw-auto). |
-| `workflow.auto_effort.explore_share` | **Advanced.** number · **Default:** `0.1`<br>Share of `@auto` draws, `0`–`0.5`, dispatched at another effort the crew can run at. |
 | `workflow.required_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands every delivered candidate must pass. Owner PR and local deliveries run them before push or merge; a distributed claim must pass them before this owner accepts its handoff. Empty means no required check on any path: nothing runs and a claimed handoff carries no validation logs. |
 | `workflow.distributed_completion` | string · **Default:** `review`<br>How far this owner takes an accepted distributed handoff: `review` waits for an operator's Approve handoff; `done` lands it through the owner's landing job, as `orbit run auto --complete` does. |
-| `workflow.admission_affinity` | **Advanced.** string · **Default:** `band`<br>How a distributed owner orders admission against its live executors, so each takes work only it can run first. `band` puts that work ahead of priority within a dispatch band, so critical and corrective work still leads; `priority` puts it first only within a priority; `off` keeps the plain band, priority, expiry and age order. Applies to followers' pulls and the owner's own drain. |
 | `workflow.unlocked_context_paths` | array&lt;string&gt; · **Default:** `["**/*.md"]`<br>Path globs (`*` within a component, `**` across components) whose `context_files` entries take no context lock. The agent still receives them as context; admission, readiness and lock reservations skip them. A task whose every entry matches still locks them all. `[]` locks every entry. |
 | `workflow.lock_modes` | **Advanced.** array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[workflow.lock_modes]]` entries, each a `pattern` (a Rust regex searched for in the workspace-relative path; anchor it with `^` and `$`) and a `mode` of `exclusive` (default) or `shared`. The first matching entry wins. Two tasks whose context overlaps only at a shared path, judged at the narrower selector's path, run together, and a conflict between them is resolved when the second lands. `module:` and `command:` selectors stay exclusive. Empty locks every overlap. |
 | `workflow.unlocked_path_validation_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands a repaired candidate runs instead of `workflow.required_validation_commands` when its tree differs from the last tree its run passed the full list on only in paths matching `workflow.unlocked_context_paths`, such as `["make ci-fast"]`. Any other change runs the full list. Each validation records which list ran and why as `validation_scope`. Empty always runs the full list. |
@@ -778,22 +799,16 @@ readouts remain readable.
 | `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Record in each run's state the newest task comment every agent prompt with task context included, the run's steering watermark, and lead the run's later prompts with the operator comments written after it. The shipped delivery pipelines do not commit while one is undelivered. Claimed leaves read steering from their owner and fail closed before commit when it cannot answer. |
 | `workflow.mid_run_steering.max_rounds` | **Advanced.** integer · **Default:** `2`<br>Steering rounds a run may spend at the promotion gate before it holds as `steering_unconsumed` (`1`–`10`). |
 | `workflow.ci_infrastructure_signatures` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Log-line prefixes a failed CI job prints when infrastructure, not the change, failed. A match gets one CI rerun, with no repair agent and no CI sweep task. The sweep itself reruns nothing, so a failed landing-branch run stays red until a rerun or a newer push. Empty declares none. |
-| `workflow.resource_throttle.enabled` | **Advanced.** bool · **Default:** `true`<br>Hold new task admission while host CPU, memory, disk space, or (on Linux) disk I/O pressure stays at or above its high mark. While CPU alone is held, a local drain may still admit eligible CPU-light auto-tasks if reserved slots remain. Memory, disk and I/O holds stop those tasks; pull drains do not use this budget and request no new claims while their executor is throttled. Disabled, pressure is still reported. |
+| `workflow.resource_throttle.enabled` | **Advanced.** bool · **Default:** `true`<br>Hold new task admission while host CPU, memory, disk space, or (on Linux) disk I/O pressure stays at or above its high mark. While CPU alone is held, a local drain may still admit up to two eligible CPU-light auto-tasks. On Linux, disk I/O stall (`full avg60` in `/proc/pressure/io`) holds at 20% and resumes below 10%; hosts without pressure stall information are not gated. Memory, disk and I/O holds stop those tasks; pull drains do not use this budget and request no new claims while their executor is throttled. Disabled, pressure is still reported. |
 | `workflow.resource_throttle.cpu_source` | string · **Default:** `"load"`<br>`load` or `utilization`. Linux utilization uses busy CPU tick deltas excluding idle and I/O wait; macOS uses Mach utilization for either choice. Both use the existing ten-second sustain window; I/O pressure remains independently gated. The active source appears in readiness and doctor. |
 | `workflow.resource_throttle.cpu_high_percent` | integer · **Default:** `90`<br>CPU high-water mark. With the default `cpu_source = "load"`, Linux uses load average divided by online CPUs, includes the run queue and I/O wait, and can exceed 100%; this differs from `machine.auto_concurrency.admit_cpu_percent`, which measures forecast utilization. |
 | `workflow.resource_throttle.cpu_resume_percent` | integer · **Default:** `85`<br>Resume below this CPU percentage. |
-| `workflow.resource_throttle.cpu_light_leaves` | **Advanced.** integer · **Default:** `2`<br>While CPU alone holds admissions, a local drain still starts up to this many `no-diff-expected` auto-tasks (reviews, curation). Memory, disk and I/O pressure hold them too; `0` holds them with everything else. |
 | `workflow.resource_throttle.memory_high_percent` | integer · **Default:** `90`<br>Memory high-water mark. It and `machine.auto_concurrency.admit_memory_percent` measure non-reclaimable memory; the global auto-concurrency threshold must stay below this global high mark. |
 | `workflow.resource_throttle.memory_resume_percent` | integer · **Default:** `85`<br>Resume below this memory percentage. |
 | `workflow.resource_throttle.disk_high_percent` | integer · **Default:** `90`<br>Disk high-water mark, per observed filesystem. |
 | `workflow.resource_throttle.disk_resume_percent` | integer · **Default:** `85`<br>Resume below this disk percentage. |
-| `workflow.resource_throttle.io_full_high_percent` | **Advanced.** integer · **Default:** `20`<br>Linux only. High-water mark for disk I/O stall: `full avg60` in `/proc/pressure/io`, the share of the last minute in which every runnable task was stalled on I/O. `full`, not `some`, because `some` fires whenever any one process waits on disk, which is normal on a busy build host. Hosts without pressure stall information are not gated. |
-| `workflow.resource_throttle.io_full_resume_percent` | integer · **Default:** `10`<br>Resume below this `full avg60` percentage. |
-| `workflow.validation_env.shell_probe` | string · **Default:** `interactive`<br>How the `PATH` (and allowlisted toolchain locators such as `CARGO_HOME`) that required validation and `local_shell` steps see is resolved from the owner's shell: `interactive` tries an interactive login shell (`-i -l -c`) so toolchains exported in rc files are found, falling back to `-l -c` on startup failure, nonzero exit, timeout, or a missing marker; `login` probes only `-l -c`; `off` never probes the shell. Each probe is bounded to 10 seconds and its outcome is cached for two minutes. Replaces the deprecated `login_shell` (`false` is `off`) and `interactive` (`false` is `login`) booleans. |
-| `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, combined with the resolved `PATH` per `path_mode`. A leading `~/` expands to `HOME`. Empty adds nothing. |
-| `workflow.validation_env.path_mode` | **Advanced.** string · **Default:** `prepend`<br>How `workflow.validation_env.path` combines with the resolved `PATH`: `prepend` puts it first, `replace` makes it the whole `PATH`. |
+| `workflow.validation_env.path` | array&lt;string&gt; · **Default:** `[]`<br>`PATH` entries for required validation and `local_shell` steps, put ahead of the resolved `PATH`, which comes from the owner's interactive login shell (falling back to a login shell). A leading `~/` expands to `HOME`. Empty adds nothing. |
 | `workflow.validation_env.build_output_env` | array&lt;string&gt; · **Default:** `[]`<br>Environment variable names bound to managed host output for required validation and host evidence. Configured bindings replace inherited values; commands must honor them. Empty allocates nothing. See [Workspace build output](#workspace-build-output). |
-| `workflow.validation_env.cargo_incremental` | **Advanced.** bool · **Default:** `false`<br>When a host validation target is bound, force `CARGO_INCREMENTAL=0` on required validation, host evidence, baseline reruns and recovery. `true` leaves the variable untouched. No binding does not set it. |
 | `machine.name` | string · **Default:** Set by `orbit init`<br>Global only. This machine's display name, and the one `[machine]` value you can change. |
 | `machine.labels` | array of strings · **Default:** `[]`<br>Global only. Capability labels this machine carries (`["gpu", "xcode"]`) for tasks whose `requires_labels` name them; a host may start such a task only when it carries every label. Its OS (`linux`, `macos` or `windows`) is an implicit label. Labels are trimmed and lowercased, and use ASCII letters, digits, `-`, `_`, `.`, `:` and `/`, up to 64 bytes. `orbit doctor` prints the effective set. |
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's stable generated identity (`hm_…`), written once by `orbit init` and never reused. `orbit config set` refuses it. |
@@ -889,26 +904,18 @@ readouts remain readable.
 | `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by auto-task name (`["doc-duties", "qa-sweep"]`). An opt-out you recorded with `orbit auto-task delete` is kept while the policy leaves the default out. |
 | `experiments.config_keys` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Config keys an experiment arm's `config` overlay may set. Starting an experiment whose arm sets any other key is refused. |
 | `experiments.min_delivered_rate` | **Advanced.** number · **Default:** `0.9`<br>Share (`0`–`1`) of a treatment arm's settled tasks that must have received its treatment before `orbit experiment readout` gives a verdict. Below it the verdict is `withheld`, with the reason `arm <arm> treatment delivered on <n>/<m> runs`. |
-| `pr.close_on_terminal` | **Advanced.** bool · **Default:** `true`<br>Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
-| `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal` and for settling a task to done from its delivery pull request merged outside Orbit. Empty means the login the forge CLI is authenticated as on this machine. |
+| `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for closing a task's open pull requests when it lands, is rejected or is archived, and for settling a task to done from its delivery pull request merged outside Orbit. Empty means the login the forge CLI is authenticated as on this machine. |
 | `pr.title_template` | **Advanced.** string · **Default:** Unset<br>Template for a single-task pull request title, using the [delivery template placeholders](#delivery-templates). Unset uses the task title. |
 | `pr.body_template` | **Advanced.** string · **Default:** Unset<br>Pull request body template: `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path, read at the delivery's base revision. Unset uses Orbit's own layout. |
 | `pr.agent_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer may fill through the `pr-sections.json` task artifact. |
 | `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. An unfilled one is handled by `pr.missing_required_section` and recorded in task history. |
 | `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>What happens when a required section is unfilled: `draft` opens the pull request as a draft with a note under the heading; `refuse` opens no pull request. |
-| `pr.screenshot_section` | **Advanced.** string · **Default:** `auto`<br>When a single-task body carries the optional `## Screenshots` section: `auto` for tasks tagged `ui`, `always`, or `off`. If no screenshots are publishable, it shows `No screenshots attached.`; this does not count as a missing required section and never drafts or refuses the PR. |
-| `pr.freshness_section` | **Advanced.** bool · **Default:** `true`<br>Include the Branch Freshness section (and the `{{freshness}}` value) in pull request bodies. |
-| `pr.signature` | **Advanced.** bool · **Default:** `true`<br>Append the authoring model's signature to pull request bodies. |
-| `pr.orchestration_trailer` | **Advanced.** bool · **Default:** `true`<br>Append the `Orchestrated-By` trailer to pull request bodies. |
 | `pr.labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Labels applied to each pull request Orbit opens. |
 | `pr.task_tag_labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Exact, case-sensitive allowlist of task tags mirrored as PR labels after creation or reuse. |
 | `pr.task_type_labels` | **Advanced.** table&lt;string,string&gt; · **Default:** `{}`<br>Map `feature`, `bug`, `refactor` or `chore` to label names, e.g. `{ bug = "bug", feature = "enhancement" }`. Unknown types are refused. Task labels are unioned across the delivery; missing labels are created and existing labels accepted. Names must be non-empty and cannot start with `-`. Failures warn and are recorded as `task_labels.applied` / `.failed` in the PR step output without failing the step. Empty settings add no commands. Later task edits do not sync or remove labels. |
 | `pr.reviewers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Reviewers (logins or `org/team`) requested on each pull request Orbit opens. |
-| `pr.draft` | **Advanced.** bool · **Default:** `false`<br>Open every pull request as a draft. A draft is never merged automatically. |
 | `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. Subjects keep a 72-character budget: the title is shortened first, with an ellipsis, and kept whole in the body. |
 | `commit.body_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit bodies, before the trailers. |
-| `commit.orchestrated_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Orchestrated-By` trailer to commit messages. |
-| `commit.regression_trailers` | **Advanced.** bool · **Default:** `true`<br>Add `Fixes` (when the target's landed commit is resolvable), `Regression-From` and `Regression` trailers for `regression_from` relations to commit messages. |
 | `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. A name containing `..` or starting with `-` is refused. |
 | `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |
 | `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. A name you add that the launching shell does not set reaches no agent: drains, `orbit run ship` and `orbit run job` warn on stderr and record it on the run, and `orbit doctor` reports it (start drains from a login shell). Clock-started runs read admitted names from `~/.orbit/clock.env`; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv). |
@@ -967,8 +974,7 @@ Notes:
   `operation.review_crew`, `workflow.final_recovery_crews`, the
   `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools,
   `review.before_pr`, `review.before_landing`, a boolean
-  `machine.worker_containment`, `machine.worker_containment_strict`, and
-  `workflow.validation_env.login_shell` and `interactive`. A file that also
+  `machine.worker_containment` and `machine.worker_containment_strict`. A file that also
   sets the replacement keeps the replacement's value. `orbit doctor
   --fix-retired-config-keys` writes each value under its replacement and then
   deletes the old key. A later release rejects them.
@@ -1296,7 +1302,7 @@ the key and the placeholder.
 | `{{acceptance_criteria}}` | The acceptance criteria as a checklist | PR title and body, commit |
 | `{{execution_summary}}` | The implementer's execution summary | PR title and body, commit |
 | `{{validation}}` | The validation section | PR title and body, commit |
-| `{{freshness}}` | The branch's base and head and how far it is behind and ahead; empty in commits or with `pr.freshness_section = false` | PR title and body, commit |
+| `{{freshness}}` | The branch's base and head and how far it is behind and ahead; empty in commits | PR title and body, commit |
 | `{{task_url}}` | The task link from `pr.task_url_template`; empty when unset | PR title and body, commit |
 | `{{ext.<system>}}` | The ID of the task's external ref for `<system>`, such as `{{ext.jira}}`; empty when the task has none | Everywhere |
 | `{{prefix}}` | The delivery's branch prefix: `orbit` unless a job sets another | Branch only |
@@ -1325,7 +1331,7 @@ unfilled required section is never published as an empty heading: with
 note under the heading, and with `"refuse"` no pull request opens. Both are
 recorded in the task's history. Orbit never merges a draft automatically.
 
-With `pr.screenshot_section` on (`auto` turns it on for tasks tagged `ui`),
+For a task tagged `ui`,
 Orbit renders the optional `## Screenshots` section with a table of Before
 and After images from the
 task's artifacts named
@@ -1394,8 +1400,7 @@ source can reuse it. Commands must honor the locator to preserve that isolation.
 Bindings apply to required validation, host replay and detached evidence,
 including baseline and recovery checks, on every platform. They do not apply
 to agent sessions or ordinary `local_shell` steps. When a binding is in
-effect, those commands also receive `CARGO_INCREMENTAL=0` unless
-`workflow.validation_env.cargo_incremental` is `true`. Logs record the resolved
+effect, those commands also receive `CARGO_INCREMENTAL=0`. Logs record the resolved
 `build_output` environment, directory, source and host context.
 
 Managed cleanup retains active, leased or ambiguous output and can reclaim

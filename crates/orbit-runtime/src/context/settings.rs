@@ -14,7 +14,7 @@ pub struct OrbitRuntimeSettings {
     publication_routine_allow_unscanned_attachments: bool,
     pr_config: PrConfig,
     /// Config-owned `[pr]` settings; the PR closure on a task's terminal
-    /// decision reads `close_on_terminal` and `delivery_authors` from here.
+    /// decision reads `delivery_authors` from here.
     pr_settings: orbit_config::PrSettings,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     workflow_base_branch: String,
@@ -35,9 +35,6 @@ pub struct OrbitRuntimeSettings {
     /// How far this owner takes an accepted distributed handoff: `review` or
     /// `done` (`[workflow] distributed_completion`, default `review`).
     workflow_distributed_completion: String,
-    /// How far admission lets work only the requesting executor can run
-    /// lead (`[workflow] admission_affinity`, default `band`).
-    admission_affinity: orbit_types::task::AdmissionAffinityReach,
     /// `[workflow.task_pilot_freshness]`: the global layer a task-pilot
     /// routine's `trigger.state.freshness` overrides [ORB-13638].
     task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
@@ -138,7 +135,6 @@ impl OrbitRuntimeSettings {
         review_baseline_commands: Vec<String>,
         validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
-        admission_affinity: orbit_types::task::AdmissionAffinityReach,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
         human_crews: std::collections::BTreeMap<String, orbit_types::identity::HumanCrew>,
@@ -193,7 +189,6 @@ impl OrbitRuntimeSettings {
             review_baseline_commands,
             validation_env,
             workflow_distributed_completion,
-            admission_affinity,
             task_pilot_freshness,
             crews,
             human_crews,
@@ -394,10 +389,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_distributed_completion(&self) -> &str {
         &self.workflow_distributed_completion
-    }
-
-    pub(crate) fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        self.admission_affinity
     }
 
     pub(crate) fn task_pilot_freshness(

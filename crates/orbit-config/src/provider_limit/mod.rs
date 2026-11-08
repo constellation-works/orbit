@@ -12,9 +12,8 @@ mod target;
 
 pub use budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use policy::{
-    CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
-    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitExplicitCrews, ProviderLimitPolicy,
-    ProviderLimitThreshold, UsagePressurePolicy,
+    CrewSelection, PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
+    ProviderLimitThreshold, USAGE_PRESSURE_CAP, USAGE_PRESSURE_STRENGTH, UsagePressurePolicy,
 };
 pub use target::ProviderLimitTarget;
 

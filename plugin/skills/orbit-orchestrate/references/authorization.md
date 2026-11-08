@@ -102,7 +102,7 @@ Linux the throttle also reads disk I/O stall (`io full`, from
 admissions with CPU idle, so lower the drain ceiling or build slots rather
 than raising the mark. While
 CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
-start within `workflow.resource_throttle.cpu_light_leaves`, and one waiting on
+start in up to two reserved slots, and one waiting on
 that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery
 batch is within two hours of its deadline already sorts ahead of same-priority
 backlog, so do not raise it to critical just to beat the throttle.

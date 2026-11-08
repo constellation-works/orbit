@@ -216,7 +216,7 @@ required section” note. The task history records a `pr_section_gap` event
 naming the gap and the configured `pr.missing_required_section` policy drafts
 the PR or refuses to open it. Verify the resulting PR body and, when required
 content is missing, the task history and delivery outcome. A reused draft is
-marked ready only when `pr.draft` is disabled, no required section is still
+marked ready only when no required section is still
 missing, and one of these recovery paths applies: its live body exactly matches
 the body Orbit created for a typed `pr_section_gap` publication; a matching
 body refresh was reserved before an interrupted ready transition; or, when no
@@ -256,7 +256,7 @@ A diff that changes something a user sees (dashboard, web pages, docs site,
 desktop app UI) follows the workspace guide's screenshot evidence rule for
 task artifacts. This review evidence follows the diff, not the `ui` tag.
 Publishing screenshots in the PR body is optional: if
-`pr.screenshot_section` applies and none are attached, Orbit writes `No
+the task is tagged `ui` and none are attached, Orbit writes `No
 screenshots attached.` and does not draft or refuse the PR for that reason.
 `.orbit/tmp/` is cleared with the worktree, so a screenshot left only there is
 lost evidence.
@@ -280,7 +280,7 @@ lost evidence.
   full-page one, or JPEG or WebP when a PNG is too large.
 - List the artifact paths in the execution summary.
 - Orbit publishes these artifacts into the PR's `## Screenshots` table when
-  `pr.screenshot_section` applies. `pr_open` commits attached shots to the
+  the task is tagged `ui`. `pr_open` commits attached shots to the
   task's permanent evidence ref `refs/orbit/evidence/<task-id>` and renders
   the Before/After table in the PR body; an empty section is optional. Do not
   push your own evidence branch:

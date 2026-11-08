@@ -232,8 +232,8 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 }
             }
             let reason = if configured {
-                "pr.draft is configured; next action: explicitly mark the PR ready on the \
-                 forge, then retry landing"
+                "the delivery conventions open every pull request as a draft; next action: \
+                 explicitly mark the PR ready on the forge, then retry landing"
             } else {
                 "no section-gap recovery evidence; next action: mark the PR ready on the \
                  forge, then retry landing"

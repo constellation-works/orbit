@@ -699,7 +699,7 @@ impl Fixture {
 /// The task the delivery actions read; everything else is the engine's own.
 struct Host {
     repo: PathBuf,
-    /// `pr.close_on_terminal`, which also closes a task's earlier delivery
+    /// The PR-closure convention, which also closes a task's earlier delivery
     /// pull requests when a run publishes its own.
     close_superseded: bool,
 }

@@ -178,9 +178,8 @@ pub(in crate::doctor) fn doctor_check_validation_env(
             WorkspaceDoctorStatus::Warning,
             message,
             "Make the interactive login shell export the intended toolchain PATH (`$SHELL \
-             -i -l -c 'echo $PATH'` should list it first), fix rc failures or set \
-             `workflow.validation_env.shell_probe = login` to use login profiles only, or \
-             set `workflow.validation_env.path` with `orbit config set`, then rerun \
+             -i -l -c 'echo $PATH'` should list it first), fix rc failures, or set \
+             `workflow.validation_env.path` with `orbit config set`, then rerun \
              `orbit doctor`."
                 .to_string(),
         )

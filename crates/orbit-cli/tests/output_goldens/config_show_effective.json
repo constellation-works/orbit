@@ -98,20 +98,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "commit.orchestrated_by_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "commit.regression_trailers": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "commit.subject_template": {
       "scope": "built-in",
       "state": "unset",
@@ -763,28 +749,7 @@
       "path": null,
       "shadowed_by": []
     },
-    "pr.close_on_terminal": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "pr.delivery_authors": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "pr.draft": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "pr.freshness_section": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -805,13 +770,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "pr.orchestration_trailer": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "pr.required_sections": {
       "scope": "built-in",
       "state": "default",
@@ -820,20 +778,6 @@
       "shadowed_by": []
     },
     "pr.reviewers": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "pr.screenshot_section": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "pr.signature": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -1029,21 +973,7 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.admission_affinity": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.auto_effort.bands": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.auto_effort.explore_share": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -1177,13 +1107,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.provider_limit_max_used_pct": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.provider_limit_overrides": {
       "scope": "built-in",
       "state": "default",
@@ -1268,13 +1191,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.resource_throttle.cpu_light_leaves": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.resource_throttle.cpu_resume_percent": {
       "scope": "built-in",
       "state": "default",
@@ -1307,20 +1223,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.resource_throttle.io_full_high_percent": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.resource_throttle.io_full_resume_percent": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
@@ -1387,20 +1289,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.usage_pressure_cap": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.usage_pressure_strength": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.validation_env.build_output_env": {
       "scope": "built-in",
       "state": "default",
@@ -1408,28 +1296,7 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.validation_env.cargo_incremental": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.validation_env.path": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.validation_env.path_mode": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "workflow.validation_env.shell_probe": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",

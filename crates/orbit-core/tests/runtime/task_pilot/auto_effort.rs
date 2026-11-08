@@ -16,7 +16,6 @@ const CONFIG: &str = "\
 [crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
 [workflow]\ndefault_crew = \"fixture\"\n\
 [workflow.purpose_crews]\ntask_pilot = [\"fixture@auto\"]\n\
-[workflow.auto_effort]\nexplore_share = 0.0\n\
 [[workflow.auto_effort.bands.fixture]]\neffort = \"low\"\ncomplexity = [\"low\"]\n\
 [[workflow.auto_effort.bands.fixture]]\neffort = \"high\"\ncomplexity = [\"hard\"]\n";
 

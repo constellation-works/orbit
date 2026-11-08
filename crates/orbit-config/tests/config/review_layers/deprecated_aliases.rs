@@ -161,28 +161,20 @@ fn every_deprecated_spelling_loads_like_its_replacement_and_warns() {
             &["machine.worker_containment"],
         ),
         (
-            "a login-only shell probe",
-            Layers {
-                global: "",
-                workspace: "[workflow.validation_env]\ninteractive = false\n",
-            },
-            Layers {
-                global: "",
-                workspace: "[workflow.validation_env]\nshell_probe = \"login\"\n",
-            },
-            &["workflow.validation_env.interactive"],
-        ),
-        (
-            "a shell probe switched off globally",
+            "shell probe switches, ignored since the probe is fixed [ORB-22808]",
             Layers {
                 global: "[workflow.validation_env]\nlogin_shell = false\n",
-                workspace: "",
+                workspace: "[workflow.validation_env]\ninteractive = false\nshell_probe = \"off\"\n",
             },
             Layers {
-                global: "[workflow.validation_env]\nshell_probe = \"off\"\n",
+                global: "",
                 workspace: "",
             },
-            &["workflow.validation_env.login_shell"],
+            &[
+                "workflow.validation_env.login_shell",
+                "workflow.validation_env.interactive",
+                "workflow.validation_env.shell_probe",
+            ],
         ),
         (
             "the live files on the delivery hosts",

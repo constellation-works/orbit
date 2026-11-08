@@ -42,8 +42,8 @@ const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "all-keys", "g
 /// The System tab is the resource throttle only: its keys, in display order.
 const THROTTLE_PREFIX = "workflow.resource_throttle.";
 const THROTTLE_RESOURCES = ["cpu", "memory", "disk", "io"];
-// The `io` resource's keys are named for the pressure line they read.
-const THROTTLE_KEY_STEM = { io: "io_full" };
+// The `io` marks are fixed, not configurable [ORB-22808]: [throttle at, resume below].
+const FIXED_THROTTLE_MARKS = { io: [20, 10] };
 
 /// Disk I/O pressure exists only on hosts that report it (Linux with PSI), so
 /// its row appears only when the host's payload carries a reading.
@@ -694,9 +694,13 @@ function describePressure(pressure) {
 
 function systemResource(resource, rows, payload, host) {
   const reading = hostReading(host, resource);
-  const stem = THROTTLE_KEY_STEM[resource] || resource;
-  const high = rows[`${THROTTLE_PREFIX}${stem}_high_percent`];
-  const resume = rows[`${THROTTLE_PREFIX}${stem}_resume_percent`];
+  const high = rows[`${THROTTLE_PREFIX}${resource}_high_percent`];
+  const resume = rows[`${THROTTLE_PREFIX}${resource}_resume_percent`];
+  const fixed = FIXED_THROTTLE_MARKS[resource];
+  const markCell = (row, index) => {
+    if (row) return systemValueCell(row, payload);
+    return el("span", { class: "config-value mono", text: fixed ? `${fixed[index]} (fixed)` : NO_VALUE });
+  };
   const node = el("div", { class: "config-sys-resource" });
   node.dataset.resource = resource;
   const live = el("span", { class: `config-sys-reading ${reading.severity}${reading.held ? " throttled" : ""}` }, [
@@ -707,8 +711,8 @@ function systemResource(resource, rows, payload, host) {
   node.appendChild(el("div", { class: "config-sys-grid" }, [
     ["Resource", el("span", { class: "config-key mono", text: resource })],
     ["Live reading", live],
-    ["Throttle at", high ? systemValueCell(high, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
-    ["Resume below", resume ? systemValueCell(resume, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
+    ["Throttle at", markCell(high, 0)],
+    ["Resume below", markCell(resume, 1)],
   ].map(([label, value]) => el("div", { class: "config-sys-cell-wrap" }, [
     el("span", { class: "config-sys-label", text: label }),
     value,

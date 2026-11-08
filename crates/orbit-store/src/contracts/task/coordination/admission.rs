@@ -24,7 +24,7 @@ pub struct AdmissionTaskGuidance {
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
     /// How far work only the requester can run reaches in the order
-    /// (`workflow.admission_affinity`) [ORB-17304].
+    /// [ORB-17304]; fixed at `band` since [ORB-22808].
     pub affinity: orbit_types::task::AdmissionAffinityReach,
     /// The live executors the requester's candidates are ordered against,
     /// the requester among them. `None`, when the census could not be read

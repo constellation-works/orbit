@@ -516,8 +516,37 @@ impl MissingSectionPolicy {
     }
 }
 
+/// The former `pr.close_on_terminal` default, fixed when the key was removed
+/// [ORB-22808]: a task's open Orbit-authored pull requests close when the
+/// task reaches done, rejected or archived.
+pub const PR_CLOSE_ON_TERMINAL: bool = true;
+/// The former `pr.screenshot_section` default, fixed when the key was removed
+/// [ORB-22808]: single-task bodies carry the Screenshots table for tasks
+/// tagged `ui`.
+pub const PR_SCREENSHOT_SECTION: ScreenshotSection = ScreenshotSection::Auto;
+/// The former `pr.freshness_section` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies carry the Branch Freshness section.
+pub const PR_FRESHNESS_SECTION: bool = true;
+/// The former `pr.signature` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies end with the authoring model's signature.
+pub const PR_SIGNATURE: bool = true;
+/// The former `pr.orchestration_trailer` default, fixed when the key was
+/// removed [ORB-22808]: generated bodies carry the `Orchestrated-By:` line.
+pub const PR_ORCHESTRATION_TRAILER: bool = true;
+/// The former `pr.draft` default, fixed when the key was removed
+/// [ORB-22808]: a pull request opens ready for review, and as a draft only
+/// for a required-section gap under [`MissingSectionPolicy::Draft`].
+pub const PR_DRAFT: bool = false;
+/// The former `commit.orchestrated_by_trailer` default, fixed when the key
+/// was removed [ORB-22808]: commit messages carry `Orchestrated-By:`.
+pub const COMMIT_ORCHESTRATED_BY_TRAILER: bool = true;
+/// The former `commit.regression_trailers` default, fixed when the key was
+/// removed [ORB-22808]: commit messages carry the `Fixes`, `Regression-From`
+/// and `Regression` trailers for `regression_from` relations.
+pub const COMMIT_REGRESSION_TRAILERS: bool = true;
+
 /// When a single-task pull request body carries the screenshot section
-/// (`pr.screenshot_section`).
+/// ([`PR_SCREENSHOT_SECTION`] for configured deliveries).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ScreenshotSection {
     /// Only for tasks tagged [`UI_TASK_TAG`].
@@ -530,7 +559,7 @@ pub enum ScreenshotSection {
 }
 
 impl ScreenshotSection {
-    /// Accepted spellings of `pr.screenshot_section`.
+    /// Accepted spellings of a screenshot-section policy.
     pub const VALUES: &'static [&'static str] = &["auto", "always", "off"];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -617,13 +646,13 @@ pub struct DeliveryConventions {
     pub required_sections: Vec<String>,
     /// `pr.missing_required_section`.
     pub missing_section: MissingSectionPolicy,
-    /// `pr.screenshot_section`.
+    /// When the Screenshots table renders; [`PR_SCREENSHOT_SECTION`].
     pub screenshot_section: ScreenshotSection,
-    /// `pr.freshness_section`.
+    /// The Branch Freshness section; [`PR_FRESHNESS_SECTION`].
     pub freshness_section: bool,
-    /// `pr.signature`: the `*authored by: <model>*` line.
+    /// The `*authored by: <model>*` line; [`PR_SIGNATURE`].
     pub signature: bool,
-    /// `pr.orchestration_trailer`: the `Orchestrated-By:` line of the body.
+    /// The `Orchestrated-By:` line of the body; [`PR_ORCHESTRATION_TRAILER`].
     pub pr_orchestration_trailer: bool,
     /// `pr.labels`.
     pub labels: Vec<String>,
@@ -633,15 +662,15 @@ pub struct DeliveryConventions {
     pub task_type_labels: BTreeMap<String, String>,
     /// `pr.reviewers`.
     pub reviewers: Vec<String>,
-    /// `pr.draft`.
+    /// Open every pull request as a draft; [`PR_DRAFT`].
     pub draft: bool,
     /// `commit.subject_template`.
     pub commit_subject: Option<ConventionTemplate>,
     /// `commit.body_template`.
     pub commit_body: Option<ConventionTemplate>,
-    /// `commit.orchestrated_by_trailer`.
+    /// The commit `Orchestrated-By:` trailer; [`COMMIT_ORCHESTRATED_BY_TRAILER`].
     pub orchestrated_by_trailer: bool,
-    /// `commit.regression_trailers`.
+    /// The commit regression trailers; [`COMMIT_REGRESSION_TRAILERS`].
     pub regression_trailers: bool,
     /// `branch.name_template`, else [`DEFAULT_BRANCH_TEMPLATE`].
     pub branch_name: ConventionTemplate,
@@ -655,19 +684,19 @@ impl Default for DeliveryConventions {
             agent_sections: Vec::new(),
             required_sections: Vec::new(),
             missing_section: MissingSectionPolicy::Draft,
-            screenshot_section: ScreenshotSection::Auto,
-            freshness_section: true,
-            signature: true,
-            pr_orchestration_trailer: true,
+            screenshot_section: PR_SCREENSHOT_SECTION,
+            freshness_section: PR_FRESHNESS_SECTION,
+            signature: PR_SIGNATURE,
+            pr_orchestration_trailer: PR_ORCHESTRATION_TRAILER,
             labels: Vec::new(),
             task_tag_labels: Vec::new(),
             task_type_labels: BTreeMap::new(),
             reviewers: Vec::new(),
-            draft: false,
+            draft: PR_DRAFT,
             commit_subject: None,
             commit_body: None,
-            orchestrated_by_trailer: true,
-            regression_trailers: true,
+            orchestrated_by_trailer: COMMIT_ORCHESTRATED_BY_TRAILER,
+            regression_trailers: COMMIT_REGRESSION_TRAILERS,
             branch_name: default_branch_template(),
         }
     }

@@ -482,7 +482,7 @@ impl OrbitRuntime {
         // requeue standing and is reported instead. The same closure as
         // `orbit task update --status backlog --discard-candidate`.
         let discard_closure = discard.then(|| {
-            if !self.context.settings().pr_settings().close_on_terminal {
+            if !orbit_types::workflow::PR_CLOSE_ON_TERMINAL {
                 "disabled"
             } else if self.close_task_prs_after_requeue(
                 TaskStatus::Blocked,

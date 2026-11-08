@@ -358,35 +358,40 @@ mod unix {
     }
 
     /// [ORB-13987] `orbit run auto` still starts a drain whose required
-    /// validation cannot use the login shell, and says so at submission.
+    /// validation cannot use the login shell, and says so at submission. The
+    /// fixture home's shell profiles fail, so the probe cannot resolve.
     fn auto_warns_when_required_validation_cannot_use_the_login_shell() {
         let fixture = Fixture::new();
+        for profile in [".bash_profile", ".profile", ".zprofile"] {
+            fs::write(fixture.home.join(profile), "exit 42\n").expect("failing profile");
+        }
+        fs::create_dir_all(fixture.home.join(".config/fish")).expect("fish config dir");
+        fs::write(fixture.home.join(".config/fish/config.fish"), "exit 42\n")
+            .expect("failing fish config");
         fixture.write_pipeline_job("workspace_auto_pipeline");
         let installed = fixture.home.join(".orbit/bin/orbit");
         fs::create_dir_all(installed.parent().expect("installation directory"))
             .expect("create installation directory");
         fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
-        for (key, value) in [
-            (
+        fixture
+            .command()
+            .args([
+                "config",
+                "set",
+                "--seed-from-global",
                 "workflow.required_validation_commands",
                 r#"["make ci-fast"]"#,
-            ),
-            ("workflow.validation_env.shell_probe", "off"),
-        ] {
-            fixture
-                .command()
-                .args(["config", "set", "--seed-from-global", key, value])
-                .assert()
-                .success();
-        }
+            ])
+            .assert()
+            .success();
 
         let submitted = fixture.installed_json(&installed, &["run", "auto", "--json"]);
 
         let warning = submitted["warning"].as_str().unwrap_or_default();
         assert!(
-            warning.contains("`workflow.validation_env.shell_probe = off`")
+            warning.contains("could not resolve the login-shell environment")
                 && warning.contains("source: launcher_fallback"),
-            "the submission names the disabled resolution and its fallback: {submitted}"
+            "the submission names the failed resolution and its fallback: {submitted}"
         );
         // A macOS host still reports its worker-containment note [ORB-19251]; only that independent note may appear.
         let notes = submitted["note"]

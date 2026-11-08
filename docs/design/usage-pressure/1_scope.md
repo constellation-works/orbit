@@ -97,7 +97,7 @@ weekly readings also count. Every other window is ignored for pressure, the 5-ho
    and the other crews use their provider's default login.
 
 The existing usage-limit gate is untouched. It still removes a crew whose window of any length
-reaches `provider_limit_max_used_pct`, before pressure weights what is left.
+reaches the provider-limit threshold (90%, or its `provider_limit_overrides` entry), before pressure weights what is left.
 
 ### Effective weight
 
@@ -145,11 +145,10 @@ spend**, from the same provider-limit observations that gating reads.
 ```toml
 [workflow]
 crew_selection = "usage_pressure"   # "static" (default until rollout) | "usage_pressure"
-usage_pressure_cap = 8              # 1 disables in effect; bounds the multiplier both ways
-usage_pressure_strength = 1.0       # exponent; 0 disables
 ```
 
-These are `workflow.*` keys and can be overridden per workspace, like `provider_limit_*`.
+[ORB-22808] fixed `cap` at 8 and `strength` at 1 and removed their keys
+(`usage_pressure_cap`, `usage_pressure_strength`). `crew_selection` is a `workflow.*` key and can be overridden per workspace, like `provider_limit_*`.
 Readings stay per host.
 
 ### Surfaces

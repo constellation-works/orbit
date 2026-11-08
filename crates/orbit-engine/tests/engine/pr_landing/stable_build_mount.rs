@@ -385,7 +385,7 @@ fn workspace_build_output_is_opt_in_and_toolchain_neutral() {
 /// Host-bound validation forces incremental compilation off at the spawn.
 /// Required validation, its scratch base-rerun and recovery checkouts, and
 /// detached host evidence all bind through the same runner. No binding
-/// leaves the variable alone. `cargo_incremental` is the operator opt-in.
+/// leaves the variable alone. The policy's `cargo_incremental` parameter opts out.
 #[test]
 fn host_validation_forces_incremental_off_unless_the_operator_opts_in() {
     isolated(

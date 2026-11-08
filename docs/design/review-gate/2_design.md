@@ -1686,8 +1686,8 @@ durable evidence.
 ### 8.1 Screenshot evidence in the pull request body [ORB-18351]
 
 A UI change's reviewer on the forge sees attached screenshots in the body
-that `pr_open` writes. `pr.screenshot_section` (`auto` for `ui`-tagged tasks,
-`always`, `off`) turns on an optional `## Screenshots` section built from the
+that `pr_open` writes. A `ui`-tagged task's body carries an optional
+`## Screenshots` section built from the
 task's `screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
 ([CONFIG.md](../../CONFIG.md#delivery-templates-pr-commit-and-branch)).
 When no screenshots are publishable, the section contains

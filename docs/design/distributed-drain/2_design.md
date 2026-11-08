@@ -54,7 +54,7 @@ owner-local alike, against its live
 executor machine, upserted with each pull receipt and on each pass of the owner's local drain,
 live for ten minutes or while its machine holds a claim. Within a band, work only the
 requesting executor can run leads, and among the rest work fewer live executors can run;
-`workflow.admission_affinity` narrows that to a priority (`priority`) or turns it off.
+The reach is fixed at the band; the former `workflow.admission_affinity` key, which could narrow it to a priority or turn it off, was removed [ORB-22808].
 [ORB-14938] first added owner-relative OS affinity; the census [ORB-17304]
 implemented supersedes that narrower preference.
 
@@ -1749,8 +1749,8 @@ this table retains its requirements without claiming the entire matrix was execu
   `machine.auto_concurrency.mode = "enforce"`, the request also filters out task classes its host
   load forecast cannot support. The census puts work only that executor can run first, but it
   does not report remaining slots: a fungible task can wait while the only other executor that
-  could run it is saturated. `workflow.admission_affinity = "priority"` is the escape hatch,
-  bounding that wait to one priority.
+  could run it is saturated. The former `workflow.admission_affinity = "priority"` escape hatch
+  was removed with the key [ORB-22808]; the reach is fixed at the band.
 - **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References

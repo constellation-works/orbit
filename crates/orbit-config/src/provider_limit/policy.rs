@@ -15,8 +15,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::budget::ProviderLimitBudget;
 use super::target::{ProviderLimitTarget, SEPARATOR, validate_crew_target};
 
-/// `workflow.provider_limit_max_used_pct` when unset.
-pub const DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT: u8 = 90;
+/// The former `workflow.provider_limit_max_used_pct` default, fixed when the
+/// key was removed [ORB-22808]: the used percent at or above which delivery
+/// admission skips a provider-limited crew, unless an override replaces it.
+pub const PROVIDER_LIMIT_MAX_USED_PCT: u8 = 90;
 
 const OVERRIDES_KEY: &str = "workflow.provider_limit_overrides";
 const EXPLICIT_CREWS_KEY: &str = "workflow.provider_limit_explicit_crews";
@@ -163,14 +165,14 @@ pub struct ProviderLimitPolicy {
     /// canonical provider [ORB-14699].
     pub budgets: Vec<ProviderLimitBudget>,
     /// How task crew draws weigh weekly usage pressure
-    /// (`workflow.crew_selection`, `workflow.usage_pressure_*`).
+    /// (`workflow.crew_selection`).
     pub usage_pressure: UsagePressurePolicy,
 }
 
 impl Default for ProviderLimitPolicy {
     fn default() -> Self {
         Self {
-            max_used_pct: DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT,
+            max_used_pct: PROVIDER_LIMIT_MAX_USED_PCT,
             overrides: BTreeMap::new(),
             crew_overrides: BTreeMap::new(),
             explicit_crews: ProviderLimitExplicitCrews::Wait,
@@ -180,10 +182,14 @@ impl Default for ProviderLimitPolicy {
     }
 }
 
-/// `workflow.usage_pressure_cap` when unset.
-pub const DEFAULT_USAGE_PRESSURE_CAP: f64 = 8.0;
-/// `workflow.usage_pressure_strength` when unset.
-pub const DEFAULT_USAGE_PRESSURE_STRENGTH: f64 = 1.0;
+/// The former `workflow.usage_pressure_cap` default, fixed when the key was
+/// removed [ORB-22808]: the largest factor usage pressure scales a crew's
+/// draw weight up or down by.
+pub const USAGE_PRESSURE_CAP: f64 = 8.0;
+/// The former `workflow.usage_pressure_strength` default, fixed when the key
+/// was removed [ORB-22808]: the exponent applied to usage pressure before
+/// the cap.
+pub const USAGE_PRESSURE_STRENGTH: f64 = 1.0;
 
 const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
 
@@ -220,8 +226,8 @@ impl CrewSelection {
     }
 }
 
-/// The admitted `workflow.crew_selection` and `workflow.usage_pressure_*`
-/// settings.
+/// The admitted `workflow.crew_selection`, with the fixed
+/// [`USAGE_PRESSURE_CAP`] and [`USAGE_PRESSURE_STRENGTH`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UsagePressurePolicy {
     /// Whether draws weigh usage pressure at all.
@@ -236,8 +242,8 @@ impl Default for UsagePressurePolicy {
     fn default() -> Self {
         Self {
             selection: CrewSelection::Static,
-            cap: DEFAULT_USAGE_PRESSURE_CAP,
-            strength: DEFAULT_USAGE_PRESSURE_STRENGTH,
+            cap: USAGE_PRESSURE_CAP,
+            strength: USAGE_PRESSURE_STRENGTH,
         }
     }
 }

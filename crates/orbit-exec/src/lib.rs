@@ -120,6 +120,7 @@ pub use supervision::{
 };
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
-    LoginShellEnv, LoginShellMode, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
-    ValidationPathMode, program_on_path,
+    LoginShellEnv, LoginShellMode, VALIDATION_CARGO_INCREMENTAL, VALIDATION_INTERACTIVE_PROBE,
+    VALIDATION_LOGIN_SHELL, VALIDATION_PATH_MODE, ValidationEnvPolicy, ValidationEnvSource,
+    ValidationEnvironment, ValidationPathMode, program_on_path,
 };

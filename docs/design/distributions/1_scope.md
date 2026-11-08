@@ -129,7 +129,7 @@ routines = ["office-daily-digest"]
 auto_tasks = []
 
 [config]
-"pr.draft" = true
+"pr.labels" = ["office"]
 ```
 
 `orbit workspace init --preset <file>` applies it to a new or an existing workspace:

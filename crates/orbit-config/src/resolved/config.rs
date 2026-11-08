@@ -47,9 +47,6 @@ struct DocumentAdmissionOptions {
 pub struct PrSettings {
     /// URL template used to link a task ID in PR descriptions.
     pub task_url_template: Option<String>,
-    /// Close a task's open Orbit-authored PRs when it reaches done, rejected
-    /// or archived (`pr.close_on_terminal`, default `true`).
-    pub close_on_terminal: bool,
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
@@ -134,7 +131,6 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures
@@ -377,7 +373,6 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
                 ci_infrastructure_signatures: snapshot
                     .workflow_ci_infrastructure_signatures

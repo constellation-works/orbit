@@ -824,9 +824,7 @@ closes the task's undelivered Orbit pull requests and says so in the answer's
 comment. An option that leaves the specification alone keeps the candidate
 resumable. The next run implements fresh. A closure the forge refuses is
 reported in the answer
-(`discard_closure: incomplete`), and the requeue stands. With
-`pr.close_on_terminal = false` nothing is closed (`discard_closure:
-disabled`); close the discarded pull request by hand. Any other refusal of the
+(`discard_closure: incomplete`), and the requeue stands. Any other refusal of the
 publication (an interrupted or timed-out run, a newer execution, a foreign
 source) offers the same discard exit. Also refused, with
 the same discard exit:
@@ -1502,8 +1500,7 @@ repair: the wait lifts by itself at the next admission pass after the reset.
 
 To run it sooner, give the pool an unlimited member, set the task's `crew` to
 a crew on another provider, or raise the threshold
-(`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
-for that provider). To keep using a provider whose plan window is exhausted
+(`workflow.provider_limit_overrides` for that provider; the default is a fixed 90%). To keep using a provider whose plan window is exhausted
 while paid credits remain, set that provider's override to `off`
 (`["codex:off"]`). Readings stay recorded and shown: readiness JSON lists
 them with `threshold` `off` and `gated` false, and `orbit doctor`'s

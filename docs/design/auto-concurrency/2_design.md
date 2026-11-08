@@ -81,7 +81,7 @@ being consulted, and stops 300 s after the last consult.
   remain; memory, disk and I/O pressure hold them too. Pull drains do not use
   this CPU-light budget and request no new claims while throttled.
 - **CPU-only pressure.** A local drain may still admit up to
-  the remaining `cpu_light_leaves` budget of eligible CPU-light tasks
+  the remaining budget of two reserved slots for eligible CPU-light tasks
   (`admission/cpu_light.rs`).
 - **Fail open.** Unknown readings never hold.
 - **Shared state.** Every drain on the host reads one shared state file,

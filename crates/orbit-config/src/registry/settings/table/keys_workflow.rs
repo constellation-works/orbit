@@ -3,14 +3,6 @@ macro_rules! with_workflow_keys {
     ([$($head:tt)*] $($tail:tt)*) => {
         define_config_settings! {
             $($head)*
-    workflow_admission_affinity: String => String {
-        key: "workflow.admission_affinity", value_type: "string",
-        description: "How far work only the requesting executor can run moves ahead in admission order.",
-        section: ConfigSection::Delivery, order: 66,
-        tier: ConfigKeyTier::Advanced,
-        allowed: one_of(&orbit_types::task::AdmissionAffinityReach::CHOICES),
-        resolve: |raw: Option<String>| resolve_choice(raw, "band", "workflow.admission_affinity"),
-    },
     workflow_auto_effort_bands: BTreeMap<String, Vec<AutoEffortBand>> => BTreeMap<String, Vec<AutoEffortBand>> {
         key: "workflow.auto_effort.bands", value_type: "table<string,array<table>>",
         description: "Per crew, the ordered effort bands a `<crew>@auto` pool entry resolves through.",
@@ -18,15 +10,6 @@ macro_rules! with_workflow_keys {
         tier: ConfigKeyTier::Advanced,
         detail: "Each band's effort applies when the draw's complexity, line or file signal meets every condition it sets.",
         resolve: |raw: Option<BTreeMap<String, Vec<AutoEffortBand>>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
-    },
-    workflow_auto_effort_explore_share: f64 => f64 {
-        key: "workflow.auto_effort.explore_share", value_type: "number",
-        description: "Share of `<crew>@auto` draws dispatched at an effort other than the bands' choice.",
-        section: ConfigSection::Delivery, order: 119,
-        tier: ConfigKeyTier::Advanced,
-        allowed: numbers(0.0, crate::crew_auto_effort::MAX_AUTO_EFFORT_EXPLORE_SHARE),
-        detail: "So each side of a cutover keeps getting data.",
-        resolve: |raw: Option<f64>| crate::crew_auto_effort::admit_auto_effort_explore_share(raw),
     },
     workflow_base_branch: String => String {
         key: "workflow.base_branch", value_type: "string",
@@ -121,14 +104,6 @@ macro_rules! with_workflow_keys {
         allowed: one_of(&crate::provider_limit::ProviderLimitExplicitCrews::CHOICES),
         resolve: |raw: Option<String>| crate::provider_limit::admit_explicit_crews(raw),
     },
-    workflow_provider_limit_max_used_pct: u8 => u8 {
-        key: "workflow.provider_limit_max_used_pct", value_type: "integer",
-        description: "Usage percent at which delivery admission skips a provider-limited crew.",
-        section: ConfigSection::Delivery, order: 106,
-        tier: ConfigKeyTier::Advanced,
-        allowed: PERCENT,
-        resolve: |raw: Option<u8>| resolve_percent(raw, crate::provider_limit::DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, "workflow.provider_limit_max_used_pct"),
-    },
     workflow_provider_limit_overrides: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_overrides", value_type: "array<string>",
         description: "Per-provider or per-crew-account usage thresholds that replace the shared percent.",
@@ -144,22 +119,6 @@ macro_rules! with_workflow_keys {
         allowed: one_of(&crate::provider_limit::CrewSelection::CHOICES),
         detail: "static uses the pool weights; usage_pressure scales them by provider usage.",
         resolve: |raw: Option<String>| crate::provider_limit::admit_crew_selection(raw),
-    },
-    workflow_usage_pressure_cap: f64 => f64 {
-        key: "workflow.usage_pressure_cap", value_type: "number",
-        description: "Largest factor usage pressure scales a crew's draw weight up or down by.",
-        section: ConfigSection::Delivery, order: 111,
-        tier: ConfigKeyTier::Advanced,
-        allowed: numbers_from(1.0),
-        resolve: |raw: Option<f64>| resolve_bounded_number(raw, crate::DEFAULT_USAGE_PRESSURE_CAP, "workflow.usage_pressure_cap"),
-    },
-    workflow_usage_pressure_strength: f64 => f64 {
-        key: "workflow.usage_pressure_strength", value_type: "number",
-        description: "Exponent applied to usage pressure before the cap; 0 disables weighting.",
-        section: ConfigSection::Delivery, order: 112,
-        tier: ConfigKeyTier::Advanced,
-        allowed: numbers_from(0.0),
-        resolve: |raw: Option<f64>| resolve_bounded_number(raw, crate::DEFAULT_USAGE_PRESSURE_STRENGTH, "workflow.usage_pressure_strength"),
     },
     workflow_task_types: Vec<TaskTypeDefinition> => Vec<TaskTypeDefinition> {
         key: "workflow.task_types", value_type: "array<table>",
@@ -255,14 +214,6 @@ macro_rules! with_workflow_keys {
         allowed: PERCENT,
         resolve: |raw: Option<u8>| resolve_percent(raw, 90, "workflow.resource_throttle.cpu_high_percent"),
     },
-    workflow_resource_throttle_cpu_light_leaves: u8 => u8 {
-        key: "workflow.resource_throttle.cpu_light_leaves", value_type: "integer",
-        description: "CPU-light leaves still admitted while only CPU pressure throttles.",
-        section: ConfigSection::Delivery, order: 137,
-        tier: ConfigKeyTier::Advanced,
-        allowed: integers(0, 32, "leaves"),
-        resolve: |raw: Option<u8>| resolve_cpu_light_leaves(raw),
-    },
     workflow_resource_throttle_cpu_resume_percent: u8 => u8 {
         key: "workflow.resource_throttle.cpu_resume_percent", value_type: "integer",
         description: "Host CPU percentage below which throttled admissions resume.",
@@ -290,21 +241,6 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 134,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
-    },
-    workflow_resource_throttle_io_full_high_percent: u8 => u8 {
-        key: "workflow.resource_throttle.io_full_high_percent", value_type: "integer",
-        description: "Linux disk I/O stall percentage that starts throttling admissions.",
-        section: ConfigSection::Delivery, order: 138,
-        tier: ConfigKeyTier::Advanced,
-        allowed: PERCENT,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 20, "workflow.resource_throttle.io_full_high_percent"),
-    },
-    workflow_resource_throttle_io_full_resume_percent: u8 => u8 {
-        key: "workflow.resource_throttle.io_full_resume_percent", value_type: "integer",
-        description: "Linux disk I/O stall percentage below which admissions resume.",
-        section: ConfigSection::Delivery, order: 139,
-        allowed: PERCENT,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 10, "workflow.resource_throttle.io_full_resume_percent"),
     },
     workflow_resource_throttle_memory_high_percent: u8 => u8 {
         key: "workflow.resource_throttle.memory_high_percent", value_type: "integer",
@@ -392,13 +328,6 @@ macro_rules! with_workflow_keys {
         allowed: format("shell commands"),
         resolve: resolve_unlocked_path_validation_commands,
     },
-    workflow_validation_env_shell_probe: String => String {
-        key: "workflow.validation_env.shell_probe", value_type: "string",
-        description: "How validation PATH is resolved from the owner's shell.",
-        section: ConfigSection::Delivery, order: 61,
-        allowed: one_of(crate::aliases::ShellProbeMode::CHOICES),
-        resolve: |raw: Option<String>| resolve_choice(raw, "interactive", "workflow.validation_env.shell_probe"),
-    },
     workflow_validation_env_path: Vec<String> => Vec<String> {
         key: "workflow.validation_env.path", value_type: "array<string>",
         description: "PATH entries added for required validation and local shell steps.",
@@ -412,21 +341,6 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 65,
         allowed: format("environment variable names"),
         resolve: |raw: Option<Vec<String>>| resolve_build_output_env(raw),
-    },
-    workflow_validation_env_cargo_incremental: bool => bool {
-        key: "workflow.validation_env.cargo_incremental", value_type: "bool",
-        description: "False forces CARGO_INCREMENTAL=0 for bound host validation; true leaves it untouched.",
-        section: ConfigSection::Delivery, order: 66,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
-    workflow_validation_env_path_mode: String => String {
-        key: "workflow.validation_env.path_mode", value_type: "string",
-        description: "How validation PATH entries combine with the resolved PATH.",
-        section: ConfigSection::Delivery, order: 64,
-        tier: ConfigKeyTier::Advanced,
-        allowed: one_of(&["prepend", "replace"]),
-        resolve: |raw: Option<String>| resolve_validation_path_mode(raw),
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.xhard_complexity_crews", value_type: "array<string>",

@@ -203,11 +203,7 @@ fn readiness_snapshot(
     // [ORB-14624] The classifier's own gate: under a CPU-only throttle,
     // CPU-light leaves fill the reserved light slots and nothing else starts.
     let light_budget = LightBudget::new(
-        runtime
-            .context
-            .settings()
-            .resource_throttle()
-            .cpu_light_leaves,
+        crate::application::admission::cpu_light::CPU_LIGHT_LEAVES,
         claimed_by_task.keys(),
         &snapshot.task_lookup,
     );

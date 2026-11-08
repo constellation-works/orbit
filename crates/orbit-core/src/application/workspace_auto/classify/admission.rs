@@ -201,11 +201,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         .map_err(|error| PassError::store(action, "read claimed tasks", error))?;
     // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
     let light_budget = LightBudget::new(
-        runtime
-            .context
-            .settings()
-            .resource_throttle()
-            .cpu_light_leaves,
+        crate::application::admission::cpu_light::CPU_LIGHT_LEAVES,
         &claimed,
         &snapshot.task_lookup,
     );

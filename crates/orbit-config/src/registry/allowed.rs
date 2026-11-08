@@ -79,15 +79,6 @@ pub(crate) const fn numbers(min: f64, max: f64) -> ConfigAllowedValues {
     }
 }
 
-/// A finite number of at least `min`.
-pub(crate) const fn numbers_from(min: f64) -> ConfigAllowedValues {
-    ConfigAllowedValues::Number {
-        min,
-        max: None,
-        unit: None,
-    }
-}
-
 /// A free-form value shaped as `note` says.
 pub(crate) const fn format(note: &'static str) -> ConfigAllowedValues {
     ConfigAllowedValues::Format(note)

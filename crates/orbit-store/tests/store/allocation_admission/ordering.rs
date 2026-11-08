@@ -116,8 +116,7 @@ fn host_os_limits() -> BTreeMap<String, ExecutorOsLimit> {
     .into()
 }
 
-/// Admission order per requester, census and `workflow.admission_affinity`
-/// reach. Critical and corrective work leads for every executor; within a
+/// Admission order per requester, census and affinity reach. Critical and corrective work leads for every executor; within a
 /// band the requester takes what only it can run, then what fewer live
 /// executors can run. A census of the requester alone, or none, keeps the
 /// canonical order, and a retry keeps its first decision.

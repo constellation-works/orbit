@@ -162,7 +162,7 @@ pub enum AdmissionAffinityClass {
 pub struct AdmissionAffinity {
     pub class: AdmissionAffinityClass,
     pub eligible_executors: usize,
-    /// The `workflow.admission_affinity` reach the order used.
+    /// The affinity reach the order used.
     pub reach: AdmissionAffinityReach,
     /// Machine ids of the live executors in the census, the requester
     /// among them.

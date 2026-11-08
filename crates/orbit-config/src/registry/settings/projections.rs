@@ -69,7 +69,7 @@ impl ConfigSnapshot {
             }
         }
         ProviderLimitPolicy {
-            max_used_pct: self.workflow_provider_limit_max_used_pct,
+            max_used_pct: crate::PROVIDER_LIMIT_MAX_USED_PCT,
             overrides,
             crew_overrides,
             explicit_crews: ProviderLimitExplicitCrews::parse(
@@ -79,8 +79,8 @@ impl ConfigSnapshot {
             budgets: self.provider_limit_budgets(),
             usage_pressure: UsagePressurePolicy {
                 selection: CrewSelection::parse(&self.workflow_crew_selection).unwrap_or_default(),
-                cap: self.workflow_usage_pressure_cap,
-                strength: self.workflow_usage_pressure_strength,
+                cap: crate::USAGE_PRESSURE_CAP,
+                strength: crate::USAGE_PRESSURE_STRENGTH,
             },
         }
     }

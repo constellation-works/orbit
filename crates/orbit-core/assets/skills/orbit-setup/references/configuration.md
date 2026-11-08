@@ -213,13 +213,10 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.unlocked_context_paths` | Default `["**/*.md"]`; array of workspace-relative globs (`*` within a component, `**` across components; no absolute paths or `..`). Matching context entries take no lock in mixed tasks; an all-matching task still locks every entry. `[]` locks all entries. Verify with `orbit run readiness` and `orbit task eligible`. Keep code and build/CI definitions locked. |
 | `workflow.lock_modes` | **Advanced: admission policy.** Default `[]` (every overlap blocks); ordered `[[workflow.lock_modes]]` tables, each a `pattern` (Rust regex searched for in the workspace-relative path; anchor with `^`/`$`) and a `mode` of `exclusive` (default) or `shared`. First match wins. An overlap is waived when its point, the narrower selector's path, is shared, so tasks sharing only, say, `(^|/)mod\.rs$` run together and the second to land resolves any conflict. `module:`/`command:` selectors stay exclusive. Set it in the workspace config only for files that merge cleanly or are regenerated. Verify with `orbit run readiness` and `orbit task eligible`. |
 | `workflow.unlocked_path_validation_commands` | **Advanced: validation policy.** Default `[]` keeps full validation; array of command strings, trimmed with blank entries dropped. Replaces required commands only when the candidate differs from this run's last fully validated tree solely in unlocked paths. Verify `validation_scope` in validation logs. See [Recovery settings](#recovery-settings). |
-| `workflow.admission_affinity` | **Advanced.** Default `band`; choices `band`, `priority`, `off`. Work only the requesting executor can run leads within a dispatch band with `band`, or only within a priority with `priority`; `off` keeps canonical band, priority, expiry and age order. Applies to owner-local and pull admission using the live executor census. Verify the effective choice with `orbit config show --all` and compare `orbit run readiness` ordering with the drain's last pass and live executor capabilities. |
-| `workflow.validation_env.cargo_incremental` | **Advanced.** Default `false`; boolean. With a host validation output binding, forces `CARGO_INCREMENTAL=0` on validation children, replacing inherited values. `true` leaves it untouched; without a binding neither value sets it. Verify the child environment during authorized validation; existing incremental directories remain. See [Validation environment](operational-logs.md#worker-resource-containment). |
 | `worktree.reclaim_below_free_mib` | **Advanced: reclaims rebuildable output.** Default unset; non-negative integer MiB (`u64`). During admission, reclaim `worktree.reclaim` paths from oldest terminal worktrees while free space under the state directory is below this mark; active runs remain protected. `0` never triggers it. Verify candidates with `orbit gc worktrees --reclaim --dry-run --estimate-bytes` and actual reclamation via the `worktree.reclaim` audit event. See [Worktree GC](maintenance.md#worktree-garbage-collection). |
-| `workflow.provider_limit_max_used_pct` | Skip a crew while a live usage window of its provider or model is exhausted or used at or above this percent (1..=100, default 90; 100 skips only on exhaustion). |
-| `workflow.provider_limit_overrides` | Per-provider replacement for that percent: `provider:percent` (1..=100) or `provider:off` (record readings without gating). Each provider once. |
+| `workflow.provider_limit_overrides` | Delivery admission skips a crew while a live usage window of its provider or model is exhausted or used at or above 90%. Each entry replaces that percent for one provider: `provider:percent` (1..=100; 100 skips only on exhaustion) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
-| `workflow.crew_selection` | `static` (default) draws on configured weights; `usage_pressure` scales task creation, re-rate and admission draws by each crew's weekly usage pressure (`weight × clamp(pressure^strength, 1/cap, cap)`) and re-draws a system-chosen crew at admission, keeping its crew source. A pull follower re-draws a claimed leaf's system-chosen crew on its own readings and reports per-crew pressure so the owner offers it first, among tied tasks, the ones whose pools hold its highest-pressure crews. Explicit crews are never re-drawn. `workflow.usage_pressure_cap` (default 8, at least 1) and `workflow.usage_pressure_strength` (default 1.0, at least 0; 0 disables) tune it. Not the run's recorded `crew_selection`. |
+| `workflow.crew_selection` | `static` (default) draws on configured weights; `usage_pressure` scales task creation, re-rate and admission draws by each crew's weekly usage pressure (`weight × clamp(pressure, 1/8, 8)`) and re-draws a system-chosen crew at admission, keeping its crew source. A pull follower re-draws a claimed leaf's system-chosen crew on its own readings and reports per-crew pressure so the owner offers it first, among tied tasks, the ones whose pools hold its highest-pressure crews. Explicit crews are never re-drawn. Not the run's recorded `crew_selection`. |
 | `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider, or for a crew that sets `env`, its own account (`opus-credits:200usd/30d`). Spend is this host's invocation ledger. None by default. |
 | `workflow.task_types` | Ordered task types that `workflow.type_complexity_crews` routes by and the implementer scorecard's by-type matrix (`orbit agents scorecard --role implementers --by-type`) splits by. Each entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first matching type, else `other`. Empty (default) means every task is `other`. The former name `workflow.crew_performance_types` loads into it with a deprecation warning until 2026-12-07; `orbit doctor --fix-retired-config-keys` rewrites it. `workflow.crew_performance`, `_strength`, `_cap` and `_window_days` are deprecated and ignored: crew-performance weighting was removed. |
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
@@ -241,8 +238,6 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.resource_throttle.cpu_high_percent`, `workflow.resource_throttle.cpu_resume_percent` | CPU hold/resume marks; defaults `90` / `85`, integers `1..=100`, resume strictly below high. |
 | `workflow.resource_throttle.memory_high_percent`, `workflow.resource_throttle.memory_resume_percent` | Non-reclaimable memory hold/resume marks; defaults `90` / `85`, integers `1..=100`, resume strictly below high. |
 | `workflow.resource_throttle.disk_high_percent`, `workflow.resource_throttle.disk_resume_percent` | Space-used hold/resume marks for each watched filesystem; defaults `90` / `85`, integers `1..=100`, resume strictly below high. |
-| `workflow.resource_throttle.cpu_light_leaves` | **Advanced.** Default `2`; integer `0..=32`. Local-drain `no-diff-expected` auto-task leaves still admitted while CPU alone is held. Memory, disk or I/O holds stop these too; `0` holds all new leaves. |
-| `workflow.resource_throttle.io_full_high_percent`, `workflow.resource_throttle.io_full_resume_percent` | Linux disk I/O stall marks on `/proc/pressure/io` `full avg60` (defaults 20 and 10; 1..=100, resume below high). Admission-only: running work is untouched, and hosts without PSI are not gated. |
 | `machine.auto_concurrency.admit_cpu_percent`, `machine.auto_concurrency.admit_memory_percent` | Forecast limits as percentages of host cores and non-reclaimable memory (defaults 90 and 75; 1..=100). Memory must be below global `workflow.resource_throttle.memory_high_percent`. |
 | `machine.auto_concurrency.profile_window`, `machine.auto_concurrency.min_profile_deliveries` | Recent completed deliveries per profile key (default 50) and minimum before using it without fallback (default 10); the window must be at least the minimum. |
 | `machine.auto_concurrency.horizon_cap_minutes` | Maximum candidate forecast horizon (default 120 minutes). |
@@ -252,16 +247,12 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `runtime.log_max_total_mb` | Total archive budget; oldest pruned first. |
 | `runtime.log_max_file_mb` | Roll the active log past N MiB. Must not exceed the total budget. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
-| `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived, when an operator moves it back to backlog or someday with no run delivering them, and when a newer attempt opens its own PR (default `true`). Branches are kept; a forge error is only a warning. |
-| `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for closing them (`pr.close_on_terminal`) and for settling a task to done from its delivery PR merged outside Orbit. Empty uses the `gh` login on this machine. |
+| `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for closing them (Orbit closes a task's open delivery and `[BLOCKED]` PRs when it lands, is rejected or archived, moves back to backlog or someday, or a newer attempt opens its own PR) and for settling a task to done from its delivery PR merged outside Orbit. Empty uses the `gh` login on this machine. |
 | `pr.title_template`, `pr.body_template` | Single-task PR title and body templates with `{{placeholder}}` values (`task_id`, `title`, `type`, `description`, `acceptance_criteria`, `execution_summary`, `validation`, `freshness`, `task_url`, `ext.<system>`). The body is `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path, read at the delivery's base revision. An unknown placeholder fails the config load. A rendered body ends with an Orbit comment naming the task, so a template that omits `{{task_id}}` still identifies the delivery. |
 | `pr.agent_sections`, `pr.required_sections`, `pr.missing_required_section` | Body headings the implementer fills through the `pr-sections.json` task artifact. An unfilled required section opens the PR as a draft (`draft`, default) or opens none (`refuse`), recorded in task history. |
-| `pr.freshness_section`, `pr.signature`, `pr.orchestration_trailer` | Toggle Orbit's own PR body sections (default `true`). |
-| `pr.labels`, `pr.reviewers`, `pr.draft` | Labels, reviewers and draft state applied when Orbit opens a PR. A draft is never merged automatically. |
+| `pr.labels`, `pr.reviewers` | Labels and reviewers applied when Orbit opens a PR. Orbit opens PRs ready for review, as a draft only for a required-section gap; a draft is never merged automatically. |
 | `pr.task_tag_labels`, `pr.task_type_labels` | Opt-in task labels after PR creation or reuse: exact, case-sensitive tag allowlist (array, default `[]`), and a table mapping `feature`, `bug`, `refactor`, `chore` to label names (default `{}`, e.g. `{ bug = "bug", feature = "enhancement" }`). Names must be non-empty and cannot start with `-`; unknown types are refused. Unioned over every delivered task; missing labels are created and existing labels accepted. Failures warn and are recorded in `pr_open.task_labels.applied` / `.failed` without failing the PR step. Empty settings add no commands; labels are never removed or synced after later task edits. |
 | `commit.subject_template`, `commit.body_template` | Single-task commit templates; the subject must contain `[{{task_id}}]` and keeps a 72-character budget. |
-| `commit.orchestrated_by_trailer` | Toggle Orbit's orchestration trailer (default `true`). |
-| `commit.regression_trailers` | Toggle `Fixes`, `Regression-From` and `Regression` trailers for `regression_from` relations (bool, default `true`). Set with `orbit config set commit.regression_trailers false`; verify with `orbit config get commit.regression_trailers` or `orbit config show`. |
 | `branch.name_template` | Single-task delivery branch name (default `{{prefix}}/{{task_id}}-{{hash}}`); must contain `{{task_id}}` and `{{hash}}`. Names with `..` or a leading `-` are refused. |
 
 Host pressure holds admission after high readings span ten seconds and releases
@@ -521,18 +512,6 @@ orbit config set attention.age_bump_hours '[24, 72]'
 orbit config get attention.run_window_hours
 orbit config get attention.age_bump_hours
 orbit config show --all
-```
-
-### Commit regression trailers: `commit.regression_trailers`
-
-| Key | Type | Default | Range | What it changes |
-|---|---|---|---|---|
-| `commit.regression_trailers` | bool | `true` | — | Add `Fixes`, `Regression-From` and `Regression` trailers for `regression_from` relations to commit messages. `Fixes` appears when the target's landed commit is resolvable. |
-
-```bash
-orbit config set commit.regression_trailers true
-orbit config get commit.regression_trailers
-orbit config show
 ```
 
 ## Host capability labels
@@ -1139,8 +1118,7 @@ otherwise `<crew>@<effort>` from the table. A task keeps its `@auto` pool
 member while the effort it resolves to moves; the next admission re-resolves
 it against the task's current tier and footprint.
 
-**Exploration.** `workflow.auto_effort.explore_share` (default `0.1`,
-allowed range 0 to 0.5 inclusive) dispatches that share of seeded draws at
+**Exploration.** A fixed share of `0.1` (10%) of seeded draws is dispatched at
 another effort the crew can resolve to — one its bands name, or its
 configured effort — so each side of a cutover keeps getting data. The roll
 is seeded per draw (by the task for implementers, by the run and partition
@@ -1164,7 +1142,6 @@ name that same crew with `@auto` in one of the supported pools:
 
 ```toml
 [workflow.auto_effort]
-explore_share = 0.1
 bands.example-crew = [
   { complexity = ["hard", "xhard"], effort = "xhigh" },
   { below_files = 4, effort = "medium" },
@@ -1181,11 +1158,10 @@ member only when both shares are wanted; they are distinct pool members.
 **Verify without dispatching production work.** Configuration alone proves
 the policy is admitted, not that any draw has used it:
 
-1. Read the policy back: `orbit config get workflow.auto_effort.bands`,
-   `orbit config get workflow.auto_effort.explore_share`, and
+1. Read the policy back: `orbit config get workflow.auto_effort.bands` and
    `orbit config show --all`. The show must load without error and report
-   each value with its source. A band against an undefined crew, a band
-   with no condition, or a share outside 0 to 0.5 fails here, before any
+   each value with its source. A band against an undefined crew, or a band
+   with no condition fails here, before any
    dispatch.
 2. Confirm each `@auto` entry sits in a supported pool above and names a
    crew that has bands: `orbit config show` lists the pools. Do not test
@@ -1746,27 +1722,21 @@ an installed subcommand or script that generates `INDEX.md`.
 
 ## PR screenshot section
 
-`pr.screenshot_section` (advanced, default `auto`) decides whether a
-single-task pull request body carries the optional `## Screenshots` table
-that Orbit builds from the task's `screenshots/` artifacts.
+A single-task pull request body for a task tagged `ui` (matched ignoring
+case) carries the optional `## Screenshots` table that Orbit builds from the
+task's `screenshots/` artifacts. An untagged task gets no section: `pr_open`
+reads no screenshots and pushes no evidence ref. This is fixed; the former
+`pr.screenshot_section` key is ignored with a deprecation warning.
 
-| Value | A single-task delivery gets the section when |
-|---|---|
-| `auto` (default) | the task carries the `ui` tag, matched ignoring case |
-| `always` | every single-task delivery |
-| `off` | never: `pr_open` reads no screenshots and pushes no evidence ref |
-
-Any other value fails the configuration load, so `orbit doctor` reports it
-before a claim. A bundle of several tasks keeps Orbit's batch body and never
-gets the section, and a `body` supplied to `pr_open` is published as given,
-without it.
-The `ui` tag's implementer routing is described in
+A bundle of several tasks keeps Orbit's batch body and never gets the
+section, and a `body` supplied to `pr_open` is published as given, without
+it. The `ui` tag's implementer routing is described in
 [Tag instructions](#tag-instructions).
 
-This setting governs only PR publication. Task-artifact evidence is a
+This rule governs only PR publication. Task-artifact evidence is a
 separate duty: a diff that changes something a user sees still attaches its
 screenshots as task artifacts when the workspace guide requires them,
-whatever this value is. Name each artifact
+whatever its tags. Name each artifact
 `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`. The width is the
 last number in the name, the theme is the token before it, and the view is
 the rest. A name without a suffix is an After shot; the Before shot is
@@ -1779,34 +1749,20 @@ the neutral note `No screenshots attached.` That note is not a required-section
 gap: `pr.missing_required_section` never drafts or refuses the PR for it.
 Only `pr.required_sections` gaps do that.
 
-### Set and verify the value
+### Verify the outcome
 
-1. Confirm the installed version supports the key:
-   `orbit config keys --json` lists `pr.screenshot_section`.
-2. Read the effective value: `orbit config get pr.screenshot_section`
-   (add `--json` for an object). `orbit config show --all` lists it in the
-   delivery section with its source.
-3. When provenance matters, resolve one file in isolation with
-   `orbit config get pr.screenshot_section --scope global` or
-   `--scope workspace`.
-4. Only with the operator's authorization, change it:
-   `orbit config set pr.screenshot_section always`. This writes the workspace
-   `config.toml`; add `--global` to write the global file. Use `auto`, `always`
-   or `off`; the value is parsed as a TOML literal, and these three fall back
-   to plain strings.
-5. Read the value back with step 2 and run `orbit doctor`.
-6. Check the outcome on a real delivery, without opening a PR for the test:
-   - Before `pr_open`, `orbit task show <task-id> --fields artifacts` lists
-     the task's `screenshots/` artifacts.
-   - After the PR opens, `gh pr view <pr-number> --json body --jq .body`
-     should show the expected body:
-     - a `## Screenshots` table with one row per view, width and theme (the
-       theme is named only when the shots carry several), with Before and
-       After columns, when publishable shots exist;
-     - the `No screenshots attached.` note, when the section applies and no
-       shot is publishable;
-     - no `## Screenshots` section, when the value is `off`, or `auto` on an
-       untagged task.
+Check a real delivery, without opening a PR for the test:
+
+- Before `pr_open`, `orbit task show <task-id> --fields artifacts` lists
+  the task's `screenshots/` artifacts.
+- After the PR opens, `gh pr view <pr-number> --json body --jq .body`
+  should show the expected body:
+  - a `## Screenshots` table with one row per view, width and theme (the
+    theme is named only when the shots carry several), with Before and
+    After columns, when publishable shots exist;
+  - the `No screenshots attached.` note, when the section applies and no
+    shot is publishable;
+  - no `## Screenshots` section on an untagged task.
 
 ## Review-skip tags
 

@@ -122,11 +122,9 @@ the first fungible task while opus-assigned and `os:macos` tasks queued.
 - **Owner-local admission** sorts with the same comparator, the owner as the requester and its
   own live row as its capability. Without that row the order is canonical. Owner-local crew
   eligibility is unchanged.
-- **Policy.** `workflow.admission_affinity` chooses how far exclusivity reaches:
-  - `band` (default): the order above;
-  - `priority`: exclusivity counts only within the same priority;
-  - `off`: no affinity at all; usage pressure still applies above age, and without reported
-    pressure the order is the canonical one alone.
+- **Policy.** Exclusivity reaches across the band, the order above. The reach is fixed
+  [ORB-22808]: the former `workflow.admission_affinity` key (`priority`, `off`) is ignored with
+  a deprecation warning.
 - **Explainability.** An admitted receipt records `affinity`: the task's class (`exclusive`,
   `shared` or `fungible`, every live executor eligible), its eligible-executor count, the reach
   in force and the census machine ids it was ordered against. A same-request replay returns the
