@@ -248,13 +248,15 @@ belong only to the job wait/reuse environment. These are not part of the base sc
 or already-filed condition-language phase-1 scope. They grant no free-text or
 arbitrary-artifact access. No new trigger carrier is needed.
 
-**Job-composition extension: partly shipped.**
-Completion contracts and accepted-result history ([ORB-20165]) are shipped.
-Readiness triggers still lack two reads: `board.empty` as a condition field (the
-condition `board` above exposes only per-bucket `empty`) and literal
-`auto_tasks['name']` accepted-completion reads ([ORB-20397]), plus the disabled
-composition ([ORB-20166]); those remain someday. Historical `reuse_when` matching is
-shipped in job steps ([ORB-22649]).
+**Condition-trigger readiness: one field remains unshipped.**
+Accepted-result history is available to conditions as `self.last_succeeded_at`
+([ORB-20397]) and `auto_tasks['<name>'].last_succeeded_at` ([ORB-22676]). The
+release-readiness job/routine composition ([ORB-20166]) ships as a disabled,
+nonseeded example, installed only after owner prerequisites. The condition-level
+`board` still exposes only per-bucket `empty`, so its aggregate `board.empty`
+remains unshipped; the job wait environment has its own `board.empty`, as
+described above. Historical `reuse_when` matching is shipped in job steps
+([ORB-22649]).
 
 Rules:
 
