@@ -838,8 +838,8 @@ The safety contract is the point of the action:
   in the message. Set it to `true` when a later step should branch on the
   exit code instead.
 
-The step's output is `{ success, exit_code, stdout, stderr, duration_ms,
-timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell`
+The step's output is `{ success, exit_code, stdout, stderr, log_tail,
+log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell`
 executor definition declares no OS sandbox, so steps run under the
 process supervisor confined by the `cwd` check above, and each step
 reports the backend it actually ran under in `sandbox` (`"none"` for the
@@ -1164,7 +1164,7 @@ spec:
   expire_when: "now >= job.started_at + duration('24h')"
   steps:
     - id: qa
-      target: auto-task:full-qa-sweep
+      target: auto-task:qa-full-sweep
       wait_until: "board.empty"
       require_result: release-readiness/v1
       reuse_when: >-
@@ -1175,6 +1175,12 @@ spec:
       wait_until: "self.prev.status == 'done' && board.empty"
       expire_when: "now >= self.wait_started_at + duration('8h')"
 ```
+
+Orbit's source carries a fuller, disabled `release-readiness` example that
+runs `qa-full-sweep`, `security-review` and `release-prep` as one gated run,
+each step requiring `release-readiness/v1`. It is not seeded into workspaces:
+install it only once those definitions declare the contract and their adapter
+scripts are granted.
 
 An auto-task step admits only `id`, `stage`, `when`, `target`,
 `wait_until`, `expire_when`, `reuse_when` and `require_result`; any other

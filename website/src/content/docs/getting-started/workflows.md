@@ -120,8 +120,8 @@ local ship or auto runs. Two limits on per-run completion:
 
 ## Watch and recover runs
 
-The dashboard's **Runs** view lists every run, with **Live** and **Failed**
-filters. A run's detail shows its steps, events, and timing; a failed run opens
+The dashboard's **Jobs** view shows runs in flight under **Live** and every
+run under **History**, with **All** and **Failed** filters. A run's detail shows its steps, events, and timing; a failed run opens
 on the step it stopped at and the error it recorded. From there you can
 **cancel** a running run, **Resume** a failed one from its first unfinished
 step, or **Replay run** to start it again.

@@ -170,15 +170,15 @@ prove that a particular task or run succeeded.
 |---|---|
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
 | **Drain** | Shown only at 1000px and narrower. Above that width the Tasks dock's Drain tab sits beside the list instead. On a narrow window the item opens the Drain tab in place of the task list, where you start and stop a window by touch. While a drain runs, the item shows its state on every view. |
-| **Runs** | Job runs, newest first, and run detail. |
+| **Jobs** | Job runs and the job catalogue: **Live** (runs pending or running now), **History** (every run, newest first, and run detail), and **Catalogue** (jobs you can run by hand). See [Runs and errors](#runs-and-errors) and [Jobs](#jobs). |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
-| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, **Jobs**, and **Residents**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
 | **[Leases](#leases)** | Read-only path holders, waiters and recent landing notices for the selected workspace. |
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
-| **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
+| **Settings** | Workflow, Execution, Review, Crews, Machine, Hosts, and All keys. |
 
 The rail foot shows live load, memory, and disk readings for the serving host
 (plus disk I/O stall on Linux hosts) above the refresh line and the UTC/Local
@@ -190,10 +190,11 @@ pressure means; click or **Pin open** keeps it open, and Esc or a click outside
 closes it. `+N more` (and, on narrower screens, the single summary chip) lists
 every provider. At 1024px wide or less, the top bar leaves out the provider chips
 and the warning chip; at 760px or less, the rail also leaves out its foot.
-Counts in
-the selected window sit on the rail: failed, timed-out, and interrupted runs
-under **Runs**, and doctor errors, warnings, and failing routines under
-**Health**. Click a rail count to open the view behind it. The rail has no
+The rail
+also carries counts: under **Jobs**, the job runs pending or running now
+(whatever the History window), plus an **N failing** pill for jobs whose recent
+runs failed in a row; under **Health**, doctor errors, warnings, and failing
+routines. Click a rail count to open the view behind it. The rail has no
 denial count. **Health → Incidents → Events** can be filtered to denials with
 its **denied** status.
 
@@ -211,8 +212,12 @@ CLI or MCP tools instead; see [Hold paths with leases](../path-leases/).
 
 ## Notices
 
-**Notices** shows open fleet notices in the selected workspaces, followed by
-notices closed or expired in the last 24 hours. A banner also shows open
+**Notices** has two tabs: **Open** fleet notices in the selected workspaces,
+and **Recently closed** (closed or expired in the last 24 hours). Select a row
+to read its body. With an [operator session](#authorization), **Post** opens a
+form for the title, kind, body, scope, an optional linked task and expiry, and
+**Close** on a row asks for a reason. Neither is available in **All
+workspaces**. A banner also shows open
 incident and maintenance notices, with each notice's kind, title, scope, age,
 and expiry. Its **Notices** link opens this view. The banner hides when no open
 incident or maintenance notices remain and clears when the selected workspace
@@ -626,8 +631,8 @@ their owner and that cancelling one fails its claim. See
 
 ## Runs and errors
 
-**Runs** lists job runs for the selected workspace. Filter by **All**,
-**Live**, or **Failed**, narrow the list with a task id or job id, and use
+**Jobs › History** lists job runs for the selected workspace; runs in flight
+are also on **Jobs › Live**. Filter by **All** or **Failed**, narrow the list with a task id or job id, and use
 the same time window as the rest of the dashboard. The address keeps
 `run_state`, `task_id`, `job_id`, and `window`, so a shared link reopens the
 same list. A task id such as `ORB-15159` keeps that task's runs; any other
@@ -662,8 +667,8 @@ These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
-| Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
+| **Jobs** rail count | Job runs pending or running now, not tasks. It ignores the History window and filters. Click it to open **Jobs › Live**. |
+| **Jobs › History** **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Health → Incidents → Events**, **denied** status | Audited calls recorded as denied. This is a filtered list, not a rail count. |
 | **Health → Incidents → Errors** | Step and event failures in the selected window. When paging, errors appear one page at a time (8 per page on desktop, 4 at widths up to 600px), with **Previous** and **Next** controls. The panel header shows the current range as `Showing a–b of N`, names the window, and reports when retention or the stderr read cap leaves part of it unread. |
 
@@ -1443,7 +1448,8 @@ appears in the timeline with actor `dashboard`.
 ## Automation
 
 **Automation** has these views: **Routines** (with the host scheduler clock),
-**Auto-tasks**, **Scripts**, **Jobs**, and [**Residents**](#residents). Its controls need a single active workspace and
+**Auto-tasks**, **Scripts**, and [**Residents**](#residents). Jobs you can run
+by hand are under [**Jobs › Catalogue**](#jobs). Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
 [Schedule Recurring Work](../recurring-work/).
@@ -1524,14 +1530,14 @@ does not count it as a scheduler hold.
 
 ### Jobs
 
-**Jobs** lists the jobs this workspace's routines target or recently ran,
-with **Running now** above them. They are grouped **Sweeps** (housekeeping and
-intake, safe to run by hand), **Delivery** (task and workspace pipelines), and
-**Other**.
+**Jobs › Catalogue** lists the jobs you can run by hand that this workspace's
+routines target or recently ran, grouped **Sweeps** (housekeeping and intake,
+safe to run by hand) and **Other**. Delivery and other jobs that need a task or
+a window are not listed: use **ship** or the [auto-drain](#auto-drain), and
+find their runs under **Live** and **History**.
 
 **Run ▸** starts the job in this workspace with no input and reports the new
-run ID. It is disabled on **Delivery** rows, which need a task or a window:
-use **ship** or the [auto-drain](#auto-drain). **Details** shows the
+run ID. **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
 
@@ -2121,7 +2127,7 @@ session does not grant operator capability.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| **Runs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Jobs** rail count disagrees with **Health → Incidents → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Reload the page. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |

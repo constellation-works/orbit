@@ -103,8 +103,9 @@ for the workspace you are in, not this table. A few familiar spellings are
 accepted and stored as the canonical tag: `ci`, `test`, `tests`, and
 `testing` become `build`; `cli`, `mcp`, and `tool` become `tooling`;
 `auto-task`, `auto-tasks`, `scheduler`, and `routine` become `automation`;
-`skill` and `prompt` become `skill-guidance`. The command reports any such
-substitution. A tag the workspace does not configure is refused.
+`skill` and `prompt` become `skill-guidance`. With `--json`, the command
+reports each substitution under `tag_normalizations`; text output shows only the
+stored tags. A tag the workspace does not configure is refused.
 
 ## Model and task context
 

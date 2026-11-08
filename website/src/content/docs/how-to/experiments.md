@@ -28,8 +28,9 @@ CLI command only.
 
 ## Before you start
 
-- Set `experiments.enabled` to `true` in the workspace. It defaults to
-  `false`. While it is `false` you can still define, edit, show, and abandon
+- Set `experiments.enabled` to `true` in the workspace. Its built-in default
+  is `false`, but `orbit init` seeds `true` in a new install's global config;
+  check yours with `orbit config get experiments.enabled`. While it is `false` you can still define, edit, show, and abandon
   drafts, but `orbit experiment start` is refused with an error naming the
   key, and forced assignment is refused too:
 
@@ -47,8 +48,8 @@ CLI command only.
   records and ignored: `workflow.explore.max_calls_per_run`, with its former
   integer bounds of `1` to `100`, and `visual_review.reviewer` (boolean),
   whose visual review feature has been removed.
-- For a `live` experiment, have the treatment ready at the base revision:
-  instruction files must exist there and pass the instruction admission
+- Have the treatment ready at the base revision before you start, in either
+  mode: instruction files must exist there and pass the instruction admission
   rules, skill bundle directories must exist there, added tools must be
   registered, enabled, and agent-facing, and removed tools must be known
   tools the agent contract does not require. Skill replacement supports
@@ -60,7 +61,7 @@ CLI command only.
 This example compares the shipped instructions (control) with a treatment
 that gives implementers a different instruction file. The keys, names, and
 paths are illustrative; the treatment file must exist in your repository
-before you start a `live` run.
+before you start the experiment, even in `shadow` mode.
 
 ```bash
 orbit experiment create brief-v2 \
@@ -347,8 +348,9 @@ Read the warnings before the verdict:
   successfully, as recorded in the run's audit trail. The arm's `delivery`
   reports `assigned`, `delivered`, `pending` (in flight and not yet
   delivered) and `rate`, the delivered share of its settled tasks; the CLI
-  prints it in the `DELIVERED` column and the dashboard arm card shows
-  `Delivered: <n> of <m> runs`. When any arm's rate is below
+  prints it in the `DELIVERED` column and the dashboard's arm evidence card shows a
+  **Delivered** column, `<delivered> of <settled> (<rate>%)`, plus
+  `· <n> pending` while tasks are in flight. When any arm's rate is below
   `experiments.min_delivered_rate` (default `0.9`, set it under
   `[experiments]` in `.orbit/config.toml`), the readout adds an
   `undelivered` warning and withholds the verdict, from the first settled
