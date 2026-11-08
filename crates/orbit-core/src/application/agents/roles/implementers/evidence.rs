@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use orbit_config::TaskTypeDefinition;
 use serde_json::{Value, json};
 
@@ -11,7 +10,7 @@ use super::performance::{
 use crate::application::agents::attribution::{Charge, Credit};
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{Tally, number};
-use crate::application::agents::{AgentFacts, ExecutionScope};
+use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 
 /// One row per implemented task and the row (crew, model) that worked it:
 /// the task's configured type, its tags as admitted, its context-file
@@ -23,11 +22,11 @@ use crate::application::agents::{AgentFacts, ExecutionScope};
 /// scorecard already made.
 pub(in crate::application::agents::roles) fn per_task_rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     types: &[TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<Value> {
-    let work = work_by_row(facts, since, execution);
+    let work = work_by_row(facts, window, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -39,7 +38,7 @@ pub(in crate::application::agents::roles) fn per_task_rows(
     let mut rows = Vec::new();
     for (row, tasks) in &work {
         for &task in tasks {
-            let tallies = compute_tallies(row, &[task], &charges, &credits, since);
+            let tallies = compute_tallies(row, &[task], &charges, &credits, window);
             let counts: serde_json::Map<String, Value> = TERMS
                 .iter()
                 .map(|term| {
@@ -54,12 +53,12 @@ pub(in crate::application::agents::roles) fn per_task_rows(
                 "crew": row.0,
                 "model": row.1,
                 "tier": tier(task),
-                "type": configured_type(task, since, types),
-                "tags": admitted_tags(task, since),
+                "type": configured_type(task, window, types),
+                "tags": admitted_tags(task, window),
                 "context_files": task.context_files,
                 "path_prefixes": path_prefixes(task),
                 "counts": counts,
-                "reviewed_units": usize::from(performance::first_implementer_review(task, row, since).is_some()),
+                "reviewed_units": usize::from(performance::first_implementer_review(task, row, window).is_some()),
             }));
         }
     }
@@ -115,11 +114,11 @@ fn raw_against(
 /// pulls each cell toward its crew's tier mean and that mean toward 100.
 pub(in crate::application::agents::roles) fn by_type_cells(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     types: &[TaskTypeDefinition],
     execution: ExecutionScope,
 ) -> Vec<Value> {
-    let work = work_by_row(facts, since, execution);
+    let work = work_by_row(facts, window, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -131,13 +130,13 @@ pub(in crate::application::agents::roles) fn by_type_cells(
     // Classify by the tags in force when the counted work was admitted
     // (the earliest counted attempt in the window), so a tag added after
     // an attempt started cannot retype work already scored.
-    let task_type = |task: &TaskFacts| configured_type(task, since, types);
+    let task_type = |task: &TaskFacts| configured_type(task, window, types);
     let mut fleet_tier: BTreeMap<&str, Fleet> = BTreeMap::new();
     let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
     for (row, tasks) in &work {
         for task in tasks {
             let reviewed =
-                usize::from(performance::first_implementer_review(task, row, since).is_some());
+                usize::from(performance::first_implementer_review(task, row, window).is_some());
             let tier_fleet = fleet_tier.entry(tier(task)).or_default();
             tier_fleet.units += 1;
             tier_fleet.reviewed_units += reviewed;
@@ -147,7 +146,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
         }
     }
     for (row, tasks) in &work {
-        let tallies = compute_tallies(row, tasks, &charges, &credits, since);
+        let tallies = compute_tallies(row, tasks, &charges, &credits, window);
         for (&term, tally) in &tallies {
             for (task, count) in tally.task_counts() {
                 *fleet_tier
@@ -183,7 +182,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
             let tier_subset: Vec<&TaskFacts> =
                 tier_tasks.get(tier_name).cloned().unwrap_or_default();
             let n_tier = tier_subset.len();
-            let tier_tallies = compute_tallies(row, &tier_subset, &charges, &credits, since);
+            let tier_tallies = compute_tallies(row, &tier_subset, &charges, &credits, window);
             let raw_tier = raw_against(
                 &tier_tallies,
                 &tier_subset,
@@ -191,7 +190,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 tier_subset
                     .iter()
                     .filter(|task| {
-                        performance::first_implementer_review(task, row, since).is_some()
+                        performance::first_implementer_review(task, row, window).is_some()
                     })
                     .count(),
             );
@@ -213,7 +212,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 } else {
                     &fleet_tier[tier_name]
                 };
-                let cell_tallies = compute_tallies(row, &subset, &charges, &credits, since);
+                let cell_tallies = compute_tallies(row, &subset, &charges, &credits, window);
                 let raw = raw_against(
                     &cell_tallies,
                     &subset,
@@ -221,7 +220,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                     subset
                         .iter()
                         .filter(|task| {
-                            performance::first_implementer_review(task, row, since).is_some()
+                            performance::first_implementer_review(task, row, window).is_some()
                         })
                         .count(),
                 )

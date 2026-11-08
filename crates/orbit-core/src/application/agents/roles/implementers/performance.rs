@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
 use orbit_config::{TaskTypeDefinition, classify_task_type};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
@@ -10,7 +9,7 @@ use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review,
 use crate::application::agents::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
 };
-use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
 pub(super) const TERMS: &[Term] = &[
     Term {
@@ -85,15 +84,15 @@ pub(super) fn tier(task: &TaskFacts) -> &'static str {
 /// in the window and the task was not `no-diff-expected` work when the
 /// attempt was admitted. The one filter the headline rows, the fleet
 /// expectations and the by-type cells all share.
-pub(super) fn counted(attempt: &Attempt, since: DateTime<Utc>) -> bool {
-    attempt.start >= since && !attempt.no_diff()
+pub(super) fn counted(attempt: &Attempt, window: WindowBounds) -> bool {
+    window.admits(attempt.start) && !attempt.no_diff()
 }
 
 /// Each row's counted tasks whose execution `execution` admits: one task
 /// per row, however many counted attempts that row started in the window.
 pub(super) fn work_by_row(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     execution: ExecutionScope,
 ) -> BTreeMap<Key, Vec<&TaskFacts>> {
     let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
@@ -105,7 +104,7 @@ pub(super) fn work_by_row(
         let keys: BTreeSet<_> = task
             .attempts
             .iter()
-            .filter(|a| counted(a, since))
+            .filter(|a| counted(a, window))
             .map(key)
             .collect();
         for row in keys {
@@ -117,11 +116,11 @@ pub(super) fn work_by_row(
 
 pub(super) fn rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     _min_support: usize,
     execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
-    let work = work_by_row(facts, since, execution);
+    let work = work_by_row(facts, window, execution);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -132,16 +131,16 @@ pub(super) fn rows(
     }
     let mut rows: Vec<_> = work
         .iter()
-        .map(|(row, tasks)| row_input(facts, since, row.clone(), tasks, &charges, &credits))
+        .map(|(row, tasks)| row_input(facts, window, row.clone(), tasks, &charges, &credits))
         .collect();
-    let expected_regressions = super::context::append_diff_context(facts, since, &work, &mut rows);
+    let expected_regressions = super::context::append_diff_context(facts, window, &work, &mut rows);
     let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
     for (row, tasks) in &work {
         for task in tasks {
             let stats = fleet.entry(tier(task)).or_default();
             stats.units += 1;
             stats.reviewed_units +=
-                usize::from(first_implementer_review(task, row, since).is_some());
+                usize::from(first_implementer_review(task, row, window).is_some());
         }
     }
     for row in &rows {
@@ -195,7 +194,8 @@ pub(super) fn rows(
                         let expected = tasks
                             .iter()
                             .filter(|task| {
-                                !review_term || first_implementer_review(task, key, since).is_some()
+                                !review_term
+                                    || first_implementer_review(task, key, window).is_some()
                             })
                             .map(|task| {
                                 let pool = &pools[pool_key(tier(task))];
@@ -224,7 +224,7 @@ pub(super) fn rows(
 /// work stays visible while the default counts leave it out.
 pub(super) fn execution_header(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
 ) -> serde_json::Map<String, Value> {
     #[derive(Default)]
     struct Split {
@@ -244,7 +244,7 @@ pub(super) fn execution_header(
         let keys: BTreeSet<_> = task
             .attempts
             .iter()
-            .filter(|a| counted(a, since))
+            .filter(|a| counted(a, window))
             .map(key)
             .collect();
         for row in keys {
@@ -284,12 +284,12 @@ pub(super) fn execution_header(
 pub(super) fn first_implementer_review<'a>(
     task: &'a TaskFacts,
     row: &Key,
-    since: DateTime<Utc>,
+    window: WindowBounds,
 ) -> Option<&'a Review> {
     task.reviews.iter().find(|review| {
         task.attempt_at(review.at).is_some_and(|index| {
             let attempt = &task.attempts[index];
-            counted(attempt, since) && key(attempt) == *row
+            counted(attempt, window) && key(attempt) == *row
         })
     })
 }
@@ -365,7 +365,7 @@ impl<'a> DefectLocation<'a> {
 fn charged_by_pre_landing_review(
     task: &TaskFacts,
     row: &Key,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     sites: &[String],
 ) -> bool {
     let sites: Vec<_> = sites
@@ -385,7 +385,7 @@ fn charged_by_pre_landing_review(
         .filter(|review| {
             task.attempt_at(review.at).is_some_and(|index| {
                 let attempt = &task.attempts[index];
-                counted(attempt, since) && key(attempt) == *row
+                counted(attempt, window) && key(attempt) == *row
             })
         })
         .flat_map(|review| &review.findings)
@@ -413,11 +413,11 @@ pub(super) fn compute_tallies<'a>(
     tasks: &[&'a TaskFacts],
     charges: &BTreeMap<&str, Vec<&Charge>>,
     credits: &BTreeMap<&str, Vec<&Credit>>,
-    since: DateTime<Utc>,
+    window: WindowBounds,
 ) -> BTreeMap<&'static str, Tally<'a>> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
     for &task in tasks {
-        if let Some(review) = first_implementer_review(task, row, since)
+        if let Some(review) = first_implementer_review(task, row, window)
             && review.verdict == ReviewVerdict::Accept
         {
             tallies.entry("first_pass_accepts").or_default().add(
@@ -437,7 +437,7 @@ pub(super) fn compute_tallies<'a>(
             .into_iter()
             .flatten()
             .any(|credit| {
-                credit.anchor >= since
+                window.admits(credit.anchor)
                     && row_key(credit.crew.as_deref(), credit.model.as_deref()) == *row
             })
         {
@@ -451,7 +451,7 @@ pub(super) fn compute_tallies<'a>(
             .into_iter()
             .flatten()
             .filter(|charge| {
-                charge.anchor >= since
+                window.admits(charge.anchor)
                     && charge.owner == Owner::Role(AgentRole::Implementers)
                     && row_key(charge.crew.as_deref(), charge.model.as_deref()) == *row
             })
@@ -460,7 +460,7 @@ pub(super) fn compute_tallies<'a>(
                 Problem::ReviewReject => "review_rejects",
                 Problem::ReviewFixes => "reviewer_repairs",
                 Problem::Regression
-                    if charged_by_pre_landing_review(task, row, since, &charge.sites) =>
+                    if charged_by_pre_landing_review(task, row, window, &charge.sites) =>
                 {
                     continue;
                 }
@@ -484,18 +484,18 @@ pub(super) fn compute_tallies<'a>(
 
 fn row_input<'a>(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     row: Key,
     tasks: &[&'a TaskFacts],
     charges: &BTreeMap<&str, Vec<&Charge>>,
     credits: &BTreeMap<&str, Vec<&Credit>>,
 ) -> RowInput<'a> {
-    let tallies = compute_tallies(&row, tasks, charges, credits, since);
+    let tallies = compute_tallies(&row, tasks, charges, credits, window);
     // Review coverage determines the review terms' population, including
     // the tier mix of their expectations, rather than credit or penalty.
     let reviewed_units = tasks
         .iter()
-        .filter(|task| first_implementer_review(task, &row, since).is_some())
+        .filter(|task| first_implementer_review(task, &row, window).is_some())
         .count();
     let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
@@ -527,7 +527,7 @@ fn row_input<'a>(
         for attempt in task
             .attempts
             .iter()
-            .filter(|a| counted(a, since) && key(a) == row)
+            .filter(|a| counted(a, window) && key(a) == row)
         {
             runs_without_model += usize::from(attempt.runner.model.is_none());
             if let Some(end) = attempt.end {
@@ -655,10 +655,10 @@ pub(super) fn stat(key: &'static str, label: &'static str, value: Value) -> Stat
 /// The tags in force when a task's counted work was admitted (its earliest
 /// counted attempt in the window), so a tag added after an attempt started
 /// cannot reclassify work already scored.
-pub(super) fn admitted_tags(task: &TaskFacts, since: DateTime<Utc>) -> &[String] {
+pub(super) fn admitted_tags(task: &TaskFacts, window: WindowBounds) -> &[String] {
     task.attempts
         .iter()
-        .filter(|a| counted(a, since))
+        .filter(|a| counted(a, window))
         .min_by_key(|a| a.start)
         .map_or(&task.tags, |a| &a.tags)
 }
@@ -667,10 +667,10 @@ pub(super) fn admitted_tags(task: &TaskFacts, since: DateTime<Utc>) -> &[String]
 /// cells classify it.
 pub(super) fn configured_type(
     task: &TaskFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     types: &[TaskTypeDefinition],
 ) -> String {
-    classify_task_type(types, admitted_tags(task, since), &task.context_files).to_string()
+    classify_task_type(types, admitted_tags(task, window), &task.context_files).to_string()
 }
 
 /// The path a context-file selector names, without its prefix. `module:`

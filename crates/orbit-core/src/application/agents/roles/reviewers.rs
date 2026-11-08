@@ -27,7 +27,7 @@ use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem, WindowBounds};
 use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -178,10 +178,10 @@ impl<'a> Row<'a> {
 }
 
 /// One row per reviewer crew and model with a review settled, or a review
-/// job attempt started, since `since`.
+/// job attempt started, in the window.
 fn rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     _min_support: usize,
     _execution: ExecutionScope,
 ) -> Vec<RowInput<'_>> {
@@ -206,7 +206,11 @@ fn rows(
 
     let mut rows: BTreeMap<(String, String), Row<'_>> = BTreeMap::new();
     for task in &facts.tasks {
-        for review in task.reviews.iter().filter(|review| review.at >= since) {
+        for review in task
+            .reviews
+            .iter()
+            .filter(|review| window.admits(review.at))
+        {
             let runner = &review.reviewer;
             let row = rows
                 .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
@@ -270,7 +274,7 @@ fn rows(
     }
     for ((filer, index), findings) in jobs {
         let attempt = &by_id[filer].attempts[index];
-        if attempt.start < since {
+        if !window.admits(attempt.start) {
             continue;
         }
         let runner = &attempt.runner;
@@ -332,7 +336,7 @@ fn rows(
     }
 
     for charge in facts.charges.iter().filter(|charge| {
-        charge.owner == Owner::Role(AgentRole::Reviewers) && charge.anchor >= since
+        charge.owner == Owner::Role(AgentRole::Reviewers) && window.admits(charge.anchor)
     }) {
         let key = match charge.problem {
             Problem::DisposedFinding | Problem::RejectedFinding => "rejected_findings",

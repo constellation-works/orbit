@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-03
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -602,20 +602,22 @@ A landed file outside the declared context on a task no pilot assessed is not ch
 All routes are GET, scoped by `workspace`, follow the host picker through `/api/on/<host>/…`, and answer only GET.
 
 ```
-GET /api/agents/{role}/scorecard?window=&min_support=&execution=
-GET /api/agents/{role}/detail?window=&min_support=&execution=&crew=&model=
-GET /api/agents/attribution?window=
-GET /api/agents/implementers/by-type?window=&min_support=&execution=
-GET /api/agents/implementers/size-curves?window=&complexity=&execution=
+GET /api/agents/{role}/scorecard?window=&min_support=&execution=&until=
+GET /api/agents/{role}/detail?window=&min_support=&execution=&crew=&model=&until=
+GET /api/agents/attribution?window=&until=
+GET /api/agents/implementers/by-type?window=&min_support=&execution=&until=
+GET /api/agents/implementers/size-curves?window=&complexity=&execution=&until=
 ```
 
 `execution` is `managed` (default), `all` or `interactive` (§5.2 Execution split); only implementer counts read it.
+
+`until` is optional. Set, it is an RFC 3339 instant or a duration ago (`30d`; units `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`, whitespace ignored, a trailing `s` trimmed). A calendar window is then `[until - window, until)`. A count window takes the newest N delivery attempts with `start < until`. A bare calendar date is not accepted, and a future instant is a 400. Omitted, behaviour is unchanged: nothing is excluded for falling at or after now. Reviewer provisional counts and the other lookbacks stay measured against the scan's now, not against `until`, so a window that ends 30 or more days before now reports `provisional: 0` for reviewers.
 
 `{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution and `model` the task's recorded `orchestrator_model`. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several.
 
 **Scorecard** answers:
 
-- `role`, `window`, `requested_window`, `since`, `min_support`, `execution`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window);
+- `role`, `window`, `requested_window`, `since`, `until`, `min_support`, `execution`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window). `since` and `until` are the served bounds as RFC 3339 UTC with second precision, after clamping `since` so it is not after a set `until`. When `until` was omitted, `until` is the instant used as now and it is not an exclusive filter;
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
 - `fleet_average`, over the judged rows;
@@ -631,7 +633,7 @@ Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; o
 
 **Size curves** (implementers only, display only) slice the same cached scan into regression rate by landed change size. The cohort is the landed tasks whose final implementation attempt counts for implementers in the window (it started in the window and the task was not `no-diff-expected` work), with a recorded landed diff size and at least 7 days since completion. A task regressed when any `regression_from` link against it, whatever its nature or escape, was observed (its regressing task created) no later than 7 days after completion. Each series is one crew reference as the run dispatched it, so `opus@medium` and `opus@high` are separate. Models recorded under one crew reference pool into that reference's single series and are listed on the series as metadata; a run with no recorded model adds to the crew's curve without adding a model. `complexity` (`low`, `medium`, `hard`, `xhard` or `unassessed`) narrows the cohort to one tier; any other value is a 400. The response carries the selection header plus `role`, `complexity`, `complexities` (each tier's task count before the filter), `follow_up_days` (7), `mature_by`, `min_bucket_tasks` (10), `min_series_tasks` (30), `sparse_outcomes` (5), `excluded` (`immature`, landed too recently; `no_size`, no recorded diff size) and `series`, largest first. Each series carries `crew`, `models`, `tasks`, `regressed`, `default_selected` (at least `min_series_tasks` tasks and a drawn bucket) and `buckets`, each with `bucket` (`floor(log2(1 + lines))`), `lines_from`, `lines_to`, `tasks`, `regressed`, `rate`, the Wilson 95% `low` and `high`, `drawn` (at least `min_bucket_tasks` tasks) and `sparse` (fewer than `sparse_outcomes` regressed tasks).
 
-**Attribution** answers `window`, `requested_window`, `since`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew`, `model` and `problems`.
+**Attribution** answers `window`, `requested_window`, `since`, `until`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew`, `model` and `problems`.
 
 Every response carries an `Age` header: the seconds since its scan.
 
@@ -641,6 +643,7 @@ Errors are 400 for:
 - an unknown role or window;
 - a zero `min_support`;
 - an `execution` other than `managed`, `all` or `interactive`;
+- a malformed `until`, or one in the future;
 - a detail request without `crew`, or naming a row the window does not contain.
 
 The dashboard reads only these routes. The `/api/orchestrators/*` routes were removed with Analytics › Orchestrators.
@@ -649,7 +652,7 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 **Current.**
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--execution <scope>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--execution <scope>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support`, `execution` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. `--until` is the same optional window end as the API's `until`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support`, `execution`, `until` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
 
 A missing row names only the caller's recovery controls: the CLI scorecard command and `--window`, the MCP `orbit_agents_scorecard` tool and `window` field, the `orbit.agents.scorecard` tool and `window` field for `orbit tool run`, or `/api/agents/<role>/scorecard` and the `window` query parameter for the dashboard API. Every refusal explains that a crew with no work in the window has no row.
 
@@ -671,7 +674,7 @@ One `AgentFacts` scan per workspace serves all four roles and the attribution st
 
 It reads at most 90 days back. `all` is served as 90 days, so the scan stays bounded however old the workspace gets.
 
-**Count windows.** `last50`, `last200`, `last500` and `last1000` select by delivery attempts rather than time: the window starts at the start of the `N`th newest implementation attempt in the scan (the oldest when the scan holds fewer, the scan's reach when it holds none) and ends now, and every role slices its own unit from that start as for a calendar window. Window membership, attribution and the shared score are unchanged. They reach no further than the scan's 90 days, so a workspace idle for longer still shows nothing. The implementers `--by-type --shadow` report reads recorded crew draws rather than the scan and refuses a count window.
+**Count windows.** `last50`, `last200`, `last500` and `last1000` select by delivery attempts rather than time: the window starts at the start of the `N`th newest implementation attempt in the scan (the oldest when the scan holds fewer, the scan's reach when it holds none) and ends now. With `until` set, those attempts are the newest N whose start is before `until`, and the window ends at `until`. Every role slices its own unit from that start as for a calendar window. Window membership, attribution and the shared score are unchanged. They reach no further than the scan's 90 days, so a workspace idle for longer still shows nothing. The implementers `--by-type --shadow` report reads recorded crew draws rather than the scan and refuses a count window.
 
 The server keeps one scan per workspace runtime for five minutes, single-flight, like the orchestrator scan. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.
 

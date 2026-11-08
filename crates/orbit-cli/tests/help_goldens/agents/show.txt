@@ -31,6 +31,9 @@ Options:
           [default: managed]
           [possible values: managed, all, interactive]
 
+      --until <UNTIL>
+          End the window at this instant or duration ago (for example 30d)
+
   -h, --help
           Print help (see a summary with '-h')
 

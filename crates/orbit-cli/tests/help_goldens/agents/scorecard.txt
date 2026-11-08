@@ -25,6 +25,9 @@ Options:
           [default: managed]
           [possible values: managed, all, interactive]
 
+      --until <UNTIL>
+          End the window at this instant or duration ago (for example 30d)
+
       --by-type
           Show implementers split by task type within each tier
 

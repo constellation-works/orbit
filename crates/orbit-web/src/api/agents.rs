@@ -46,6 +46,10 @@ pub(super) struct AgentScorecardQuery {
     /// (default), `all` or `interactive`.
     #[serde(default)]
     execution: Option<String>,
+    /// Exclusive window end: an RFC 3339 instant or a duration ago such as
+    /// `30d`. Omitted, the window ends now.
+    #[serde(default)]
+    until: Option<String>,
 }
 
 pub(super) async fn agent_scorecard(
@@ -182,7 +186,8 @@ pub(super) async fn agent_attribution(
 
 fn selection(query: &AgentScorecardQuery) -> Result<AgentQuery, OrbitError> {
     AgentQuery::parse(query.window.as_deref(), query.min_support)?
-        .with_execution(query.execution.as_deref())
+        .with_execution(query.execution.as_deref())?
+        .with_until(query.until.as_deref())
 }
 
 /// A bad selection is the caller's 400; anything else is a runtime error.

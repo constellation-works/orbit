@@ -22,7 +22,7 @@ use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_at
 use super::records::{Cause, label};
 use super::roles::pilot_warnings::{Assessment, Outcome};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
-use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
+use super::{AgentFacts, AgentRole, MODEL_UNKNOWN, WindowBounds};
 use crate::application::task::FindingVerdict;
 
 /// What a problem counts against.
@@ -527,13 +527,17 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
 
 /// The window's problems by owner, with Not scored by reason and each
 /// role's problems by row.
-pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
+pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
     let mut owners: BTreeMap<AgentRole, u64> =
         AgentRole::ALL.iter().map(|role| (*role, 0)).collect();
     let mut rows: BTreeMap<AgentRole, BTreeMap<(String, String), u64>> = BTreeMap::new();
     let mut reasons: BTreeMap<&str, u64> = BTreeMap::new();
     let mut total = 0;
-    for charge in facts.charges.iter().filter(|charge| charge.anchor >= since) {
+    for charge in facts
+        .charges
+        .iter()
+        .filter(|charge| window.admits(charge.anchor))
+    {
         total += 1;
         match charge.owner {
             Owner::Role(role) => {
@@ -574,7 +578,8 @@ pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
         })
         .collect();
     json!({
-        "since": since.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "since": window.since().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "until": window.reported_until().to_rfc3339_opts(SecondsFormat::Secs, true),
         "total": total,
         "owners": owner_counts,
         "charged": charged,

@@ -5,13 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::performance::{ESCAPED_REGRESSIONS, Key, configured_type, tier};
-use crate::application::agents::AgentFacts;
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{RowInput, Stat, number};
+use crate::application::agents::{AgentFacts, WindowBounds};
 
 fn median(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
@@ -27,14 +26,14 @@ fn median(values: &mut [f64]) -> Option<f64> {
 /// tasks.
 pub(super) fn append_diff_context(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
+    window: WindowBounds,
     work: &BTreeMap<Key, Vec<&TaskFacts>>,
     rows: &mut [RowInput<'_>],
 ) -> Vec<f64> {
     let cell = |task: &TaskFacts| {
         (
             tier(task),
-            configured_type(task, since, &facts.performance_types),
+            configured_type(task, window, &facts.performance_types),
         )
     };
     let mut landed = BTreeMap::new();
