@@ -343,13 +343,25 @@ impl UnsatisfiableTaskDependency {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExternalRef {
     pub system: String,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
+
+// An external reference names its target by key (`system` + `id`); the `url`
+// is display metadata a later writer may complete. Key-only and
+// with-URL forms of the same pull request compare equal so a handoff that
+// records its link still satisfies a key-only membership check.
+impl PartialEq for ExternalRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.system == other.system && self.id == other.id
+    }
+}
+
+impl Eq for ExternalRef {}
 
 pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
 
