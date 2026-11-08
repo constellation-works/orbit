@@ -183,9 +183,16 @@ pub(super) fn concluded_stopped(job: &CiCommitJobEvidence) -> Option<&str> {
     job.conclusion.value().and_then(CiJobConclusion::stopped)
 }
 
+const CONCLUSION_SIGNATURE_PREFIX: &str = "concluded ";
+
 /// Signature of a stop classified from the job conclusion, with no log.
 pub(super) fn conclusion_signature(conclusion: &str) -> String {
-    format!("concluded {conclusion}")
+    format!("{CONCLUSION_SIGNATURE_PREFIX}{conclusion}")
+}
+
+/// Whether a signature was taken from a job's conclusion rather than its log.
+pub(super) fn is_conclusion_signature(signature: &str) -> bool {
+    signature.starts_with(CONCLUSION_SIGNATURE_PREFIX)
 }
 
 /// The network or runner failure a log shows, if any.

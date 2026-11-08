@@ -818,11 +818,20 @@ fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
                 && job.class != CheckFailureClass::Unknown
                 && !job.signature.is_empty()
         })
-        .map(|job| orbit_types::workflow::CiRerunRoot {
-            job_id: job.job_id,
-            check: job.label.clone(),
-            classification: "flaky".to_string(),
-            signature: job.signature.clone(),
+        .map(|job| {
+            // The planner authenticates a stopped job only as a transient root
+            // carrying its conclusion signature; a log-classified job stays flaky.
+            let classification = if super::jobs::is_conclusion_signature(&job.signature) {
+                CheckFailureClass::Transient.as_str()
+            } else {
+                "flaky"
+            };
+            orbit_types::workflow::CiRerunRoot {
+                job_id: job.job_id,
+                check: job.label.clone(),
+                classification: classification.to_string(),
+                signature: job.signature.clone(),
+            }
         })
         .collect();
     if roots.is_empty() {
