@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_engine::activity_job::{ScriptAsset, ScriptLoadError, V2ScriptCatalog};
+use orbit_engine::activity_job::{ScriptAsset, V2ScriptCatalog};
 use orbit_types::identity::lower_hex;
 use orbit_types::workflow::activity_job::{
     SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES, SCRIPT_OUTPUT_HARD_MAX_FILES, ScriptGrant,
@@ -218,6 +218,8 @@ pub enum ScriptGrantState {
     /// A stored grant whose witness is untrusted or whose timeout ceiling is
     /// outside the supported range.
     WitnessRefused,
+    /// A manifest that could not be loaded.
+    Unavailable,
 }
 
 impl ScriptGrantState {
@@ -228,6 +230,7 @@ impl ScriptGrantState {
             ScriptGrantState::Ungranted => "ungranted",
             ScriptGrantState::Orphaned => "orphaned",
             ScriptGrantState::WitnessRefused => "witness_refused",
+            ScriptGrantState::Unavailable => "unavailable",
         }
     }
 }
@@ -341,39 +344,15 @@ fn grant_output_limits(
     Ok(limits)
 }
 
-/// A script catalog load refusal plus how to recover. Every job dispatch
-/// loads the whole catalog, so one bad manifest refuses every job in the
-/// workspace until it is repaired or removed.
-fn script_catalog_refusal(error: &ScriptLoadError) -> String {
-    let remedy = match error.manifest_path() {
-        Some(path) => {
-            let name = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            format!(
-                "repair that manifest (for example its `entry`), or, if the script is retired, \
-                 delete {} and run `orbit script revoke {name}`",
-                path.display()
-            )
-        }
-        None => "repair or remove the manifests it names".to_string(),
-    };
-    format!(
-        "{error}. Every job in this workspace refuses until the script catalog loads: {remedy}, \
-         then rerun `orbit doctor`"
-    )
-}
-
 impl RuntimeKernel {
     /// Load this workspace's script catalog. Scripts are workspace-only:
     /// the global root's `resources/` holds none.
     pub fn v2_script_catalog(&self) -> Result<V2ScriptCatalog, OrbitError> {
         let paths = self.paths();
         let mut catalog = V2ScriptCatalog::new(paths.scripts_dir.clone(), paths.repo_root.clone());
-        catalog
-            .load_dir()
-            .map_err(|error| OrbitError::InvalidInput(script_catalog_refusal(&error)))?;
+        catalog.load_dir().map_err(|error| {
+            OrbitError::InvalidInput(orbit_engine::activity_job::script_load_refusal(&error))
+        })?;
         Ok(catalog)
     }
 
@@ -445,8 +424,19 @@ impl RuntimeKernel {
                 detail,
             });
         }
+        for (name, reason) in catalog.unavailable_scripts() {
+            statuses.push(ScriptStatus {
+                name: name.to_string(),
+                state: ScriptGrantState::Unavailable,
+                asset: None,
+                grant: grants.iter().find(|grant| grant.name == name).cloned(),
+                detail: reason.to_string(),
+            });
+        }
         for grant in grants {
-            if catalog.get(&grant.name).is_some() {
+            if catalog.get(&grant.name).is_some()
+                || catalog.unavailable_script(&grant.name).is_some()
+            {
                 continue;
             }
             let witness_note = match verify_script_grant_witness(&global_root, &grant) {
@@ -532,6 +522,9 @@ impl RuntimeKernel {
         options: &ScriptGrantOptions,
     ) -> Result<ScriptGrant, OrbitError> {
         let catalog = self.v2_script_catalog()?;
+        if let Some(reason) = catalog.unavailable_script(name) {
+            return Err(OrbitError::InvalidInput(reason.to_string()));
+        }
         let Some(asset) = catalog.get(name) else {
             return Err(OrbitError::InvalidInput(format!(
                 "script `{name}` manifest not found at {}; nothing was granted",

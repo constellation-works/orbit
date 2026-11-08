@@ -68,6 +68,9 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
                     status.name
                 )),
             ),
+            ScriptGrantState::Unavailable => {
+                (WorkspaceDoctorStatus::Warning, Some(status.detail.clone()))
+            }
             ScriptGrantState::WitnessRefused => (
                 WorkspaceDoctorStatus::Error,
                 Some(format!(

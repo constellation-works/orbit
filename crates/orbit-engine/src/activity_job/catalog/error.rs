@@ -62,6 +62,12 @@ pub enum ResolveError {
         name: String,
         reason: String,
     },
+    #[error("step `{step_id}`: script `{name}` is unavailable: {reason}")]
+    ScriptUnavailable {
+        step_id: String,
+        name: String,
+        reason: String,
+    },
     #[error("job recovery_activity `{name}` not found in catalog")]
     RecoveryActivityNotInCatalog { name: String },
     #[error("job failure_activity `{name}` not found in catalog")]

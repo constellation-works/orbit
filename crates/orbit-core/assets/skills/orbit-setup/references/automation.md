@@ -409,9 +409,8 @@ Its manifest lives at `.orbit/resources/scripts/<name>.yaml`, and the manifest's
 the script holds an operator grant on the host that runs it. Granting runs
 nothing; the step runs when a job reaches it.
 
-Every job dispatch loads every manifest in that directory, so one whose entry
-is missing or invalid refuses every job in the workspace, not only the jobs
-that name it; the refusal names the manifest. Repair it, or delete a retired
+A manifest whose entry is missing or invalid is unavailable; jobs that name
+it refuse with an error naming the manifest. Other jobs can still run. Repair it, or delete a retired
 script's manifest and run `orbit script revoke <name>`. The retired ux-rules
 routine left one: if the workspace set it up, delete
 `.orbit/resources/scripts/ux_rules_runner.yaml` and run
@@ -532,6 +531,7 @@ Privacy & Security pane to allow it in.
 | `stale` | A verified grant whose digests no longer match: one of the files changed after granting. |
 | `ungranted` | A manifest with no grant. |
 | `orphaned` | A grant whose manifest no longer exists. |
+| `unavailable` | The manifest could not be loaded; its diagnostic names the error and remedy. |
 | `witness_refused` | The stored grant is not trusted because its witness is missing or invalid, its row does not match the witness, or its timeout ceiling is outside `1..=4294967295` seconds. Review it and run `orbit script grant <name>` to re-authorize it. |
 
 ### Grant requests
