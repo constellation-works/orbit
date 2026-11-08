@@ -148,6 +148,138 @@ fn run_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
     )
 }
 
+/// Completion whose conflict leaf cannot be redirected: no top-level step
+/// declares `step_failure_recovery`.
+fn unrouted_repair_job(input: Value) -> orbit_types::workflow::JobV2 {
+    job_asset(json!([
+        {"id":"commit","target":"activity:checkpoint"},
+        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+    ]))
+}
+
+fn run_unrouted_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
+    run_job(
+        host,
+        unrouted_repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+/// An admitted check-repair handoff at attempt 1 of budget 3, through the
+/// public job run. A configured check-repair activity receives it. With none
+/// configured, the in-budget handoff holds the run. An exhausted repair
+/// budget still fails it.
+#[test]
+fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
+    auto_fix_table(
+        "auto_fix::admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget",
+        "routed held exhausted",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script("test_ci_repair", json!({"mode":"repair"}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "exhausted" {
+                seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
+            }
+            let input = auto_fix_input(&fx);
+            let outcome = if case == "routed" {
+                run_repair_job(&host, input)
+            } else {
+                run_unrouted_repair_job(&host, input)
+            };
+            match case {
+                "routed" => {
+                    let result = outcome.expect("in-budget handoff enters check repair");
+                    assert!(
+                        result.success,
+                        "configured check repair must not end as a pr_complete failure: {result:?}"
+                    );
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    let head = fx.head();
+                    assert_green_repair_published(
+                        &fx,
+                        &host,
+                        &result.pipeline["complete_pr"]["merge"],
+                        &head,
+                        case,
+                    );
+                }
+                "held" => {
+                    let error = outcome.expect_err("absent activity holds the in-budget handoff");
+                    assert_eq!(
+                        error.failure_code(),
+                        "delivery_check_repair_activity_absent",
+                        "{error}"
+                    );
+                    match error {
+                        DispatchError::DeliveryRefused {
+                            refusal, message, ..
+                        } => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                                "{message}"
+                            );
+                            assert!(
+                                message.contains("attempt 1 of 3"),
+                                "in-budget handoff must stay on the hold: {message}"
+                            );
+                            assert!(is_check_repair(&message), "{message}");
+                        }
+                        other => panic!("expected a typed hold, got {other}"),
+                    }
+                    assert!(
+                        !scripted_ran(&host, "test_ci_repair"),
+                        "no repair agent runs when the activity is absent"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    assert_eq!(fx.head(), fx.candidate, "{case}");
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                "exhausted" => {
+                    let error = match outcome {
+                        Ok(result) => {
+                            assert!(!result.success, "{result:?}");
+                            result.message.unwrap_or_default()
+                        }
+                        Err(error) => {
+                            assert!(
+                                !matches!(error, DispatchError::DeliveryRefused { .. }),
+                                "an exhausted repair budget is a failure, not a hold: {error}"
+                            );
+                            error.to_string()
+                        }
+                    };
+                    assert!(
+                        error.contains("auto_fix_budget_exhausted"),
+                        "{case}: {error}"
+                    );
+                    assert!(
+                        !scripted_ran(&host, "test_ci_repair"),
+                        "an exhausted budget does not enter check repair"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 3, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                other => panic!("unknown case {other}"),
+            }
+        },
+    );
+}
+
 /// Repair input with an explicit watch budget. The prerequisite clock and the
 /// poll wait advance together, so holds reach their deadline without a
 /// wall-clock sleep.
@@ -3111,8 +3243,10 @@ fn auto_fix_repairs_without_treating_unreadable_base_as_known_red() {
 }
 
 /// Auto-fix admits source repair on an older green base without a repeat.
-/// Independent final recovery still requires the same-PR later attempt.
-/// Oversized workflow and job payloads exercise the normal 1 MiB process
+/// This job declares no `step_failure_recovery`, so that in-budget handoff
+/// holds the run in review and does not enter final recovery. Independent
+/// final recovery still requires the same-PR later attempt when auto-fix is
+/// off. Oversized workflow and job payloads exercise the normal 1 MiB process
 /// capture bound without gating auto-fix. The refused-history row is
 /// the former `held_first_failure_survives_a_refused_history_write` scenario:
 /// a refused first-failure record still holds and dispatches no recovery.
@@ -3165,12 +3299,33 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         "{detail}"
                     );
                     if auto_fix {
+                        let error = result.expect_err(
+                            "{detail}: an absent check-repair activity holds the source repair",
+                        );
+                        assert_eq!(
+                            error.failure_code(),
+                            "delivery_check_repair_activity_absent",
+                            "{detail}: {error}"
+                        );
+                        match &error {
+                            DispatchError::DeliveryRefused {
+                                refusal, message, ..
+                            } => {
+                                assert_eq!(
+                                    *refusal,
+                                    orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                                    "{detail}: {message}"
+                                );
+                                assert!(
+                                    is_check_repair(message),
+                                    "{detail}: the hold keeps the admitted source repair: {message}"
+                                );
+                            }
+                            other => panic!("{detail}: expected a typed hold, got {other}"),
+                        }
                         assert!(
-                            result
-                                .as_ref()
-                                .err()
-                                .is_some_and(|error| is_check_repair(&error.to_string())),
-                            "{detail}: first failure hands off the source repair: {result:?}"
+                            !scripted_ran(&host, "test_final_decision"),
+                            "{detail}: the hold does not enter final recovery"
                         );
                         assert_eq!(repair_attempts(&host).len(), 1, "{detail}");
                         assert!(
@@ -3181,7 +3336,7 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                             "{detail}: suspicion does not gate repair"
                         );
                         assert_no_context_widening(&host, &context, &detail);
-                        assert_nothing_landed(&fx, &host, TaskStatus::Backlog, &detail);
+                        assert_nothing_landed(&fx, &host, TaskStatus::Review, &detail);
                         return;
                     }
                     assert!(

@@ -32,7 +32,8 @@ const RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.failure_recovery";
 
 /// The job's `step_failure_recovery`, resolved from the first top-level step
 /// that declares it: the repair an `--auto-fix` check failure is routed to.
-/// A job none of whose steps declares it routes no check repair.
+/// A job none of whose steps declares it routes no check repair; that
+/// in-budget handoff holds the run.
 pub(super) fn check_repair_activity(job: &JobV2) -> Option<ResolvedRecoveryActivity> {
     job.steps.iter().find_map(|step| {
         match (
