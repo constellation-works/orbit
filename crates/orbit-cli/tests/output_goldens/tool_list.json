@@ -216,12 +216,6 @@
         "description": "Only failures whose current class is this: code (the head's own change), flaky (the same head passed on a rerun), infrastructure (a declared infrastructure signature, the runner or network, or a base that fails the same check) or unknown (no cause established).",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "model",
-        "description": "Agent family or full model ID for provenance.",
-        "param_type": "string",
-        "required": false
       }
     ],
     "mcp_toolset": "analytics"
