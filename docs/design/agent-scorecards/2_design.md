@@ -390,12 +390,14 @@ actual size:
   by-type rules and admitted tags below. Fleet medians include all rows,
   including the row being compared. Tasks enter buckets by that **cell
   median**, never by their own lines changed: `[0, 2)`, `[2, 4)`, `[4, 8)`, and
-  so on. Each `(tier, expected-size bucket)` has a fleet severity-weighted
-  regression rate per row-task observation, and the row's expected count sums
-  that rate over its tasks. Missing cell medians use an explicit unknown-size
-  bucket in that same tier. Sparse buckets keep their own rate and no tiers
-  pool. This conserves actual and expected counts across the fleet; matching
-  bucket rates yields contribution zero. The by-type cells (§5.2 below) use
+  so on. For each row and bucket, the expected rate is the severity-weighted
+  escapes per row-task observation among the other rows in that bucket; the
+  expected count sums those rates over the row's tasks. Missing medians use an
+  unknown-size bucket. If a bucket has no peer observations, use the other rows'
+  rate across the same tier, then across all tiers if that tier has no peers.
+  With no peers anywhere, use a zero reference (an explicit conservative prior,
+  not an observed rate). The row's boolean `escaped_regressions_fallback` is true when any task used a fallback. Leave-one-out
+  expectations need not conserve fleet totals. By-type cells (§5.2 below) use
   their `(tier, type)` cell rates for this term like every other.
 - **Counted once across review layers.** A pre-landing review gate and delivery
   review can both see a task. A `no_test` link whose `sites` name a path that a

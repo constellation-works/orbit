@@ -671,6 +671,7 @@ fn row_input<'a>(
         "too_hard": too_hard,
     });
     RowInput {
+        escaped_regressions_fallback: None,
         crew: row.0,
         model: row.1,
         units,

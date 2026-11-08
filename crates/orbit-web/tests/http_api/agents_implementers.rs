@@ -47,11 +47,12 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
             let mut low_ids = Vec::new();
             for (crew, complexity) in [
                 ("hard", TaskComplexity::Hard),
+                ("hard-peer", TaskComplexity::Hard),
                 ("low", TaskComplexity::Low),
                 ("low-peer", TaskComplexity::Low),
             ] {
                 for index in 0..40 {
-                    let landed = if crew == "hard" { 30 } else { 36 };
+                    let landed = if crew.starts_with("hard") { 30 } else { 36 };
                     let status = if index < landed {
                         TaskStatus::Done
                     } else {
@@ -85,7 +86,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                         None,
                         Some(TaskStatus::InProgress),
                     );
-                    if index < if crew == "hard" { 2 } else { 1 } {
+                    if index < if crew.starts_with("hard") { 2 } else { 1 } {
                         append(
                             &fixture,
                             &id,
@@ -128,7 +129,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                         None,
                         Some(status),
                     );
-                    if index < if crew == "hard" { 2 } else { 1 } {
+                    if index < if crew.starts_with("hard") { 2 } else { 1 } {
                         regression(
                             &fixture,
                             &id,
@@ -136,7 +137,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                             RegressionEscape::NoTest,
                         );
                     }
-                    let rejects = if crew == "hard" { 20 } else { 0 };
+                    let rejects = if crew.starts_with("hard") { 20 } else { 0 };
                     let verdict = if index < rejects {
                         "reject"
                     } else if index < rejects + 4 {
@@ -168,11 +169,11 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                 as_f64(&row(&card, "low")["raw"]),
                 "matching each tier's fleet rates must erase tier-mix bias"
             );
-            for crew in ["hard", "low", "low-peer"] {
+            for crew in ["hard", "hard-peer", "low", "low-peer"] {
                 let r = row(&card, crew);
                 assert_eq!(
                     as_f64(&r["counts"]["weighted_landed"]),
-                    if crew == "hard" { 30.0 } else { 36.0 },
+                    if crew.starts_with("hard") { 30.0 } else { 36.0 },
                     "landings count one per task at every complexity"
                 );
                 assert_eq!(
@@ -990,14 +991,15 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                 stat_value(row(&card, "missing"), "diff_economy"),
                 Value::Null
             );
-            // Missing own size still uses the known fleet cell median, so the
-            // expected count is identical for all four comparable tasks.
+            // Missing own size uses the known cell median; each rate excludes
+            // the row being scored.
             for crew in ["peer-a", "peer-b", "large", "missing"] {
                 assert_eq!(
                     as_f64(&row(&card, crew)["expected"]["escaped_regressions"]),
-                    0.25,
-                    "{crew} expects the fleet rate of its expected-size bucket"
+                    if crew == "large" { 0.0 } else { 0.33 },
+                    "{crew} expects the other rows’ rate of its expected-size bucket"
                 );
+                assert_eq!(row(&card, crew)["escaped_regressions_fallback"], false);
             }
             for id in [&ids[0], &ids[1], &ids[3]] {
                 regression(
@@ -1041,6 +1043,79 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                     .status(),
                 400
             );
+        },
+    );
+}
+
+#[test]
+fn escape_expectation_uses_other_rows_when_a_bucket_has_no_peer() {
+    isolated(
+        "agents_implementers::escape_expectation_uses_other_rows_when_a_bucket_has_no_peer",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let id = add(
+                &fixture,
+                Owned {
+                    title: "isolated tier",
+                    orchestrator: None,
+                    origin: None,
+                    complexity: TaskComplexity::Hard,
+                    status: TaskStatus::Done,
+                    relations: vec![],
+                },
+            );
+            let start = now - Duration::hours(3);
+            implementation_run(
+                &fixture,
+                "jrun-isolated",
+                &id,
+                "isolated",
+                Some("model"),
+                start,
+                now - Duration::hours(1),
+            );
+            append(
+                &fixture,
+                &id,
+                start,
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &id,
+                now - Duration::hours(1),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            regression(
+                &fixture,
+                &id,
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+            );
+            landed_with_tags(&fixture, "jrun-clean", "clean", Vec::new());
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&min_support=1"
+            )));
+            let isolated = row(&card, "isolated");
+            assert_eq!(isolated["counts"]["escaped_regressions"], 1);
+            assert_eq!(isolated["expected"]["escaped_regressions"], 0);
+            assert_eq!(isolated["escaped_regressions_fallback"], true);
+            let detail = json_ok(server.get(&format!(
+                "/api/agents/implementers/detail?{WS}&crew=isolated&model=model&min_support=1"
+            )));
+            let term = detail["terms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|term| term["key"] == "escaped_regressions")
+                .unwrap();
+            assert_eq!(term["contribution"], -50);
         },
     );
 }

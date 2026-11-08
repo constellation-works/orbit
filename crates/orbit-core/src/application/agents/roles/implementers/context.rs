@@ -54,9 +54,7 @@ pub(super) fn append_diff_context(
         .into_iter()
         .filter_map(|(key, mut values)| median(&mut values).map(|median| (key, median)))
         .collect();
-    // [0, 2), [2, 4), [4, 8), ... lines, plus an explicit unknown bucket.
-    // Every observation, including the row itself, shares its cell's median.
-    // Sparse buckets keep their own same-tier rate; they never pool tiers.
+    // Size medians include the fleet; regression rates exclude the entire row.
     let bucket = |task: &TaskFacts| {
         (
             tier(task),
@@ -66,27 +64,59 @@ pub(super) fn append_diff_context(
         )
     };
     let mut fleet: BTreeMap<_, (usize, f64)> = BTreeMap::new();
+    let mut by_row = Vec::new();
     for (row, tasks) in rows.iter().zip(work.values()) {
+        let mut own: BTreeMap<_, (usize, f64)> = BTreeMap::new();
         for task in tasks {
-            fleet.entry(bucket(task)).or_default().0 += 1;
+            own.entry(bucket(task)).or_default().0 += 1;
         }
         if let Some(tally) = row.tallies.get(ESCAPED_REGRESSIONS) {
             for (task, count) in tally.task_counts() {
-                fleet.entry(bucket(task)).or_default().1 += count;
+                own.entry(bucket(task)).or_default().1 += count;
             }
         }
+        for (&key, &(units, count)) in &own {
+            let total = fleet.entry(key).or_default();
+            total.0 += units;
+            total.1 += count;
+        }
+        by_row.push(own);
     }
     let mut expected_regressions = Vec::with_capacity(rows.len());
-    for (row, tasks) in rows.iter_mut().zip(work.values()) {
-        expected_regressions.push(
-            tasks
-                .iter()
-                .map(|task| {
-                    let (units, count) = fleet[&bucket(task)];
+    for ((row, tasks), own) in rows.iter_mut().zip(work.values()).zip(&by_row) {
+        let mut fallback = false;
+        let expected = tasks
+            .iter()
+            .map(|task| {
+                let key = bucket(task);
+                let peers = |key: &(_, _), total: &(usize, f64)| {
+                    let own = own.get(key).copied().unwrap_or_default();
+                    (total.0 - own.0, total.1 - own.1)
+                };
+                let (mut units, mut count) = peers(&key, &fleet[&key]);
+                if units == 0 {
+                    fallback = true;
+                    (units, count) = fleet
+                        .iter()
+                        .filter(|(other, _)| other.0 == key.0)
+                        .map(|(key, total)| peers(key, total))
+                        .fold((0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                    if units == 0 {
+                        (units, count) = fleet
+                            .iter()
+                            .map(|(key, total)| peers(key, total))
+                            .fold((0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                    }
+                }
+                if units == 0 {
+                    0.0
+                } else {
                     count / units as f64
-                })
-                .sum(),
-        );
+                }
+            })
+            .sum();
+        expected_regressions.push(expected);
+        row.escaped_regressions_fallback = Some(fallback);
         let mut ratios = Vec::new();
         if let Some(tally) = row.tallies.get("weighted_landed") {
             for (task, _) in tally.task_counts() {

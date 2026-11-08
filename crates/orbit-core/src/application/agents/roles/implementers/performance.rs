@@ -51,7 +51,7 @@ pub(super) const TERMS: &[Term] = &[
         key: ESCAPED_REGRESSIONS,
         label: "Escaped regressions",
         weight: -0.5,
-        definition: "regression_from links with escape no_test against the row's landed tasks, mostly delivery-review findings, each at its severity weight (critical 8, high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review reject. Expected counts use the fleet's rate for the same tier and expected change size, never the row's own diff. A link whose defect site a pre-landing review finding on the row's candidate already cited or fixed is that review's reject or repair and is not counted again.",
+        definition: "regression_from links with escape no_test against the row's landed tasks, mostly delivery-review findings, each at its severity weight (critical 8, high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review reject. Expected counts use other rows' rate for the same tier and expected change size, falling back to other rows in the tier, then the fleet, or zero without peers; never the row's own escapes or diff. A link whose defect site a pre-landing review finding on the row's candidate already cited or fixed is that review's reject or repair and is not counted again.",
         group: "problem",
     },
 ];
@@ -570,6 +570,7 @@ fn row_input<'a>(
         Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
     };
     RowInput {
+        escaped_regressions_fallback: None,
         denominators: REVIEW_TERM_UNITS
             .iter()
             .map(|(key, _)| {
