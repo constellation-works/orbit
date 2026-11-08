@@ -22,7 +22,7 @@ use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_at
 use super::records::{Cause, label};
 use super::roles::pilot_warnings::{Assessment, Outcome};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
-use super::{AgentFacts, AgentRole, MODEL_UNKNOWN, WindowBounds};
+use super::{AgentFacts, AgentRole, WindowBounds};
 use crate::application::task::FindingVerdict;
 
 /// What a problem counts against.
@@ -530,7 +530,10 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
 pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
     let mut owners: BTreeMap<AgentRole, u64> =
         AgentRole::ALL.iter().map(|role| (*role, 0)).collect();
-    let mut rows: BTreeMap<AgentRole, BTreeMap<(String, String), u64>> = BTreeMap::new();
+    let mut rows: BTreeMap<
+        AgentRole,
+        BTreeMap<super::effort::ModelEffortKey, (u64, std::collections::BTreeSet<String>)>,
+    > = BTreeMap::new();
     let mut reasons: BTreeMap<&str, u64> = BTreeMap::new();
     let mut total = 0;
     for charge in facts
@@ -542,11 +545,35 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
         match charge.owner {
             Owner::Role(role) => {
                 *owners.entry(role).or_default() += 1;
-                *rows
+                let activity = match role {
+                    AgentRole::Implementers => Some(super::effort::MainActivity::Implement),
+                    AgentRole::Reviewers => Some(super::effort::MainActivity::Review),
+                    AgentRole::Pilots => Some(super::effort::MainActivity::Pilot),
+                    AgentRole::Orchestrators => None,
+                };
+                let effort = activity.map_or_else(
+                    || Some(super::effort::EFFORT_UNKNOWN.to_string()),
+                    |activity| {
+                        super::effort::main_invocation_effort(
+                            facts,
+                            charge.run_id.as_deref(),
+                            activity,
+                            Some(&charge.task_id),
+                        )
+                    },
+                );
+                let entry = rows
                     .entry(role)
                     .or_default()
-                    .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
-                    .or_default() += 1;
+                    .entry(super::effort::model_effort_key(
+                        charge.model.as_deref(),
+                        effort,
+                    ))
+                    .or_default();
+                entry.0 += 1;
+                if let Some(crew) = &charge.crew {
+                    entry.1.insert(crew.clone());
+                }
             }
             Owner::NotScored(reason) => *reasons.entry(reason).or_default() += 1,
         }
@@ -566,12 +593,20 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
         .iter()
         .map(|role| {
             let mut list: Vec<_> = rows.remove(role).unwrap_or_default().into_iter().collect();
-            list.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+            list.sort_by(|left, right| (right.1).0.cmp(&(left.1).0).then(left.0.cmp(&right.0)));
             (
                 role.as_str().to_string(),
                 list.into_iter()
-                    .map(|((crew, model), problems)| {
-                        json!({"crew": crew, "model": model, "problems": problems})
+                    .map(|((model, effort), (problems, crews))| {
+                        json!({
+                            "crew": crews.first(),
+                            "crews": crews,
+                            "model": model,
+                            "reasoning_effort": effort,
+                            "effort_label": super::effort::effort_label(&effort),
+                            "label": super::effort::row_label(&model, &effort),
+                            "problems": problems,
+                        })
                     })
                     .collect(),
             )
@@ -584,14 +619,4 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
         "owners": owner_counts,
         "charged": charged,
     })
-}
-
-/// The row a charge or credit counts in: its crew and model, `crew unknown`
-/// and `model unknown` when the run (or, for an orchestrator, the task)
-/// recorded none.
-pub(super) fn row_key(crew: Option<&str>, model: Option<&str>) -> (String, String) {
-    (
-        crew.unwrap_or(super::CREW_UNKNOWN).to_string(),
-        model.unwrap_or(MODEL_UNKNOWN).to_string(),
-    )
 }

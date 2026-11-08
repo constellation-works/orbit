@@ -272,7 +272,9 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
         .iter()
         .map(|row| row["rank_label"].as_str().unwrap_or("-"))
         .collect();
-    assert_eq!(labels, ["1", "2=", "2=", "4", "-"]);
+    // Band ranks are dense: the shared 2= band is followed by 3, never 4,
+    // and the unranked ineligible row consumes no rank.
+    assert_eq!(labels, ["1", "2=", "2=", "3", "-"]);
     assert!(
         f(&row(&payload, "twin")["cost"]["ratio"]) < f(&row(&payload, "middle")["cost"]["ratio"])
     );

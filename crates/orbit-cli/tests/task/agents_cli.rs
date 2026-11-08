@@ -114,7 +114,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     let rows = scorecard["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{scorecard}");
     // A plain record includes effort among six fixed columns, plus one per term.
-    let width = 6 + scorecard["terms"].as_array().unwrap().len();
+    let width = 5 + scorecard["terms"].as_array().unwrap().len();
     let opus = rows.iter().find(|row| row["crew"] == "opus").unwrap();
     assert_eq!(opus["units"], 2, "{opus}");
     assert_eq!(opus["below_support"], false, "{opus}");
@@ -421,9 +421,11 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     let header: Vec<&str> = with_header.lines().next().unwrap().split('\t').collect();
     assert_eq!(header.len(), width, "{with_header}");
     assert_eq!(header[0], "RANK", "{with_header}");
-    assert_eq!(header[3], "EFFORT", "{with_header}");
+    assert_eq!(header[1], "ROW", "{with_header}");
     assert!(
-        records.iter().all(|fields| fields[3] == "unknown"),
+        records
+            .iter()
+            .all(|fields| fields[1].ends_with("@ effort unknown")),
         "historical rows must not guess an effort: {piped_stdout}"
     );
     assert_eq!(

@@ -11,6 +11,9 @@ Options:
       --crew <CREW>
           The row's crew, or the orchestrator name tasks record
 
+      --effort <EFFORT>
+          The row's recorded effort; optional when the crew and model name one row
+
       --model <MODEL>
           The row's model; optional when the crew has one row
 

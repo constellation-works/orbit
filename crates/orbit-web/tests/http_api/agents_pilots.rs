@@ -26,7 +26,13 @@ fn row<'a>(card: &'a Value, crew: &str, model: &str) -> &'a Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["crew"] == crew && row["model"] == model)
+        .find(|row| {
+            row["model"] == model
+                && (row["crew"] == crew
+                    || row["crews"]
+                        .as_array()
+                        .is_some_and(|crews| crews.iter().any(|name| name == crew)))
+        })
         .unwrap_or_else(|| panic!("a {crew} / {model} row: {card}"))
 }
 
@@ -319,8 +325,9 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 .collect();
             let expected = [
                 ("haiku", "actual-pilot-model", 2),
-                ("overlap-a", "initial-model", 1),
-                ("overlap-b", "initial-model", 1),
+                // Both overlap runs' initial assessments share the one
+                // initial-model row; the crews are its secondary detail.
+                ("overlap-a", "initial-model", 2),
                 ("overlap-b", "repair-model", 2),
             ];
             let missing: Vec<_> = expected
@@ -332,8 +339,9 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 "recorded model and overlapping legacy attribution failures: {missing:?}; observed {observed:?}"
             );
             for (crew, model, units, cost, seconds) in [
-                ("overlap-a", "initial-model", 1, 2.0, 600),
-                ("overlap-b", "initial-model", 1, 12.0, 1200),
+                // The merged initial-model row: both runs' costs (2 + 12)
+                // over its two units, median of 600s and 1200s runs.
+                ("overlap-a", "initial-model", 2, 7.0, 900),
                 ("overlap-b", "repair-model", 2, 6.0, 1200),
             ] {
                 let attributed = row(&card, crew, model);
@@ -348,18 +356,22 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 "pilot assessments follow the drawn crew, never the piloted task's crew: {card}"
             );
             assert_eq!(row(&card, "luna", "legacy-pilot-model")["units"], 1);
-            assert_eq!(row(&card, "haiku", "model unknown")["units"], 1);
+            assert_eq!(
+                row(&card, "haiku", "model unknown")["units"],
+                2,
+                "the haiku and uninvoked model-unknown assessments share one row"
+            );
             assert_eq!(
                 row(&card, "haiku", "model unknown")["runs_without_model"],
-                1
+                2
             );
             assert_eq!(
                 row(&card, "luna", "repair-only-model")["runs_without_model"],
                 0
             );
             assert_eq!(
-                row(&card, "uninvoked", "model unknown")["runs_without_model"],
-                1
+                row(&card, "uninvoked", "model unknown")["crews"],
+                json!(["haiku", "uninvoked"])
             );
             assert_eq!(
                 row(&card, "crew unknown", "unattributed-pilot-model")["units"],
@@ -367,7 +379,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
             );
             assert_eq!(
                 card["rows"].as_array().unwrap().len(),
-                9,
+                7,
                 "no task-crew or other-activity rows: {card}"
             );
         },
@@ -914,7 +926,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
             assert_eq!(strip["owners"]["pilots"], 2, "{strip}");
             assert_eq!(
                 strip["charged"]["pilots"],
-                json!([{"crew": "pilot-a", "model": "model-a", "problems": 2}]),
+                json!([{"crew": "pilot-a", "crews": ["pilot-a"], "model": "model-a", "reasoning_effort": "unknown", "effort_label": "effort unknown", "label": "model-a @ effort unknown", "problems": 2}]),
                 "{strip}"
             );
         },
@@ -934,7 +946,7 @@ fn pilots_calibrate_only_placed_tasks() {
                 &fixture,
                 &format!("jrun-pilot-{crew}"),
                 crew,
-                "pilot-model",
+                &format!("{crew}-pilot-model"),
                 now - Duration::hours(9),
                 now - Duration::hours(8),
             );
@@ -966,7 +978,7 @@ fn pilots_calibrate_only_placed_tasks() {
         let card = json_ok(server.get(&format!(
             "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
         )));
-        let mixed = row(&card, "mixed", "pilot-model");
+        let mixed = row(&card, "mixed", "mixed-pilot-model");
         assert_eq!(mixed["units"], 3);
         assert_eq!(mixed["counts"]["tier_calibration"], 1);
         assert_eq!(mixed["per_100"]["tier_calibration"], 50);
@@ -974,7 +986,7 @@ fn pilots_calibrate_only_placed_tasks() {
         assert_eq!(stat(mixed, "tier_matrix")["not_placed"], 1);
         assert_eq!(mixed["per_100"]["f1_lift"], 100);
         assert_eq!(mixed["raw"], 112.5);
-        let full = row(&card, "full", "pilot-model");
+        let full = row(&card, "full", "full-pilot-model");
         assert_eq!(full["units"], 1);
         assert_eq!(full["term_units"]["tier_calibration"], 1);
         assert_eq!(full["per_100"]["tier_calibration"], 100);
@@ -987,11 +999,11 @@ fn pilots_calibrate_only_placed_tasks() {
             .unwrap();
         assert_eq!(calibration["unit"], "placed tasks");
         let detail = json_ok(server.get(&format!(
-            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=pilot-model"
+            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=mixed-pilot-model"
         )));
         assert_eq!(term(&detail, "tier_calibration")["units"], 2);
         assert_eq!(term(&detail, "tier_calibration")["contribution"], 12.5);
-        let unpriced = row(&card, "unpriced", "pilot-model");
+        let unpriced = row(&card, "unpriced", "unpriced-pilot-model");
         assert_eq!(unpriced["term_units"]["tier_calibration"], 0);
         assert_eq!(stat(unpriced, "tier_matrix")["not_placed"], 3);
         assert!(
@@ -1005,7 +1017,7 @@ fn pilots_calibrate_only_placed_tasks() {
         let supported = json_ok(server.get(&format!(
             "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=3"
         )));
-        let mixed = row(&supported, "mixed", "pilot-model");
+        let mixed = row(&supported, "mixed", "mixed-pilot-model");
         assert_eq!(mixed["below_support"], false);
         assert!(
             mixed["provisional_terms"]

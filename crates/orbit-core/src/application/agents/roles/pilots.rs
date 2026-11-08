@@ -27,7 +27,9 @@ use serde_json::{Value, json};
 
 use super::RoleSpec;
 use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, WarningRow};
-use crate::application::agents::attribution::row_key;
+use crate::application::agents::effort::{
+    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
@@ -331,13 +333,21 @@ pub(in crate::application::agents) struct Graded {
 }
 
 impl Graded {
-    /// The row the assessment counts in.
-    pub(in crate::application::agents) fn key(&self) -> (String, String) {
+    /// The row the assessment counts in: its model and the recorded effort
+    /// of its pilot run's main piloting invocation.
+    pub(in crate::application::agents) fn key(&self, facts: &AgentFacts) -> ModelEffortKey {
         let run = self.run.as_ref();
-        row_key(
-            run.and_then(|run| run.crew.as_deref()),
-            run.and_then(|run| run.model.as_deref()),
-        )
+        let effort = main_invocation_effort(
+            facts,
+            self.run_id().as_deref(),
+            MainActivity::Pilot,
+            Some(&self.task_id),
+        );
+        model_effort_key(run.and_then(|run| run.model.as_deref()), effort)
+    }
+
+    pub(in crate::application::agents) fn crew(&self) -> Option<&str> {
+        self.run.as_ref().and_then(|run| run.crew.as_deref())
     }
 
     pub(in crate::application::agents) fn run_id(&self) -> Option<String> {
@@ -409,7 +419,7 @@ pub(in crate::application::agents) fn grade_all(evidence: PilotEvidence) -> Vec<
         .collect()
 }
 
-type Key = (String, String);
+type Key = ModelEffortKey;
 
 /// The tier a task was assessed at, as an index into [`TIERS`].
 fn tier_index(complexity: Option<TaskComplexity>) -> Option<usize> {
@@ -503,7 +513,9 @@ fn rows(
         .collect();
     let mut work: BTreeMap<Key, Vec<(&Graded, &TaskFacts)>> = BTreeMap::new();
     for (graded, task) in assessed {
-        work.entry(graded.key()).or_default().push((graded, task));
+        work.entry(graded.key(facts))
+            .or_default()
+            .push((graded, task));
     }
     let mut warnings = pilot_warnings::rows(facts, window);
     for key in warnings.keys() {
@@ -670,10 +682,21 @@ fn row_input<'a>(
         "too_easy": too_easy,
         "too_hard": too_hard,
     });
+    let mut crews: BTreeSet<String> = assessed
+        .iter()
+        .filter_map(|(graded, _)| graded.crew().map(str::to_string))
+        .collect();
+    crews.extend(warnings.crews.iter().cloned());
+    let crews: Vec<String> = crews.into_iter().collect();
     RowInput {
         escaped_regressions_fallback: None,
-        crew: row.0,
-        model: row.1,
+        crew: crews
+            .first()
+            .cloned()
+            .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
+        crews,
+        model: row.0,
+        effort: row.1,
         units,
         runs_without_model,
         provisional: None,

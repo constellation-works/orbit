@@ -42,6 +42,10 @@ pub(super) struct AgentScorecardQuery {
     /// when the crew has one row.
     #[serde(default)]
     model: Option<String>,
+    /// The row's recorded effort selection; `/detail` only, optional when
+    /// the crew and model name one row.
+    #[serde(default)]
+    effort: Option<String>,
     /// One tier the implementer size curves narrow to; `/size-curves` only,
     /// every tier when omitted.
     #[serde(default)]
@@ -152,12 +156,13 @@ pub(super) async fn agent_detail(
         Ok(served) => served,
         Err(error) => return error_response(error),
     };
-    match agents::agent_detail(
+    match agents::agent_detail_with_effort(
         &served.body,
         role,
         &selection,
         crew,
         query.model.as_deref(),
+        query.effort.as_deref(),
         AGENT_SCAN_TTL,
     ) {
         Ok(value) => (served.age_header(), Json(value)).into_response(),

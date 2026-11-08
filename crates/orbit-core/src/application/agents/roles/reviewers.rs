@@ -14,7 +14,7 @@
 //! whose units is judged (no gate settlement, and no filed finding with a
 //! verdict or a terminal task) is unjudged: no score, no rank.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::task::{DefectSeverity, TaskComplexity};
@@ -22,7 +22,10 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
 use super::RoleSpec;
-use crate::application::agents::attribution::{Owner, row_key};
+use crate::application::agents::attribution::Owner;
+use crate::application::agents::effort::{
+    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
@@ -148,6 +151,7 @@ struct Row<'a> {
     without_model: usize,
     review_jobs: usize,
     tallies: BTreeMap<&'static str, Tally<'a>>,
+    crews: BTreeSet<String>,
     outcomes: BTreeMap<&'static str, usize>,
     /// Each review gate settlement's tier and whether its verdict passed.
     verdicts: Vec<(&'static str, bool)>,
@@ -204,7 +208,7 @@ fn rows(
         }
     }
 
-    let mut rows: BTreeMap<(String, String), Row<'_>> = BTreeMap::new();
+    let mut rows: BTreeMap<ModelEffortKey, Row<'_>> = BTreeMap::new();
     for task in &facts.tasks {
         for review in task
             .reviews
@@ -212,17 +216,26 @@ fn rows(
             .filter(|review| window.admits(review.at))
         {
             let runner = &review.reviewer;
+            let run_id = task
+                .attempt_at(review.at)
+                .and_then(|index| task.attempts[index].runner.run_id.clone());
+            let effort = main_invocation_effort(
+                facts,
+                run_id.as_deref(),
+                MainActivity::Review,
+                Some(&task.id),
+            );
             let row = rows
-                .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
+                .entry(model_effort_key(runner.model.as_deref(), effort))
                 .or_default();
+            if let Some(crew) = &runner.crew {
+                row.crews.insert(crew.clone());
+            }
             row.unit(review.at, runner.model.as_deref(), lookback);
             row.judged = true;
             row.verdicts
                 .push((tier(task.complexity), review.verdict.passed()));
             row.seconds.extend(review.seconds);
-            let run_id = task
-                .attempt_at(review.at)
-                .and_then(|index| task.attempts[index].runner.run_id.clone());
             let occurrence = |detail: String| Occurrence {
                 at: review.at,
                 detail: format!("review attempt {}: {detail}", review.attempt_id),
@@ -278,9 +291,18 @@ fn rows(
             continue;
         }
         let runner = &attempt.runner;
+        let effort = main_invocation_effort(
+            facts,
+            runner.run_id.as_deref(),
+            MainActivity::Review,
+            Some(filer),
+        );
         let row = rows
-            .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
+            .entry(model_effort_key(runner.model.as_deref(), effort))
             .or_default();
+        if let Some(crew) = &runner.crew {
+            row.crews.insert(crew.clone());
+        }
         row.unit(attempt.start, runner.model.as_deref(), lookback);
         row.review_jobs += 1;
         let (mut held, mut rejected) = (0, 0);
@@ -349,9 +371,18 @@ fn rows(
         let Some(task) = by_id.get(charge.task_id.as_str()) else {
             continue;
         };
+        let effort = main_invocation_effort(
+            facts,
+            charge.run_id.as_deref(),
+            MainActivity::Review,
+            Some(&charge.task_id),
+        );
         let row = rows
-            .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
+            .entry(model_effort_key(charge.model.as_deref(), effort))
             .or_default();
+        if let Some(crew) = &charge.crew {
+            row.crews.insert(crew.clone());
+        }
         row.judged = true;
         row.add(
             key,
@@ -374,11 +405,17 @@ fn rows(
         .zip(comparisons)
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
+            let crews: Vec<String> = row.crews.iter().cloned().collect();
             RowInput {
                 escaped_regressions_fallback: None,
                 denominators: BTreeMap::new(),
-                crew: key.0,
-                model: key.1,
+                crew: crews
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
+                crews,
+                model: key.0,
+                effort: key.1,
                 units: row.units,
                 runs_without_model: row.without_model,
                 provisional: Some(row.provisional),
@@ -427,7 +464,7 @@ fn tier(complexity: Option<TaskComplexity>) -> &'static str {
 }
 
 /// Each row's passed and total review gate settlements on one tier.
-type TierCounts<'k> = BTreeMap<&'k (String, String), (usize, usize)>;
+type TierCounts<'k> = BTreeMap<&'k ModelEffortKey, (usize, usize)>;
 
 /// Every row's review gate verdicts by tier, to compare a row's accept rate
 /// with the other reviewers' on the same tiers.
@@ -444,7 +481,7 @@ struct PeerComparison {
 }
 
 impl<'k> PeerRates<'k> {
-    fn new(rows: &'k BTreeMap<(String, String), Row<'_>>) -> Self {
+    fn new(rows: &'k BTreeMap<ModelEffortKey, Row<'_>>) -> Self {
         let mut tiers: BTreeMap<&'static str, TierCounts<'k>> = BTreeMap::new();
         for (key, row) in rows {
             for (tier, passed) in &row.verdicts {
@@ -458,7 +495,7 @@ impl<'k> PeerRates<'k> {
 
     fn compare(
         &self,
-        key: &(String, String),
+        key: &ModelEffortKey,
         verdicts: &[(&'static str, bool)],
     ) -> Option<PeerComparison> {
         let (mut compared, mut passed, mut expected) = (0.0, 0.0, 0.0);

@@ -110,10 +110,17 @@ impl Denominator {
     }
 }
 
-/// One crew and model's work and term tallies in the window.
+/// One model-and-recorded-effort row's work and term tallies in the
+/// window. `crew` is the first contributing crew, kept so a detail
+/// selection by crew still resolves; `crews` lists every crew whose units
+/// the row groups.
 pub(super) struct RowInput<'a> {
     pub(super) crew: String,
+    pub(super) crews: Vec<String>,
     pub(super) model: String,
+    /// The row's recorded effort in the shared encoding (`None` is the
+    /// provider default, `Some("unknown")` is unrecorded historical work).
+    pub(super) effort: super::effort::RecordedEffort,
     /// The role's units of work in the window.
     pub(super) units: usize,
     pub(super) runs_without_model: usize,
@@ -228,8 +235,12 @@ pub(super) fn score<'a>(
                     .unwrap_or(Ordering::Equal),
             )
             .then(right.input.units.cmp(&left.input.units))
-            .then(left.input.crew.cmp(&right.input.crew))
             .then(left.input.model.cmp(&right.input.model))
+            .then(
+                super::effort::effort_label(&left.input.effort)
+                    .cmp(&super::effort::effort_label(&right.input.effort)),
+            )
+            .then(left.input.crew.cmp(&right.input.crew))
     });
     for (index, row) in scored
         .iter_mut()
@@ -257,8 +268,14 @@ fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, ter
 }
 
 impl Scored<'_> {
-    pub(super) fn is(&self, crew: &str, model: &str) -> bool {
-        self.input.crew == crew && self.input.model == model
+    /// Whether `crew` contributed units to this row.
+    pub(super) fn has_crew(&self, crew: &str) -> bool {
+        self.input.crew == crew || self.input.crews.iter().any(|name| name == crew)
+    }
+
+    /// The row's `model @ effort` label.
+    pub(super) fn label(&self) -> String {
+        super::effort::row_label(&self.input.model, &self.input.effort)
     }
 
     /// The ranking row. An unjudged row's `raw` and `score` are null.
@@ -274,7 +291,11 @@ impl Scored<'_> {
             .collect();
         let mut payload = json!({
             "crew": self.input.crew,
+            "crews": self.input.crews,
             "model": self.input.model,
+            "reasoning_effort": self.input.effort,
+            "effort_label": super::effort::effort_label(&self.input.effort),
+            "label": self.label(),
             "units": self.input.units,
             "below_support": self.below_support,
             "unjudged": self.input.unjudged,

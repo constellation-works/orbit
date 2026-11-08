@@ -30,9 +30,11 @@ pub(in crate::application::agents) struct LedgerTask {
     pub(in crate::application::agents) lines: Option<u64>,
 }
 
-/// One crew-and-model row of the implementer scorecard and its tasks.
+/// One model-and-recorded-effort row of the implementer scorecard and its
+/// tasks, with the crews that contributed them.
 pub(in crate::application::agents) struct LedgerRow {
     pub(in crate::application::agents) crew: String,
+    pub(in crate::application::agents) crews: Vec<String>,
     pub(in crate::application::agents) model: String,
     pub(in crate::application::agents) tasks: Vec<LedgerTask>,
 }
@@ -49,7 +51,7 @@ pub(in crate::application::agents) fn implementer_ledger(
         .iter()
         .zip(&evaluated.tasks)
         .map(|(row, tasks)| {
-            let row_key = (row.crew.clone(), row.model.clone());
+            let row_key = (row.model.clone(), row.effort.clone());
             let tasks = tasks
                 .iter()
                 .map(|expectation| {
@@ -71,7 +73,9 @@ pub(in crate::application::agents) fn implementer_ledger(
                     let attempts: Vec<_> = task
                         .attempts
                         .iter()
-                        .filter(|attempt| counted(attempt, window) && key(attempt) == row_key)
+                        .filter(|attempt| {
+                            counted(attempt, window) && key(facts, task, attempt) == row_key
+                        })
                         .collect();
                     let start = attempts
                         .iter()
@@ -109,6 +113,7 @@ pub(in crate::application::agents) fn implementer_ledger(
                 .collect();
             LedgerRow {
                 crew: row.crew.clone(),
+                crews: row.crews.clone(),
                 model: row.model.clone(),
                 tasks,
             }

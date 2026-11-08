@@ -57,11 +57,11 @@ function render({ rows }) {
       bar.append(segment);
     }
     const item = el("li", { class: row.below_support || row.unjudged ? "agents-cause-row agents-row-below" : "agents-cause-row" }, [
-      el("span", { class: "agents-cause-name", text: row.crew, title: `${row.crew} · ${row.model}` }),
+      el("span", { class: "agents-cause-name", text: row.label || row.model, title: `${row.label || row.model} · crews ${(row.crews || [row.crew]).join(", ")}` }),
       bar,
       el("span", { class: "agents-cause-total", text: plural(total, "review") }),
     ]);
-    item.dataset.row = `${row.crew}\0${row.model}`;
+    item.dataset.row = `${row.model}\0${row.reasoning_effort ?? "provider_default"}\0${row.crew || ""}`;
     list.append(item);
   });
   return [

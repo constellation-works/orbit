@@ -61,11 +61,12 @@ pub(super) fn dispatch(
         AgentsVerb::CiFailures => Err(OrbitError::Execution(
             "orbit.agents.ci_failures is answered before the role selection".to_string(),
         )),
-        AgentsVerb::Show => runtime.agent_role_detail_for_surface(
+        AgentsVerb::Show => runtime.agent_role_detail_with_effort(
             role,
             &query,
             &input.required_string("crew")?,
             input.optional_string("row_model")?.as_deref(),
+            input.optional_string("row_effort")?.as_deref(),
             surface,
         ),
     }

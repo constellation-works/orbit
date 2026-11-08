@@ -98,7 +98,12 @@ pub(super) fn pool(ledger: Vec<LedgerRow>) -> Vec<ModelRow> {
             lines: 0,
             sized_tasks: 0,
         });
-        *model.crews.entry(row.crew).or_default() += row.tasks.len();
+        for crew in &row.crews {
+            *model.crews.entry(crew.clone()).or_default() += row.tasks.len();
+        }
+        if row.crews.is_empty() {
+            *model.crews.entry(row.crew.clone()).or_default() += row.tasks.len();
+        }
         for task in row.tasks {
             model.landed += task.actual.get("weighted_landed").copied().unwrap_or(0.0);
             if let Some(lines) = task.lines {
@@ -296,8 +301,10 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
                 _ => bands.push(vec![index]),
             }
         }
-        let mut rank = 1;
-        for mut band in bands {
+        for (band_index, mut band) in bands.into_iter().enumerate() {
+            // Dense band ranks: each band takes the next rank, however many
+            // models share the band above it.
+            let rank = band_index + 1;
             band.sort_by(|a, b| {
                 let (a_unknown, a_ratio) = cost_keys[*a];
                 let (b_unknown, b_ratio) = cost_keys[*b];
@@ -313,7 +320,6 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
                 placed[index].band = Some(rank);
                 placed[index].band_size = band.len();
             }
-            rank += band.len();
             order.extend(band);
         }
     } else {

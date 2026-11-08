@@ -38,7 +38,7 @@ pub(in crate::application::agents::roles) fn per_task_rows(
     let mut rows = Vec::new();
     for (row, tasks) in &work {
         for &task in tasks {
-            let tallies = compute_tallies(row, &[task], &charges, &credits, window);
+            let tallies = compute_tallies(facts, row, &[task], &charges, &credits, window);
             let counts: serde_json::Map<String, Value> = TERMS
                 .iter()
                 .map(|term| {
@@ -50,15 +50,19 @@ pub(in crate::application::agents::roles) fn per_task_rows(
                 .collect();
             rows.push(json!({
                 "task_id": task.id,
-                "crew": row.0,
-                "model": row.1,
+                "crew": performance::crews_of(facts, window, row, &[task]).first().cloned(),
+                "crews": performance::crews_of(facts, window, row, &[task]),
+                "model": row.0,
+                "reasoning_effort": row.1,
+                "effort_label": crate::application::agents::effort::effort_label(&row.1),
+                "label": crate::application::agents::effort::row_label(&row.0, &row.1),
                 "tier": tier(task),
                 "type": configured_type(task, window, types),
                 "tags": admitted_tags(task, window),
                 "context_files": task.context_files,
                 "path_prefixes": path_prefixes(task),
                 "counts": counts,
-                "reviewed_units": usize::from(performance::first_implementer_review(task, row, window).is_some()),
+                "reviewed_units": usize::from(performance::first_implementer_review(facts, task, row, window).is_some()),
             }));
         }
     }
@@ -135,8 +139,9 @@ pub(in crate::application::agents::roles) fn by_type_cells(
     let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
     for (row, tasks) in &work {
         for task in tasks {
-            let reviewed =
-                usize::from(performance::first_implementer_review(task, row, window).is_some());
+            let reviewed = usize::from(
+                performance::first_implementer_review(facts, task, row, window).is_some(),
+            );
             let tier_fleet = fleet_tier.entry(tier(task)).or_default();
             tier_fleet.units += 1;
             tier_fleet.reviewed_units += reviewed;
@@ -146,7 +151,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
         }
     }
     for (row, tasks) in &work {
-        let tallies = compute_tallies(row, tasks, &charges, &credits, window);
+        let tallies = compute_tallies(facts, row, tasks, &charges, &credits, window);
         for (&term, tally) in &tallies {
             for (task, count) in tally.task_counts() {
                 *fleet_tier
@@ -182,7 +187,8 @@ pub(in crate::application::agents::roles) fn by_type_cells(
             let tier_subset: Vec<&TaskFacts> =
                 tier_tasks.get(tier_name).cloned().unwrap_or_default();
             let n_tier = tier_subset.len();
-            let tier_tallies = compute_tallies(row, &tier_subset, &charges, &credits, window);
+            let tier_tallies =
+                compute_tallies(facts, row, &tier_subset, &charges, &credits, window);
             let raw_tier = raw_against(
                 &tier_tallies,
                 &tier_subset,
@@ -190,7 +196,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 tier_subset
                     .iter()
                     .filter(|task| {
-                        performance::first_implementer_review(task, row, window).is_some()
+                        performance::first_implementer_review(facts, task, row, window).is_some()
                     })
                     .count(),
             );
@@ -212,7 +218,7 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 } else {
                     &fleet_tier[tier_name]
                 };
-                let cell_tallies = compute_tallies(row, &subset, &charges, &credits, window);
+                let cell_tallies = compute_tallies(facts, row, &subset, &charges, &credits, window);
                 let raw = raw_against(
                     &cell_tallies,
                     &subset,
@@ -220,7 +226,8 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                     subset
                         .iter()
                         .filter(|task| {
-                            performance::first_implementer_review(task, row, window).is_some()
+                            performance::first_implementer_review(facts, task, row, window)
+                                .is_some()
                         })
                         .count(),
                 )
@@ -228,8 +235,12 @@ pub(in crate::application::agents::roles) fn by_type_cells(
                 let score =
                     (n as f64 * raw + CELL_SHRINKAGE * crew_mean) / (n as f64 + CELL_SHRINKAGE);
                 cells.push(json!({
-                    "crew": row.0,
-                    "model": row.1,
+                    "crew": performance::crews_of(facts, window, row, tasks).first().cloned(),
+                    "crews": performance::crews_of(facts, window, row, tasks),
+                    "model": row.0,
+                    "reasoning_effort": row.1,
+                    "effort_label": crate::application::agents::effort::effort_label(&row.1),
+                    "label": crate::application::agents::effort::row_label(&row.0, &row.1),
                     "tier": tier_name,
                     "type": type_name,
                     "n": n,

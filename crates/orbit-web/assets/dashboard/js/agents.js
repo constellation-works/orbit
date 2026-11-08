@@ -1,4 +1,4 @@
-// Analytics › Agents: one scorecard per agent role, ranked by crew and model.
+// Analytics › Agents: one scorecard per agent role, ranked by model and recorded effort.
 // Reads GET /api/agents/<role>/scorecard for the ranking and its terms, and
 // GET /api/agents/attribution for the strip of who each problem counts
 // against. The server keeps one scan per workspace, so a role or window
@@ -123,7 +123,18 @@ function attributionPath(selectedWindow) {
 }
 
 function rowKey(row) {
-  return `${row.crew}\0${row.model}`;
+  return `${row.model}\0${row.reasoning_effort ?? "provider_default"}\0${row.crew || ""}`;
+}
+
+function rowLabel(row) {
+  if (row.label) return row.label;
+  const effort = row.effort_label || (row.reasoning_effort === null ? "provider default" : row.reasoning_effort === "unknown" || row.reasoning_effort == null ? "effort unknown" : row.reasoning_effort);
+  return `${row.model} @ ${effort}`;
+}
+
+function crewsText(row) {
+  const crews = Array.isArray(row.crews) && row.crews.length ? row.crews : row.crew ? [row.crew] : [];
+  return crews.join(", ");
 }
 
 function resetView() {
@@ -458,7 +469,8 @@ function rows() {
   });
   ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
     || b.units - a.units || a.crew.localeCompare(b.crew) || a.model.localeCompare(b.model));
-  ranking.forEach((row, index) => { if (!row.below_support) row.rank = index + 1; });
+  let nextRank = 0;
+  ranking.forEach((row) => { if (!row.below_support && !row.unjudged) row.rank = ++nextRank; });
   return ranking;
 }
 
@@ -729,7 +741,7 @@ function executionSplitNode() {
     ? el("div", { class: "agents-table-wrap", role: "region", "aria-label": "Interactive work by crew" }, [
       el("table", { class: "agents-table" }, [
         el("thead", {}, [el("tr", {}, [
-          el("th", { text: "Crew · model" }),
+          el("th", { text: "Model · effort" }),
           el("th", { class: "agents-num", text: "Managed", title: "Tasks a job worked" }),
           el("th", { class: "agents-num", text: "Interactive", title: "Tasks that reached review or done without a job" }),
           el("th", { class: "agents-num", text: "Interactive landed" }),
@@ -737,7 +749,7 @@ function executionSplitNode() {
           el("th", { class: "agents-num", text: "Unclassified", title: "Worked without a job and not yet in review: counted in neither population" }),
         ])]),
         el("tbody", {}, shown.map((row) => el("tr", {}, [
-          el("td", {}, [el("span", { class: "agents-crew", text: row.crew }), " ", el("span", { class: "agents-model", text: row.model })]),
+          el("td", {}, [el("span", { class: "agents-crew", text: rowLabel(row) }), " ", el("span", { class: "agents-model", text: crewsText(row) })]),
           el("td", { class: "agents-num", text: String(row.managed_tasks) }),
           el("td", { class: "agents-num", text: String(row.interactive_tasks) }),
           el("td", { class: "agents-num", text: String(row.interactive_landed) }),
@@ -858,7 +870,7 @@ function scoreBar(value, scale) {
   return track;
 }
 
-const SCORE_HINT = "One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
+const SCORE_HINT = "One row per model and recorded reasoning effort (crews that contributed are listed under the row; unrecorded effort is its own effort-unknown row and a null effort is the provider default), ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
 
 // The ranking's term columns. A review term no row can score (implementers,
 // no reviewed deliveries anywhere) has nothing to show, so it leaves the
@@ -887,7 +899,7 @@ function rankingNode(ranking) {
   const panel = ROLE_PANELS[role];
   const header = el("tr", {}, [
     el("th", { class: "agents-num", text: "Rank" }),
-    el("th", { text: "Crew · model" }),
+    el("th", { text: "Model · effort" }),
     el("th", { class: "agents-score-col" }, [el("span", { text: "Score" }), common.pinnedInfoHint(SCORE_HINT)]),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
     ...columns.shown.map((term) => el("th", {
@@ -903,10 +915,10 @@ function rankingNode(ranking) {
       class: "agents-row-select",
       type: "button",
       "aria-pressed": isSelected ? "true" : "false",
-      title: `Show ${row.crew} · ${row.model} in the detail column. ${effortSummary(row)}`,
+      title: `Show ${rowLabel(row)} in the detail column. Crews: ${crewsText(row)}. ${effortSummary(row)}`,
     }, [
-      el("span", { class: "agents-crew", text: row.crew }),
-      el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-crew", text: rowLabel(row) }),
+      el("span", { class: "agents-model", text: crewsText(row) }),
     ]);
     select.addEventListener("click", () => selectRow(row));
     const tags = [...(row.unjudged ? [unjudgedTag()] : []), ...(panel && panel.rowTags ? panel.rowTags(row) : [])];
@@ -1071,7 +1083,7 @@ function radarNode(row) {
     const angle = -Math.PI / 2 + index * 2 * Math.PI / axes.length;
     return [150 + Math.cos(angle) * 104 * value, 130 + Math.sin(angle) * 104 * value];
   };
-  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": `Agent profile for ${row.crew} · ${row.model} versus ranked fleet median; outward is better` });
+  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": `Agent profile for ${rowLabel(row)} versus ranked fleet median; outward is better` });
   for (const level of [0.25, 0.5, 0.75, 1]) {
     plot.append(svg("polygon", { points: axes.map((_, i) => point(i, level).join(",")).join(" "), class: "agents-radar-grid" }));
   }
@@ -1135,7 +1147,7 @@ function radarNode(row) {
   // the offscreen profile sits in a 1px scroll container. Its columns stay in
   // the accessibility tree and out of the Analytics pane's scroll range.
   const table = el("table", {}, [
-    el("caption", { text: `Agent profile: ${row.crew} · ${row.model}; ranked fleet in ${windowLabel()}` }),
+    el("caption", { text: `Agent profile: ${rowLabel(row)}; ranked fleet in ${windowLabel()}` }),
     el("thead", {}, [el("tr", {}, ["Axis", "Agent rate", "Fleet median rate", "Weight", "Contribution vs fleet median", "Raw count and units", "Evidence"].map((text) => heading(text, "col")))]),
     tableBody,
   ]);
@@ -1212,8 +1224,8 @@ function detailNode(rankedRow) {
   const children = [
     el("header", { class: "agents-detail-head" }, [
       el("span", { class: "agents-detail-rank", text: rankedRow.unjudged ? "unjudged" : rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
-      el("h3", { text: row.crew }),
-      el("span", { class: "agents-model", text: row.model }),
+      el("h3", { text: rowLabel(row) }),
+      el("span", { class: "agents-model", text: crewsText(row) }),
       el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]),
     el("div", { class: "agents-detail-score" }, [
@@ -1233,7 +1245,7 @@ function detailNode(rankedRow) {
     stats,
     ...(costNote ? [el("p", { class: "agents-detail-note agents-cost-note", text: costNote })] : []),
   ];
-  const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
+  const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${rowLabel(row)}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
   node.dataset.hash = JSON.stringify([role, rankedRow, implementerTier, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
