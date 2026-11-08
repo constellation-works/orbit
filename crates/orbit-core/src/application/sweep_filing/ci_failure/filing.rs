@@ -63,6 +63,7 @@ use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
 use super::cluster::FailureCluster;
+use super::dependency_fold;
 use super::dependency_fold::{
     cluster_dependency_refs, folded_cluster_indices, sibling_cluster_for, sibling_cluster_index,
 };
@@ -660,16 +661,19 @@ where
         max_tasks,
     );
     let sibling_index = sibling_cluster_index(&clusters);
+    // Each folded aggregate is described on the task that covers it, which for
+    // a chain A -> B -> C is C's task, not the directly named B.
     let mut folded_targets: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for &folded in &folded_indices {
-        if let Some(refs) = &refs_by_cluster[folded] {
-            for reference in refs {
-                if let Some(target) = sibling_cluster_for(&sibling_index, reference)
-                    && target != folded
-                    && !folded_targets.entry(target).or_default().contains(&folded)
-                {
-                    folded_targets.entry(target).or_default().push(folded);
-                }
+        for owner in dependency_fold::fold_owner_indices(
+            &sibling_index,
+            &refs_by_cluster,
+            &folded_indices,
+            folded,
+        ) {
+            let members = folded_targets.entry(owner).or_default();
+            if !members.contains(&folded) {
+                members.push(folded);
             }
         }
     }
@@ -792,8 +796,9 @@ where
         if let Some(folded) = folded_targets.get(&cluster_index) {
             description.push_str("\n## Folded dependency-only failures\n\n");
             description.push_str(
-                "These jobs failed only because this job failed; their only evidence was an \
-                 `orbit-dependency-evidence` record naming this job, so no separate task was filed for them:\n\n",
+                "These jobs failed only because this job failed, directly or through other folded \
+                 jobs; their only evidence was an `orbit-dependency-evidence` record naming a job \
+                 in that chain, so no separate task was filed for them:\n\n",
             );
             for &folded_index in folded {
                 let folded_cluster = &clusters[folded_index];
@@ -879,7 +884,28 @@ where
         filed.push(filing);
     }
 
-    // Report every folded aggregate with the sibling task that covers it.
+    // Report every folded aggregate with the task that covers it: the owner its
+    // dependency chain reaches, which can be several folds away from its record.
+    let task_id_for_failure_key = |failure_key: &str| -> Option<String> {
+        filed
+            .iter()
+            .find(|entry| entry.failure_key == failure_key)
+            .map(|entry| entry.task_id.clone())
+            .or_else(|| {
+                skipped_existing
+                    .iter()
+                    .find(|entry| {
+                        entry.get("failure_key").and_then(Value::as_str) == Some(failure_key)
+                    })
+                    .and_then(|entry| {
+                        entry
+                            .get("task_id")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+            })
+            .filter(|task_id| !task_id.is_empty())
+    };
     let folded: Vec<Value> = folded_clusters
         .iter()
         .map(|&folded_index| {
@@ -888,7 +914,6 @@ where
             let mut dependency_jobs: Vec<String> = Vec::new();
             let mut folded_into_jobs: Vec<String> = Vec::new();
             let mut folded_into_failure_keys: Vec<String> = Vec::new();
-            let mut covered_by_task_id = String::new();
             for reference in &refs {
                 if !dependency_jobs.contains(&reference.job_name) {
                     dependency_jobs.push(reference.job_name.clone());
@@ -901,29 +926,17 @@ where
                     if !folded_into_failure_keys.contains(&sibling.failure_key) {
                         folded_into_failure_keys.push(sibling.failure_key.clone());
                     }
-                    if covered_by_task_id.is_empty() {
-                        covered_by_task_id = filed
-                            .iter()
-                            .find(|entry| entry.failure_key == sibling.failure_key)
-                            .map(|entry| entry.task_id.clone())
-                            .or_else(|| {
-                                skipped_existing
-                                    .iter()
-                                    .find(|entry| {
-                                        entry.get("failure_key").and_then(Value::as_str)
-                                            == Some(sibling.failure_key.as_str())
-                                    })
-                                    .and_then(|entry| {
-                                        entry
-                                            .get("task_id")
-                                            .and_then(Value::as_str)
-                                            .map(ToOwned::to_owned)
-                                    })
-                            })
-                            .unwrap_or_default();
-                    }
                 }
             }
+            let covered_by_task_id = dependency_fold::fold_owner_indices(
+                &sibling_index,
+                &refs_by_cluster,
+                &folded_indices,
+                folded_index,
+            )
+            .into_iter()
+            .find_map(|owner| task_id_for_failure_key(&clusters[owner].failure_key))
+            .unwrap_or_default();
             json!({
                 "outcome": "folded",
                 "reason": "dependency_only_failure",
