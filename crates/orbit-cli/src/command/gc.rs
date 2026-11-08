@@ -25,7 +25,8 @@ impl Execute for GcCommand {
 #[derive(Subcommand)]
 pub enum GcTarget {
     /// Reap job-run worktrees whose associated task has settled to rejected, archived, or done,
-    /// or whose claim this follower has settled with its owner
+    /// or whose claim this follower has settled with its owner. Also reap terminal-run worktrees
+    /// for tasks parked in someday after the age set by `worktree.parked_reclaim_after_hours`.
     Worktrees(WorktreeGcArgs),
     /// Reclaim this workspace checkout's scratch contents when no job runs are active
     Tmp(TmpGcArgs),
