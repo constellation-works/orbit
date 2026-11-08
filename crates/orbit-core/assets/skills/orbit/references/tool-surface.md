@@ -371,7 +371,7 @@ subprocess, and external authentication checks.
   lists a role's tools and size.
 - Only `core` is always advertised. Without a configured role, the default
   tier (tasks, workflows and runs, automation, decision list and show,
-  codebase, friction, search, the UI and visual tools, and command execution)
+  codebase, friction, search, and command execution)
   is advertised. Named toolsets and toolsets stamped for a managed activity
   add to the selected role or default tier. `decision-channel` tools may be
   called only by the bound channel plugin or the operator.
@@ -718,8 +718,12 @@ nothing and is not listed there. Preemption belongs to a later phase.
 
 A fleet notice is a short note every agent and operator in its scope should see
 until it stops being true: an `incident` (something is broken now),
-`maintenance` (planned work to hold off or plan around) or `info`. It informs;
-it grants nothing and no gate reads it. The workspace owner holds it.
+`maintenance` (planned work to hold off or plan around) or `info`. A notice never
+grants authority, and no delivery gate reads it. An open `maintenance` notice does
+narrow resident cycles in its scope to observe-only, as does a failure to read
+the notices in scope; a notice never widens a resident's rights (see
+[Manager](manager.md) and [Resident cycle](resident-cycle.md)). The workspace owner
+holds it.
 
 `orbit.notice.post` takes `kind` and `title` (at most 120 characters), and
 optionally `body`, `scope` (`workspace`, the default, or `global`),
