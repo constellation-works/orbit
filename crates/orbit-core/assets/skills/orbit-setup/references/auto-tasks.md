@@ -576,9 +576,18 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
 - **`host-health`** (`hard`) — enabled-by-default daily review of host-local
-  `orbit doctor --json` findings and Orbit service logs. It groups normalized
-  signatures, files standing doctor findings and recurring log errors, and
-  routes operator fixes with runnable `## Resolve` steps.
+  `orbit doctor --json` findings, Orbit service logs, and a read-only Orbit
+  version and migrations check. That check records `orbit --version`, the
+  executable path, SHA-256 and any recorded local-candidate source commit,
+  `orbit update --check`, how far that commit trails the workspace integration
+  branch, `orbit update --preflight`, `orbit migrate --dry-run` for each
+  workspace (`orbit workspace list --all`), and doctor's `retired-config-keys` findings. The owner compares
+  follower versions from collector reports and files a different build as
+  drift. It files standing doctor, migration, update and drift findings and
+  recurring log errors, and routes operator fixes to the human crew with
+  runnable `## Resolve` steps that name the install-type command or the
+  printed migrate remediation. It never installs, confirms a migration, adopts
+  authority, or removes retired keys.
 - **`pilot-block-patterns`** (`medium`) — daily. The upstream counterpart of
   `run-failure-patterns`. A first pass, with no prior cursor, reads the 3 days
   before scan start; a later pass reads the 14 days before scan start, unless

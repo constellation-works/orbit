@@ -86,9 +86,21 @@ repairs doctor checks, restarts services, edits config or reads credentials.
 Doctor warnings/errors qualify on first sight; log signatures require three
 distinct events across two completed collection windows on the same host within
 seven days. Signatures remove volatile IDs, SHAs, home paths, ports and times.
+An update, source-lag or drift signature keeps its target version or commit.
 The owner searches open tasks, tasks closed within 30 days and open frictions,
 comments new counts on a covering task, and retains rejected mappings without
 refiling them. It files at most five tasks per pass.
+
+The same pass also records, still read-only, the installed Orbit version and
+executable identity (path, SHA-256, and the source commit when a local-candidate
+manifest matches), `orbit update --check`, how far a recorded source commit
+trails the workspace integration branch, `orbit update --preflight`, and
+`orbit migrate --dry-run` for each workspace on the host, plus doctor's
+`retired-config-keys` findings. It does not install, apply migrations, adopt
+generation authority, or remove retired keys. An available update, a lagging
+source commit, a pending migration, an authority gap those commands report, and
+a follower on a different build than the owner become human-crew chores. The
+report's `version` object and `migrations` array hold those results.
 
 **Service configuration.** There is no `host_health.units` config key. The
 source of service names is the host's installed service-manager configuration:
