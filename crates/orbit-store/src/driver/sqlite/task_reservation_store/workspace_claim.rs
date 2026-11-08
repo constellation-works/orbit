@@ -64,7 +64,7 @@ impl Store {
             }
 
             let claim_id = super::unique_row_id(CLAIM_ID_PREFIX);
-            let claim_token = mint_claim_token();
+            let claim_token = mint_claim_token()?;
             let expires_at =
                 (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
             let diagnostics = diagnostics_json(
@@ -159,10 +159,12 @@ impl Store {
                 });
             };
 
-            let token_matches = params
-                .claim_token
-                .as_deref()
-                .is_some_and(|presented| existing.claim_token.as_deref() == Some(presented));
+            let token_matches = params.claim_token.as_deref().is_some_and(|presented| {
+                existing
+                    .claim_token
+                    .as_deref()
+                    .is_some_and(|stored| constant_time_eq(stored.as_bytes(), presented.as_bytes()))
+            });
             if !token_matches && !params.force {
                 return Ok(WorkspaceClaimReleaseResult {
                     released: false,
@@ -277,10 +279,11 @@ impl Store {
                 &now,
             )?;
             let token_matches = active.as_ref().is_some_and(|active| {
-                params
-                    .claim_token
-                    .as_deref()
-                    .is_some_and(|presented| active.claim_token.as_deref() == Some(presented))
+                params.claim_token.as_deref().is_some_and(|presented| {
+                    active.claim_token.as_deref().is_some_and(|stored| {
+                        constant_time_eq(stored.as_bytes(), presented.as_bytes())
+                    })
+                })
             });
             Ok(WorkspaceClaimCheckResult {
                 claim: active.map(|active| active.holder),
@@ -383,29 +386,33 @@ fn parse_diagnostics(raw: Option<&str>) -> (Option<String>, Option<String>) {
     (field("machine_id"), field("session_id"))
 }
 
-/// Mint a bearer token for a freshly acquired claim.
-///
-/// `RandomState` is seeded from the OS, which is the entropy source available
-/// here without taking a new dependency. The claim is an accident guard in the
-/// same sense as the capability model — every agent on the box runs as the same
-/// OS user and can bypass Orbit entirely — so the bar is "not guessable by a
-/// contender", not "resistant to an attacker with the database".
-fn mint_claim_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
+/// Mint a bearer token for a freshly acquired claim from the OS random source.
+fn mint_claim_token() -> Result<String, OrbitError> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| OrbitError::Execution(format!("OS random source unavailable: {error}")))?;
+    Ok(format!("wsclaim-{}", lower_hex(&bytes)))
+}
 
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let mut seed = Vec::with_capacity(32);
-    for salt in 0..2u64 {
-        let mut hasher = RandomState::new().build_hasher();
-        hasher.write_u128(nanos);
-        hasher.write_u32(std::process::id());
-        hasher.write_u64(salt);
-        seed.extend_from_slice(&hasher.finish().to_le_bytes());
+fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
-    seed.extend_from_slice(&nanos.to_le_bytes());
-    format!("wsclaim-{}", blake3::hash(&seed).to_hex())
+    out
+}
+
+/// Equal-length comparison whose running time does not depend on the first
+/// differing byte.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let difference = left
+        .iter()
+        .zip(right)
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right));
+    std::hint::black_box(difference) == 0
 }
