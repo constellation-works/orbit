@@ -134,6 +134,8 @@ pub struct TaskHistoryUpdateParams {
     pub status: Option<TaskStatus>,
     pub status_event: Option<String>,
     pub status_note: Option<String>,
+    /// Typed decision recorded on the status event this write appends.
+    pub status_decision: Option<TaskDecision>,
     pub append_history: Vec<TaskHistoryEntry>,
     pub append_comments: Vec<TaskComment>,
     /// [ORB-11305] Compare-and-set guard: when `Some`, the write is applied

@@ -11,7 +11,9 @@ use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::resource::ExecutorResource;
-use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskRelation, TaskRelationType};
+use orbit_types::task::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, TaskDecision, TaskRelation, TaskRelationType,
+};
 use orbit_types::workflow::{
     ChildDispatch, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
 };
@@ -730,7 +732,33 @@ fn assert_approved_by_drain(ws: &Workspace, tasks: &[&Task], drain: &str) {
             approval.note.as_deref().unwrap_or_default().contains(drain),
             "the approval names the drain: {approval:?}"
         );
+        assert_eq!(
+            approval.decision,
+            Some(TaskDecision::DrainApproved {
+                drain_run_id: drain.to_string(),
+                operation_id: None,
+            }),
+            "the approval records the drain as a typed decision"
+        );
     }
+}
+/// A drain approval written before `proposal_approved` carried a typed
+/// decision names the drain only in its note; the drain's report still
+/// counts the task as its approval, and another drain's note does not.
+fn a_legacy_note_only_drain_approval_is_still_attributed_to_its_drain() {
+    let (ws, drain) = harness();
+    let legacy = ws.readme_task("legacy");
+    let other = ws.readme_task("other");
+    for (task, approver) in [(&legacy, drain.as_str()), (&other, "jrun-other-drain")] {
+        let note = format!("approved by auto drain {approver} after task-pilot verification");
+        ws.runtime.approve_task(&task.id, Some(note), None).unwrap();
+        assert_eq!(ws.approval_entry(task).decision, None, "note-only shape");
+    }
+    let pilot = ws.pilot_child(&drain, &json!([legacy.id.clone(), other.id.clone()]));
+    ws.finish(&pilot, JobRunState::Success);
+    let recorded = ws.record(&drain);
+    assert_eq!(recorded["approved"], json!([legacy.id]), "{recorded}");
+    assert_eq!(recorded["approved_count"], 1, "{recorded}");
 }
 fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass() {
     let (ws, drain) = harness_for(3600);
@@ -1410,6 +1438,14 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
             .starts_with(&prefix),
         "{approval:?}"
     );
+    assert!(
+        matches!(
+            &approval.decision,
+            Some(TaskDecision::DrainApproved { drain_run_id, operation_id: Some(_) })
+                if drain_run_id == &drain
+        ),
+        "the reuse approval records the drain and the reused receipt: {approval:?}"
+    );
     let again = ws.select(&drain);
     assert_task_ids(&again, &[&fresh]);
     assert_eq!(again["reused"], json!([]), "{again}");
@@ -1539,6 +1575,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass_scenarios,
     tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass,
+    a_legacy_note_only_drain_approval_is_still_attributed_to_its_drain,
     unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons,
     no_auto_approve_is_held_by_every_promotion_authority,
     no_drain_is_held_by_drain_auto_approval,

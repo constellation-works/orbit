@@ -81,7 +81,20 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
-        self.approve_task_locked(id, note, comment, agent, model, false)
+        self.approve_task_locked(id, note, None, comment, agent, model, false)
+    }
+
+    /// Trusted approval of [`Self::approve_task`] that also records
+    /// `decision` on the approval's history event, for an automated approver
+    /// whose approval later readers attribute (a drain's
+    /// [`TaskDecision::DrainApproved`]).
+    pub(crate) fn approve_task_with_decision(
+        &self,
+        id: &str,
+        note: Option<String>,
+        decision: Option<TaskDecision>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(id, note, decision, None, None, None, false)
     }
 
     /// Operator approval (`orbit task update --approve` and the dashboard).
@@ -97,13 +110,15 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
-        self.approve_task_locked(id, note, comment, agent, model, true)
+        self.approve_task_locked(id, note, None, comment, agent, model, true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn approve_task_locked(
         &self,
         id: &str,
         note: Option<String>,
+        decision: Option<TaskDecision>,
         comment: Option<String>,
         agent: Option<String>,
         model: Option<String>,
@@ -112,6 +127,7 @@ impl OrbitRuntime {
         let (result, effects) = self.approve_task_deferring_effects(
             id,
             note,
+            decision,
             comment,
             agent,
             model,
@@ -132,7 +148,7 @@ impl OrbitRuntime {
         note: Option<String>,
         comment: Option<String>,
     ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
-        self.approve_task_deferring_effects(id, note, comment, None, None, true)
+        self.approve_task_deferring_effects(id, note, None, comment, None, None, true)
     }
 
     /// Run the effects an approval deferred until its caller released the
@@ -146,10 +162,12 @@ impl OrbitRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn approve_task_deferring_effects(
         &self,
         id: &str,
         note: Option<String>,
+        decision: Option<TaskDecision>,
         comment: Option<String>,
         agent: Option<String>,
         model: Option<String>,
@@ -200,6 +218,7 @@ impl OrbitRuntime {
                             actor: effective_label.clone(),
                             status_event: Some("proposal_approved".to_string()),
                             status_note: note.clone(),
+                            status_decision: decision.clone(),
                             append_comments: append_comments.clone(),
                             expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {

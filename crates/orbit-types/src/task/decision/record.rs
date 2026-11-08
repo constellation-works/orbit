@@ -50,6 +50,16 @@ pub enum TaskDecision {
         /// The task-pilot run that left the task undecided.
         pilot_run_id: String,
     },
+    /// An auto drain approved the proposed task, recorded on its
+    /// `proposal_approved` event.
+    DrainApproved {
+        /// The drain run that approved the task.
+        drain_run_id: String,
+        /// Operation id of the task-pilot receipt the drain reused, when it
+        /// approved on an explicit pilot's assessment rather than its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+    },
     /// An auto drain withheld approval of the task its pilot assessed.
     DrainApprovalHeld {
         /// Why the drain held it.

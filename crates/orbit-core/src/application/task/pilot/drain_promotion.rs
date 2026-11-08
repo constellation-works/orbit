@@ -70,9 +70,39 @@ pub(crate) fn approval_note(run_id: &str) -> String {
     format!("approved by auto drain {run_id} after task-pilot verification")
 }
 
-/// Whether a `proposal_approved` history note records this drain's approval.
-pub(crate) fn approved_by_drain(note: &str, run_id: &str) -> bool {
-    note.starts_with(&approval_note(run_id))
+/// Approve `task_id` as drain `drain_run_id`, recording the approving drain
+/// (and the reused pilot receipt's `operation_id`) as a typed decision on the
+/// `proposal_approved` event. The note text history views show is unchanged.
+fn approve_as_drain(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    drain_run_id: &str,
+    operation_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    let note = match operation_id {
+        Some(operation_id) => format!("{} (operation {operation_id})", approval_note(drain_run_id)),
+        None => approval_note(drain_run_id),
+    };
+    runtime.approve_task_with_decision(
+        task_id,
+        Some(note),
+        Some(TaskDecision::DrainApproved {
+            drain_run_id: drain_run_id.to_string(),
+            operation_id: operation_id.map(str::to_string),
+        }),
+    )?;
+    Ok(())
+}
+
+/// Whether a `proposal_approved` history entry records drain `run_id`'s
+/// approval: its typed decision, or the note of an entry written before
+/// drain approvals carried one.
+pub(crate) fn approved_by_drain(entry: &TaskHistoryEntry, run_id: &str) -> bool {
+    match &entry.decision {
+        Some(TaskDecision::DrainApproved { drain_run_id, .. }) => drain_run_id == run_id,
+        Some(_) => false,
+        None => legacy_decisions::drain_approval_note_names(entry, run_id),
+    }
 }
 
 /// The pilot classification a drain hold recorded on a `task_pilot_applied`
@@ -455,7 +485,7 @@ pub(super) fn approve(
                     evidence: json!(warnings),
                 }
             } else {
-                runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
+                approve_as_drain(runtime, task_id, authority_run_id, None)?;
                 Approval::Approved
             });
             Ok(())
@@ -595,8 +625,7 @@ pub(crate) fn promote_reusable_assessment(
         else {
             return Ok(());
         };
-        let note = format!("{} (operation {operation_id})", approval_note(drain_run_id));
-        runtime.approve_task(task_id, Some(note), None)?;
+        approve_as_drain(runtime, task_id, drain_run_id, Some(&operation_id))?;
         promoted = true;
         Ok(())
     })?;
