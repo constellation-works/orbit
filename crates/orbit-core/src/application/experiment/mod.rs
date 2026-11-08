@@ -6,6 +6,7 @@ mod assignment;
 mod capture;
 mod definition;
 mod distributed_port;
+mod job_port;
 pub(crate) use capture::validate_experiment_capture;
 pub use definition::{
     EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS, STEP_LOCAL_METRICS,
@@ -18,6 +19,7 @@ mod promotion;
 mod readout;
 mod run_policy;
 mod skills;
+mod task_port;
 mod view;
 
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
+use crate::application::job::JobExperimentPort;
 use crate::application::task::provider_limit::ProviderLimit;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
@@ -202,11 +203,11 @@ impl OrbitRuntime {
                     if let Some(capture) = parent.get("experiment_capture") {
                         input["experiment_capture"] = capture.clone();
                     } else {
-                        self.install_experiment_capture(input)?;
+                        self.install_job_experiment_capture(input)?;
                     }
                     return Ok(None);
                 }
-                self.install_experiment_capture(input)?;
+                self.install_job_experiment_capture(input)?;
                 self.capture_auto_task_selection(input, &task_id, random)
             }
             // A top-level submission — a drain, a ship wrapper, or an ordinary
@@ -215,7 +216,7 @@ impl OrbitRuntime {
             // multi-task or discovery run leaves each leaf to draw at its own
             // admission, so siblings stay independent.
             None => {
-                self.install_experiment_capture(input)?;
+                self.install_job_experiment_capture(input)?;
                 input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
                 let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
                     return Ok(None);
@@ -311,7 +312,7 @@ impl OrbitRuntime {
         {
             None
         } else {
-            self.experiment_crew_pool(task_id)?
+            self.job_experiment_crew_pool(task_id)?
         };
         let allowlist = self.crew_allowlist_from_input(input)?;
         let explicit = input

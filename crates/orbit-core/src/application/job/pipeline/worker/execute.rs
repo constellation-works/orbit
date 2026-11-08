@@ -1,7 +1,7 @@
 //! The child process's own work: execute the run it was handed.
 
 use super::*;
-use crate::application::job::{JobAutomationPort, JobPullSettlementPort};
+use crate::application::job::{JobAutomationPort, JobExperimentPort, JobPullSettlementPort};
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -183,7 +183,7 @@ impl OrbitRuntime {
                     input["crew"] = selection["crew"].clone();
                     input["crew_selection"] = selection;
                 } else {
-                    self.install_claimed_experiment_crew(&mut input)?;
+                    self.install_job_claimed_experiment_crew(&mut input)?;
                     if let Some(selection) = input.get("crew_selection") {
                         self.stores()
                             .jobs()

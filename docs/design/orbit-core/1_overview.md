@@ -261,7 +261,22 @@ moved the backlog forecast out of `task` to its own place in the order:
   owns, so admission captures a claimed task's experiments through
   `distributed::DistributedExperimentPort::capture_pull_experiments`, which
   `experiment` implements on `OrbitRuntime`; the receipt read stays a legal
-  `experiment -> distributed` edge [ORB-22416]. `landing` sits above
+  `experiment -> distributed` edge [ORB-22416]. `experiment` is also above
+  `task` and `job`, whose tasks, crew source and claimed leaf it reads back.
+  Task show's assignment readout and the provider-limit gate's experiment-pool
+  check go through `task::TaskExperimentPort`
+  (`task_experiment_assignment_readout`, `task_has_experiment_crew_pool`), and
+  job's crew admission, fresh claim routing, claimed-leaf crew installation and
+  claimed-leaf capture validation go through `job::JobExperimentPort`
+  (`job_experiment_crew_pool`, `job_existing_experiment_capture`,
+  `install_job_experiment_capture`, `install_job_claimed_experiment_crew`,
+  `validate_job_experiment_capture`). `experiment` implements both on
+  `OrbitRuntime` in `experiment/task_port.rs` and `experiment/job_port.rs` and
+  keeps enrollment, override resolution, digest validation and every authority
+  check; the pool job draws from is the lower-owned
+  `contracts::ExperimentCrewPool`. The public `task_experiments` readout and the
+  adapter's `experiment::validate_experiment_capture` call are unchanged
+  [ORB-23015]. `landing` sits above
   `distributed`, outside the order: it consumes authorized handoff requests and
   calls down into `task`, `job` and `distributed`. The pure
   handoff-to-claim read `landing_claim` lives in `task/handoff_claim.rs`, so
@@ -271,10 +286,10 @@ moved the backlog forecast out of `task` to its own place in the order:
   failures are still logged and leave the durable request pending [ORB-22708].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
-  `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`
-  or `workspace_auto` by path, grouped tree or `super::` chain, when `job`
-  names `distributed`, `pull_drain`, `admission`, `automation`, `review`,
-  `sweep_filing` or `workspace_auto` the same ways, and when either calls an
+  `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
+  `workspace_auto` or `experiment` by path, grouped tree or `super::` chain,
+  when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
+  `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
   receiver, `automation` included [ORB-22035]. Since [ORB-22003] those method
   names are not listed: the guard derives them from the `impl OrbitRuntime`

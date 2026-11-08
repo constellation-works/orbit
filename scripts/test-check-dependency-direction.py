@@ -356,6 +356,61 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::application::distributed::claim_receipt;\n",
         }, rejected=False)
 
+    def test_task_and_job_reach_experiment_only_through_their_ports(self):
+        # [ORB-23015] Task show, the provider-limit gate and job's crew
+        # admission called experiment's inherent methods, and claimed-leaf
+        # authorization named its free capture validation: a hidden cycle, as
+        # experiment reads tasks, their crew source and the claimed leaf back.
+        method = {
+            "experiment/run_policy.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_pool_method(&self) {}\n}\n",
+        }
+        self.check_rows([
+            ("task/provider_limit/gate.rs",
+             "impl OrbitRuntime {\n    fn gate(&self) {\n"
+             "        self.fresh_pool_method();\n    }\n}\n"),
+            ("job/crew_pools/admission.rs",
+             "impl OrbitRuntime {\n    fn admit(&self) {\n"
+             "        self.fresh_pool_method();\n    }\n}\n"),
+        ], rejected=True, shared=method)
+        for module in ("task", "job"):
+            for relative, source in (
+                (f"{module}/claimed.rs", "use crate::application::experiment::Probe;\n"),
+                (f"{module}/claimed.rs", "use crate::application::{experiment::Probe};\n"),
+                (f"{module}/claimed.rs", "use super::super::experiment::Probe;\n"),
+                (f"{module}/crew_pools/claims.rs",
+                 "use super::super::super::{experiment::Probe};\n"),
+            ):
+                with self.subTest(relative=relative, source=source):
+                    self.check_files({relative: source}, rejected=True)
+        self.check_files({
+            **method,
+            "task/experiment_port.rs":
+                "pub(in crate::application) trait TaskExperimentPort {\n"
+                "    fn task_has_experiment_crew_pool(&self);\n}\n",
+            "job/experiment_port.rs":
+                "pub(in crate::application) trait JobExperimentPort {\n"
+                "    fn job_experiment_crew_pool(&self);\n}\n",
+            "experiment/task_port.rs":
+                "impl TaskExperimentPort for OrbitRuntime {\n"
+                "    fn task_has_experiment_crew_pool(&self) {\n"
+                "        self.fresh_pool_method();\n    }\n}\n",
+            "experiment/job_port.rs":
+                "impl JobExperimentPort for OrbitRuntime {\n"
+                "    fn job_experiment_crew_pool(&self) {\n"
+                "        self.fresh_pool_method();\n    }\n}\n",
+            "task/provider_limit/gate.rs":
+                "use crate::application::task::TaskExperimentPort;\n"
+                "impl OrbitRuntime {\n    fn gate(&self) {\n"
+                "        self.task_has_experiment_crew_pool();\n    }\n}\n",
+            "job/crew_pools/admission.rs":
+                "use crate::application::job::JobExperimentPort;\n"
+                "impl OrbitRuntime {\n    fn admit(&self) {\n"
+                "        self.job_experiment_crew_pool();\n    }\n}\n",
+            "experiment/assignment.rs":
+                "use crate::application::task::TaskRecords;\n",
+        }, rejected=False)
+
     def test_lower_modules_reach_landing_only_through_owned_port(self):
         # [ORB-22708] Task and job resolved claims through landing, and review
         # dispatched it directly; the missing guard admitted these cycles.

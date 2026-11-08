@@ -1,6 +1,7 @@
 //! Fresh owner claim routing over historical experiment crew assignments.
 use super::draw::weighted_draw;
 use crate::OrbitRuntime;
+use crate::application::job::JobExperimentPort;
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
 use serde_json::Value;
@@ -17,7 +18,7 @@ impl OrbitRuntime {
         // Preserve unrelated routing, including human work and standing
         // purpose/type assignments. Only historical crew enrollment needs
         // the fresh-authority projection.
-        let capture = self.existing_task_experiment_capture(&task.id)?;
+        let capture = self.job_existing_experiment_capture(&task.id)?;
         if self.is_human_crew(task.crew.as_deref())
             || !capture.assignments.iter().any(|entry| {
                 serde_json::from_str::<Value>(&entry.overlay_json)

@@ -46,7 +46,7 @@ use crate::application::contracts::{
     CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX,
     auto_task_minted, automatic_crew_source,
 };
-use crate::application::task::{CrewPools, TaskJobPort};
+use crate::application::task::{CrewPools, TaskExperimentPort, TaskJobPort};
 use crate::runtime::run_input::non_empty;
 use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
@@ -297,7 +297,7 @@ impl OrbitRuntime {
     /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
     /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
-        if self.experiment_crew_pool(&task.id)?.is_some() {
+        if self.task_has_experiment_crew_pool(&task.id)? {
             return Ok(false);
         }
         let source = self.recorded_crew_source(task)?;
