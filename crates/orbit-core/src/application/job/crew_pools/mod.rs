@@ -27,6 +27,8 @@ mod candidate_assignment;
 mod candidates;
 mod claims;
 mod draw;
+#[cfg(feature = "test-support")]
+mod draw_quantile;
 mod host_os_wait;
 mod purpose;
 #[cfg(feature = "test-support")]
@@ -41,6 +43,8 @@ pub(crate) use admission::{
 pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
+#[cfg(feature = "test-support")]
+pub use draw_quantile::with_crew_draw_quantile;
 #[cfg(feature = "test-support")]
 pub use selection_checkpoint::with_crew_selection_checkpoint;
 pub(crate) use types::CapturedCrewPools;
