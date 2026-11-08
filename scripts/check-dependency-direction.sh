@@ -829,9 +829,10 @@ if dependency_matches -n "crate::application::(${job_drain_modules})\\b" \
 fi
 
 # [ORB-17938] `job` reaches review admission, state automation, backlog
-# admission and the auto drain's concurrency mode only through the ports it
-# owns (`ReviewAdmissionHook`, `JobAutomationPort`, `JobAdmissionPort`,
-# `JobAutoConcurrencyPort`), which `review`, `automation`, `admission` and
+# admission and the auto drain's concurrency mode and leaf settlement only
+# through the ports it owns (`ReviewAdmissionHook`, `JobAutomationPort`,
+# `JobAdmissionPort`, `JobAutoConcurrencyPort`, `JobDrainLeafPort`
+# [ORB-23198]), which `review`, `automation`, `admission` and
 # `workspace_auto` implement on `OrbitRuntime`; the job name and filing tags
 # it shares with `review` and `sweep_filing` are contracts. A path, a grouped
 # tree, a `super::` chain out of `job` into any of them, or a call to an

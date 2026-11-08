@@ -246,7 +246,10 @@ moved the backlog forecast out of `task` to its own place in the order:
   delivery's deferred gate reservation and the execution claims holding a
   starved gate's blockers), which `admission` implements, and
   `job::JobAutoConcurrencyPort` (the auto drain's captured concurrency
-  mode), which `workspace_auto` implements. [ORB-17939] added three ports
+  mode), which `workspace_auto` implements; [ORB-23198] added
+  `job::JobDrainLeafPort` beside it (a reconciling read of an auto drain
+  records its finished leaves terminal), also implemented by
+  `workspace_auto`. [ORB-17939] added three ports
   above job: `automation::AutomationReviewPort` (the before-PR coverage
   exclusions delivery evaluation applies, and the reviewer pool members,
   their `os:` split, candidates and draw for after-landing review tasks),

@@ -1279,6 +1279,81 @@ fn run_show_prints_a_settled_leaf_terminal_status() {
     );
 }
 
+/// [ORB-23198] A leaf that ends after its drain's last admission pass is
+/// recorded by the next reconciling `orbit run show` of the finished drain,
+/// with no further pass. `--no-reconcile` leaves the record as it was. A live
+/// leaf and a finished pilot stay submitted.
+#[test]
+fn run_show_settles_a_leaf_that_finished_after_the_drain_ended() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_settles_a_leaf_that_finished_after_the_drain_ended",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    const DRAIN: &str = "jrun-late-leaf-drain";
+    const FAILED_LEAF: &str = "jrun-late-leaf-failed";
+    const LIVE_LEAF: &str = "jrun-late-leaf-live";
+    const PILOT: &str = "jrun-late-leaf-pilot";
+    let (runtime, mut state) =
+        fixture.seed_running(DRAIN, "workspace_auto_pipeline", serde_json::json!({}));
+    let now = chrono::Utc::now();
+    let stamp = now.to_rfc3339();
+    let workspace_id = fixture.workspace_id();
+    for (id, job) in [
+        (FAILED_LEAF, "task_auto_pipeline"),
+        (LIVE_LEAF, "task_auto_pipeline"),
+        (PILOT, "task_pilot_pipeline"),
+    ] {
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                scheduled_at, started_at, created_at, pid)
+             VALUES (?1, ?2, ?3, 1, 'running', '{}', ?4, ?4, ?4, ?5)",
+                params![id, workspace_id, job, stamp, std::process::id()],
+            )
+            .unwrap();
+        dispatch(&mut state, id, job, "invoke_detached", now);
+    }
+    runtime.write_run_state(DRAIN, &state).unwrap();
+    // The drain ends with its leaves still live, so no admission pass ever
+    // sees them finish. Then the leaf and the pilot end.
+    fixture.set_run_state(DRAIN, "success");
+    fixture.set_run_state(FAILED_LEAF, "failed");
+    fixture.set_run_state(PILOT, "success");
+
+    let observed = fixture.show_text(DRAIN);
+    let failed_observed = dispatch_line(&observed, FAILED_LEAF);
+    assert!(
+        failed_observed.contains("phase=submitted") && !failed_observed.contains("status="),
+        "an observe-only read records nothing: {failed_observed}"
+    );
+
+    let shown = fixture.text(&["run", "show", DRAIN]);
+    let failed = dispatch_line(&shown, FAILED_LEAF);
+    assert!(
+        failed.contains("phase=terminal") && failed.contains("status=failed"),
+        "a leaf that finished after the drain ended must be recorded terminal: {failed}\n{shown}"
+    );
+    let live = dispatch_line(&shown, LIVE_LEAF);
+    assert!(
+        live.contains("phase=submitted") && !live.contains("status="),
+        "{live}"
+    );
+    let pilot = dispatch_line(&shown, PILOT);
+    assert!(
+        pilot.contains("phase=submitted") && !pilot.contains("status="),
+        "{pilot}"
+    );
+    // The record is durable, not a rendering: an observe-only read now sees it.
+    let persisted = dispatch_line(&fixture.show_text(DRAIN), FAILED_LEAF);
+    assert!(
+        persisted.contains("phase=terminal") && persisted.contains("status=failed"),
+        "{persisted}"
+    );
+}
+
 fn dispatch_line(text: &str, run_id: &str) -> String {
     text.lines()
         .find(|line| line.contains(&format!("Child {run_id} ")))
