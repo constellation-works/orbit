@@ -231,7 +231,7 @@ only renamed or moved are translated on load and rewritten by
 | Routine publication attachments | `publication.routine_attachments`, `publication.routine_allow_unscanned_attachments` | None for the scheduled routine, which always omits attachments. Publish attachments by hand with `orbit task publication publish --attachments`. | 2026-12-08 |
 | Selective before-landing review | `[review.selective_before_landing]` table; `review.selective_before_landing.mode`, `risk_threshold`, `paths`, `unknown_risk` | Review before landing with `review.timing = "before_landing"` or `review.before_landing_hosts`. | 2026-12-08 |
 | Decision assistance | Global `[assistance]` table. `orbit decision assist` is gone. | None. | 2026-12-08 |
-| Path leases | `[lease]` table / `lease.*` keys. `orbit lease` and the `orbit.lease.*` tools are gone. | None. The lease machinery stays disabled. | No date set; warns until a later release makes it an error |
+| Path leases | `[lease]` table / `lease.*` keys. `orbit lease` and the `orbit.lease.*` tools are gone. | None. The lease machinery stays disabled. | 2026-12-08 |
 
 The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
 while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
