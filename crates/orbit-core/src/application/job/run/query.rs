@@ -45,16 +45,26 @@ impl OrbitRuntime {
     }
 
     pub fn show_job_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
+        let run = self.show_job_run_without_drain_leaf_settlement(run_id)?;
+        // [ORB-23198] A drain's leaf can end after the drain's last admission
+        // pass; this reconciling read records it terminal on the dispatch.
+        self.record_finished_drain_leaves(&run);
+        Ok(run)
+    }
+
+    /// Show a run after stale-run reconciliation without settling its drain
+    /// leaves. Read projections that separately display live child outcomes
+    /// can use this to keep the parent's dispatch checkpoint unchanged.
+    pub fn show_job_run_without_drain_leaf_settlement(
+        &self,
+        run_id: &str,
+    ) -> Result<JobRun, OrbitError> {
         let run = self.show_job_run_observed(run_id)?;
-        let run = if self.reconcile_stale_job_run(&run)? {
+        Ok(if self.reconcile_stale_job_run(&run)? {
             self.show_job_run_observed(run_id)?
         } else {
             run
-        };
-        // [ORB-23198] A drain's leaf can end after the drain's last admission
-        // pass; this read is what records it terminal on the dispatch.
-        self.record_finished_drain_leaves(&run);
-        Ok(run)
+        })
     }
 
     /// The provider/model evidence each of a run's activities recorded, for

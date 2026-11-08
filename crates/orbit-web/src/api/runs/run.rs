@@ -21,7 +21,7 @@ pub(in crate::api) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> 
         Err(message) => return bad_request(message),
     };
     match blocking("get run", move || {
-        let run = runtime.show_job_run(&id)?;
+        let run = runtime.show_job_run_without_drain_leaf_settlement(&id)?;
         Ok(job_run_detail_to_json(&runtime, &run))
     })
     .await
