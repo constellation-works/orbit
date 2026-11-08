@@ -23,9 +23,9 @@ Start an orchestrator or on-call inspection with `orbit attention --json` or the
   intended host and use that registered workspace. Never substitute another
   host or shadow store.
 - Use registered tools: MCP `orbit_task_show`, or the installed CLI's
-  `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`.
-  Include your agent family in `model` where supported. Use `fields` for compact
-  reads. The advertised schema decides which inputs and tools are available.
+  `orbit tool run orbit.task.show --input '{"id":"<task-id>"}'`.
+  Provenance comes from the session, not a `model` argument. Use `fields` for
+  compact reads. The advertised schema decides which inputs and tools are available.
 - Update task state through tools, not files under `.orbit/`. Creating a task
   does not authorize dispatch or completion. In a managed activity, implement
   the assigned work; the pipeline owns delivery and lifecycle transitions.

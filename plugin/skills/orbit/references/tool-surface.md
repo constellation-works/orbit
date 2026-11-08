@@ -65,8 +65,8 @@ a registered remote prefix goes there, and an unknown prefix fails closed.
 Show or update another host's task directly, without SSH or `--workspace`:
 
 ```bash
-orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'
-orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress>","model":"<agent-family>"}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress>"}'
 ```
 
 The ID-routed tools are `orbit.task.show`, `update`, `reject`, `delete`,
@@ -88,7 +88,7 @@ For workspace-scoped CLI tool calls, name a host and a workspace as that host
 lists it:
 
 ```bash
-orbit tool run orbit.task.list --host <name> --workspace <workspace-name-or-ws_id> --input '{"model":"<agent-family>"}'
+orbit tool run orbit.task.list --host <name> --workspace <workspace-name-or-ws_id>
 ```
 
 `--host` accepts an exact registered host name or `machine_id`. Orbit reads
@@ -130,15 +130,23 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 
 ## Model provenance
 
-Where a tool accepts `model` for provenance, pass the agent family (`codex`,
-`claude`, `gemini`, `grok` or `muse`) or a recognized full model ID. Family
-inference is case-insensitive: `gpt-*`, `o1*` and `o3*` identify codex;
-`claude-*`, `opus*`, `sonnet*` and `fable*` identify claude; `gemini-*`,
+MCP tool schemas do not accept `model` or `agent`. Attribution comes from the
+session: a managed run's `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL`, or the
+crew named by `orbit mcp serve --orchestrator`. On task creation, `created_by`
+records that family; a full model ID is additionally retained once as
+`created_by_model`. The CLI's `--model` is the explicit override on
+`orbit tool run` and the human task commands that still take it. Family
+inference on that path is case-insensitive: `gpt-*`, `o1*` and `o3*` identify
+codex; `claude-*`, `opus*`, `sonnet*` and `fable*` identify claude; `gemini-*`,
 `grok-*`/`grok3*` and `muse-*` identify their respective families. Unknown
-values are refused, and trusted runtime identity takes precedence over
-self-reported input. The deprecated `agent` field remains available for compatibility
-where advertised. On task creation, `created_by` records the family;
-a full model ID is additionally retained once as `created_by_model`.
+values are refused, and trusted runtime identity takes precedence over a
+self-reported override. An `agent` input is refused. Audit `session_model`
+ignores tool input. For an MCP call it is the brokered job's resolved crew
+model, otherwise a managed run's `ORBIT_AGENT_MODEL`, otherwise the
+`--orchestrator` crew's configured model, otherwise `clientInfo.name`.
+`clientInfo` stays audit-only: it is `self_reported_actor`, and `session_model`
+only in that last position. It is not `created_by` and it is not the
+authenticated role.
 
 ## Capability map
 
@@ -355,7 +363,9 @@ subprocess, and external authentication checks.
 - `--orchestrator <CREW>` is attribution only. Unlike `--operator` it grants
   nothing: a session still holds exactly the capabilities it was served with,
   and the crew named neither selects the crew a task executes under nor the
-  model recorded for that execution. The name is resolved against the crews
+  model recorded for that execution. When the call is not brokered for a job
+  and this is not a managed run with `ORBIT_AGENT_MODEL`, the named crew's
+  configured model is the audit `session_model`. The name is resolved against the crews
   of whichever workspace the call lands in, so an unconfigured crew fails that
   call rather than quietly selecting another one. It applies only when a task
   is created, and only to that task, unless the call names an orchestrator
@@ -529,7 +539,8 @@ human crew that is not `done`, `archived` or `rejected`. Inputs:
 - `topic` (optional): a structured token of 1-64 characters (letters, digits and
   `. _ : / -`), or a corpus rule id. `orbit_decision_list` filters by exact
   `topic`.
-- `model`: your agent family. It names the filer the per-filer cap counts.
+
+The filer the per-filer cap counts is the session, not an input `model`.
 
 The request has gate `agent_request` and `raised_by` `agent_request`. It is
 bounded: the same open question (same text ignoring case and spacing, same
@@ -611,21 +622,21 @@ MCP it is in the `analytics` toolset.
 These are JSON arguments to the named tool, not shell commands:
 
 ```json
-{"workspace":"<selector>","query":"<problem terms>","kind":"task","limit":5,"model":"<agent-family>"}
+{"workspace":"<selector>","query":"<problem terms>","kind":"task","limit":5}
 ```
 
 Use with `orbit_search` before filing a task. Search closed history as well with
 `all: true` when looking for already-delivered work.
 
 ```json
-{"workspace":"<selector>","id":"<task-id>","fields":["status","description","acceptance_criteria","execution_summary"],"model":"<agent-family>"}
+{"workspace":"<selector>","id":"<task-id>","fields":["status","description","acceptance_criteria","execution_summary"]}
 ```
 
 Use with `orbit_task_show`. A task title or an agent's narrative is not completion
 evidence; inspect status and the recorded implementation/validation outcome.
 
 ```json
-{"workspace":"<selector>","task_ids":["<task-id>"],"mode":"pr","base":"<integration-branch>","allowed_crews":["<configured-crew>"],"model":"<agent-family>"}
+{"workspace":"<selector>","task_ids":["<task-id>"],"mode":"pr","base":"<integration-branch>","allowed_crews":["<configured-crew>"]}
 ```
 
 Use with `orbit_workflow_ship` only when execution is authorized. At least one

@@ -14,9 +14,9 @@ use orbit_core::application::audit_event::{
 };
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::{
-    AuditEventStatus, AuditToolAggregate, FailureClass, FailureIncidentQuery,
-    FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, JobRunState, LIFECYCLE_DIAGNOSTIC_LABEL,
-    OrbitError, OrbitRuntime, is_failure_only_diagnostic_surface,
+    AuditEventStatus, AuditToolAggregate, AuditToolModelAggregate, FailureClass,
+    FailureIncidentQuery, FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, JobRunState,
+    LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, OrbitRuntime, is_failure_only_diagnostic_surface,
 };
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
@@ -232,6 +232,9 @@ struct AuditSummaryBundle {
     /// successful + unexpected-failed denominator and a sample-size floor.
     tool_call_failure_rate: Value,
     tool_call_failures_by_tool: Vec<Value>,
+    /// Same callable population as `tool_call_failures_by_tool`, split by the
+    /// server-derived session model (with a role-derived fallback).
+    tool_call_failures_by_model: Vec<Value>,
     /// Canonical per-actor split [ORB-10888]. One agent appears once
     /// regardless of the granularity its label was recorded at, and `kind`
     /// says whether a row is a real agent at all.
@@ -291,6 +294,7 @@ fn summary_payload(
         "failure_rate_by_tool": bundle.failure_rate_by_tool,
         "tool_call_failure_rate": bundle.tool_call_failure_rate,
         "tool_call_failures_by_tool": bundle.tool_call_failures_by_tool,
+        "tool_call_failures_by_model": bundle.tool_call_failures_by_model,
         "actor_split": bundle.actor_split,
         "attribution_split": bundle.attribution_split,
         "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
@@ -323,6 +327,7 @@ fn compute_audit_summary_bundle(
     let buckets = runtime.audit_event_hourly_buckets(&since)?;
 
     let tool_aggs = runtime.audit_event_aggregates_by_tool(&since)?;
+    let tool_model_aggs = runtime.audit_event_aggregates_by_tool_model(&since)?;
     let role_aggs = runtime.audit_event_aggregates_by_role(&since)?;
     let actor_aggs = runtime.audit_event_aggregates_by_actor(&since)?;
 
@@ -400,6 +405,7 @@ fn compute_audit_summary_bundle(
 
     let (tool_call_failure_rate, tool_call_failures_by_tool) =
         callable_tool_call_failure_stats(&tool_aggs);
+    let tool_call_failures_by_model = callable_tool_call_failures_by_model(&tool_model_aggs);
 
     let actor_vec: Vec<_> = actor_aggs
         .iter()
@@ -468,6 +474,7 @@ fn compute_audit_summary_bundle(
         failure_rate_by_tool: rate_vec,
         tool_call_failure_rate,
         tool_call_failures_by_tool,
+        tool_call_failures_by_model,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
         mcp_vs_cli_split,
@@ -724,4 +731,54 @@ fn callable_tool_call_failure_stats(tool_aggs: &[AuditToolAggregate]) -> (Value,
         }),
         by_tool,
     )
+}
+
+/// Callable failures split by server-derived model. Denied rows stay out of
+/// `total` and `rate`, matching [`callable_tool_call_failure_stats`]. Rows
+/// with neither a failure nor a denial are omitted. The per-tool card is
+/// unchanged.
+fn callable_tool_call_failures_by_model(rows: &[AuditToolModelAggregate]) -> Vec<Value> {
+    let mut by_model = Vec::new();
+    for row in rows {
+        if !is_named_tool(&row.tool_name) || is_failure_only_diagnostic_surface(&row.tool_name) {
+            continue;
+        }
+        if row.failures == 0 && row.denials == 0 {
+            continue;
+        }
+        let total = row.successes + row.failures;
+        let rate = if total > 0 {
+            row.failures as f64 / total as f64
+        } else {
+            0.0
+        };
+        by_model.push(json!({
+            "tool": row.tool_name,
+            "model": row.model,
+            "failed": row.failures,
+            "total": total,
+            "rate": rate,
+            "unexpected": row.unexpected_failures,
+            "denied": row.denials,
+        }));
+    }
+    by_model.sort_by(|left, right| {
+        right["failed"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&left["failed"].as_i64().unwrap_or(0))
+            .then_with(|| {
+                left["model"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(right["model"].as_str().unwrap_or(""))
+            })
+            .then_with(|| {
+                left["tool"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(right["tool"].as_str().unwrap_or(""))
+            })
+    });
+    by_model
 }

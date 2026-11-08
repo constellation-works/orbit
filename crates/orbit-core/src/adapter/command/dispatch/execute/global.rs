@@ -51,6 +51,7 @@ where
             entry_point,
             session_context: Some(session_context.clone()),
             brokered: None,
+            orchestrator_model: None,
         },
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
@@ -161,6 +162,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             entry_point,
             session_context: Some(session_context),
             brokered: None,
+            orchestrator_model: None,
         },
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(

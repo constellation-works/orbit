@@ -38,7 +38,6 @@ orbit tool run orbit.friction.add --input '{
   "title": "<the surface and the failure, max 120 chars>",
   "body": "<what happened, where, and why it caused friction>",
   "tags": ["<tag>"], "during_task": "<optional task id>",
-  "model": "<agent-family>"
 }'
 ```
 
@@ -65,7 +64,7 @@ Over MCP or `orbit tool run`, list frictions with `orbit.search`, `kind:
 "friction"`, and no `query`:
 
 ```bash
-orbit tool run orbit.search --input '{"kind":"friction","status":"friction:open","model":"<agent-family>"}'
+orbit tool run orbit.search --input '{"kind":"friction","status":"friction:open"}'
 ```
 
 A listing covers every status unless a `friction:<open|triaged|resolved>`
@@ -113,8 +112,8 @@ sends everything to `other` is telling you it's the wrong taxonomy.
 ## Lifecycle
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged","model":"<agent-family>"}'
-orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved","model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved"}'
 ```
 
 `update` also accepts `tags`, `body`, `title`, and `rehome_to`. Over MCP, use `orbit_friction_update`
@@ -170,7 +169,7 @@ Close a local legacy report from that replica using the normal audited path:
 
 ```bash
 orbit --workspace <replica-workspace> friction resolve <ID>
-orbit tool run orbit.friction.update --input '{"workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>","model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>"}'
 ```
 
 The update must explicitly set `status: resolved`; it may include body, title,
@@ -196,7 +195,7 @@ a `resolves` edge from the owning workspace cannot reach the record.
 `rehome_to` on an update:
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<name-or-ws-id>","model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<name-or-ws-id>"}'
 orbit friction rehome <ID> --to-workspace <name-or-ws-id>   # CLI spelling of the same move
 ```
 
@@ -221,7 +220,7 @@ disposition: the record stays open, and curation counts it as dispositioned,
 not as uncovered. `"rehome_to": ""` clears a recorded disposition.
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","move":false,"model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","move":false}'
 ```
 
 ## Reading the corpus

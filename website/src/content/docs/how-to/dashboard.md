@@ -1164,8 +1164,12 @@ Pipeline uses `7d` and labels that cutoff.
 
 **Tools** (`#analytics/reliability/tools`) is the tool-failure scan. What each
 card counts, and when a count is capped, is under
-[Runs and errors](#runs-and-errors). Tools offers `24h`, `7d`, and `30d`. A
-dashboard window of `1h` or **all** uses `24h`, named on the cards.
+[Runs and errors](#runs-and-errors). **Tool call failures by model** splits
+those same callable failures by the server-derived session model: the brokered
+job's crew model, a managed worker's model, the MCP session's `--orchestrator`
+crew model, or the MCP client's name. That model is not the authenticated role
+and it is not a model the tool call reported. Tools offers `24h`, `7d`, and
+`30d`. A dashboard window of `1h` or **all** uses `24h`, named on the cards.
 
 ## Agents
 

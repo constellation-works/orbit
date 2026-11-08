@@ -1345,77 +1345,194 @@ fn mcp_repeated_field_metadata_stays_within_context_budget() {
         workspace_bytes <= 4_434,
         "ORB-21943: repeated workspace metadata must use at most half the observed 8,868 bytes, got {workspace_bytes}"
     );
-    assert!(
-        model_bytes <= 6_000,
-        "ORB-21943: repeated model metadata must shrink from the observed 8,732 bytes, got {model_bytes}"
+    assert_eq!(
+        model_bytes, 0,
+        "no MCP tool schema advertises a model property, got {model_bytes} description/pattern bytes"
     );
 }
 
-#[test]
-fn mcp_model_schema_admits_full_model_strings_and_call_succeeds() {
-    let (_workspace, mut client) = McpWorkspace::served();
-    let listed = client.tools_list();
-    let tools = tools_array(&listed);
-
-    // Every advertised provenance `model` must admit recognized full model
-    // strings (ORB-19690), not only the canonical families.
-    let mut checked = 0usize;
-    for tool in tools {
-        let Some(model) = tool["inputSchema"]["properties"].get("model") else {
-            continue;
-        };
-        checked += 1;
-        assert!(
-            model.get("enum").is_none(),
-            "{} model must not be limited to a finite family enum: {model}",
-            tool["name"]
-        );
-        let pattern = model["pattern"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{} model must advertise a pattern: {model}", tool["name"]));
-        let regex = regex::Regex::new(pattern).expect("advertised model pattern compiles");
-        for accepted in [
-            "codex",
-            "claude",
-            "gemini",
-            "grok",
-            "muse",
-            "gpt-6.1-sol",
-            "o1-preview",
-            "o3-mini",
-            "claude-opus-5-5",
-            "opus",
-            "sonnet-5",
-            "fable-1",
-            "gemini-3.8-flash-high",
-            "grok-4.7",
-            "grok3-mini",
-            "muse-wonder-1.0",
-        ] {
-            assert!(
-                regex.is_match(accepted),
-                "{} model pattern must admit {accepted:?}: {pattern}",
-                tool["name"]
-            );
+/// Whether a JSON schema advertises `model` as an input property or names it
+/// in a `propertyNames` enum.
+fn schema_advertises_model(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(schema_advertises_model),
+        Value::Object(map) => {
+            if map
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key("model"))
+            {
+                return true;
+            }
+            if map
+                .get("propertyNames")
+                .and_then(|names| names.get("enum"))
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("model")))
+            {
+                return true;
+            }
+            map.values().any(schema_advertises_model)
         }
-        for refused in ["llama-3", "unknown-model", ""] {
-            assert!(
-                !regex.is_match(refused),
-                "{} model pattern must not admit {refused:?}: {pattern}",
-                tool["name"]
-            );
-        }
+        _ => false,
     }
-    assert!(checked > 0, "at least one tool advertises a model field");
+}
 
-    // The same values pass the real call; unknown/mismatched stay refused.
-    let listed_tasks = client.call_tool_ok("orbit_task_list", json!({ "model": "gpt-6.1-sol" }));
-    assert!(listed_tasks["tasks"].is_array(), "{listed_tasks}");
-    client.call_tool_ok("orbit_task_list", json!({ "model": "codex" }));
-    client.call_tool_err("orbit_task_list", json!({ "model": "llama-3" }));
-    client.call_tool_err(
-        "orbit_task_list",
-        json!({ "model": "gpt-6.1-sol", "agent": "claude" }),
+/// No MCP tool schema exposes `model`. Provenance is the managed session crew,
+/// and initialize `clientInfo` is recorded only as the audit actor.
+#[test]
+fn mcp_schemas_omit_model_and_session_records_provenance() {
+    let (workspace, mut client) = McpWorkspace::served();
+    let listed = client.tools_list();
+    for tool in tools_array(&listed) {
+        let name = tool["name"].as_str().unwrap_or("?");
+        assert!(
+            !schema_advertises_model(&tool["inputSchema"]),
+            "{name} must not advertise a model property: {}",
+            tool["inputSchema"]
+        );
+    }
+    let tools = tools_array(&listed);
+    for (name, field) in [
+        ("orbit_task_list", "agent"),
+        ("orbit_task_add", "context"),
+        ("orbit_task_update", "context"),
+    ] {
+        assert!(
+            find_tool(tools, name)["inputSchema"]["properties"]
+                .get(field)
+                .is_none(),
+            "{name} must not advertise `{field}`"
+        );
+    }
+
+    let agent = client.call_tool_err("orbit_task_list", json!({ "agent": "codex" }));
+    assert_message_parts(
+        &agent,
+        &[
+            "orbit.task.list no longer accepts `agent`",
+            "attribution comes from the session",
+        ],
+    );
+    let added = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Alias refused",
+            "description": "The context alias is gone.",
+            "complexity": "low",
+            "context": "file:README.md",
+        }),
+    );
+    assert_message_parts(&added, &["unknown field 'context'", "context_files"]);
+    let created = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Unattributed MCP create",
+            "description": "A tool-input model must not become the audit model.",
+            "complexity": "low",
+            "model": "gpt-liar",
+        }),
+    );
+    let created_id = id_of(&created);
+    assert_ne!(
+        created["created_by"].as_str(),
+        Some("orbit-mcp-roundtrip-test"),
+        "clientInfo must not become created_by: {created}"
+    );
+    let context = client.call_tool_err(
+        "orbit_task_update",
+        json!({ "id": created_id, "context": "file:README.md" }),
+    );
+    assert_message_parts(&context, &["unknown field 'context'", "context_files"]);
+    drop(client);
+
+    let rows = audit_rows(&workspace, &["--tool", "orbit.task.add"]);
+    let adds = rows.as_array().expect("task add audit rows");
+    assert!(!adds.is_empty(), "task add must leave an audit row");
+    for row in adds {
+        assert_eq!(
+            row["self_reported_actor"], "orbit-mcp-roundtrip-test",
+            "initialize clientInfo is the audit actor: {row}"
+        );
+        assert_eq!(
+            row["role"], "unverified",
+            "unmanaged MCP stays unverified: {row}"
+        );
+        assert_eq!(
+            row["session_model"], "orbit-mcp-roundtrip-test",
+            "unmanaged MCP records clientInfo, ignoring a tool-input model: {row}"
+        );
+    }
+
+    let mut managed = workspace.serve_with_args_and_env(
+        &[],
+        &[
+            ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+            ("ORBIT_RUN_ID", "jrun-session-provenance"),
+            ("ORBIT_AGENT_NAME", "codex"),
+            ("ORBIT_AGENT_MODEL", "gpt-6-sol"),
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+            ("ORBIT_ACTIVITY_TOOLS", "orbit.task.add"),
+        ],
+    );
+    let attributed = managed.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Session crew provenance",
+            "description": "The job model wins over a tool-input model.",
+            "complexity": "low",
+            "model": "gpt-liar",
+        }),
+    );
+    assert_eq!(attributed["created_by"], "codex");
+    assert_eq!(attributed["created_by_model"], "gpt-6-sol");
+    drop(managed);
+    let managed_rows = audit_rows(&workspace, &["--tool", "orbit.task.add"]);
+    let managed_row = managed_rows
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["session_model"] == "gpt-6-sol"))
+        .expect("managed task add audit row");
+    assert_ne!(
+        managed_row["role"], "unverified",
+        "a managed worker keeps its crew role: {managed_row}"
+    );
+    assert_ne!(managed_row["session_model"], "gpt-liar");
+
+    let config_path = workspace.home.join(".orbit/config.toml");
+    let baseline = std::fs::read_to_string(&config_path).expect("read the seeded config");
+    std::fs::write(
+        &config_path,
+        format!(
+            "{baseline}\n[crews.session-orch]\nprovider = \"codex\"\nmodel = \"gpt-orch-session\"\n"
+        ),
+    )
+    .expect("define the orchestrator crew");
+    let mut orchestrated = workspace.serve_with_args(&["--orchestrator", "session-orch"]);
+    orchestrated.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Orchestrator session model",
+            "description": "The crew model wins over clientInfo and a tool-input model.",
+            "complexity": "low",
+            "model": "gpt-liar",
+        }),
+    );
+    drop(orchestrated);
+    let orchestrated_rows = audit_rows(&workspace, &["--tool", "orbit.task.add"]);
+    let orchestrated_row = orchestrated_rows
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["session_model"] == "gpt-orch-session")
+        })
+        .expect("orchestrator task add audit row");
+    assert_eq!(
+        orchestrated_row["role"], "unverified",
+        "an orchestrator crew model must not become the role: {orchestrated_row}"
+    );
+    assert_eq!(
+        orchestrated_row["self_reported_actor"], "orbit-mcp-roundtrip-test",
+        "{orchestrated_row}"
     );
 }
 

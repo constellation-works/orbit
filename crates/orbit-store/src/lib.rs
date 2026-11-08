@@ -65,14 +65,14 @@ pub(crate) use contracts::{
 };
 pub use contracts::{
     ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,
-    AuditToolAggregate, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams, RegisteredTaskResolution,
-    RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, SessionLogAppendParams,
-    SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
-    TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
-    TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
-    TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
-    V2AuditEventRow,
+    AuditToolAggregate, AuditToolModelAggregate, InvocationInsertParams, InvocationQuery,
+    InvocationRecord, InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams,
+    RegisteredTaskResolution, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
+    SessionLogAppendParams, SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams,
+    TaskCompletionByComplexity, TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics,
+    TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason, TaskReservationReserveParams,
+    TaskStoreBackend, TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter,
+    V2AuditEventInsertParams, V2AuditEventRow,
 };
 pub use driver::file::session_log_store::SessionLogStore;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;

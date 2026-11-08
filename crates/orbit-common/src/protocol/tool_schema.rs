@@ -160,10 +160,9 @@ pub fn tool_parameter_enum_values(
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
         ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
-        // A `model` provenance field accepts canonical families and full
-        // model strings (see `tool_parameter_pattern`), so no finite enum
-        // can list its accepted values. `orbit.task.add` additionally
-        // records a full model string as `created_by_model`.
+        // No MCP tool advertises `model`. A parameter that is still named
+        // `model` (a CLI filter, or the unadvertised identity key) accepts
+        // families and full model strings, so it has no finite enum.
         (_, "model") => None,
         _ => None,
     }

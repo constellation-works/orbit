@@ -84,7 +84,8 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    evidence: deterministic fixtures for service/time/filesystem behavior,
    required repository gates, and explicit platform or operator handoffs where
    necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
-4. Create through `orbit.task.add` with `model` attribution. Required inputs are
+4. Create through `orbit.task.add`. Attribution is the session, not a `model`
+   argument. Required inputs are
    title, description, workspace and assessed complexity (`low`, `medium`, `hard`,
    `xhard`). An orchestrator also sets `origin`: `operator_request` when a human
    asked for the work (in chat or elsewhere outside Orbit), or
@@ -111,7 +112,7 @@ orbit tool run orbit.task.add --input '{
   "acceptance_criteria": ["<behavior and evidence>"],
   "context_files": ["file:<verified-modification-target>"],
   "workspace": "<discovered-selector>",
-  "complexity": "medium", "type": "feature", "model": "<agent-family>",
+  "complexity": "medium", "type": "feature",
   "origin": "operator_request", "orchestrator": "<your-crew>",
   "fields": ["id"]
 }'
@@ -128,13 +129,13 @@ Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
 chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
-`model` is tool-call provenance (agent family), while `orchestrator` identifies
-who prepared/supervised the work; neither substitutes for execution `crew`.
-On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
-`created_by` keeps the family and the full id is recorded once as
-`created_by_model`.
-`model` never sets `orchestrator_model`: that comes from the `orchestrator`
-crew's configuration unless you override it.
+Session identity is tool-call provenance (agent family), while `orchestrator`
+identifies who prepared/supervised the work; neither substitutes for execution
+`crew`. A managed run's `ORBIT_AGENT_MODEL`, or CLI `--model`, may be a full
+model id (`claude-opus-5-5`): `created_by` keeps the family and the full id is
+recorded once as `created_by_model`. MCP schemas do not take `model`.
+`orchestrator_model` comes from the `orchestrator` crew's configuration unless
+you override it; a caller-supplied `model` never sets it.
 
 ### Work only a human can do
 
@@ -234,7 +235,7 @@ To route a task an auto-task or a sweep already minted, retag it with
 
 ```bash
 orbit tool run orbit.task.update --input '{"id": "<task-id>",
-  "tags": ["<existing tags>", "os:macos"], "workspace": "<selector>", "model": "<agent-family>"}'
+  "tags": ["<existing tags>", "os:macos"], "workspace": "<selector>"}'
 ```
 
 The next admission honours it. A task already running or claimed is not moved.
@@ -315,8 +316,9 @@ Either way the PR is gated only by the required hosted checks.
 
 Set them when you file the task, or as an operator. An agent's update, the
 implementer's own included, cannot add either tag to an existing task.
-Naming an agent model on the update is enough, even when the process has no
-agent environment.
+A session crew (`ORBIT_AGENT_*` or the `--orchestrator` crew), CLI `--model`,
+or an unadvertised tool `model` key counts as that agent, even when the
+process has no agent environment.
 
 A tag applies only while every path the final candidate changes matches
 `workflow.light_delivery_paths`. By default that is documentation, CI

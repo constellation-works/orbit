@@ -166,6 +166,13 @@ pub struct AuditEvent {
     /// asked the broker for a brokered call. `None` for every other row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_pid: Option<u32>,
+    /// Server-derived model for an MCP tool call. The job's resolved crew
+    /// model, else the session `--orchestrator` crew's configured model, else
+    /// MCP `clientInfo.name`. Not an authenticated role and not the caller's
+    /// tool-input `model`. `None` on CLI rows and on rows written before the
+    /// column existed.
+    #[serde(default)]
+    pub session_model: Option<String>,
 }
 
 impl AuditEvent {
@@ -222,6 +229,7 @@ pub fn audit_event_base_json(event: &AuditEvent) -> Value {
         "job_run_id": event.job_run_id,
         "activity_id": event.activity_id,
         "step_index": event.step_index,
+        "session_model": event.session_model,
     })
 }
 

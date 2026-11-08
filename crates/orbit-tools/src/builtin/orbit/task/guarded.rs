@@ -121,7 +121,7 @@ pub(super) fn extend_create_schema(value: &mut Value) {
     extend_relations_schema(value);
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
-        "then":{"required":["workspace","description","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
+        "then":{"required":["workspace","description","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
         "else":{"required":["description","complexity"]}
     }]);
     // Nullable crew is used only by guarded creation; ordinary creation still
@@ -143,9 +143,9 @@ pub(super) fn extend_update_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
         "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
-            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","verdict","complete"]}},
-            {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","comment"]}},
-            {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
+            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete"]}},
+            {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","comment"]}},
+            {"propertyNames":{"enum":["workspace","request_id","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
         ]}
     }]);
 }

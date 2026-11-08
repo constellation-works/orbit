@@ -1,7 +1,7 @@
 //! The shared lexical search operation. Reindex is local maintenance and has no tool.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamType, RetiredField,
-    ToolOnlyRegistration, UnknownFields, aliased, both, defaulted, mcp_only, operation_registry,
+    ToolOnlyRegistration, UnknownFields, aliased, both, defaulted, operation_registry,
     preserve_empty,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
@@ -124,11 +124,6 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
                 "Search every active workspace registered on this machine. Overrides `--workspaces`",
             ),
             &["allWorkspaces"],
-        ),
-        mcp_only(
-            "model",
-            ParamType::String,
-            "Agent family or full model ID for provenance.",
         ),
     ]],
     at_least_one_of: &[],

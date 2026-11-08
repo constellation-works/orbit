@@ -1,7 +1,7 @@
 //! Evolution is a capability-gap ledger, separate from friction repairs.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
@@ -32,11 +32,6 @@ pub const EVOLUTION: NounSpec<EvolutionVerb> = NounSpec {
     cli_groups: &[],
     operations: EVOLUTION_OPERATIONS,
 };
-const MODEL: ParamSpec = mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family for provenance (codex, claude, gemini, grok or muse).",
-);
 const ID: ParamSpec = required(both(
     "id",
     ParamType::String,
@@ -66,7 +61,6 @@ const ADD_PARAMS: &[ParamSpec] = &[
         CliArgKind::flag("cycle"),
         "Cycle identifier",
     ),
-    MODEL,
 ];
 const ADD: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::Add,
@@ -98,7 +92,6 @@ const LIST_PARAMS: &[ParamSpec] = &[
         CliArgKind::flag("since"),
         "Aggregate occurrences since this RFC 3339 instant",
     ),
-    MODEL,
 ];
 const LIST: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::List,
@@ -123,7 +116,7 @@ const SHOW: OperationSpec<EvolutionVerb> = OperationSpec {
     cli_about: "Show an evolution record and its occurrences",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[&[ID, MODEL]],
+    params: &[&[ID]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
@@ -149,7 +142,6 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
             CliArgKind::flag("days"),
             "Suppression days (default: configured suppression, initially 30)",
         ),
-        MODEL,
     ]],
     at_least_one_of: &[],
     retired_fields: &[],

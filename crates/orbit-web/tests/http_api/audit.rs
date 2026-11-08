@@ -5,6 +5,7 @@ use orbit_core::{
     AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
     JobRunState, OrbitError,
 };
+use orbit_store::contracts::AuditInvocationFields;
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok, walk_audit_pages};
@@ -745,6 +746,103 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
                     "shared incident classifier for {tool}"
                 );
             }
+        },
+    );
+}
+
+fn record_modeled(
+    fixture: &Fixture,
+    id: &str,
+    tool: &str,
+    status: AuditEventStatus,
+    role: &str,
+    session_model: Option<&str>,
+) {
+    let mut event = row(id, Some(tool), status);
+    event.role = role.into();
+    fixture
+        .runtime
+        .record_audit_event_with_invocation(
+            &event,
+            AuditInvocationFields {
+                session_model,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn tool_call_failures_break_down_by_session_model() {
+    isolated(
+        "audit::tool_call_failures_break_down_by_session_model",
+        || {
+            let fixture = Fixture::new();
+            use AuditEventStatus::{Failure, Success};
+            record_modeled(
+                &fixture,
+                "sol-fail",
+                "orbit.task.add",
+                Failure,
+                "unverified",
+                Some("gpt-6-sol"),
+            );
+            record_modeled(
+                &fixture,
+                "sol-ok",
+                "orbit.task.add",
+                Success,
+                "unverified",
+                Some("gpt-6-sol"),
+            );
+            record_modeled(
+                &fixture,
+                "client-fail",
+                "orbit.task.add",
+                Failure,
+                "unverified",
+                Some("orbit-mcp-roundtrip-test"),
+            );
+            // A row from before session_model existed groups by the role-derived
+            // actor family. `codex` is a family, so the model bucket is `codex`.
+            record_modeled(
+                &fixture,
+                "historical",
+                "orbit.task.show",
+                Failure,
+                "codex",
+                None,
+            );
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let by_tool = summary["tool_call_failures_by_tool"].as_array().unwrap();
+            let add = by_tool
+                .iter()
+                .find(|row| row["tool"] == "orbit.task.add")
+                .unwrap();
+            assert_eq!(add["failed"], 2, "per-tool rates stay unsplit: {add}");
+            assert_eq!(add["total"], 3);
+            let by_model = summary["tool_call_failures_by_model"]
+                .as_array()
+                .expect("model breakdown");
+            let find = |tool: &str, model: &str| {
+                by_model
+                    .iter()
+                    .find(|row| row["tool"] == tool && row["model"] == model)
+                    .unwrap_or_else(|| panic!("missing {tool} / {model} in {by_model:?}"))
+                    .clone()
+            };
+            let sol = find("orbit.task.add", "gpt-6-sol");
+            assert_eq!(sol["failed"], 1);
+            assert_eq!(sol["total"], 2);
+            assert_eq!(sol["rate"], json!(0.5));
+            let client = find("orbit.task.add", "orbit-mcp-roundtrip-test");
+            assert_eq!(client["failed"], 1);
+            assert_eq!(client["total"], 1);
+            let historical = find("orbit.task.show", "codex");
+            assert_eq!(historical["failed"], 1);
+            assert_eq!(historical["total"], 1);
         },
     );
 }

@@ -3,7 +3,7 @@
 //! ([`crate::governance::agents`]), kept for one release.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, defaulted, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -67,8 +67,8 @@ const SELECTION: &[ParamSpec] = &[
 ];
 
 /// The row a detail names beside its orchestrator, as `orbit agents show`
-/// takes it: `--model` on the CLI, `row_model` over MCP. `model` stays the
-/// caller's provenance on every tool.
+/// takes it: `--model` on the CLI, `row_model` over MCP. Caller provenance
+/// is the session, not a tool argument.
 const ROW_MODEL: &[ParamSpec] = &[both(
     "row_model",
     ParamType::String,
@@ -84,12 +84,6 @@ const ROW_MODEL: &[ParamSpec] = &[both(
     "The row's model; optional when the crew has one row",
 )];
 
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family or full model ID for provenance.",
-)];
-
 const SCORECARD: OperationSpec<OrchestratorVerb> = OperationSpec {
     verb: OrchestratorVerb::Scorecard,
     cli_path: &["scorecard"],
@@ -98,7 +92,7 @@ const SCORECARD: OperationSpec<OrchestratorVerb> = OperationSpec {
     cli_about: "Deprecated: use `orbit agents scorecard --role orchestrators`",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[SELECTION, MODEL],
+    params: &[SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -122,7 +116,7 @@ const SHOW: OperationSpec<OrchestratorVerb> = OperationSpec {
     cli_about: "Deprecated: use `orbit agents show --role orchestrators --crew <name>`",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[NAME, ROW_MODEL, SELECTION, MODEL],
+    params: &[NAME, ROW_MODEL, SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

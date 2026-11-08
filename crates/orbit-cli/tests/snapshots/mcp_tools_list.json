@@ -276,19 +276,13 @@
           "type": "string",
           "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused"
         },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Required agent family for attribution (`codex`, `claude`, `gemini`, `grok`, or `muse`)"
-        },
         "workspace": {
           "type": "string",
           "description": "Optional in this session; select another registered workspace by name, ID or path."
         }
       },
       "required": [
-        "body",
-        "model"
+        "body"
       ],
       "additionalProperties": true
     },
@@ -443,11 +437,6 @@
         "all_workspaces": {
           "type": "boolean",
           "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
@@ -759,11 +748,6 @@
         "request_id": {
           "type": "string",
           "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
         }
       },
       "required": [
@@ -787,7 +771,6 @@
               "enum": [
                 "workspace",
                 "request_id",
-                "model",
                 "title",
                 "description",
                 "acceptance_criteria",
@@ -840,15 +823,6 @@
           "type": "string",
           "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected."
         },
-        "agent": {
-          "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
-        },
         "workspace": {
           "type": "string",
           "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default."
@@ -882,11 +856,6 @@
         "path": {
           "type": "string",
           "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`)."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
@@ -937,15 +906,6 @@
         "explain": {
           "type": "boolean",
           "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it."
-        },
-        "agent": {
-          "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
         },
         "workspace": {
           "type": "string",
@@ -1079,15 +1039,6 @@
           "type": "string",
           "description": "Optional external reference system filter: keep tasks with any reference in this system"
         },
-        "agent": {
-          "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
-        },
         "workspace": {
           "type": "string",
           "description": "Optional in this session; select another registered workspace by name, ID or path."
@@ -1113,15 +1064,6 @@
         "snapshot": {
           "type": "boolean",
           "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections."
-        },
-        "agent": {
-          "type": "string",
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-        },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
         },
         "fields": {
           "anyOf": [
@@ -1476,15 +1418,11 @@
               "type": "string"
             }
           ],
-          "description": "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
+          "description": "Replaces the whole selector list; omit `context_files` to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`."
         },
         "allow_missing_context": {
           "type": "boolean",
           "description": "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`."
-        },
-        "context": {
-          "type": "string",
-          "description": "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`."
         },
         "fields": {
           "anyOf": [
@@ -1581,11 +1519,6 @@
           "type": "boolean",
           "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches."
         },
-        "model": {
-          "type": "string",
-          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|(?:[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Mm][Uu][Ss][Ee])(?:-.*)?|[Gg][Rr][Oo][Kk](?:[-3].*)?|(?:[Gg][Pp][Tt]-|[Oo][13]|[Oo][Pp][Uu][Ss]|[Ss][Oo][Nn][Nn][Ee][Tt]|[Ff][Aa][Bb][Ll][Ee]).*)$",
-          "description": "Agent family or full model ID for provenance."
-        },
         "workspace": {
           "type": "string",
           "description": "Optional in this session; select another registered workspace by name, ID or path."
@@ -1636,7 +1569,6 @@
                   "enum": [
                     "workspace",
                     "request_id",
-                    "model",
                     "id",
                     "expected_revision",
                     "verdict",
@@ -1652,7 +1584,6 @@
                   "enum": [
                     "workspace",
                     "request_id",
-                    "model",
                     "id",
                     "expected_revision",
                     "comment"
@@ -1664,7 +1595,6 @@
                   "enum": [
                     "workspace",
                     "request_id",
-                    "model",
                     "id",
                     "expected_revision",
                     "status",

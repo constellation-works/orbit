@@ -19,8 +19,7 @@
 //! verbs with no MCP scope, like answering.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
-    required,
+    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -87,12 +86,6 @@ const GATES: &[EnumValue] = &[
     EnumValue::plain("script_grant"),
 ];
 
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family or full model ID for provenance.",
-)];
-
 const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
@@ -132,7 +125,7 @@ const LIST: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "List decision requests held work is waiting on",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[LIST_FILTER, MODEL],
+    params: &[LIST_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -156,7 +149,7 @@ const SHOW: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Show one decision request with its answers and binding",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[REQUEST_ID, MODEL],
+    params: &[REQUEST_ID],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -205,7 +198,7 @@ const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Raise a multiple-choice decision request on a human-crew task",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[RAISE_PARAMS, MODEL],
+    params: &[RAISE_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -384,7 +377,7 @@ const SUBMIT: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Submit a human's answer through a registered decision channel",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[REQUEST_ID, SUBMIT_PARAMS, MODEL],
+    params: &[REQUEST_ID, SUBMIT_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -410,7 +403,7 @@ const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Raise missing approval requests and show the decision digest",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[DIGEST_PARAMS, MODEL],
+    params: &[DIGEST_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -481,7 +474,7 @@ const CHANNEL_LIST: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "List this host's decision channels",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[MODEL],
+    params: &[],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

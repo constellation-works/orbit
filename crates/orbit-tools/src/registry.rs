@@ -421,19 +421,18 @@ fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The fields retired by `orbit.task.add` name their replacement operation.
-/// Let those fields reach `OperationSpec::parse_input` so the registry does
-/// not hide that more useful refusal. Other task operations keep their
-/// existing registry-level unknown-field refusals.
+/// Retired names that must reach `OperationSpec::parse_input`.
+///
+/// `orbit.task.add` retires fields onto the operation that still accepts
+/// them, and every task operation retires `agent` and the `context` alias.
+/// Those refusals name the replacement. Other retired names stay refused
+/// here, so their existing registry wording is unchanged.
 fn declared_retired_fields(name: &str) -> Vec<&'static str> {
-    if name != "orbit.task.add" {
-        return Vec::new();
-    }
-
     orbit_common::governance::task::TASK_OPERATIONS
         .iter()
         .filter(|spec| spec.tool_name == name)
         .flat_map(|spec| spec.retired_fields.iter().map(|field| field.name))
+        .filter(|field| name == "orbit.task.add" || *field == "agent" || *field == "context")
         .collect()
 }
 
@@ -447,12 +446,16 @@ fn validate_task_arguments(
     aliases: &[(&str, &str)],
     retired_fields: &[&str],
 ) -> Result<(), OrbitError> {
-    use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
+    use orbit_common::protocol::tool_input::{
+        TOOL_INPUT_IDENTITY_KEYS, reject_unknown_tool_fields,
+    };
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
 
     let object = input
         .as_object()
         .ok_or_else(|| OrbitError::InvalidInput("task tool arguments must be an object".into()))?;
+    // `model` stays an unadvertised identity key (CLI, `orbit tool run`, and
+    // a caller that still sends it). The MCP schema does not list it.
     let allowed = schema
         .parameters
         .iter()
@@ -460,6 +463,7 @@ fn validate_task_arguments(
         .chain(cli_fields.iter().copied())
         .chain(aliases.iter().map(|(_, alias)| *alias))
         .chain(retired_fields.iter().copied())
+        .chain(TOOL_INPUT_IDENTITY_KEYS.iter().copied())
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {

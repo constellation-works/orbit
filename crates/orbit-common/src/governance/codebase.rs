@@ -2,8 +2,7 @@
 //! Analytics › Codebase view shows, and one path's detail behind them.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    Redaction, ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry,
-    required,
+    Redaction, ToolOnlyRegistration, UnknownFields, both, defaulted, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
@@ -157,12 +156,6 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
     ),
 ];
 
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family or full model ID for provenance.",
-)];
-
 const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
@@ -178,7 +171,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[SELECTION, REGRESSION_FILTER, MODEL],
+    params: &[SELECTION, REGRESSION_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -202,7 +195,7 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[PATH, SELECTION, REGRESSION_FILTER, MODEL],
+    params: &[PATH, SELECTION, REGRESSION_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -255,7 +248,7 @@ const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
     cli_about: "List files that usually change alongside a repository file",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[RELATED_PATH, RELATED_SELECTION, MODEL],
+    params: &[RELATED_PATH, RELATED_SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

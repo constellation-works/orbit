@@ -112,8 +112,8 @@ impl<V: 'static> OperationSpec<V> {
     /// Whether `field` is an input key this operation does not declare.
     ///
     /// A key is declared when it is a parameter name or alias, a retired
-    /// field, a transport wrapper (`workspace`, `_meta`) or an attribution key
-    /// (`model`, `agent`) that the tool boundary reads for every builtin.
+    /// field, a transport wrapper (`workspace`, `_meta`) or the unadvertised
+    /// `model` attribution key that the tool boundary reads for every builtin.
     pub fn is_undeclared_field(&self, field: &str) -> bool {
         !TOOL_INPUT_TRANSPORT_WRAPPER_KEYS.contains(&field)
             && !TOOL_INPUT_IDENTITY_KEYS.contains(&field)

@@ -680,7 +680,7 @@ fn task_update_params_from_input(
         crew: optional_raw_string(input, "crew")?.map(empty_string_to_none),
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         origin: parse_optional_task_origin(input, "origin")?,
-        context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
+        context_files: optional_csv_or_string_list_alias(input, &["context_files"])?,
         // Derived from the core's selector screening, never from tool input.
         context_creation: ContextCreationAuthorization::default(),
         // Inline artifacts come only from the CLI's options and the artifact

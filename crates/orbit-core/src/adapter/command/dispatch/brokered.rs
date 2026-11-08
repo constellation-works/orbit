@@ -194,6 +194,12 @@ impl BrokerDispatch for RunDispatch {
                 step_index: None,
             },
             working_directory: cwd.to_string_lossy().into_owned(),
+            session_model: run
+                .model_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(ToOwned::to_owned),
         };
         let entry_point = match entry_point {
             EntryPoint::Cli => ToolEntryPoint::Cli,

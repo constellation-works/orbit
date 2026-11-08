@@ -210,8 +210,8 @@ pub use application::auto_tasks::{AutoTaskAddParams, AutoTaskDeleteParams};
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
-    AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, V2AuditEventFilter,
-    V2AuditEventInsertParams,
+    AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, AuditToolModelAggregate,
+    V2AuditEventFilter, V2AuditEventInsertParams,
 };
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,

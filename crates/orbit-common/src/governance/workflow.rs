@@ -84,12 +84,6 @@ const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
     "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
 );
 
-const MODEL_PARAM: ParamSpec = mcp_only(
-    "model",
-    ParamType::String,
-    "Agent family or full model ID for provenance.",
-);
-
 const VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
@@ -185,7 +179,6 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
             ParamType::String,
             "Exact selector returned by workspace discovery. No implicit destination.",
         )),
-        MODEL_PARAM,
     ]],
     at_least_one_of: &[],
     // The control always refused fields outside its schema, `agent` included.
@@ -203,14 +196,11 @@ const LAND: OperationSpec<WorkflowVerb> = OperationSpec {
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[&[
-        required(mcp_only(
-            "task_id",
-            ParamType::String,
-            "The task in review whose delivery pull request lands.",
-        )),
-        MODEL_PARAM,
-    ]],
+    params: &[&[required(mcp_only(
+        "task_id",
+        ParamType::String,
+        "The task in review whose delivery pull request lands.",
+    ))]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -361,7 +351,6 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
             "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         ),
         CLAIM_TOKEN_PARAM,
-        MODEL_PARAM,
     ]],
     at_least_one_of: &[],
     retired_fields: &[],

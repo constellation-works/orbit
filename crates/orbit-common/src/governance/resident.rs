@@ -61,18 +61,11 @@ const RIGHTS: &[EnumValue] = &[
     EnumValue::plain("plugin_upgrade"),
 ];
 
-const ATTRIBUTION: &[ParamSpec] = &[
-    mcp_only(
-        "orchestrator",
-        ParamType::String,
-        "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
-    ),
-    mcp_only(
-        "model",
-        ParamType::String,
-        "Agent family or full model ID for provenance.",
-    ),
-];
+const ATTRIBUTION: &[ParamSpec] = &[mcp_only(
+    "orchestrator",
+    ParamType::String,
+    "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+)];
 
 const TASK_ID: ParamSpec = required(both(
     "task_id",
