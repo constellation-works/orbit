@@ -375,6 +375,7 @@ fn rows(
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
             RowInput {
+                escaped_regressions_fallback: None,
                 denominators: BTreeMap::new(),
                 crew: key.0,
                 model: key.1,

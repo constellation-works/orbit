@@ -183,6 +183,7 @@ fn row<'a>(
         ),
     ];
     RowInput {
+        escaped_regressions_fallback: None,
         denominators: BTreeMap::new(),
         crew: name.to_string(),
         model: model.to_string(),

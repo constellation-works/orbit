@@ -114,6 +114,8 @@ pub(super) struct RowInput<'a> {
     pub(super) provisional: Option<usize>,
     pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
     pub(super) stats: Vec<Stat>,
+    /// Whether an implementer escape expectation used a broader reference.
+    pub(super) escaped_regressions_fallback: Option<bool>,
     /// Implementer reference counts for the row's tier mix; other roles
     /// retain their uncentred score when absent.
     pub(super) expected: Option<BTreeMap<&'static str, f64>>,
@@ -282,6 +284,9 @@ impl Scored<'_> {
                 "value": stat.value,
             })).collect::<Vec<_>>(),
         });
+        if let Some(fallback) = self.input.escaped_regressions_fallback {
+            payload["escaped_regressions_fallback"] = json!(fallback);
+        }
         if !self.input.denominators.is_empty() {
             payload["term_units"] = json!(
                 self.input
