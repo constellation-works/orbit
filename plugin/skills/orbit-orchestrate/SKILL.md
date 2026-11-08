@@ -30,6 +30,14 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
 - Verify persisted preparation, actual diffs, required checks and merge state.
   Post-merge review/QA findings become repairs under continuous delivery; do not
   invent an extra pre-merge approval gate. Repository protections still apply.
+- Start every supervision pass (each wake of a long-running session) with
+  `orbit.attention` (`orbit attention`) on the owning host for the workspaces
+  you supervise. Clear each `pilot_warning` and `pilot_hold`: repair the task
+  (criteria, context, dependencies; `required_tools` is set only at filing, so
+  re-file to change it) and re-pilot, or record on the task why it stays.
+  Treat an empty result as clear only when `degraded` is empty and the read
+  reached the owner: a caller without the agent or operator capability, or a
+  federated read that misses the owner, can return nothing.
 - Diagnose blocked work before retrying. Preserve user interventions and active
   work. A stopped admission loop does not mean its children were cancelled.
 - Record `orchestrator` separately from execution `crew`. Neither attribution
