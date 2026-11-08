@@ -6,6 +6,12 @@ const SAFE_TITLE: &str =
     "opus@\u{200d}auto @\u{200d}auto @\u{200d}orbit-tools/cli dev+orbit@example.com `@kept`";
 const PROSE: &str = "@auto @astrojs/core dev+orbit@example.com\n\n`@literal` and ``a ` @literal``\n\n`multiline\n@literal`\n\n````md\n@fenced\n```\n@fenced\n````\n\n~~~text\n@tilde\n~~~\n\nCo-authored-by: @author <author@example.com>\n\nAfter @auto";
 const SAFE_PROSE: &str = "@\u{200d}auto @\u{200d}astrojs/core dev+orbit@example.com\n\n`@literal` and ``a ` @literal``\n\n`multiline\n@literal`\n\n````md\n@fenced\n```\n@fenced\n````\n\n~~~text\n@tilde\n~~~\n\nCo-authored-by: @author <author@example.com>\n\nAfter @\u{200d}auto";
+// A bare URL and a Markdown link destination keep their `@` path segments and
+// query values byte-for-byte; the visible `@auto` still receives the joiner.
+const URL_TITLE: &str = "Link https://medium.com/@someone/post for @auto";
+const SAFE_URL_TITLE: &str = "Link https://medium.com/@someone/post for @\u{200d}auto";
+const URL_PROSE: &str = "[pkg](https://www.npmjs.com/package/@orbit-tools/cli) and https://medium.com/@someone/post and https://x.io/a?b=c@d, then @auto";
+const SAFE_URL_PROSE: &str = "[pkg](https://www.npmjs.com/package/@orbit-tools/cli) and https://medium.com/@someone/post and https://x.io/a?b=c@d, then @\u{200d}auto";
 
 #[test]
 fn pr_open_neutralizes_forge_mentions_in_generated_and_override_text() {
@@ -85,6 +91,23 @@ fn pr_open_neutralizes_forge_mentions_in_a_refreshed_draft_and_truncated_body() 
             let body = fx.forge_state("pr-body").unwrap();
             assert!(body.starts_with("`@\u{200d}auto "), "{}", &body[..40]);
             assert!(body.len() <= 65_536, "{} bytes", body.len());
+        },
+    );
+}
+
+#[test]
+fn pr_open_leaves_at_signs_inside_urls_unchanged() {
+    isolated(
+        "mentions::pr_open_leaves_at_signs_inside_urls_unchanged",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            input["title"] = json!(URL_TITLE);
+            input["body"] = json!(URL_PROSE);
+            action_ok(&host, "pr_open", &input);
+            assert_eq!(fx.forge_state("pr-title").as_deref(), Some(SAFE_URL_TITLE));
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(body.contains(SAFE_URL_PROSE), "{body}");
         },
     );
 }
