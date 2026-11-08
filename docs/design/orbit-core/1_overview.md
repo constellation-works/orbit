@@ -284,10 +284,18 @@ moved the backlog forecast out of `task` to its own place in the order:
   at the same acceptance and approval points through its own
   `review::ReviewLandingDispatchPort`, implemented in `landing/review_port.rs`;
   failures are still logged and leave the durable request pending [ORB-22708].
+- **Selector matching.** `search` sits outside the order, above `task`: it
+  reads task candidates and uses the pure matcher owned by
+  `task/selector_match.rs`, exported as `task::task_selectors_contain_path`.
+  Task listing and pilot no-diff scope checks call the task-owned helper,
+  preserving exact and bidirectional containment, normalization, symbol
+  selectors and empty-path behavior. `search::task_selectors_contain_path`
+  remains an explicit compatibility re-export; retiring it after consumers
+  migrate is a follow-up [ORB-23016].
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
   `make ci-guards`, fails when `task` names `automation`, when `task` names
   `job`, `review`, `distributed`, `pull_drain`, `admission`, `sweep_filing`,
-  `workspace_auto` or `experiment` by path, grouped tree or `super::` chain,
+  `workspace_auto`, `experiment` or `search` by path, grouped tree or `super::` chain,
   when `job` names `distributed`, `pull_drain`, `admission`, `automation`,
   `review`, `sweep_filing`, `workspace_auto` or `experiment` the same ways, and when either calls an
   inherent `OrbitRuntime` method one of those modules defines on any
