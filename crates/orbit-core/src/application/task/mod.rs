@@ -109,10 +109,10 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
-pub use decision::DecisionRequestListing;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;
 pub(crate) use decision::decision_request_json;
+pub use decision::{DecisionListProfile, DecisionRequestListing};
 #[cfg(feature = "test-support")]
 pub use decision_channel::dkim::test_support::with_decision_dkim_resolver;
 pub use decision_channel::dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
