@@ -1,12 +1,14 @@
 //! Fail-closed experiment captures: the arms a run applies, carried in its
 //! input on the owner and in the admission receipt for a claimed leaf.
 use super::definition::{ExperimentOverlay, overlay_digest};
+use super::overlay::instruction_role;
 use crate::OrbitRuntime;
+use crate::application::crew_memory::memory_key;
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExperimentStoreBackend as _;
 use orbit_types::{
     task::Task,
-    workflow::{CapturedExperiment, CapturedExperiments},
+    workflow::{CapturedExperiment, CapturedExperimentMemory, CapturedExperiments},
 };
 use serde_json::Value;
 
@@ -33,7 +35,7 @@ impl OrbitRuntime {
                 .admission
                 .receipt
                 .and_then(|receipt| receipt.experiments);
-            validate_experiment_capture(capture.as_ref(), task_id)?;
+            validate_claimed_experiment_capture(capture.as_ref(), task_id)?;
             return capture
                 .ok_or_else(|| OrbitError::PolicyDenied("missing experiment capture".into()));
         }
@@ -99,6 +101,7 @@ impl OrbitRuntime {
                     && !task_override,
                 instructions: Vec::new(),
                 skills: Vec::new(),
+                memory: None,
             });
         }
         let capture = CapturedExperiments {
@@ -152,6 +155,101 @@ impl OrbitRuntime {
         })?;
         Ok(())
     }
+
+    /// A memory arm's capture for a crew running `model`: each role in the
+    /// arm's `roles` rendered from that model's newest revision (and the
+    /// global's, when the arm asks). `None` for an arm without a memory
+    /// surface. No recorded model, or `crew_memory.enabled` off, captures no
+    /// delivery: no memory is guessed and none reaches a disabled workspace.
+    pub(crate) fn experiment_memory_capture(
+        &self,
+        overlay: &ExperimentOverlay,
+        model: Option<&str>,
+    ) -> Result<Option<CapturedExperimentMemory>, OrbitError> {
+        let Some(memory) = &overlay.memory else {
+            return Ok(None);
+        };
+        let enabled = self.current_crew_memory_enabled();
+        let mut deliveries = Vec::new();
+        if enabled && let Some(key) = memory_key(model) {
+            for role in &memory.roles {
+                deliveries.push(self.render_crew_memory_delivery(
+                    instruction_role(*role),
+                    &key,
+                    memory.global,
+                )?);
+            }
+        }
+        Ok(Some(CapturedExperimentMemory {
+            enabled,
+            deliveries,
+        }))
+    }
+
+    /// Resolve crew memory into the run's capture after its crew draw, for
+    /// the drawn crew's `model` [crew memory §5.2]. Live and shadow memory
+    /// arms are both captured, so a shadow run records the digest it would
+    /// have delivered. An entry that already carries memory (inherited from
+    /// a coordinator that drew the same crew) is kept. A claimed leaf never
+    /// resolves: it applies only what its owner's receipt carries.
+    pub(crate) fn install_experiment_memory_capture(
+        &self,
+        input: &mut Value,
+        model: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(());
+        }
+        let Some(raw) = input.get(EXPERIMENT_CAPTURE_KEY).cloned() else {
+            return Ok(());
+        };
+        let mut capture: CapturedExperiments = serde_json::from_value(raw)
+            .map_err(|error| OrbitError::Store(format!("invalid experiment capture: {error}")))?;
+        let mut changed = false;
+        for entry in &mut capture.assignments {
+            if entry.memory.is_some() {
+                continue;
+            }
+            let overlay = ExperimentOverlay::parse(
+                &entry.arm,
+                serde_json::from_str(&entry.overlay_json).map_err(|error| {
+                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
+                })?,
+            )?;
+            entry.memory = self.experiment_memory_capture(&overlay, model)?;
+            changed |= entry.memory.is_some();
+        }
+        if !changed {
+            return Ok(());
+        }
+        validate_experiment_capture(Some(&capture), &capture.task_id)?;
+        input[EXPERIMENT_CAPTURE_KEY] = serde_json::to_value(capture).map_err(|error| {
+            OrbitError::Execution(format!("serialize experiment capture: {error}"))
+        })?;
+        Ok(())
+    }
+}
+
+/// [`validate_experiment_capture`] for a claimed leaf, which also refuses a
+/// memory arm whose owner capture carries no crew memory resolution: the
+/// follower holds no memory tables and never resolves memory itself.
+pub(crate) fn validate_claimed_experiment_capture(
+    capture: Option<&CapturedExperiments>,
+    task: &str,
+) -> Result<(), OrbitError> {
+    validate_experiment_capture(capture, task)?;
+    for entry in capture.iter().flat_map(|capture| &capture.assignments) {
+        let memory_arm = serde_json::from_str::<Value>(&entry.overlay_json)
+            .ok()
+            .is_some_and(|overlay| !overlay["memory"].is_null());
+        if memory_arm && entry.memory.is_none() {
+            return Err(OrbitError::PolicyDenied(format!(
+                "claimed leaf experiment capture refused: experiment `{}` arm `{}` delivers crew memory and the owner capture carries none",
+                entry.experiment, entry.arm
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// A missing capture is different from an explicitly empty owner capture.
@@ -201,6 +299,25 @@ pub(crate) fn validate_experiment_capture(
             || overlay_digest(&entry.overlay_json) != entry.digest
         {
             return Err(refused("overlay digest mismatch"));
+        }
+        if let Some(memory) = &entry.memory {
+            let surface = overlay.memory.as_ref().ok_or_else(|| {
+                refused("crew memory captured for an arm without a memory surface")
+            })?;
+            let mut roles = std::collections::BTreeSet::new();
+            for delivery in &memory.deliveries {
+                delivery.verify().map_err(|reason| refused(&reason))?;
+                if !memory.enabled
+                    || delivery.global != surface.global
+                    || !surface
+                        .roles
+                        .iter()
+                        .any(|role| super::overlay::instruction_role(*role) == delivery.role)
+                    || !roles.insert(delivery.role)
+                {
+                    return Err(refused("unexpected or duplicate crew memory delivery"));
+                }
+            }
         }
         let mut names = std::collections::BTreeSet::new();
         for bundle in &entry.skills {

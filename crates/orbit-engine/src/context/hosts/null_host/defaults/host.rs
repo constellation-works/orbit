@@ -845,6 +845,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _run_id: &str,
         _activity_name: &str,
         _input: &Value,
+        _model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
         Ok(Vec::new())
     }

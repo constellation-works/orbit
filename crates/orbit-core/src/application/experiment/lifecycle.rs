@@ -201,6 +201,18 @@ impl OrbitRuntime {
                 }
                 let settings = self.experiment_settings();
                 let overlays = validate_startable(&record, &settings.config_keys)?;
+                // Crew memory is gated on its own key too, read live so a
+                // disable takes effect at once.
+                if let Some((arm, _)) = overlays
+                    .iter()
+                    .find(|(_, overlay)| overlay.memory.is_some())
+                    && !self.current_crew_memory_enabled()
+                {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "experiment `{}` cannot start: arm `{arm}` delivers crew memory, and crew memory is disabled in this workspace (`crew_memory.enabled` is false)",
+                        current.name
+                    )));
+                }
                 self.validate_experiment_overlays(&current.name, &overlays)?;
                 self.validate_experiment_crews(&current.name, &overlays)?;
                 running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);

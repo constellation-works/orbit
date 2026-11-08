@@ -5,9 +5,12 @@
 //! writer goes through one write path, which refuses while
 //! `crew_memory.enabled` is false and runs [`validate_memory_write`], the one
 //! place the five write rules live. Nothing here delivers memory to a
-//! prompt; that is the experiment overlay's job in a later slice.
+//! prompt on its own: slice M2's `memory` experiment overlay renders a space
+//! with [`OrbitRuntime::render_crew_memory_delivery`](crate::OrbitRuntime)
+//! for a memory arm's dispatches.
 //! Design: `docs/design/crew-memory/2_design.md`.
 
+mod delivery;
 mod key;
 mod operations;
 mod validate;

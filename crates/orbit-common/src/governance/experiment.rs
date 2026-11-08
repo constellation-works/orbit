@@ -92,7 +92,7 @@ const ID: &[ParamSpec] = &[required(both(
     "The experiment's id or name",
 ))];
 
-const ARMS_DESCRIPTION: &str = "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.";
+const ARMS_DESCRIPTION: &str = "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}), config ({\"values\": {key: value}, \"roles\"}) and memory ({\"roles\", \"global\"}: deliver the drawn crew's model memory, and the global memory when global is true, as data; experimental). Roles default to implement. Unknown fields are refused.";
 
 const POPULATION_DESCRIPTION: &str = "Which tasks the experiment enrolls, as a JSON object with any of: complexity, task_type, tags_include, tags_exclude and origin, each a list of strings. Empty enrolls every task.";
 
@@ -266,7 +266,7 @@ const START: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Start,
     cli_path: &["start"],
     tool_name: "orbit.experiment.start",
-    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, config overlays only for keys on experiments.config_keys, and crew_memory.enabled true for a memory overlay. Operator only: an agent session is refused.",
     cli_about: "Start a draft experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

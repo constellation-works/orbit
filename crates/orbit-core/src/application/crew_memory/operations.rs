@@ -48,7 +48,7 @@ impl WriteAction {
 }
 
 impl OrbitRuntime {
-    fn crew_memory_store(&self) -> Result<Arc<dyn CrewMemoryStoreBackend>, OrbitError> {
+    pub(super) fn crew_memory_store(&self) -> Result<Arc<dyn CrewMemoryStoreBackend>, OrbitError> {
         Ok(orbit_store::compose::crew_memory_store(
             self.sqlite_store()?,
         ))
@@ -241,7 +241,7 @@ impl OrbitRuntime {
                 .crew_memory_current(&workspace_id)?
                 .iter()
                 .map(|row| {
-                    let files = parse_files(row)?;
+                    let files = parse_revision_files(row)?;
                     Ok(json!({
                         "key": row.memory_key,
                         "revision": row.revision,
@@ -317,7 +317,7 @@ impl OrbitRuntime {
         let mut written = Vec::new();
         for row in &rows {
             let key = parse_memory_key(&row.memory_key)?;
-            let files = parse_files(row)?;
+            let files = parse_revision_files(row)?;
             if key.is_global() {
                 if let Some(file) = files.first() {
                     write_export(&dir, &PathBuf::from("global.md"), &file.text)?;
@@ -399,7 +399,7 @@ impl OrbitRuntime {
                 OrbitError::InvalidInput(format!("crew memory `{from}` has no revision to copy"))
             })?;
         let write = MemoryWrite {
-            files: parse_files(&source)?,
+            files: parse_revision_files(&source)?,
             evidence: parse_evidence(&source)?,
         };
         self.write_crew_memory_revision(
@@ -432,7 +432,9 @@ fn content_digest(files: &[MemoryFile]) -> Result<String, OrbitError> {
     ))
 }
 
-fn parse_files(row: &CrewMemoryRevisionRow) -> Result<Vec<MemoryFile>, OrbitError> {
+pub(super) fn parse_revision_files(
+    row: &CrewMemoryRevisionRow,
+) -> Result<Vec<MemoryFile>, OrbitError> {
     serde_json::from_str(&row.files_json).map_err(|error| {
         OrbitError::Store(format!(
             "invalid crew memory revision {} of `{}`: {error}",
@@ -481,7 +483,7 @@ fn revision_view(
             "caps": caps,
         }));
     };
-    let files = parse_files(row)?;
+    let files = parse_revision_files(row)?;
     Ok(json!({
         "key": key,
         "revision": row.revision,

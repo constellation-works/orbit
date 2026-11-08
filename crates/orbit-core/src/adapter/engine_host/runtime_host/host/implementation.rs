@@ -759,8 +759,9 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         activity_name: &str,
         input: &Value,
+        model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-        agent::experiment_overlays_for_activity(self, run_id, activity_name, input)
+        agent::experiment_overlays_for_activity(self, run_id, activity_name, input, model)
     }
 
     fn acquire_deferred_footprint(

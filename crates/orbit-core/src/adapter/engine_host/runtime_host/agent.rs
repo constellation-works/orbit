@@ -61,9 +61,10 @@ pub(super) fn experiment_overlays_for_activity(
     run_id: &str,
     activity_name: &str,
     input: &Value,
+    model: Option<&str>,
 ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-    OrbitRuntime::experiment_overlays_for_activity(runtime, run_id, activity_name, input).map_err(
-        |failure| match failure {
+    OrbitRuntime::experiment_overlays_for_activity(runtime, run_id, activity_name, input, model)
+        .map_err(|failure| match failure {
             TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
                 "load experiment overlays for `{activity_name}` (run {run_id}): {error}"
             )),
@@ -71,8 +72,7 @@ pub(super) fn experiment_overlays_for_activity(
             TagInstructionFailure::Refused(error) => {
                 DispatchError::CliInvocationPermanent(error.to_string())
             }
-        },
-    )
+        })
 }
 
 pub(super) fn actor_model_identity(runtime: &OrbitRuntime) -> Option<String> {

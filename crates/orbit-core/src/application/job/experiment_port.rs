@@ -2,7 +2,8 @@
 //! [ORB-23015].
 //!
 //! Crew admission reads an existing assignment's crew pool and installs the
-//! run's experiment capture, fresh owner claim routing reads the existing
+//! run's experiment capture (and, after the crew draw, its crew memory),
+//! fresh owner claim routing reads the existing
 //! capture, a claimed leaf freezes its treatment's crew on the executing host,
 //! and claimed-leaf authorization validates the owner's capture. `experiment`
 //! owns all of that, and it reads tasks and the claimed leaf back and draws
@@ -40,6 +41,11 @@ pub(in crate::application) trait JobExperimentPort {
     /// it on the owner; an explicit run crew disables crew-bearing arms whole.
     /// Implemented by experiment.
     fn install_job_experiment_capture(&self, input: &mut Value) -> Result<(), OrbitError>;
+
+    /// After the crew draw, resolve a memory arm's crew memory into the
+    /// run's capture for the model of the crew `input` now names.
+    /// Implemented by experiment.
+    fn install_job_experiment_memory(&self, input: &mut Value) -> Result<(), OrbitError>;
 
     /// Freeze a claimed leaf's treatment crew once on the executing host.
     /// Implemented by experiment.

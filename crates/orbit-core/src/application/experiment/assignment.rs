@@ -254,6 +254,9 @@ fn experiment_surfaces(record: &ExperimentRecord) -> Result<BTreeSet<&'static st
         if overlay.config.is_some() {
             surfaces.insert("config");
         }
+        if overlay.memory.is_some() {
+            surfaces.insert("memory");
+        }
     }
     Ok(surfaces)
 }

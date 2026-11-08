@@ -2,6 +2,7 @@ use orbit_agent::{AgentResponseStatus, ParsedStdout};
 use orbit_common::governance::authorization::governed_tool;
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::tool::{ExecutionResult, McpCapability};
+use orbit_types::workflow::CrewMemoryBlock;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -14,6 +15,7 @@ pub(super) fn cli_agent_envelope_json(
     task_ctx: Option<&Value>,
     requested_tools: &[String],
     effective_tools: &[String],
+    crew_memory: Option<&CrewMemoryBlock>,
 ) -> Result<Vec<u8>, DispatchError> {
     let mut envelope = serde_json::Map::new();
     envelope.insert("schemaVersion".to_string(), Value::from(1));
@@ -46,6 +48,16 @@ pub(super) fn cli_agent_envelope_json(
 
     if let Some(task) = task_ctx {
         envelope.insert("task".to_string(), task.clone());
+    }
+    // A memory arm's notes ride as a JSON object, never inside
+    // `instruction`, so a note cannot close a fence and read as instruction.
+    if let Some(block) = crew_memory {
+        envelope.insert(
+            "crew_memory".to_string(),
+            serde_json::to_value(block).map_err(|err| {
+                DispatchError::CliInvocationFailed(format!("serialize crew memory: {err}"))
+            })?,
+        );
     }
 
     serde_json::to_vec(&Value::Object(envelope))

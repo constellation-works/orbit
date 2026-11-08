@@ -205,6 +205,7 @@ impl OrbitRuntime {
                     } else {
                         self.install_job_experiment_capture(input)?;
                     }
+                    self.install_job_experiment_memory(input)?;
                     return Ok(None);
                 }
                 self.install_job_experiment_capture(input)?;
@@ -488,6 +489,8 @@ impl OrbitRuntime {
             }
         }
         input["crew"] = json!(selected.crew.name);
+        // Crew memory follows the crew just drawn [crew memory §5.2].
+        self.install_job_experiment_memory(input)?;
         #[cfg(feature = "test-support")]
         super::selection_checkpoint::notify_crew_selection_checkpoint();
         Ok(AdmissionTaskWrites {

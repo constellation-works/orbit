@@ -9,7 +9,7 @@ next: "The horizon decision-channel step remains unfiled"
 feature: experiments
 doc_role: scope
 type: design
-summary: "Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion"
+summary: "Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews, allowlisted config or crew memory on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion"
 tags: [experiments, admission, tag-instructions, crew-pools, analytics, decisions]
 ---
 
@@ -175,6 +175,7 @@ activities themselves.
 | Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
 | Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
+| Memory | `roles` and `global`: deliver the drawn crew's model memory space (and the reviewed global memory) as data ([crew memory §5](../crew-memory/2_design.md#5-delivery-the-memory-overlay-surface)) | Resolved after the crew draw into the admission capture; a `crew_memory` envelope field plus one fixed precedence sentence | `crew_memory.enabled` is true |
 | Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean); both are inert and kept so historical experiments still validate | Key is on both the code list and the workspace allowlist |
 
 Each overlay entry names the roles it applies to; the default is `implement` only. Review and
@@ -305,7 +306,7 @@ segment:
   treatment reached it, so a treatment whose overlaid step fails on every run would be judged
   on control's work ([ORB-20597]: every explorer call in exp-2b6d910d's treatment arm failed,
   yet its primary interval excluded zero). Each treatment arm's overlay names its dispatch
-  roles: the roles of its instructions, skills and tools. Crew and config surfaces act at
+  roles: the roles of its instructions, skills, tools and memory. Crew and config surfaces act at
   admission or through settings. A crew overlay additionally requires positive evidence from
   the latest delivery's frozen admission selection: the experiment source and overlay digest,
   with no crew deviation or suppression. Choosing the same crew explicitly is not treatment.

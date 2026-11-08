@@ -444,6 +444,7 @@ fn experiment_tool_overlay(add: &[&str], remove: &[&str]) -> ExperimentActivityO
         tools_add: add.iter().map(|tool| (*tool).to_string()).collect(),
         tools_remove: remove.iter().map(|tool| (*tool).to_string()).collect(),
         skills: Vec::new(),
+        memory: None,
     }
 }
 
