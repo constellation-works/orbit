@@ -58,15 +58,14 @@ let routineFailureRequest = 0;
 const pendingCadenceByHost = new Map();
 let timelineResizeObserver = null;
 let observedTimelineBody = null;
-const ROUTINE_PAGE_SIZE = 3;
-const routineList = { query: "", activePage: 0, pausedPage: 0, pausedOpen: false };
+const routineList = { query: "", pausedOpen: false };
 
 // ---------------------------------------------------------------------------
 // Routines
 registerOperationsReset(() => {
   closeEditors("routine");
   updateRoutineFailureBadge([]);
-  Object.assign(routineList, { query: "", activePage: 0, pausedPage: 0, pausedOpen: false });
+  Object.assign(routineList, { query: "", pausedOpen: false });
 });
 
 function routineButton(payload, routine) {
@@ -508,12 +507,11 @@ function routineCatalogue(payload, routines, workspaceId) {
   search.setAttribute("aria-controls", groups.id);
   catalogue.append(el("div", { class: "routine-list-toolbar" }, [label, search, clear, count]), routineTimeline(routines), groups);
 
-  // Filter and paging are refused only while an editor is on screen: an open
-  // editor whose routine is on another page or filtered out has nothing to
+  // Filtering is refused only while an editor is on screen: an open
+  // editor whose routine is filtered out has nothing to
   // close here, so the controls stay usable to navigate back to it. Every
-  // repaint re-derives the state, so paging or filtering back to an open editor
+  // repaint re-derives the state, so filtering back to an open editor
   // disables the controls again.
-  let pageButtons = [];
   // Focus the first enabled, visible control of the open editor. A cron-only
   // editor disables its Trigger select, and a pending save disables every
   // control, so with none available focus the editor itself, not the page.
@@ -532,11 +530,10 @@ function routineCatalogue(payload, routines, workspaceId) {
   };
   const paintGroups = () => {
     groups.textContent = "";
-    pageButtons = [];
     const query = routineList.query.trim().toLocaleLowerCase();
     const matches = routines.filter(routine => [routine.name, routine.target, routine.description]
       .some(value => String(value || "").toLocaleLowerCase().includes(query)));
-    count.textContent = query ? `${matches.length} of ${routines.length} routines match` : `${routines.length} routines · ${ROUTINE_PAGE_SIZE} per page`;
+    count.textContent = query ? `${matches.length} of ${routines.length} routines match` : `${routines.length} routines`;
     for (const [kind, title, hint] of [
       ["active", "Active", "enabled and delivered by the host clock"],
       ["paused", "Paused", "slots are skipped, not queued"],
@@ -565,37 +562,9 @@ function routineCatalogue(payload, routines, workspaceId) {
           if (container.isConnected) routineList.pausedOpen = container.open;
         });
       }
-      const pageKey = `${kind}Page`;
-      const lastPage = Math.max(0, Math.ceil(filtered.length / ROUTINE_PAGE_SIZE) - 1);
-      routineList[pageKey] = Math.min(routineList[pageKey], lastPage);
-      const start = routineList[pageKey] * ROUTINE_PAGE_SIZE;
       if (filtered.length) {
-        const page = el("div", { class: "routine-list-page", role: "group", "aria-label": `${title} routine pages` });
-        page.appendChild(el("span", { class: "routine-list-count", role: "status", text: `${start + 1}–${Math.min(start + ROUTINE_PAGE_SIZE, filtered.length)} of ${filtered.length}` }));
-        for (const [direction, offset] of [["Previous", -1], ["Next", 1]]) {
-          const button = el("button", {
-            class: "operation-button", type: "button", text: direction,
-            "aria-label": `${direction} ${kind} routines`,
-          });
-          const atEnd = offset < 0 ? start === 0 : routineList[pageKey] === lastPage;
-          button.disabled = atEnd;
-          button.dataset.routineFocus = `${kind}-${direction}`;
-          pageButtons.push({ button, atEnd });
-          button.addEventListener("click", () => {
-            routineList[pageKey] += offset;
-            paintGroups();
-            // Keep keyboard focus in the replaced page controls, including at an end.
-            const controls = groups.querySelector(`[aria-label="${title} routine pages"]`);
-            const next = controls.querySelector(`[aria-label="${direction} ${kind} routines"]`);
-            // Paging onto a page that shows an open editor disables the controls: focus the editor instead.
-            const enabled = next.disabled ? controls.querySelector("button:not(:disabled)") : next;
-            if (enabled) enabled.focus();
-            else focusEditor();
-          });
-          page.appendChild(button);
-        }
-        container.append(page, operationColumns(["", "Routine", "Cadence", "Next fire", "Last run"]));
-        for (const routine of filtered.slice(start, start + ROUTINE_PAGE_SIZE)) container.appendChild(routineRow(payload, routine, workspaceId));
+        container.append(operationColumns(["", "Routine", "Cadence", "Next fire", "Last run"]));
+        for (const routine of filtered) container.appendChild(routineRow(payload, routine, workspaceId));
       } else {
         container.appendChild(el("p", { class: "routine-list-empty", text: `No ${kind} routines match. Clear or change the filter.` }));
       }
@@ -605,14 +574,9 @@ function routineCatalogue(payload, routines, workspaceId) {
     search.disabled = editing;
     search.title = editing ? "Close the trigger editor to filter routines." : "";
     clear.disabled = editing || !routineList.query;
-    for (const { button, atEnd } of pageButtons) {
-      button.disabled = atEnd || editing;
-      button.title = editing ? "Close the trigger editor to change pages." : "";
-    }
   };
   search.addEventListener("input", () => {
     routineList.query = search.value;
-    routineList.activePage = routineList.pausedPage = 0;
     if (routineList.query.trim()) routineList.pausedOpen = true;
     const typing = document.activeElement === search;
     paintGroups();
