@@ -212,10 +212,52 @@ def scratch_cleanup_race_self_test(harness, scratch):
             raise AssertionError(f"scratch cleanup warning failed a passing sweep: {child.returncode} {report['decision']} {result}")
 
 
+def report_output_self_test(harness, scratch):
+    """Both public entrypoints keep default reports in ignored scratch storage."""
+    with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+        wrapper = repo / "scripts/qa-full-sweep.sh"
+        wrapper.write_bytes(harness.with_name("qa-full-sweep.sh").read_bytes())
+        entrypoint = repo / "scripts/test-qa-full-sweep.py"
+        entrypoint.write_text(f'''
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("qa", {str(harness)!r})
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+qa.__file__ = __file__
+qa.validate_inventory = lambda *_: ([], {{"cli": []}})
+qa.cargo_inventory_errors = lambda *_, **__: []
+qa.candidate_source = lambda *_: {{"candidate_id": "fixture", "head": "a" * 40,
+                                  "status": [], "diff_sha256": "fixture"}}
+qa.main()
+''')
+        binary = repo / "orbit"
+        binary.write_text("#!/bin/sh\necho 'fixture orbit'\n")
+        binary.chmod(0o755)
+        for entry in ([sys.executable, str(entrypoint)], ["bash", str(wrapper)]):
+            for explicit in (False, True):
+                output = repo / (".orbit/tmp/explicit/report.json" if explicit else
+                                 ".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json")
+                child = subprocess.run(
+                    [*entry, "--orbit-bin", str(binary),
+                     *(["--output", str(output)] if explicit else [])],
+                    cwd=repo, capture_output=True, text=True, timeout=60)
+                assert child.returncode == 0 and output.is_file(), (
+                    entry, explicit, child.returncode, child.stdout, child.stderr)
+                report = json.loads(output.read_text())
+                assert report["schema_version"] == 2, report
+                assert not (repo / "qa-full-sweep-report.json").exists(), child.stdout
+                output.unlink()
+
+
 def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    report_output_self_test(harness, scratch)
     candidate_build_report_self_test(harness, scratch)
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)

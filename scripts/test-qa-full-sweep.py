@@ -4206,7 +4206,7 @@ def main():
             self_test()
         print("qa-full-sweep inventory: ok")
         return
-    output = (args.output or repo / "qa-full-sweep-report.json").resolve()
+    output = (args.output or repo / ".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json").resolve()
     browser_evidence_dir = (args.browser_evidence_dir or
                             output.parent / f"{output.stem}.browser-evidence").resolve()
     excluded_paths = []
@@ -4478,6 +4478,7 @@ def main():
                                   "part_of_pre_release_decision":False},
         "decision":"PASS" if full_pass else "INCOMPLETE"
     }
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(f"qa-full-sweep: {report['decision']} ({output})")
     if errors:

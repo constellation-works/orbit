@@ -14,7 +14,7 @@ Composition   orbit-cmd
 Application   orbit-core
 Runtime       orbit-runtime
 Domain        orbit-engine · orbit-automation · orbit-agent · orbit-tools · orbit-store
-              orbit-search · orbit-registry · orbit-config
+              orbit-search · orbit-registry · orbit-config · orbit-clock
 Kernel        orbit-exec · orbit-policy · orbit-auth
 Foundation    orbit-common · orbit-types
 ```
