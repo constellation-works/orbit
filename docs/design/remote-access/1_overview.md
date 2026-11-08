@@ -1,7 +1,7 @@
 ---
 title: "Remote Access — Overview"
 owner: codex
-last_updated: 2026-11-04
+last_updated: 2026-11-07
 last_validated: 2026-11-05
 status: Implemented
 stage: shipped
@@ -29,8 +29,8 @@ Both commands are runtime-free CLI entry points, so they can start outside a wor
 The committed scope is shipped. [ORB-10708] delivered attach-first connection;
 [ORB-14679] delivered the on-demand host forward. [ORB-16130] repaired its
 initial port-bind collision handling, and [ORB-18488] added optional browser
-session tickets. Background reconnect and replication remain vision, not pending
-implementation slices.
+session tickets, which [ORB-22808] later removed. Background reconnect and
+replication remain vision, not pending implementation slices.
 
 ## Multi-workspace Web state
 
@@ -42,7 +42,7 @@ The registry is refreshed at request boundaries. A successful refresh atomically
 
 ## Remote Web connection
 
-Web's SSH transport is a local port forward. It first probes for an existing remote dashboard through a commandless forward. If /healthz answers, connect attaches to that process without stopping or replacing it; when browser sessions are enabled, it may also request a one-time browser ticket with `orbit web open --no-open`. Otherwise it starts `orbit web serve --no-open` through a second SSH process, waits for health, and owns that process's lifetime.
+Web's SSH transport is a local port forward. It first probes for an existing remote dashboard through a commandless forward. If /healthz answers, connect attaches to that process without stopping or replacing it. Otherwise it starts `orbit web serve --no-open` through a second SSH process, waits for health, and owns that process's lifetime. Either way, connect then opens the plain local URL unless `--no-open` is set.
 
 This tunnel belongs to orbit-web. It is separate from MCP remote mode: MCP uses direct non-PTY SSH stdio and no local-forward listener.
 
