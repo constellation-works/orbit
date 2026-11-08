@@ -173,6 +173,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("retired-config-keys", |runtime, _| {
         super::retired_config::doctor_check_retired_config_keys(runtime)
     }),
+    DoctorProbe::many("retired-scripts", |runtime, _| {
+        super::retired_config::doctor_check_retired_scripts(runtime)
+    }),
     DoctorProbe::one("database", doctor_check_database),
     DoctorProbe::one("disk-space", |runtime, _| doctor_check_disk_space(runtime)),
     DoctorProbe::one("search-index", |runtime, _| {

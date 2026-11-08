@@ -409,6 +409,15 @@ Its manifest lives at `.orbit/resources/scripts/<name>.yaml`, and the manifest's
 the script holds an operator grant on the host that runs it. Granting runs
 nothing; the step runs when a job reaches it.
 
+Every job dispatch loads every manifest in that directory, so one whose entry
+is missing or invalid refuses every job in the workspace, not only the jobs
+that name it; the refusal names the manifest. Repair it, or delete a retired
+script's manifest and run `orbit script revoke <name>`. The retired ux-rules
+routine left one: if the workspace set it up, delete
+`.orbit/resources/scripts/ux_rules_runner.yaml` and run
+`orbit script revoke ux_rules_runner`. `orbit doctor` reports it under
+`retired-scripts`, and a manifest that fails to load under `script-grants`.
+
 ### Grants
 
 A grant is the operator's host-local consent to run one script at one set of
