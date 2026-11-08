@@ -383,8 +383,20 @@ failed-claim settlement read that needs `distributed`, so `task -> codebase ->
 distributed` no longer climbs; it also keeps the persisted representation of
 `BlockCause`, and re-exports the moved names as a compatibility shim for
 `agents` and its own modules, whose retirement is a follow-up. The guard's
-`task` upper-module list names `codebase`. Their back-edges with other unordered
-modules (`resident`, `experiment`, `codebase`) still keep
+`task` upper-module list names `codebase`.
+
+`resident` (resident orchestrator mandates) sits outside the order but above
+`task` [ORB-22955]: it drives task writes and reads task history, so task
+reaches its policy only through `task::TaskResidentPort`, which `resident`
+implements on `OrbitRuntime` in `resident/task_port.rs`. A
+`resident_authority` decision answer applies the human's grant through it,
+and a task write admits a resident comment under the task lock and refuses a
+resident record whose verbatim text needs redaction through it, by delegating
+to the unchanged resident helpers. The guard's `task` upper-module list names
+`resident`, so a path, grouped tree, `super::` chain or call to a
+resident-defined inherent method from `task` is refused. The remaining
+back-edges among the unordered modules (`resident`, `experiment`, `codebase`)
+and the rest of the application still keep
 the core strongly connected component and await a later audit. [ORB-22708]
 cut the lower modules’ direct edges into `landing`.
 
@@ -415,6 +427,7 @@ cut the lower modules’ direct edges into `landing`.
 - [ORB-22624] — placed `visual_delivery` above `distributed`, moved its two pure reads into `task`, cut review's and distributed's calls through `review::ReviewVisualPort` and `distributed::DistributedVisualPort`, and guarded the direction.
 - [ORB-22708] — placed `landing` above `distributed` beside `visual_delivery`, moved its pure handoff claim resolution into `task`, routed review dispatch through `ReviewLandingDispatchPort`, and guarded the direction.
 - [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
+- [ORB-22955] — cut task's grant-answer and resident-comment calls into `resident` through `task::TaskResidentPort`, implemented by `resident`, and added `resident` to the guarded `task` upper modules.
 - [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 - [ORB-22807] — removed visual review: `visual_delivery`, `review::ReviewVisualPort`, `distributed::DistributedVisualPort`, `task::mock_admission` and `task::visual_review_json` are gone, `landing` calls down into `task`, `job` and `distributed` only, and the guard's `visual_delivery` rule is dropped.

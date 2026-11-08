@@ -28,7 +28,7 @@ use super::entry::{
     LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
 };
 use crate::OrbitRuntime;
-use crate::application::task::{TaskJobPort, TaskReviewPort};
+use crate::application::task::{TaskJobPort, TaskResidentPort, TaskReviewPort};
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -129,7 +129,7 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
-        self.validate_resident_comment_write(
+        self.admit_locked_resident_comment(
             &task,
             params.comment.as_deref(),
             operator_decision_authority

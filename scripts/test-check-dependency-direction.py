@@ -55,6 +55,7 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/workspace_auto",
             "crates/orbit-core/src/application/backlog_forecast",
             "crates/orbit-core/src/application/codebase",
+            "crates/orbit-core/src/application/resident",
             "crates/orbit-core/src/adapter", "crates/orbit-core/src/bootstrap",
             "crates/orbit-runtime/src", "crates/orbit-automation/src",
             "crates/orbit-store/src/contracts", "crates/orbit-store/src/driver/file",
@@ -187,6 +188,47 @@ class RelativeImportTests(unittest.TestCase):
             "codebase/facts/block_cause.rs":
                 "use crate::application::distributed::LeafSettlement;\n"
                 "pub(in crate::application) use crate::application::task::classify_block;\n",
+        }, rejected=False)
+
+    def test_task_reaches_resident_only_through_its_port(self):
+        # [ORB-22955] Task imported resident's comment redaction check and
+        # called its grant-answer and comment-admission inherent methods,
+        # closing a task <-> resident cycle. One detector per call: the
+        # guard's chains stop at the first hit.
+        for rows in (
+            [("task/update/fields.rs", "use crate::application::resident;\n")],
+            [("task/probe.rs", "use crate::application::{\n    resident::Probe,\n};\n")],
+            [("task/mod.rs", "use super::resident::Probe;\n"),
+             ("task/update/probe.rs", "use super::super::super::{resident::Probe};\n")],
+        ):
+            self.check_rows(rows, rejected=True)
+        self.check_rows([
+            ("task/decision/answering.rs",
+             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+             "        self.apply_resident_grant_answer();\n    }\n}\n"),
+            ("task/update/locked.rs",
+             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+             "        self.validate_resident_comment_write();\n    }\n}\n"),
+        ], rejected=True, shared={
+            "resident/grant.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn apply_resident_grant_answer(&self) {}\n}\n",
+            "resident/comments.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn validate_resident_comment_write(&self) {}\n}\n"})
+        self.check_files({
+            "task/resident_port.rs": "pub(in crate::application) trait TaskResidentPort {\n"
+                                     "    fn admit_locked_resident_comment(&self);\n}\n",
+            "task/update/locked.rs":
+                "use crate::application::task::TaskResidentPort;\n"
+                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
+                "        self.admit_locked_resident_comment();\n    }\n}\n",
+            "resident/comments.rs":
+                "use crate::application::task::TaskUpdateParams;\n"
+                "impl OrbitRuntime {\n    pub(crate) fn validate_resident_comment_write(&self) {}\n}\n",
+            "resident/task_port.rs":
+                "use crate::application::task::TaskResidentPort;\n"
+                "impl TaskResidentPort for OrbitRuntime {\n"
+                "    fn admit_locked_resident_comment(&self) {\n"
+                "        self.validate_resident_comment_write();\n    }\n}\n",
         }, rejected=False)
 
     def test_lower_modules_cannot_reach_the_forecast(self):

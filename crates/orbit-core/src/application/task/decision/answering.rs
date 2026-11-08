@@ -12,7 +12,9 @@ use super::super::TaskRecordUpdateParams;
 use super::super::params::{TaskAddParams, TaskUpdateParams};
 use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
-use crate::application::task::{PilotAdmissionHold, TaskJobPort, TaskRecords, TriageTarget};
+use crate::application::task::{
+    PilotAdmissionHold, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
+};
 
 /// What an answer's comment says when its rewrite discarded the task's
 /// published or kept candidate, which the rewritten specification no longer
@@ -346,7 +348,7 @@ impl OrbitRuntime {
                 ),
             )),
             DecisionGate::ResidentAuthority => {
-                self.apply_resident_grant_answer(request, answer_id, actor_label)?;
+                self.apply_resident_authority_decision_answer(request, answer_id, actor_label)?;
                 Ok(None)
             }
             DecisionGate::ScriptGrant => {

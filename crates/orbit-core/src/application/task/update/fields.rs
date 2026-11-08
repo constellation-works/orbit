@@ -15,8 +15,7 @@ use super::artifacts::validate_pr_status;
 use super::entry::{TaskFieldWriter, ValidatedTaskFieldEdits};
 use crate::OrbitRuntime;
 use crate::application::contracts::CreationCrewAssignment;
-use crate::application::resident;
-use crate::application::task::TaskJobPort;
+use crate::application::task::{TaskJobPort, TaskResidentPort};
 
 impl OrbitRuntime {
     /// Re-check, under the task lock, the creation intent an operator
@@ -68,7 +67,7 @@ impl OrbitRuntime {
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.
         if let Some(comment) = &params.comment {
-            resident::ensure_resident_comment_redaction_safe(comment)?;
+            self.refuse_resident_comment_needing_redaction(comment)?;
         }
         for value in [
             &mut params.title,

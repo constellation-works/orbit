@@ -755,7 +755,12 @@ fi
 # task owns the pure block classification (`task::classify_block`) and records
 # a done landing's diff stats through `TaskCodebasePort`, which `codebase`
 # implements on `OrbitRuntime`; `codebase` reads `distributed` itself.
-task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase'
+# `resident` sits outside the order but above `task` [ORB-22955]: it drives
+# task writes, so a decision answer applies a resident grant, and a task
+# comment write admits a resident record and refuses one needing redaction,
+# only through `TaskResidentPort`, which `resident` implements on
+# `OrbitRuntime`.
+task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
 task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::application::backlog_forecast::(BacklogForecastHistory|COMPUTE_BUDGET_ENV);$'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
@@ -769,7 +774,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto and codebase through its task ports, must not route through tag_instructions, and names backlog_forecast only in its two task/mod.rs re-exports"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase and resident through its task ports, must not route through tag_instructions, and names backlog_forecast only in its two task/mod.rs re-exports"
   fail=1
 fi
 
