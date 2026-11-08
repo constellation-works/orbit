@@ -56,15 +56,18 @@ including workspace discovery, is always present. Roles are presets:
 
 | Role | Included toolsets |
 |---|---|
-| `operator` | Every MCP toolset |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, and `plugins` |
 | `manager` | Task and run reads, decisions, notices, resident mandates and search |
 | `resident` | The manager surface plus task writes and dispatch |
 | `agent` | Task reads and writes, decisions, codebase, search, UI and notices |
 | `reader` | Task and run reads, codebase and search |
 
-The `operator` role selects every toolset but grants no operator authority.
-`--operator` is a separate server choice; tools that require operator
-capability still require that capability under every role.
+The `operator` role selects `tasks-read`, `tasks-write`, `task-repair`,
+`decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`,
+`exec`, and `plugins` but grants no operator authority. `--operator` is a
+separate server choice, and selects the operator profile when no `--role` is
+given; tools that require operator capability still require that capability
+under every role.
 
 Set and read back the global defaults with:
 
@@ -80,10 +83,11 @@ The configured toolset names are additions to the chosen role. At server
 startup, `--role <role>` replaces `machine.mcp.role`, and `--toolset <list>`
 replaces `machine.mcp.toolsets`; each flag overrides only its corresponding
 setting. Passing both flags replaces both configured values. The requested
-toolsets are then added to the selected role, or to the legacy default surface
-when no role is selected. With no selected role, that legacy surface remains
-the base; configured or command-line toolsets can extend it. `default` names
-the default surface and `all` names every toolset. Restart a long-lived MCP
+toolsets are then added to the selected role, or to the core profile
+when no role is selected. With no selected role, that core profile (`core`
+plus `tasks-read`, `tasks-write`, and `search`) remains the base;
+configured or command-line toolsets can extend it. `default` names
+the core profile and `all` names every toolset. Restart a long-lived MCP
 server or listener after changing the host defaults; an open session keeps the
 selection it started with.
 

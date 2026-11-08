@@ -114,9 +114,9 @@ toolsets it enables. `orbit tool show <tool>` names a tool's toolset, and
 | Toolset | Tools |
 |---|---|
 | `core` (always on) | Workspace discovery: `orbit.workspace.list` |
-| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `block_triage`, `orbit.task.artifact.get` and `orbit.attention` |
+| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `orbit.task.artifact.get` and `orbit.attention` |
 | `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put`, `orbit.friction.add` and `orbit.friction.update` |
-| `task-repair` | The delivery repair verbs: `orbit.task.requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
+| `task-repair` | The delivery repair verbs: `orbit.task.block_triage`, `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
 | `decisions` | `orbit.decision.list`, `show` and `raise` |
 | `runs` | `orbit.workflow.run.list`, `show` and `observe` |
 | `dispatch` | `orbit.workflow.ship`, `orbit.workflow.land`, `orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke` |
@@ -134,9 +134,10 @@ toolsets it enables. `orbit tool show <tool>` names a tool's toolset, and
 | `resident` | `orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`: resident orchestrator mandates, their authority, the live cycle's checkpoint record, widening measures and the evolution capability-gap ledger. Widening a mandate's authority from an MCP session raises a decision request for the human instead of applying; `orbit evolution decline` is operator-only and CLI-only, so it is not listed over MCP |
 | `local` | Tools no MCP server lists (`proc.spawn`, `github.*`, the drain tools); `orbit tool run` and activities reach them |
 
-Without a role, a server lists `core` plus the default surface: every
-toolset from `tasks-read` through `plugins` above. `default` names that
-surface in a selection. The other toolsets are opt-in.
+Without a role, a server lists `core` plus the core profile:
+`tasks-read`, `tasks-write`, and `search`. `default` names that
+surface in a selection. The other toolsets are opt-in, or included in a
+named role.
 
 Enable groups per server with `--toolset`, or for every server on the host
 with the global `machine.mcp.toolsets` config key; the flag replaces the
@@ -163,7 +164,7 @@ carries only the tools its job needs:
 
 | Role | Toolsets (beside `core`) |
 |---|---|
-| `operator` | Every toolset |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
 | `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
 | `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
@@ -178,8 +179,8 @@ orbit tool list --role agent                         # the role's tools and size
 
 `--role` replaces the global `machine.mcp.role` default for one server;
 `--toolset` replaces `machine.mcp.toolsets` for one server; the selected
-toolsets add to the role. With no configured role, a server lists the default
-surface above, unchanged from before roles, plus any selected toolsets.
+toolsets add to the role. With no configured role, a server lists the core
+profile above plus any selected toolsets.
 `orbit tool list --role <role>` prints the role's tool count and an
 approximate token size of its listed schemas.
 

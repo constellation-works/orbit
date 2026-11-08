@@ -447,8 +447,8 @@ authority: `--operator` still decides operator capability. Today `--role manager
 reads, decisions, notices and search, and `--role resident` adds task writes and dispatch for the
 bounded cycle. Both also serve the `resident` toolset, which [ORB-21242] introduced with
 `orbit.resident.grant`, `show` and `list`; [ORB-21245] added relay and control for the manager, and
-later slices the resident's own checkpoints for the cycle. Without a role a server still
-serves the pre-role default surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
+later slices the resident's own checkpoints for the cycle. Without a role a server serves
+the core profile (`core` plus `tasks-read`, `tasks-write`, and `search`); `--toolset` adds to it. Daniel (2026-11-02): "mcp surfaces are getting too large lately."
 
 ## 7. Notices
 
