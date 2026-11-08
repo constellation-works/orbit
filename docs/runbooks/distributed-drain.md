@@ -2081,6 +2081,18 @@ one. From then on:
 Do not merge follower pull requests on the provider by hand. That skips the
 owner's validation gate, and the owner still has to settle the claim.
 
+The owner clock sweep resumes stopped waiting gates without an operator once a
+fresh observation shows the base checks green or the PR's required checks passed
+and mergeability ready. The stop's typed `waiting_gate` field distinguishes these
+from candidate failures, conflicts and review refusals; opaque diagnostic text
+does not authorize retries. The sweep uses the same guarded retry reservation
+as **Retry landing**, preserves the accepted handoff, and records each retry in
+`landing_retry_reserved` history. Automatic retries open at most attempts 2–4,
+waiting at least 60, 120 and 240 seconds after each stop. Explicit retries count
+toward this automatic ceiling and remain available after it is exhausted. See
+[stopped owner landing retries](../CONFIG.md#delivery-refusals-are-held). Older
+stops without typed waiting evidence continue to require explicit recovery.
+
 An authorized, stopped accepted handoff whose exact head is already merged
 can use **Retry landing** on the owner. The public retry also accepts a
 provider base-only update when fresh Git/provider evidence proves a two-parent

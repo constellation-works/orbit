@@ -1363,6 +1363,11 @@ fn owner_landing_waits_out_pending_only_block_before_checks_pass() {
                     );
                 } else {
                     let error = result.unwrap_err().to_string();
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&host.forge.last_evidence()).unwrap()["waiting_gate"],
+                        "required_checks_pending",
+                        "a check wait must remain distinguishable from review refusal after the job ends"
+                    );
                     // [ORB-22485] The rollup-only wait names its running checks.
                     assert!(
                         error.contains("within 15s")
@@ -2794,6 +2799,11 @@ fn untouched_failure_escalates_after_configured_base_ci_cycles() {
             if refusal.error_code() == "delivery_base_checks_pending"
                 && message.contains("escalated after 2 base CI observation cycles")),
         "the exhausted base budget holds as delivery_base_checks_pending: {error}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&forge.last_evidence()).unwrap()["waiting_gate"],
+        "base_checks_pending",
+        "a base wait must be eligible for the owner's stopped-landing retry loop"
     );
     assert_reason(
         &forge,

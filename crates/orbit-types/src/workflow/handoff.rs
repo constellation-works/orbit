@@ -296,8 +296,9 @@ pub enum LandingAttemptState {
     Dispatched,
     /// Merged and completed against verified external evidence.
     Merged,
-    /// Stopped with durable evidence; an operator may retry a healthy authorized
-    /// handoff. A candidate repair needs fresh validation and a new handoff.
+    /// Stopped with durable evidence. The owner may automatically retry a cleared
+    /// waiting gate within its budget; an operator may explicitly retry a healthy
+    /// authorized handoff. Candidate repair needs validation and a new handoff.
     Stopped,
 }
 
@@ -341,6 +342,26 @@ pub struct LandingRefusalReason {
     pub truncated: bool,
 }
 
+/// A waiting gate that can clear without changing an accepted candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LandingWaitGate {
+    /// The base's checks must finish successfully before landing resumes.
+    BaseChecksPending,
+    /// Required or owner-owed checks are still running on the candidate.
+    RequiredChecksPending,
+}
+
+impl LandingWaitGate {
+    /// The delivery stop code recorded with an automatic retry reservation.
+    pub fn stop_code(self) -> &'static str {
+        match self {
+            Self::BaseChecksPending => "delivery_base_checks_pending",
+            Self::RequiredChecksPending => "delivery_requirements_unsatisfied",
+        }
+    }
+}
+
 /// The diagnostic an owner landing stop records as its attempt's evidence.
 ///
 /// Fields serialize in this declaration order, which is the stored byte
@@ -354,6 +375,10 @@ pub struct OwnerLandingRefusal {
     pub reason: LandingRefusalReason,
     #[serde(default)]
     pub repairable: bool,
+    /// Typed retry eligibility, separate from opaque diagnostic observations.
+    /// Older stops lacking this evidence remain available for explicit retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_gate: Option<LandingWaitGate>,
     #[serde(default)]
     pub accepted: serde_json::Value,
     #[serde(default)]
