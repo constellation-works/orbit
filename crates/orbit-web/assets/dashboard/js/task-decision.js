@@ -163,23 +163,38 @@ export function buildOpenDecisions(task, detail, context) {
   return wrap;
 }
 
+// One answer per request may be in flight: a second, contradictory POST
+// would race the first and let arrival order pick the recorded answer.
+const decisionAnswersInFlight = new Set();
+
 async function answerDecision(task, detail, requestId, answer, note, btnNode, context) {
   const visit = captureWorkspaceVisit();
   if (!taskShared.canMutateTask(task)) return;
+  const flightKey = `${task.id}:${requestId}`;
+  if (decisionAnswersInFlight.has(flightKey)) return;
+  decisionAnswersInFlight.add(flightKey);
   const requestPath = visit.path(
     taskShared.taskWorkspacePath(task, `/api/decisions/${encodeURIComponent(requestId)}/answer`),
   );
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
-  btnNode.disabled = true;
+  // Disable every option on this card (and its note), not just the clicked
+  // one, for the whole flight — the pattern the detail's other actions use.
+  const card = btnNode.closest(".decision-card");
+  const controls = card
+    ? [...card.querySelectorAll(".decision-answer, .decision-note")]
+    : [btnNode];
+  for (const control of controls) control.disabled = true;
   try {
     await postJson(requestPath, note ? { answer, note } : { answer });
   } catch (error) {
+    decisionAnswersInFlight.delete(flightKey);
     if (!visit.isCurrent()) return;
-    btnNode.disabled = false;
+    for (const control of controls) control.disabled = false;
     detail.prepend(taskShared.actionErrorNode(`decision answer: ${error.message || String(error)}`));
     return;
   }
+  decisionAnswersInFlight.delete(flightKey);
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
   forgetTaskDetailLoad(task.id);

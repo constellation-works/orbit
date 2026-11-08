@@ -448,7 +448,8 @@ export function cronText(cron, instant) {
   if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {
-    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
+    // Cron day-of-week runs 0-7 with both 0 and 7 naming Sunday.
+    return `weekly ${CRON_DAYS[Number(dow) % 7] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
   }
   return cron;
 }

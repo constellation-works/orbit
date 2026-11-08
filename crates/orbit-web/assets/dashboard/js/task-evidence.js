@@ -221,6 +221,7 @@ export function buildArtifacts(task) {
     // has already passed over this subtree, so a blob URL mounted into it later
     // would never be revoked.
     let request = null;
+    let failed = false;
     let retired = false;
     preview.teardown = () => {
       retired = true;
@@ -236,6 +237,13 @@ export function buildArtifacts(task) {
           revealPreview(preview.hidden);
           return;
         }
+        // A failed load stays collapsible: hiding the error is a toggle, and
+        // only expanding it again retries the fetch.
+        if (failed && !preview.hidden) {
+          revealPreview(false);
+          return;
+        }
+        failed = false;
         revealPreview(true);
         preview.textContent = "loading...";
         // Same 30s bound as fetchJson, covering the body read too, so a
@@ -256,6 +264,7 @@ export function buildArtifacts(task) {
           preview.dataset.loaded = "true";
         } catch (error) {
           if (retired) return;
+          failed = true;
           const reason = error && error.name === "AbortError" ? "request timed out after 30 seconds" : error.message;
           preview.textContent = `Unable to load ${path}: ${reason}`;
         } finally {

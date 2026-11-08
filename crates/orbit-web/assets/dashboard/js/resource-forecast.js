@@ -175,14 +175,17 @@ function tabPanel(key, children) {
 
 // ---- header and settings ----------------------------------------------------
 
-// The mode admission runs in: the drain's own (an explicit mode it started
-// with, or the host's setting it inherits), else the host's setting.
+// The mode admission runs in: the live drain's own (an explicit mode it
+// started with, or the host's setting it inherits), else the host's setting.
+// Readiness reports a finished drain's mode when none is live, so the drain's
+// explicit mode counts only while its run is the live one (`drain_run_id` is
+// active-only); a dead drain must not headline as the current mode.
 function modeOf(payload) {
   const configured = String(payload.forecast?.configured_mode || "off");
   const drain = payload.readiness?.auto_concurrency;
   const runId = payload.readiness?.capacity?.drain_run_id || null;
-  if (drain?.mode && drain.source === "explicit") {
-    return { mode: String(drain.mode), source: `set on drain ${runId || "start"}`, configured, runId };
+  if (runId && drain?.mode && drain.source === "explicit") {
+    return { mode: String(drain.mode), source: `set on drain ${runId}`, configured, runId };
   }
   return { mode: configured, source: "machine.auto_concurrency.mode on this host", configured, runId };
 }
@@ -335,7 +338,9 @@ function profilesPanel(rows) {
   const shown = rows
     .filter((profile) => view.filter === "all" || (view.filter === "sparse" ? profile.sparse === true : profileKind(profile) === view.filter))
     .sort(compareProfiles);
-  const link = el("a", { href: "#analytics/resources", text: "Analytics › Resources" });
+  const link = el("a", { text: "Analytics › Resources" });
+  // `el` never assigns `href`; set it explicitly or the anchor is inert.
+  link.href = "#analytics/resources";
   return [
     filterControl(rows.length),
     forecastTable("Delivery profiles", [
