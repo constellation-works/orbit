@@ -335,7 +335,7 @@ impl From<ConditionStatus> for ConditionListing {
 impl OrbitRuntime {
     /// The list projection of a routine's condition, `None` for any other
     /// trigger.
-    pub fn routine_condition_listing(
+    pub(crate) fn routine_condition_listing(
         &self,
         definition: &RoutineDefinition,
     ) -> Result<Option<ConditionListing>, OrbitError> {
@@ -346,7 +346,7 @@ impl OrbitRuntime {
 
     /// The list projection of an auto-task's condition, `None` for any
     /// other schedule.
-    pub fn auto_task_condition_listing(
+    pub(crate) fn auto_task_condition_listing(
         &self,
         definition: &AutoTaskDefinition,
     ) -> Result<Option<ConditionListing>, OrbitError> {

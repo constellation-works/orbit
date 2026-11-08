@@ -10,7 +10,7 @@ impl OrbitRuntime {
     /// The enable dry run of a condition auto-task (§9): what enabling it now
     /// would baseline or fire, and whether `max_matches` refuses it. Writes
     /// nothing.
-    pub fn auto_task_enable_preview(
+    pub(crate) fn auto_task_enable_preview(
         &self,
         name: &str,
     ) -> Result<ConditionEnablePreview, OrbitError> {
@@ -30,7 +30,7 @@ impl OrbitRuntime {
     /// that a storm, loop or oscillation was looked at. Audited, fenced, and
     /// refused off the owner. The next pass evaluates normally; a cause that
     /// persists stalls it again.
-    pub fn clear_condition_stall(
+    pub(crate) fn clear_condition_stall(
         &self,
         selector: &str,
         reason: &str,

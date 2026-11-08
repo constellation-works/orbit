@@ -230,7 +230,7 @@ impl AfterLandingSource {
 }
 
 /// Whether after-landing review is on here, and why.
-pub fn after_landing_switch(
+pub(crate) fn after_landing_switch(
     runtime: &OrbitRuntime,
 ) -> Result<(bool, AfterLandingSource), OrbitError> {
     let Some(definition) = after_landing_definition(runtime)? else {
@@ -435,7 +435,7 @@ const BLOCKING_STATES: &[&str] = &[
 
 /// The after-landing consumer's health on this host, or `None` when
 /// after-landing review is off.
-pub fn after_landing_health(
+pub(crate) fn after_landing_health(
     runtime: &OrbitRuntime,
     now: DateTime<Utc>,
 ) -> Result<Option<AfterLandingHealth>, OrbitError> {

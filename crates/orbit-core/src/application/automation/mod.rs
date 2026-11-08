@@ -32,9 +32,8 @@ mod task;
 mod task_port;
 
 pub(crate) use after_landing::review_crew_overrides_definition;
-pub use after_landing::{
-    AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
-};
+pub use after_landing::{AfterLandingHealth, AfterLandingSource};
+pub(crate) use after_landing::{after_landing_health, after_landing_switch};
 pub(in crate::application) use board_port::AutomationBoardPort;
 pub use condition::{
     ConditionChainLink, ConditionEnablePreview, ConditionFireView, ConditionListing,
@@ -48,12 +47,14 @@ pub(crate) use evaluation::{evaluate_auto_task_with_cache, evaluate_routine_with
 pub use explain::{AutomationExplain, ConditionExplain, JobStepsExplain};
 pub(crate) use inspect::inspect_routine_with_cache;
 pub use inspect::{
-    UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
-    inspect_auto_task, inspect_auto_task_with_open_instance, inspect_routine,
+    UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, inspect_routine,
     unadmittable_delivery_definitions, unresolvable_delivery_branches, wedged_delivery_consumers,
 };
+pub(crate) use inspect::{
+    delivery_ownership_refusal, inspect_auto_task, inspect_auto_task_with_open_instance,
+};
 pub use pins::{AttemptPinCleanup, pin_attempt_source, release_unreferenced_attempt_pins};
-pub use recovery::recover_auto_task;
+pub(crate) use recovery::recover_auto_task;
 #[cfg(feature = "test-support")]
 pub use reset::probe_hook::with_reset_probe_hook;
 pub use reset::{ConsumerTeardown, reset_auto_task};
