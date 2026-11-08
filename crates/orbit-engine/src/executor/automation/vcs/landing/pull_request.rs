@@ -49,6 +49,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
+    let mut waiting_for_checks = false;
     // Merge requests the provider refused because the base moved, against the
     // same ceiling pr_complete uses.
     let mut base_modified_refusals = 0_u32;
@@ -68,6 +69,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 &context.owed_hosted_checks,
                 &unreported,
                 &diagnostic,
+                waiting_for_checks,
             )?);
         }
         let status = if max_wait_seconds == 0 {
@@ -284,6 +286,19 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             }
         };
         diagnostic["classification"] = diagnostics::text(&describe(&state));
+        waiting_for_checks = matches!(state, PrMergeState::Pending)
+            && failed_checks(&status).is_empty()
+            && (unreported.awaiting_policy_checks()
+                || status
+                    .status_checks
+                    .iter()
+                    .flatten()
+                    .any(|check| check.state == Some(super::super::pr::CheckState::Pending)))
+            && matches!(
+                status.review_decision,
+                super::super::pr::ReviewDecision::Approved
+                    | super::super::pr::ReviewDecision::NotApplicable
+            );
         // A required context the head has not reported may be one only the
         // advanced base emits, so absent-context recovery still diagnoses it.
         if !refresh_wait
@@ -524,6 +539,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                         &context.owed_hosted_checks,
                         &unreported,
                         &diagnostic,
+                        waiting_for_checks,
                     )?);
                 }
                 if updated_head.is_some() {
@@ -541,6 +557,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                                 &context.owed_hosted_checks,
                                 &unreported,
                                 &diagnostic,
+                                waiting_for_checks,
                             )?);
                         }
                         let delay = poll_interval_seconds
@@ -571,6 +588,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                         &context.owed_hosted_checks,
                         &unreported,
                         &diagnostic,
+                        waiting_for_checks,
                     )?);
                 }
                 let observed =
@@ -699,6 +717,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 waiting,
                 &unreported,
                 &diagnostic,
+                waiting_for_checks,
             )?);
         }
         let sleep_seconds = poll_interval_seconds.min(max_wait_seconds - waited_seconds);
@@ -707,6 +726,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn landing_timeout<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &LandingPass,
@@ -715,6 +735,7 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
     owed: &[String],
     unreported: &UnreportedChecks,
     diagnostic: &Value,
+    waiting_for_checks: bool,
 ) -> Result<OrbitError, OrbitError> {
     let mut waiting = if owed.is_empty() {
         String::new()
@@ -735,13 +756,12 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
             ),
         );
     }
-    stop_pr(
-        host,
-        context,
-        diagnostic,
-        false,
-        &format!(
-            "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
-        ),
-    )
+    let reason = format!(
+        "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
+    );
+    if waiting_for_checks {
+        super::record::stop_waiting_checks(host, context, diagnostic, &reason)
+    } else {
+        stop_pr(host, context, diagnostic, false, &reason)
+    }
 }

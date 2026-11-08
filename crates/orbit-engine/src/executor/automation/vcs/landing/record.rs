@@ -3,7 +3,7 @@
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::{
-    HandoffCandidate, OwnerLandingRefusal, OwnerLandingRefusalKind,
+    HandoffCandidate, LandingWaitGate, OwnerLandingRefusal, OwnerLandingRefusalKind,
 };
 use serde_json::{Value, json};
 
@@ -89,7 +89,15 @@ pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
     refusal: DeliveryRefusal,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
-    let stopped = stop_pr(host, context, observation, repairable, reason)?;
+    let stopped = record_refusal(
+        host,
+        context,
+        observation,
+        HandoffLandingStep::Stop { repairable },
+        reason,
+        (refusal == DeliveryRefusal::BaseChecksPending)
+            .then_some(LandingWaitGate::BaseChecksPending),
+    )?;
     Ok(match stopped {
         OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
         other => other,
@@ -105,6 +113,37 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
     step: HandoffLandingStep,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
+    record_refusal(host, context, observation, step, reason, None)
+}
+
+pub(super) fn stop_waiting_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    record_refusal(
+        host,
+        context,
+        observation,
+        HandoffLandingStep::Stop { repairable: false },
+        reason,
+        Some(LandingWaitGate::RequiredChecksPending),
+    )?;
+    Ok(OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::RequirementsUnsatisfied,
+        message: format!("handoff_land: {reason}"),
+    })
+}
+
+fn record_refusal<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    step: HandoffLandingStep,
+    reason: &str,
+    waiting_gate: Option<LandingWaitGate>,
+) -> Result<OrbitError, OrbitError> {
     let requeue = matches!(step, HandoffLandingStep::StopForRequeue);
     let repairable = requeue || matches!(step, HandoffLandingStep::Stop { repairable: true });
     let refusal = OwnerLandingRefusal {
@@ -112,6 +151,7 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
         kind: OwnerLandingRefusalKind::OwnerLandingRefusal,
         reason: diagnostics::reason(reason),
         repairable,
+        waiting_gate,
         accepted: json!({
             "task":diagnostics::text(&context.task_id),
             "handoff":diagnostics::text(&context.handoff_id),

@@ -392,6 +392,20 @@ pub(crate) fn run_sweep_at_with_providers_at(
         });
     }
 
+    // Only owners resume authorized landing work. Honor dry runs, the tick
+    // deadline and shutdown admission above; replicas never dispatch landings.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            if let Err(error) = runtime.dispatch_landing_requests_at(now_utc) {
+                tracing::warn!(workspace = %workspace.name, %error,
+                    "sweep.owner_landing_dispatch_failed");
+            }
+        }
+    }
+
     let dispatch = RuntimeDispatch {
         runtimes: discovered
             .entries

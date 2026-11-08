@@ -24,16 +24,17 @@
 //!
 //! # What this module never does
 //!
-//! It does not merge, observe a provider, or decide that a candidate landed.
-//! Those belong to the landing activity (which reads real external state) and to
-//! the coordination store (which rechecks the current authorization, the exact
-//! candidate and the digest-pinned validation evidence inside the transaction
+//! It does not merge or decide that a candidate landed. A read-only engine
+//! probe can wake a stopped waiting gate; the landing activity then reads real
+//! external state again, and the coordination store rechecks authorization,
+//! candidate identity and digest-pinned validation inside the transaction.
 
 mod attempts;
 mod context;
 mod dispatch;
 mod retry;
 mod review_port;
+mod waiting;
 
 /// The owner-local job that lands one authorized handoff.
 pub const LANDING_JOB: &str = "task_landing_pipeline";

@@ -1080,6 +1080,23 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_origin_unavailable` | `worktree_setup` could not reach origin during pre-admission base fetch while every task being admitted was still in backlog, including a fetch-lock wait whose bounded origin probe confirms a transport outage. The run is held without changing those tasks; a later admission retries after origin recovers. If any task is already in progress, the outage follows ordinary run failure handling (or claim settlement for a claimed leaf) instead of a hold with no generic resume path. Authentication, permission and missing-ref refusals remain failures. |
 | `delivery_check_repair_activity_absent` | An in-budget `--auto-fix` check repair was admitted, and the job has no `step_failure_recovery` to run it. The run holds, the repair stays uncommitted, and the pull request stays open. Give the job that recovery activity and start a new delivery attempt. Spending the repair budget still fails the run. |
 
+**Stopped owner landing retries.** The owner clock sweep also consumes pending
+landing requests. A stopped handoff with typed waiting-gate evidence resumes
+when a fresh observation shows its base's required checks green, or its PR's
+required and owner-owed checks satisfied and the PR mergeable. It uses the same
+guarded reservation and fresh candidate/authority checks as `retry-handoff`.
+There are at most three automatic retries per handoff, opening landing attempts
+2–4 with minimum backoffs of 60, 120 and 240 seconds from the preceding durable
+stop. Prior explicit retries count toward that ceiling; explicit retry remains
+available after automatic retries are exhausted. Restarts, repeated ticks and changing gate
+reasons do not reset that budget. The `landing_retry_reserved` history event
+records the stop code, retry number and landing attempt. Live jobs, withdrawn
+handoffs, candidate failures, conflicts and review refusals are left alone;
+legacy stops without typed waiting evidence still need explicit retry. Dry-run
+sweeps and shutdown admission holds start no landing work. Transient-failure
+and unknown-mergeability policies can use this same reservation mechanism;
+they do not by themselves grant waiting-gate eligibility.
+
 These codes come from typed refusals, never from matching diagnostic wording.
 The refusing action keeps its existing task transition and landing evidence;
 run finalization does not change the task's status. Retry, step recovery, final

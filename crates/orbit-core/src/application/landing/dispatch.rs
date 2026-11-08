@@ -26,10 +26,18 @@ impl OrbitRuntime {
     /// carried by a live owner job.
     ///
     /// Called when authority is recorded and by explicit owner recovery. It is
-    /// idempotent: a merged handoff is skipped, a stopped attempt waits for the
-    /// deliberate retry in [`Self::land_handoff`], and a live job is left to
-    /// finish.
+    /// idempotent: merged handoffs and live jobs are skipped. A stopped waiting
+    /// gate may resume through the guarded retry path once it clears.
     pub fn dispatch_landing_requests(&self) -> Result<Vec<LandingDispatch>, OrbitError> {
+        self.dispatch_landing_requests_at(chrono::Utc::now())
+    }
+
+    /// Dispatch at an explicit owner-clock instant. Backoff is measured from
+    /// each durable stop, so restarts and overlapping passes cannot reset it.
+    pub fn dispatch_landing_requests_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<LandingDispatch>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let attempts = self.stores().tasks().landing_attempts()?;
         let mut dispatched = Vec::new();
@@ -41,14 +49,16 @@ impl OrbitRuntime {
                 .iter()
                 .find(|attempt| attempt.handoff_id == request.handoff_id);
             match attempt {
-                // Settled work, or a stop whose evidence an operator must read
-                // before anything is retried.
-                Some(attempt)
-                    if matches!(
-                        attempt.state,
-                        LandingAttemptState::Merged | LandingAttemptState::Stopped
-                    ) =>
-                {
+                Some(attempt) if attempt.state == LandingAttemptState::Merged => continue,
+                Some(attempt) if attempt.state == LandingAttemptState::Stopped => {
+                    // One stale/withdrawn handoff or unavailable forge must not
+                    // prevent other owner work from making progress.
+                    match self.retry_waiting_landing(attempt, now) {
+                        Ok(Some(dispatch)) => dispatched.push(dispatch),
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(%error, handoff_id = %attempt.handoff_id,
+                            "waiting landing retry deferred"),
+                    }
                     continue;
                 }
                 Some(attempt) if self.landing_job_is_live(attempt)? => continue,

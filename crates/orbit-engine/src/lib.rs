@@ -90,6 +90,7 @@ pub use executor::automation::vcs::claim::{
     observe_published_candidate, verify_handoff_pull_request_head,
 };
 pub use executor::automation::vcs::git::BaseSyncMode;
+pub use executor::automation::vcs::landing_wait_gate_cleared;
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
