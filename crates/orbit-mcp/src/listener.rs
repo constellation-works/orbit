@@ -4,10 +4,11 @@
 //! is only a question of where the byte stream comes from, who owns the session
 //! behind it, and which addresses may be bound. Framing, dispatch, and the
 //! trusted session envelope are shared with stdio. Before handing a socket to
-//! rmcp, this module rejects streams that do not start with a JSON object.
-//! Without that guard, rmcp skips HTTP request lines and headers, then dispatches
-//! JSON-RPC lines in a browser's HTTP POST body. Loopback alone does not stop a
-//! page visited on the same machine from reaching the socket.
+//! rmcp, this module closes a peer whose user id is not the server's, then
+//! rejects streams that do not start with a JSON object. Without that framing
+//! guard, rmcp skips HTTP request lines and headers, then dispatches JSON-RPC
+//! lines in a browser's HTTP POST body. Loopback alone does not stop a page
+//! visited on the same machine from reaching the socket.
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -25,14 +26,17 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{McpHost, OrbitToolServer};
 
+#[path = "listener_peer.rs"]
+mod peer;
+
 /// Loopback port `orbit mcp listen` binds when no address is given.
 pub const DEFAULT_MCP_LISTEN_PORT: u16 = 7879;
 
 /// Sessions one listener serves at a time. Each accepted connection holds a
-/// server instance and an rmcp session until the peer closes, and the
-/// listener authenticates no one, so without a ceiling any process that can
-/// reach the socket can pin descriptors and memory until `accept` itself
-/// fails. Beyond the ceiling new connections wait for a slot rather than
+/// server instance and an rmcp session until the peer closes. Only this
+/// process's user is admitted, and without a ceiling that user can still pin
+/// descriptors and memory until `accept` itself fails. Beyond the ceiling new
+/// connections wait for a slot rather than
 /// being refused, so a burst of legitimate clients degrades to queueing.
 pub const DEFAULT_MAX_MCP_SESSIONS: usize = 64;
 
@@ -47,7 +51,7 @@ const INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Longest single JSON-RPC message, in bytes, a listener session accepts.
 ///
-/// The peer is unauthenticated. rmcp's transport discards a line longer than its
+/// A same-user peer can still send one huge line. rmcp's transport discards a line longer than its
 /// own 16 MiB default and keeps the connection open, so this stricter limit is
 /// what protects the listener. A session whose single message exceeds it is
 /// closed before rmcp buffers the message whole. Far larger than any tool call
@@ -56,10 +60,11 @@ pub(crate) const DEFAULT_MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// How far a listener is allowed to be reachable.
 ///
-/// The listener authenticates no one: a local process that reaches the socket
-/// gets the accepting machine's agent tool surface. Loopback blocks remote TCP
-/// peers, but a browser page can send HTTP requests to loopback. The framing
-/// guard below closes those requests before rmcp can dispatch their bodies.
+/// The listener admits a connection only when the peer's user id is the
+/// server's, and then only to the agent tool surface. Loopback blocks remote
+/// TCP peers; a remote peer also has no local user id and is refused. A
+/// browser page can still send HTTP requests to loopback. The framing guard
+/// below closes those requests before rmcp can dispatch their bodies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ListenerExposure {
     /// Refuse any bind address that is not a loopback address.
@@ -79,6 +84,12 @@ pub struct McpListener {
     sessions: Arc<Semaphore>,
     initialization_timeout: Duration,
     max_message_bytes: usize,
+    /// Effective uid captured at bind. Production callers cannot replace it.
+    allowed_peer_uid: u32,
+    /// Test-only stand-in for the two established TCP rows. Production binds
+    /// leave this empty, so the platform lookup is what admits a peer.
+    #[cfg(feature = "test-support")]
+    tcp_uid_rows: Option<peer::TcpUidRows>,
 }
 
 impl McpListener {
@@ -104,6 +115,9 @@ impl McpListener {
             sessions: Arc::new(Semaphore::new(DEFAULT_MAX_MCP_SESSIONS)),
             initialization_timeout: INITIALIZATION_TIMEOUT,
             max_message_bytes: DEFAULT_MAX_MCP_MESSAGE_BYTES,
+            allowed_peer_uid: peer::current_euid(),
+            #[cfg(feature = "test-support")]
+            tcp_uid_rows: None,
         })
     }
 
@@ -118,6 +132,31 @@ impl McpListener {
     /// Replace the longest message a session may send before it is closed.
     pub fn with_max_message_bytes(mut self, limit: usize) -> Self {
         self.max_message_bytes = limit;
+        self
+    }
+
+    /// Admit only connections whose peer uid is `uid`, instead of this
+    /// process. Tests use a uid other than the connector's to observe the
+    /// refusal; production binds capture the effective uid themselves.
+    #[cfg(feature = "test-support")]
+    pub fn with_allowed_peer_uid(mut self, uid: u32) -> Self {
+        self.allowed_peer_uid = uid;
+        self
+    }
+
+    /// Effective uid of this process, the uid a production listener admits.
+    #[cfg(feature = "test-support")]
+    pub fn current_euid() -> u32 {
+        peer::current_euid()
+    }
+
+    /// Stand in the two established TCP rows for this listener.
+    ///
+    /// `client_uid` is the socket whose local address is the accepted peer.
+    /// `server_uid` is the reversed row. Production callers have no setter.
+    #[cfg(feature = "test-support")]
+    pub fn with_tcp_uid_rows(mut self, client_uid: u32, server_uid: u32) -> Self {
+        self.tcp_uid_rows = Some(peer::TcpUidRows::new(client_uid, server_uid));
         self
     }
 
@@ -167,6 +206,37 @@ impl McpListener {
                     return Err(OrbitError::Execution(format!("mcp listen accept: {error}")));
                 }
             };
+            // The user-id check runs before any read, so a refused peer never
+            // reaches framing or tool dispatch. A local-address failure fails
+            // closed for the same reason.
+            let local = match stream.local_addr() {
+                Ok(addr) => addr,
+                Err(error) => {
+                    tracing::warn!(
+                        peer = %peer,
+                        error = %error,
+                        "mcp listener refused a peer whose local address could not be read"
+                    );
+                    drop(permit);
+                    continue;
+                }
+            };
+            #[cfg(feature = "test-support")]
+            let tcp_uid_rows = self.tcp_uid_rows;
+            #[cfg(not(feature = "test-support"))]
+            let tcp_uid_rows = None;
+            if let Some(reason) =
+                peer::peer_refusal(local, peer, self.allowed_peer_uid, tcp_uid_rows)
+            {
+                tracing::warn!(
+                    peer = %peer,
+                    allowed_uid = self.allowed_peer_uid,
+                    reason,
+                    "mcp listener refused a peer before reading"
+                );
+                drop(permit);
+                continue;
+            }
             let initialization_deadline = tokio::time::Instant::now() + self.initialization_timeout;
             let server = OrbitToolServer::new_with_context(
                 Arc::clone(&self.host),
@@ -205,9 +275,10 @@ fn ensure_bind_allowed(addr: SocketAddr, exposure: ListenerExposure) -> Result<(
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(
-        "refusing to bind the MCP listener to non-loopback address {addr}: the listener \
-         authenticates no client. Reach it through an authenticated tunnel, or pass \
-         `--allow-non-loopback` once the network path is restricted by other means."
+        "refusing to bind the MCP listener to non-loopback address {addr}: pass \
+         `--allow-non-loopback` only when every peer is this user. A remote TCP \
+         client has no local user id and is refused. Reach the listener through an \
+         SSH tunnel as this user, or keep the bind on loopback."
     )))
 }
 
