@@ -6,7 +6,8 @@
 //! index state — the manifest is the only non-bundle entry.
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_shared_file_lock;
@@ -16,6 +17,34 @@ use crate::driver::file::task_bundle::{PENDING_WRITE_FILE_NAME, bundle_lock_targ
 /// Compression level for the zstd frame. Task bundles are small text; a moderate
 /// level keeps archives compact without a slow compress path.
 const ZSTD_LEVEL: i32 = 3;
+
+/// Largest tree a task-migration archive may unpack to. Task bundles are
+/// small text trees, so this is generous for legitimate exports while making
+/// a decompression bomb harmless: a few compressed kilobytes say nothing
+/// about how many bytes they inflate to.
+pub(super) const MAX_TASK_ARCHIVE_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Most members one task-migration archive may carry, so an archive of
+/// millions of empty files cannot exhaust inodes before the size bound trips.
+pub(super) const MAX_TASK_ARCHIVE_ENTRIES: usize = 20_000;
+
+/// The bounds one task-archive extraction runs under, carried as a value
+/// so both bounds are stated once at the extraction call site.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TaskArchiveLimits {
+    /// Total bytes an archive may unpack to.
+    pub(super) unpacked_bytes: u64,
+    /// Number of members an archive may carry.
+    pub(super) entries: usize,
+}
+
+impl TaskArchiveLimits {
+    /// What every import extracts under.
+    pub(super) const DEFAULT: Self = Self {
+        unpacked_bytes: MAX_TASK_ARCHIVE_UNPACKED_BYTES,
+        entries: MAX_TASK_ARCHIVE_ENTRIES,
+    };
+}
 
 /// Archive-relative directory that holds the per-task bundle trees.
 pub(super) const BUNDLES_DIR: &str = "bundles";
@@ -226,13 +255,25 @@ fn reject_pending_write(task_id: &str, bundle_dir: &Path) -> Result<(), OrbitErr
     Ok(())
 }
 
-/// Extract a tar.zst archive into `dest`. Path-traversal entries are rejected by
-/// the tar reader, so `dest` fully contains the extracted tree.
+/// Extract a tar.zst archive into `dest`, bounded by
+/// [`MAX_TASK_ARCHIVE_UNPACKED_BYTES`] and [`MAX_TASK_ARCHIVE_ENTRIES`].
+///
+/// A member whose path would escape `dest` is refused explicitly rather
+/// than delegated to `tar::Entry::unpack_in`, which silently skips such a
+/// member and would leave a silently incomplete staged tree.
 ///
 /// Only directories and regular files are extracted. Exports never contain
 /// anything else, and a link would let an archive author have a later read
 /// (blob verification, the copy into the store) follow it to a host file.
 pub(super) fn extract_archive(archive_path: &Path, dest: &Path) -> Result<(), OrbitError> {
+    extract_archive_with_limits(archive_path, dest, TaskArchiveLimits::DEFAULT)
+}
+
+pub(super) fn extract_archive_with_limits(
+    archive_path: &Path,
+    dest: &Path,
+    limits: TaskArchiveLimits,
+) -> Result<(), OrbitError> {
     let file = File::open(archive_path).map_err(|e| {
         OrbitError::Io(format!(
             "failed to open archive '{}': {e}",
@@ -245,29 +286,147 @@ pub(super) fn extract_archive(archive_path: &Path, dest: &Path) -> Result<(), Or
             archive_path.display()
         ))
     })?;
-    let extract_error = |e: std::io::Error| {
-        OrbitError::Store(format!(
-            "failed to extract archive '{}': {e}",
-            archive_path.display()
-        ))
-    };
-    let mut archive = tar::Archive::new(decoder);
+    let extract_error = |e: std::io::Error| extract_failure(archive_path, &e);
+    // Bound the decompressed stream itself, so tar headers and any bytes
+    // not accounted for by a member's logical size also count against the
+    // budget. The per-entry logical-size check below is the sparse-safe
+    // half: GNU sparse holes are created by seek/set_len without those
+    // bytes ever appearing in the stream.
+    let bounded = BoundedReader::new(decoder, limits.unpacked_bytes, archive_path);
+    let mut archive = tar::Archive::new(bounded);
+    let mut count = 0usize;
+    let mut remaining_output = limits.unpacked_bytes;
     for entry in archive.entries().map_err(extract_error)? {
         let mut entry = entry.map_err(extract_error)?;
+        count += 1;
+        if count > limits.entries {
+            return Err(OrbitError::Store(format!(
+                "archive '{}' has more than {} entries \
+                 (MAX_TASK_ARCHIVE_ENTRIES = {}); refusing to extract it",
+                archive_path.display(),
+                limits.entries,
+                limits.entries
+            )));
+        }
         let kind = entry.header().entry_type();
         if kind.is_pax_global_extensions() {
             continue;
         }
-        if !(kind.is_file() || kind.is_dir()) {
+        // Logical size: for a GNU sparse member `header.size()` is the
+        // real (expanded) size while `entry.size()` is only the stored
+        // bytes, so take the larger. Check before `unpack_in` can create
+        // an oversized or sparse file, and before the kind refusal so an
+        // over-bound sparse member names the unpacked bound.
+        let logical_size = entry
+            .header()
+            .size()
+            .map(|header_size| header_size.max(entry.size()))
+            .unwrap_or_else(|_| entry.size());
+        remaining_output = remaining_output.checked_sub(logical_size).ok_or_else(|| {
+            OrbitError::Store(format!(
+                "archive '{}' unpacks to more than {} bytes \
+                 (MAX_TASK_ARCHIVE_UNPACKED_BYTES = {}); refusing to extract it",
+                archive_path.display(),
+                limits.unpacked_bytes,
+                limits.unpacked_bytes
+            ))
+        })?;
+        if !(kind.is_file() || kind.is_gnu_sparse() || kind.is_dir()) {
             return Err(OrbitError::Store(format!(
                 "archive '{}' holds an entry that is a link or special file; only files and \
                  directories are imported",
                 archive_path.display()
             )));
         }
+        let path = entry.path().map_err(extract_error)?.into_owned();
+        refuse_escaping_member(&path, archive_path)?;
         entry.unpack_in(dest).map_err(extract_error)?;
     }
     Ok(())
+}
+
+/// Report an extraction failure with its whole cause chain, so a bound
+/// enforced by [`BoundedReader`] is not buried under tar's wrapper error.
+fn extract_failure(archive_path: &Path, error: &std::io::Error) -> OrbitError {
+    let mut causes = vec![error.to_string()];
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(inner) = cause {
+        causes.push(inner.to_string());
+        cause = inner.source();
+    }
+    OrbitError::Store(format!(
+        "failed to extract archive '{}': {}",
+        archive_path.display(),
+        causes.join(": ")
+    ))
+}
+
+/// Refuse a member whose path would write outside the extraction root.
+fn refuse_escaping_member(path: &Path, archive_path: &Path) -> Result<(), OrbitError> {
+    let refuse = |why: &str| {
+        Err(OrbitError::Store(format!(
+            "archive '{}' contains the entry '{}', which {why}; refusing to extract it",
+            archive_path.display(),
+            path.display()
+        )))
+    };
+    if path.components().next().is_none() {
+        return refuse("has an empty path");
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                return refuse("traverses out of the archive root with `..`");
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return refuse("is an absolute path");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A reader that fails once the decompressed stream passes `limit` bytes.
+///
+/// One byte of headroom is kept so reaching exactly `limit` is still a
+/// successful read: the error fires only on the byte that would exceed it.
+struct BoundedReader<R> {
+    inner: R,
+    remaining: u64,
+    limit: u64,
+    archive_path: PathBuf,
+}
+
+impl<R: Read> BoundedReader<R> {
+    fn new(inner: R, limit: u64, archive_path: &Path) -> Self {
+        Self {
+            inner,
+            remaining: limit.saturating_add(1),
+            limit,
+            archive_path: archive_path.to_path_buf(),
+        }
+    }
+}
+
+impl<R: Read> Read for BoundedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let capacity = usize::try_from(self.remaining)
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        if capacity == 0 {
+            return Err(std::io::Error::other(format!(
+                "archive '{}' unpacks to more than {} bytes \
+                 (MAX_TASK_ARCHIVE_UNPACKED_BYTES = {})",
+                self.archive_path.display(),
+                self.limit,
+                self.limit
+            )));
+        }
+        let read = self.inner.read(&mut buf[..capacity])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
 }
 
 fn map_io(context: &'static str) -> impl Fn(std::io::Error) -> OrbitError {
