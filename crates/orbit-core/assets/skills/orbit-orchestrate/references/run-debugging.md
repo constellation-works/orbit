@@ -400,6 +400,27 @@ budget blocks it for an operator. Unreadable evidence and unresolved base
 waits spend no candidate repair. Confirm the actual task and latest landing
 attempt state before recommending any action.
 
+### Review deliveries without a handoff
+
+A dashboard ship, `orbit run ship` and an owner drain leaf all deliver through
+the same `task_pr_pipeline`, so they behave the same. Without `--complete` or
+`--auto-fix`, the leaf ends at `review` with its pull request open, and no
+owner landing follows: that runs only for a follower's handoff. Instead the
+leaf submits a detached `task_pr_watch_pipeline` (step `watch`, activity
+`pr_checks_watch`). It records one `landing_checks_observed` entry in the task
+history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
+`blocked` or `pending`), `pr_number` and `head_sha`. A `failed` note adds
+`failed_checks`, plus a `classification` and `detail` that use the classes in
+the table above. A watch that cannot read jobs or logs records
+`inconclusive`. The watch only observes. To repair a red or conflicting pull
+request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
+[auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
+resumes the succeeded leaf at its completion step under the leaf's own
+`completion`. A drain pass still resumes only stopped leaves. A watch that
+ended without an entry (the task left review, or the pull request merged or
+closed) shows `recorded: false` and its `ended` reason in
+`orbit run show <watch-run-id> --step watch --json`.
+
 These outcomes describe existing owner landing, not new operator authority.
 For completion-watcher repairs use [auto-fix authorization](orchestration.md#auto-fix-authorization);
 its repair and single base-update limits remain separate. A **missing**

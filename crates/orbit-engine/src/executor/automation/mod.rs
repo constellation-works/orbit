@@ -191,6 +191,7 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::PrPrepare => vcs::prepare_pr_handoff(host, input),
         EngineDeterministicAction::PrPromote => vcs::pr_promote(host, input),
         EngineDeterministicAction::HandoffLand => vcs::handoff_land(host, input),
+        EngineDeterministicAction::PrChecksWatch => vcs::pr_checks_watch(host, input),
         EngineDeterministicAction::PrComplete => vcs::pr_complete(host, input),
     }
 }

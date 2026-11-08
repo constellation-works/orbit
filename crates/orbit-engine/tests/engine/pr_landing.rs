@@ -66,6 +66,7 @@ mod draft_handoff;
 mod flaky;
 mod infrastructure;
 mod landing_transport;
+mod review_watch;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
 use super::git_fixture;

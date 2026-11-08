@@ -1862,7 +1862,15 @@ shows only when the task records a pull request. It is enabled only when that
 pull request conflicts with its base or a required check failed on its head;
 otherwise it is disabled with the reason in its title. A refused start answers
 `409` with code `task_auto_fix_<reason>`, using the drain's reasons plus the
-single-task ones; nothing starts. See the
+single-task ones; nothing starts. Unlike a drain pass, Fix PR also hands
+back a delivery that succeeded without `--complete` and left its pull request
+in review, as a dashboard ship or `orbit run ship` does. Such a delivery's own
+run ends at once, so a detached `task_pr_watch_pipeline` watches the pull
+request's checks for up to an hour. It records one `landing_checks_observed`
+history entry on the task (`state` `passed`, `failed`, `conflicting`,
+`blocked` or `pending`; for `failed`, the failed checks and the owner landing's
+`classification` of them). It never merges, reruns or repairs, and the task
+detail shows the newest entry beside Fix PR. See the
 [runbook](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching)
 for the reasons.
 

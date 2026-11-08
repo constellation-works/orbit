@@ -437,6 +437,14 @@ pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
 /// recover from a failure inherited from it, before the landing deadline.
 pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
 
+/// History event of the review watch that follows an owner-local delivery
+/// left in review with an open pull request (a dashboard ship, `orbit run
+/// ship` or a drain leaf, none of which hands off for landing). Its note is
+/// the JSON outcome: `state` (`passed`, `failed`, `conflicting`, `blocked`
+/// or `pending`), `pr_number`, `head_sha`, and for `failed` the landing's
+/// `classification` of the failed checks with its `detail`.
+pub const LANDING_CHECKS_OBSERVED_EVENT: &str = "landing_checks_observed";
+
 /// History event of the landing stop that found the task's landing repair
 /// budget spent and blocked it. Requeues before it no longer count.
 pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";

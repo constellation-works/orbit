@@ -95,6 +95,7 @@ not a rewrite of failed history.
 | `task_claimed_pr_pipeline` | Claimed leaf for PR ship mode. Ends at an owner handoff; the follower never merges. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
 | `task_claimed_local_pipeline` | Claimed leaf for local ship mode, and only when the execution machine is the owner. A remote follower is refused. Ends at a handoff and does not merge or complete. |
 | `task_landing_pipeline` | Lands one authorized handoff on the owner. The handoff outbox submits it; a drain or schedule does not. |
+| `task_pr_watch_pipeline` | Review watch for an owner-local delivery that ends in review with an open pull request and no `--complete` or `--auto-fix` (a dashboard ship, `orbit run ship`, or a drain leaf without either grant). `task_pr_pipeline` submits it detached. It polls the pull request's checks (default one hour) and appends one `landing_checks_observed` history entry, classifying failed checks as owner landing does. It never merges, reruns, repairs or changes the task's status. Not for direct invocation. |
 | `task_review_reconciliation_pipeline` | Validates and reviews one already-merged foreign delivery head. Admitted by `orbit task reconcile-review submit`; the job refuses a run that lacks that admission. |
 
 ## Task-pilot readiness holds

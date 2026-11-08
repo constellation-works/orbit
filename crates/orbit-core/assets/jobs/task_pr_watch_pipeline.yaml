@@ -1,0 +1,49 @@
+# Review watch [ORB-23003].
+#
+# Landing follow-through for an owner-local delivery that ends in review with
+# an open pull request. `task_pr_pipeline` submits it detached as its last
+# step when the run neither merges (`completion: done`) nor watches its own
+# pull request (`auto_fix: true`), so every entry point that ships through
+# that leaf (a dashboard ship, `orbit run ship`, a drain) gets it. A
+# follower's handoff is landed by `task_landing_pipeline` instead.
+#
+# The watch polls the pull request's checks and records one
+# `landing_checks_observed` history entry classifying them, the signal the
+# dashboard shows on the task and Fix PR acts on. It is observation only: it
+# never merges, reruns, updates the branch or starts a repair, and it holds no
+# delivery slot or footprint lock, so a drain refills the slot as soon as the
+# delivery leaf ends.
+#
+# Failure semantics:
+# - A task that leaves review, or a pull request that merges or closes, ends
+#   the watch without an entry.
+# - Checks that have not settled within `max_wait_seconds` are recorded as
+#   `pending`.
+# - A forge read failure fails this run only; the delivery and the task are
+#   unaffected, and an operator can submit the watch again.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_pr_watch_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 0
+  default_input:
+    task_ids: []
+    pr_number: ""
+    base: ""
+    base_sync: remote
+    max_wait_seconds: null
+    poll_interval_seconds: null
+
+  steps:
+    - id: watch
+      target: activity:pr_checks_watch
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        pr_number: "{{ input.pr_number }}"
+        base: "{{ input.base }}"
+        base_sync: "{{ input.base_sync }}"
+        max_wait_seconds: "{{ input.max_wait_seconds }}"
+        poll_interval_seconds: "{{ input.poll_interval_seconds }}"
