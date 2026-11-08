@@ -7,7 +7,10 @@
 
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
 use orbit_types::task::UNSET_BUCKET;
+
+use crate::application::admission::backlog_exclusion::BacklogTaskExclusion;
 use serde_json::{Value, json};
 
 use super::outcomes::{AwayWait, Episode, EpisodeOutcome, Follow, MAX_ATTEMPTS, ReturnCurve};
@@ -45,7 +48,9 @@ use super::review_modes::ReviewMode;
 /// is withheld [ORB-21949]. A bump starts uncorrected; earlier versions
 /// keep their own scoring rules, though task-level calibration of every
 /// version counts each task once on that same population.
-pub(super) const MODEL_VERSION: u32 = 18;
+/// 19: time to drain excludes future-scheduled and no-drain work; their
+/// standalone work, token and cost estimates remain in spending totals.
+pub(super) const MODEL_VERSION: u32 = 19;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -93,8 +98,39 @@ pub(super) struct Spent {
     pub(super) usd: f64,
 }
 
+/// Work estimated separately from the tasks this drain can start.
+pub(super) enum DrainHold {
+    Scheduled(DateTime<Utc>),
+    Excluded(BacklogTaskExclusion),
+}
+
+impl DrainHold {
+    pub(super) fn reason(&self) -> &'static str {
+        match self {
+            Self::Scheduled(_) => "scheduled",
+            Self::Excluded(_) => "drain_excluded",
+        }
+    }
+
+    pub(super) fn to_json(&self) -> Value {
+        match self {
+            Self::Scheduled(at) => json!({
+                "kind": "scheduled",
+                "starts_at": at.to_rfc3339(),
+                "detail": format!("starts {}", at.to_rfc3339()),
+            }),
+            Self::Excluded(exclusion) => json!({
+                "kind": "excluded",
+                "reason": exclusion.reason,
+                "detail": exclusion.detail,
+            }),
+        }
+    }
+}
+
 /// One task the forecast covers.
 pub(super) struct Item {
+    pub(super) drain_hold: Option<DrainHold>,
     pub(super) task_id: String,
     pub(super) title: String,
     /// Complexity bucket; [`UNSET_BUCKET`] when unassessed.

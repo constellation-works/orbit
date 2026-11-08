@@ -263,6 +263,21 @@ export function backlogForecastFailureSummary() {
   return { unavailable: true, reasonKind: "transport", reason: "Couldn't load the backlog forecast", detail: "The forecast could not be loaded. Check the connection and try again." };
 }
 
+// Scope holds are estimates of future/manual work, outside this drain's clock.
+export function forecastDrainScope(source) {
+  const held = (source?.task_predictions || []).filter((row) => row.drain_hold);
+  const scheduled = held.filter((row) => row.drain_hold.kind === "scheduled");
+  const excluded = held.filter((row) => row.drain_hold.kind === "excluded");
+  const next = scheduled.map((row) => row.drain_hold.starts_at).filter(Boolean).sort()[0];
+  const reasons = [...new Set(excluded.map((row) => row.drain_hold.reason === "no_drain_tag" ? "no-drain" : row.drain_hold.reason).filter(Boolean))];
+  const compact = [
+    scheduled.length ? `${scheduled.length} scheduled${next ? ` · starts ${next.slice(0, 10)}` : ""}` : null,
+    excluded.length ? `${excluded.length} excluded${reasons.length ? ` · ${reasons.join(", ")}` : ""}` : null,
+  ].filter(Boolean).join(" · ");
+  const lines = held.map((row) => `${row.drain_hold.kind === "scheduled" ? "Scheduled" : "Excluded"}: ${row.title || "Untitled task"} — ${row.drain_hold.detail || row.drain_hold.reason}`);
+  return { compact, lines };
+}
+
 /// Compact drain-card figures. When the adjusted forecast is unavailable this
 /// still returns a summary carrying the reason (and baseline, when present),
 /// so the drain card can explain itself instead of a generic line. Null only
@@ -271,15 +286,16 @@ export function backlogForecastSummary(payload) {
   if (!payload || typeof payload !== "object") return null;
   const forecast = payload.forecast || {};
   const backlog = payload.backlog || {};
+  const scope = forecastDrainScope(forecast);
   const counts = `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`;
   const freshness = backlogForecastFreshness(payload);
   const info = forecastUnavailableInfo(forecast, payload);
   if (info) {
     const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, scope, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
   }
   if (num(forecast.tasks) === 0) {
-    return { unavailable: true, reasonKind: "empty", reason: "No backlog to forecast", detail: "No backlog or in-progress tasks in this workspace.", baseline: null, baselineText: "", counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+    return { unavailable: true, reasonKind: "empty", reason: "No backlog to forecast", detail: "No backlog or in-progress tasks in this workspace.", baseline: null, baselineText: "", scope, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
   }
   const hours = forecast.time_to_drain_hours;
   if (quantilePair(hours)) {
@@ -291,7 +307,7 @@ export function backlogForecastSummary(payload) {
       tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
       bars: backlogBarQuantiles(forecast),
       references: backlogBarReferences(forecast.pre_regression_baseline),
-      counts, freshness,
+      scope, counts, freshness,
     };
   }
   // No adjusted quantiles and no unavailable flags: classify from evidence.
@@ -306,7 +322,7 @@ export function backlogForecastSummary(payload) {
   else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
   else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
   const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, scope, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
 }
 
 // The backlog card's bar rows: key, label, forecast field and figure format.
@@ -411,7 +427,7 @@ export function drainBacklogForecastLink(summary) {
   link.href = scopedHashHref("#analytics/forecast");
   if (unavailable) {
     const reason = summary?.reason || "Backlog forecast unavailable";
-    const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts].filter(Boolean).join(" ");
+    const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts, ...(summary?.scope?.lines || [])].filter(Boolean).join(" ");
     link.title = `${detail}\nAnalytics › Forecast`;
     if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
     const bars = backlogBarList(summary?.baselineBars, null, "pre-regression baseline");
@@ -422,10 +438,11 @@ export function drainBacklogForecastLink(summary) {
       el("span", { class: "visually-hidden", text: ` ${detail}` }),
       bars ? null : el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
     ]) if (child) link.append(child);
+    if (summary?.scope?.compact) link.append(el("span", { class: "drain-forecast-meta drain-backlog-forecast-scope", text: summary.scope.compact }));
     return link;
   }
   const detail = [
-    summary.freshness, summary.counts,
+    summary.freshness, summary.counts, ...(summary.scope?.lines || []),
     summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
     summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
   ].filter(Boolean).join(" · ");
@@ -436,6 +453,7 @@ export function drainBacklogForecastLink(summary) {
     el("span", { class: "drain-section-label", text: "Backlog" }),
     el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),
     bars,
+    summary.scope?.compact ? el("span", { class: "drain-forecast-meta drain-backlog-forecast-scope", text: summary.scope.compact }) : null,
     summary.references ? el("span", { class: "drain-backlog-forecast-legend", text: "pre-regression baseline p50" }) : null,
     el("span", { class: "visually-hidden", text: ` p50 – p90, ${accessibleDetail}` }),
     el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),

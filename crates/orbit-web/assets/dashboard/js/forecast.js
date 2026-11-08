@@ -31,7 +31,7 @@ import {
   UNREPORTED_FORECAST_REASON, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
   fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
-  regressionGapBecause, regressionHistoryIsAbsent,
+  regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
 } from './forecast-summary.js';
 import { dataGapsPanelNodes, openCoverageCount, otherChecksClearText } from './forecast-gaps.js';
 import { accuracyPanelNodes } from './forecast-accuracy.js';
@@ -695,6 +695,7 @@ function taskEvidenceLines(row, review) {
   return [
     sub,
     order,
+    row.drain_hold?.detail,
     quantilePair(row.tokens) ? `${formatForecastQuantileRange(row.tokens, formatForecastTokens)} tokens` : null,
     metricSupportLine(row),
   ].filter(Boolean);
@@ -710,6 +711,8 @@ function taskCell(row, review) {
 }
 
 function startsCell(row) {
+  const hold = row.drain_hold;
+  if (hold) return el("td", { class: "fc-unforecastable", title: hold.detail, text: hold.kind === "scheduled" ? `starts ${hold.starts_at?.slice(0, 10) || "later"}` : `Excluded · ${hold.reason === "no_drain_tag" ? "no-drain" : hold.reason || "drain policy"}` });
   if (row.unforecastable) return el("td", { class: "fc-unforecastable", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable });
   if (row.status === "in-progress") return el("td", { class: "num", text: "running" });
   return el("td", { class: "num", text: formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) });
@@ -724,7 +727,7 @@ function costCell(row) {
 }
 
 function finishesCell(row) {
-  if (row.unforecastable) return el("td", { class: "num", text: "—" });
+  if (row.unforecastable || row.drain_hold) return el("td", { class: "num", text: "—" });
   const share = num(row.completion_probability);
   return el("td", { class: share != null && share < 1 ? "num fc-finish-short" : "num", text: fmtShare(share) });
 }
@@ -765,9 +768,11 @@ function waitsSection(scenario) {
 // ---- forecast tab ---------------------------------------------------------
 
 function forecastPanelNodes(scenario) {
+  const scope = forecastDrainScope(scenario.source);
   return [
     el("div", { class: "fc-scenario-row" }, [scenarioSwitch(), pinnedInfoHint(arrivalsText())]),
     ...totalsNodes(scenario),
+    scope.lines.length ? forecastCard("Outside this drain", "Time to drain covers startable work. These tasks retain their own work, token and cost estimates; their regression follow-up is outside this drain.", scope.lines.map((line) => el("p", { class: "mx-blurb", text: line }))) : null,
     tasksCard(scenario),
     el("div", { class: "fc-more-list" }, [waitsSection(scenario)]),
   ];

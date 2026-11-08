@@ -402,7 +402,7 @@ function historyText(inputs) {
   return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
 }
 
-const ADMISSION_TEXT = "Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet.";
+const ADMISSION_TEXT = "Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, other static eligibility and arrivals' files are not modelled yet.";
 
 function methodSection() {
   const inputs = forecastView.payload.inputs || {};
@@ -417,6 +417,7 @@ function methodSection() {
     el("h3", { class: "fc-sub-title", text: "Sampling and admission" }),
     el("p", { class: "mx-blurb", text: samplingExplanation(inputs) }),
     el("p", { class: "mx-blurb", text: ADMISSION_TEXT }),
+    forecastView.payload.model_version >= 19 ? el("p", { class: "mx-blurb", text: "Time to drain covers startable work. Future-scheduled and no-drain tasks are listed separately, with standalone work, token and cost estimates retained in spending totals. Their future regression follow-up stays outside this drain. Stored scheduled and excluded work stays outside drain-time actuals too; model versions are scored separately." }) : null,
     predictions.length ? el("p", { class: "mx-blurb", text: scheduleCaption(scheduleShowsReview(predictions.slice(0, SCHEDULE_ROWS))) }) : null,
     el("h3", { class: "fc-sub-title", text: "By complexity" }),
     byComplexityTable(),

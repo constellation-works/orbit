@@ -27,6 +27,10 @@
 //!   admission module's forecast adapter). A task whose dependency the
 //!   forecast cannot schedule leaves the full-backlog totals unknown and is
 //!   reported with a schedulable subset (`dependencies.rs`).
+//! - Future-scheduled and no-drain tasks retain standalone script spending
+//!   estimates but stay outside the drain simulation. Their holds are reported
+//!   explicitly, including scheduled starts and admission's exclusion reasons.
+//!   Stored holds keep drain-time calibration on the same population.
 //! - Where the drain enforces gap fit, each simulated pass also fits
 //!   candidates against the host's CPU and memory, from this host's profiles,
 //!   size and baseline [ORB-18689] (`resource_fit.rs`). The ceiling stays the

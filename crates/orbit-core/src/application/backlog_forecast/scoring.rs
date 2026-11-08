@@ -72,6 +72,8 @@ struct StoredTask {
     in_progress: bool,
     #[serde(default)]
     forecast: Value,
+    #[serde(default)]
+    drain_hold: Option<Value>,
 }
 
 /// The forecasts task-level calibration and the residual correction read:
@@ -562,6 +564,12 @@ fn rework_actuals(
 ) -> Value {
     let cutoff = forecast.forecast_at + Duration::days(90);
     let ids: BTreeSet<&str> = initial.iter().map(|task| task.id.as_str()).collect();
+    // Models before 19 omit drain_hold and retain their original population.
+    let drain_ids: BTreeSet<&str> = initial
+        .iter()
+        .filter(|task| task.drain_hold.is_none())
+        .map(|task| task.id.as_str())
+        .collect();
     let fixes: Vec<&Task> = tasks
         .values()
         .filter(|task| {
@@ -570,7 +578,7 @@ fn rework_actuals(
                 && task.created_at <= cutoff
                 && task.relations.iter().any(|link| {
                     link.relation_type == TaskRelationType::RegressionFrom
-                        && ids.contains(link.target.as_str())
+                        && drain_ids.contains(link.target.as_str())
                 })
         })
         .collect();
@@ -578,15 +586,17 @@ fn rework_actuals(
     let mut rework = super::model::Draw::ZERO;
     let mut drained = true;
     let mut last = forecast.forecast_at;
-    for (id, is_fix) in initial
+    for (id, is_fix, in_drain) in initial
         .iter()
-        .map(|task| (task.id.as_str(), false))
-        .chain(fixes.iter().map(|task| (task.id.as_str(), true)))
+        .map(|task| (task.id.as_str(), false, task.drain_hold.is_none()))
+        .chain(fixes.iter().map(|task| (task.id.as_str(), true, true)))
     {
-        if let Some(done) = done_at.get(id).filter(|done| **done <= cutoff) {
-            last = last.max(*done);
-        } else {
-            drained = false;
+        if in_drain {
+            if let Some(done) = done_at.get(id).filter(|done| **done <= cutoff) {
+                last = last.max(*done);
+            } else {
+                drained = false;
+            }
         }
         let bounded: Vec<ForecastRun> = runs
             .get(id)
