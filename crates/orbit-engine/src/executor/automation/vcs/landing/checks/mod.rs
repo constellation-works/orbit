@@ -101,6 +101,7 @@ mod log;
 mod recovery;
 mod rerun;
 pub(in crate::executor::automation::vcs) mod rerun_diagnostic;
+mod review_watch;
 mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
@@ -113,3 +114,4 @@ pub(in crate::executor::automation::vcs) use recovery::{
 };
 
 pub(in crate::executor::automation::vcs) use rerun::{CiRerunStep, plan_ci_rerun};
+pub(in crate::executor::automation::vcs) use review_watch::classify_watched_failures;

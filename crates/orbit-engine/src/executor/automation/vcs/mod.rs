@@ -59,7 +59,7 @@ pub(super) use failure::pr_failure_handoff;
 pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
-pub(super) use landing::handoff_land;
+pub(super) use landing::{handoff_land, pr_checks_watch};
 pub use light_delivery::{
     judge_light_delivery, judge_light_delivery_with_key, review_skip_decision,
     run_review_skip_guard,

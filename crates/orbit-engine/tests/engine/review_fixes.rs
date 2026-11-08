@@ -352,6 +352,7 @@ const ACTIVITIES: &[&str] = &[
     "claim_validate",
     "claim_handoff",
     "claim_candidate_carry",
+    "invoke_detached",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -738,6 +739,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             }),
             "claim_handoff" => json!({ "decision": "handed_off" }),
             "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
+            "invoke_detached" => json!({ "run_id": "jrun-watch", "state": "pending" }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),

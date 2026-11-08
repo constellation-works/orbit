@@ -34,6 +34,7 @@ const HISTORY_EVENT_CATEGORY = {
   run_finished: "run",
   pull_request: "run",
   landing_completed: "run",
+  landing_checks_observed: "run",
   transient_infra_requeued: "warning",
   escalated: "warning",
 };

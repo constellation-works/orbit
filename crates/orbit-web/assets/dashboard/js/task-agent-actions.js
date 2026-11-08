@@ -399,7 +399,7 @@ const FIX_PR_REASONS = {
   pull_request_not_open: "the pull request is no longer open",
   not_orbit_pull_request: "the pull request was not opened by an Orbit delivery on this task's branch",
   no_delivery_leaf: "the task has no delivery run of its own to hand the pull request back to",
-  leaf_not_stopped: "the task's newest delivery did not stop with its pull request unfinished",
+  leaf_not_stopped: "the task's newest delivery neither stopped nor ended in review with its pull request unfinished",
   operator_hold: "an operator holds the task",
   opted_out: "the task is tagged no-auto-approve; a person decides its delivery",
   authority: "its delivery was started with completion authority this session lacks",
@@ -454,9 +454,57 @@ function fixPrDisabledReason(task, mutable, entry) {
   return `Fix PR unavailable — ${fixPrReasonText(data.reason, data.detail)}`;
 }
 
+// The newest check state the review watch recorded for the task's pull
+// request (`landing_checks_observed`), or null when none was recorded.
+export function observedPrChecks(task) {
+  const history = Array.isArray(task.history) ? task.history : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (!entry || entry.event !== "landing_checks_observed" || typeof entry.note !== "string") continue;
+    try {
+      const data = JSON.parse(entry.note);
+      if (data && typeof data === "object" && !Array.isArray(data)) return { ...data, at: entry.at };
+    } catch (_) {
+      // A note that is not the watch's JSON says nothing about the checks.
+    }
+  }
+  return null;
+}
+
+const OBSERVED_CHECK_WORDS = {
+  passed: "checks passed",
+  failed: "required checks failed",
+  conflicting: "conflicts with its base",
+  blocked: "blocked",
+  pending: "checks still running",
+};
+
+// One line naming the pull request's recorded check state, so a red pull
+// request in review shows why before anyone opens GitHub.
+function observedPrChecksNode(task) {
+  const observed = observedPrChecks(task);
+  if (!observed || !observed.state) return null;
+  const number = observed.pr_number || taskPullRequestNumber(task);
+  const parts = [`PR #${number}: ${OBSERVED_CHECK_WORDS[observed.state] || observed.state}`];
+  if (observed.classification) parts.push(`classified ${observed.classification}`);
+  if (Array.isArray(observed.failed_checks) && observed.failed_checks.length) parts.push(observed.failed_checks.join(", "));
+  else if (observed.reason) parts.push(observed.reason);
+  const failing = observed.state === "failed" || observed.state === "conflicting" || observed.state === "blocked";
+  const node = el("div", {
+    class: `fix-pr-checks${failing ? " fix-pr-checks-failed" : ""}`,
+    text: parts.join(" — "),
+    title: [observed.detail, observed.head_sha ? `head ${observed.head_sha}` : "", observed.at ? `recorded ${observed.at}` : ""].filter(Boolean).join("\n"),
+    role: "status",
+  });
+  node.style.flexBasis = "100%";
+  return node;
+}
+
 // Fix PR on a review task: hand its conflicting or red pull request back to
 // its own delivery for an auto-fix, as an --auto-fix drain would, without one.
 export function appendFixPrControls(actions, task, detail, context, mutable) {
+  const checks = observedPrChecksNode(task);
+  if (checks) actions.appendChild(checks);
   const entry = fixPrState(task, context);
   const reason = fixPrDisabledReason(task, mutable, entry);
   const data = entry && entry.data ? entry.data : {};
@@ -494,7 +542,7 @@ export function refreshFixPrControls(wrap, task, context) {
   const detail = button.closest(".task-detail");
   if (!detail) return;
   const actions = button.parentNode;
-  for (const note of actions.querySelectorAll(".fix-pr-feedback")) note.remove();
+  for (const note of actions.querySelectorAll(".fix-pr-feedback, .fix-pr-checks")) note.remove();
   const replacement = document.createDocumentFragment();
   appendFixPrControls(replacement, task, detail, context, canMutateTask(task));
   button.replaceWith(replacement);

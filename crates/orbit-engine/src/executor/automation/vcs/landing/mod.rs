@@ -53,6 +53,8 @@ mod local;
 mod observe;
 mod pull_request;
 mod record;
+mod review_watch;
 mod run;
 
+pub(in crate::executor::automation) use review_watch::pr_checks_watch;
 pub(in crate::executor::automation) use run::handoff_land;

@@ -1851,7 +1851,11 @@ reasons are those listed above, except `no_capacity` and `checked_recently`,
 which a single-task start never reports. These are added:
 
 - `no_delivery_leaf`: the task has no `task_pr_pipeline` run of its own;
-- `leaf_not_stopped`: the newest delivery finished or was cancelled;
+- `leaf_not_stopped`: the newest delivery merged (it was started with
+  `--complete`) or was cancelled. Unlike a drain pass, Fix PR also hands back
+  a delivery that succeeded without `--complete` and so left its pull request
+  in review (a dashboard ship or `orbit run ship`): it resumes at the
+  completion step under the delivery's own `completion`;
 - `live_run`: also when the newest delivery, or an earlier repair, is still
   running;
 - `task_status` or `no_pull_request`: the task is not delivered, or records no

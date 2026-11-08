@@ -187,6 +187,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/handoff_land.yaml"),
     ),
     (
+        "pr_checks_watch",
+        include_str!("../../orbit-core/assets/activities/pr_checks_watch.yaml"),
+    ),
+    (
         "pr_conflict_recovery",
         include_str!("../../orbit-core/assets/activities/pr_conflict_recovery.yaml"),
     ),
@@ -384,6 +388,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_landing_pipeline",
         include_str!("../../orbit-core/assets/jobs/task_landing_pipeline.yaml"),
+    ),
+    (
+        "task_pr_watch_pipeline",
+        include_str!("../../orbit-core/assets/jobs/task_pr_watch_pipeline.yaml"),
     ),
     (
         "task_local_pipeline",

@@ -1,0 +1,69 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_checks_watch
+spec:
+  type: deterministic
+  description: >
+    Watch the open pull request of an owner-local delivery that ended in
+    review, the landing follow-through a delivery without a handoff gets.
+    Polls the pull request until its checks settle or the budget runs out,
+    classifies failed checks the way the owner's landing does (transient,
+    inherited, flaky, candidate, base-suspect or inconclusive), and appends
+    one `landing_checks_observed` entry to the task's history whose note is
+    the JSON outcome: `passed`, `failed`, `conflicting`, `blocked` or
+    `pending`. Observation only: it never merges, reruns, updates the branch,
+    starts a repair or changes the task's status. A task that left review, or
+    a pull request that merged or closed, ends the watch without an entry.
+  input_schema_json:
+    type: object
+    required: [pr_number]
+    properties:
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+        description: >
+          The delivery's task list, an alternative to `task_id`; it must name
+          exactly one task.
+      pr_number:
+        type: [string, integer]
+      base:
+        type: string
+        description: >
+          The delivery's base branch, used when the pull request does not
+          report its own.
+      base_sync:
+        type: string
+        enum: [local, remote]
+      workspace_path:
+        type: string
+        description: >
+          The owner checkout to read the forge and the base from. Defaults to
+          the workspace's repository root.
+      max_wait_seconds:
+        type: [integer, "null"]
+        description: >
+          How long to wait for the checks to settle before recording them as
+          `pending`. Defaults to 3600; at most 21600.
+      poll_interval_seconds:
+        type: [integer, "null"]
+  output_schema_json:
+    type: object
+    required: [task_id, pr_number, recorded]
+    properties:
+      task_id:
+        type: string
+      pr_number:
+        type: string
+      recorded:
+        type: boolean
+      ended:
+        type: string
+        description: Why the watch ended without an entry.
+      observation:
+        type: object
+  action: pr_checks_watch
+  config: {}

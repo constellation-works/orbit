@@ -217,8 +217,15 @@ impl OrbitRuntime {
                 .last()
                 .and_then(|step| step.error_code.as_deref())
                 == Some(DeliveryRefusal::BaseChaseExhausted.error_code());
+        // [ORB-23003] A delivery that succeeded at review handed its pull
+        // request to nobody: no completion step ran, so a red or conflicting
+        // PR it left is repaired by rewinding it to that step, exactly as a
+        // stopped delivery is. Only the completion-repair route admits it; a
+        // generic resume of a succeeded run stays refused.
+        let review_handoff = repair.is_some() && source.state == JobRunState::Success;
         if !forge_held
             && !base_chase_held
+            && !review_handoff
             && !matches!(
                 source.state,
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout

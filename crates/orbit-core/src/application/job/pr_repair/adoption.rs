@@ -22,7 +22,10 @@
 //!
 //! - its newest `task_pr_pipeline` run carries only that task, ended
 //!   `failed`, `timeout` or `interrupted` (a dead worker), and is not a
-//!   claimed execution. A leaf that finished or was cancelled is not resumed;
+//!   claimed execution. For an operator's single-task Fix PR only, a leaf
+//!   that succeeded without `--complete`, and so left its pull request in
+//!   review with nothing to repair it [ORB-23003], qualifies too. A leaf that
+//!   merged or was cancelled is not resumed;
 //! - the task is in `review`, or in `blocked` or `backlog` because that run's
 //!   lineage blocked or requeued it (a delivery failure handoff, an
 //!   interruption or a final-recovery escalation or requeue). An operator's
@@ -366,20 +369,30 @@ impl OrbitRuntime {
                 format!("its delivery run {} is still {}", run.run_id, run.state),
             );
         }
-        if !matches!(
-            run.state,
-            JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-        ) {
+        let input = run.input.clone().unwrap_or(Value::Null);
+        // [ORB-23003] A leaf that succeeded without `completion: done` ended
+        // at review with its pull request open and unwatched. An operator's
+        // Fix PR (no drain) hands it back like a stopped one; a drain pass
+        // still repairs only stopped leaves. A succeeded `--complete` leaf
+        // merged.
+        let ended_at_review = authority.drain_run_id.is_none()
+            && run.state == JobRunState::Success
+            && input.get("completion").and_then(Value::as_str) != Some("done");
+        if !ended_at_review
+            && !matches!(
+                run.state,
+                JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+            )
+        {
             return Verdict::Ignore(
                 "leaf_not_stopped",
                 format!(
-                    "its newest delivery run {} ended {}; only a failed, timed-out or \
-                     interrupted delivery is handed back",
+                    "its newest delivery run {} ended {}; only a delivery that failed, timed \
+                     out, was interrupted or ended in review is handed back",
                     run.run_id, run.state
                 ),
             );
         }
-        let input = run.input.clone().unwrap_or(Value::Null);
         if input.get("claimed").and_then(Value::as_bool) == Some(true) {
             return Verdict::Ignore(
                 "claimed_execution",

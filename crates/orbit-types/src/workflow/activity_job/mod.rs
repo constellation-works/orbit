@@ -106,6 +106,7 @@ macro_rules! deterministic_action_catalog {
                 PrFailureHandoff => "pr_failure_handoff",
                 PrOpen => "pr_open",
                 PrPrepare => "pr_prepare",
+                PrChecksWatch => "pr_checks_watch",
                 PrComplete => "pr_complete",
                 PrPromote => "pr_promote",
                 TaskComplete => "task_complete",

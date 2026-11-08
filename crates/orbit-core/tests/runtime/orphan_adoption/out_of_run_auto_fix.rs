@@ -91,6 +91,17 @@ impl Fixture {
     /// promoted pull request `number` on its Orbit branch, then failed in
     /// completion and left the task on `shelf`.
     fn stopped_leaf(&self, number: u64, completion: &str, shelf: Shelf) -> Leaf {
+        self.delivered_leaf(number, completion, shelf, true)
+    }
+
+    /// A task whose delivery leaf, started without `--complete`, opened and
+    /// promoted pull request `number` and then succeeded, leaving the task
+    /// in review: its completion step never ran.
+    fn review_leaf(&self, number: u64) -> Leaf {
+        self.delivered_leaf(number, "review", Shelf::Review, false)
+    }
+
+    fn delivered_leaf(&self, number: u64, completion: &str, shelf: Shelf, stopped: bool) -> Leaf {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -142,17 +153,25 @@ impl Fixture {
             state.record_pipeline_output(id, output.clone());
             self.step(&run, index, id, JobRunState::Success, None);
         }
-        // Production checkpoints only a step that succeeded, so the failed
-        // `complete_pr` leaves no entry in `step_states`.
-        self.jobs.write_run_state(&run, &state).unwrap();
-        self.step(
-            &run,
-            4,
-            "complete_pr",
-            JobRunState::Failed,
-            Some("pr_checks_failed"),
-        );
-        self.fail(&run);
+        if stopped {
+            // Production checkpoints only a step that succeeded, so the failed
+            // `complete_pr` leaves no entry in `step_states`.
+            self.jobs.write_run_state(&run, &state).unwrap();
+            self.step(
+                &run,
+                4,
+                "complete_pr",
+                JobRunState::Failed,
+                Some("pr_checks_failed"),
+            );
+            self.fail(&run);
+        } else {
+            // A review delivery skips `complete_pr` and ends `success`.
+            state.record_step(4, JobRunState::Skipped, None, None);
+            self.jobs.write_run_state(&run, &state).unwrap();
+            self.step(&run, 4, "complete_pr", JobRunState::Skipped, None);
+            self.succeed(&run);
+        }
         self.runtime
             .apply_task_automation_update(
                 &task,
@@ -213,6 +232,19 @@ impl Fixture {
         }
         self.jobs
             .finalize_job_run(run, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+    }
+
+    /// `run` ends `success`, as a delivery that stopped at review does.
+    fn succeed(&self, run: &str) {
+        let current = self.jobs.get_job_run(run).unwrap().unwrap();
+        if current.state == JobRunState::Pending {
+            self.jobs
+                .mark_job_run_running(run, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        self.jobs
+            .finalize_job_run(run, JobRunState::Success, Utc::now(), None)
             .unwrap();
     }
 
@@ -1118,9 +1150,51 @@ fn one_tasks_repair_starts_without_a_drain_and_refusals_are_typed() {
     assert_eq!(resumed.input.as_ref().unwrap()["completion"], "done");
 }
 
+/// [ORB-23003] A dashboard or `orbit run ship` delivery without `--complete`
+/// succeeds at review; its red pull request is handed back by Fix PR, while a
+/// drain pass still repairs only stopped leaves.
+fn fix_pr_hands_back_a_red_pull_request_a_review_delivery_left() {
+    let fx = fixture();
+    let shipped = fx.review_leaf(131);
+    fx.blocked(&shipped, "ggg1", "orbit-bot", false, &["Test"]);
+    // A stopped leaf nominates the drain pass; the shipped task's leaf did
+    // not stop, so the pass leaves it alone.
+    let stopped = fx.stopped_leaf(132, "review", Shelf::Review);
+    fx.blocked(&stopped, "ggg2", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &stopped.task).is_some(), "{pass}");
+    assert!(started(&pass, &shipped.task).is_none(), "{pass}");
+    assert!(fx.retries(&shipped.run).is_empty(), "{pass}");
+
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&shipped.task, false)
+        .unwrap();
+    assert_eq!(readiness["available"], true, "{readiness}");
+    assert_eq!(readiness["blocker"], "failed_checks", "{readiness}");
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&shipped.task, false, Some("dashboard"))
+        .unwrap();
+    let retries = fx.retries(&shipped.run);
+    assert_eq!(retries.len(), 1, "{started}");
+    let input = retries[0].input.as_ref().unwrap();
+    assert_eq!(input["auto_fix"], true, "{input}");
+    assert_eq!(
+        input["completion"], "review",
+        "the repair never gains merge authority the delivery lacked"
+    );
+    assert_eq!(
+        input["out_of_run_auto_fix"]["failed_checks"],
+        json!(["Test"])
+    );
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
+    fix_pr_hands_back_a_red_pull_request_a_review_delivery_left,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
     a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
     a_repair_reruns_the_second_round_when_it_is_the_one_that_failed,

@@ -2027,3 +2027,20 @@ input.field-editor-input {
   color: var(--fg-soft);
   font: 400 12px/1.45 var(--font-sans);
 }
+
+/* The review watch's recorded check state beside Fix PR. */
+.fix-pr-checks {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 12px;
+  border-left: 3px solid var(--state-success);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.fix-pr-checks-failed {
+  border-left-color: var(--state-error);
+  color: var(--state-error);
+}
