@@ -1,6 +1,6 @@
 //! Task-update requests.
 
-use orbit_types::task::{ExternalRef, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{ExternalRef, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskAutomationUpdate {
@@ -19,6 +19,11 @@ pub struct TaskAutomationUpdate {
     pub implemented_by: Option<String>,
     pub status_event: Option<String>,
     pub status_note: Option<String>,
+    /// Typed decision recorded on the status event, such as the
+    /// [`TaskDecision::RunTransition`] naming the run that shelved the task.
+    /// A claimed worker's update does not carry it; the owner's entry then
+    /// names the run in its note only.
+    pub status_decision: Option<TaskDecision>,
     pub append_comments: Vec<TaskComment>,
     /// History entries recorded with the update, beside its status event.
     pub append_history: Vec<TaskHistoryEntry>,

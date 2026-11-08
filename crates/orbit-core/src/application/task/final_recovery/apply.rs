@@ -113,7 +113,6 @@ impl OrbitRuntime {
                 if let Some(recorded) =
                     self.recorded_final_recovery(&request.task_id, &request.run_id)?
                 {
-                    let marker = format!("final recovery (run_id={}):", request.run_id);
                     transition = self
                         .get_task_history(&request.task_id)?
                         .into_iter()
@@ -121,10 +120,7 @@ impl OrbitRuntime {
                             matches!(
                                 entry.event.as_str(),
                                 FINAL_RECOVERY_COMPLETED_EVENT | REJECTED_EVENT | ARCHIVED_EVENT
-                            ) && entry
-                                .note
-                                .as_deref()
-                                .is_some_and(|note| note.starts_with(&marker))
+                            ) && entry.transition_run_id() == Some(request.run_id.as_str())
                         })
                         .and_then(|entry| {
                             Some((entry.from_status?, entry.to_status?, entry.note?))
@@ -615,6 +611,9 @@ impl OrbitRuntime {
                     status: transition.then_some(plan.status),
                     status_event: record_status.then(|| plan.event.to_string()),
                     status_note: record_status.then(|| plan.note.clone()),
+                    status_decision: record_status.then(|| TaskDecision::RunTransition {
+                        run_id: request.run_id.clone(),
+                    }),
                     execution_summary: plan.execution_summary.clone(),
                     append_comments: vec![comment.clone()],
                     append_history: decided

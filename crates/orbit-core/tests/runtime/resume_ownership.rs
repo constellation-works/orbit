@@ -654,6 +654,8 @@ fn resume_handoff_admission_cases() {
         ("review_gate_escalation", "owned", false),
         ("pr_failure_handoff", "outside", false),
         ("validation_environment_blocked", "missing", false),
+        // The typed decision alone names the run; the note names none.
+        ("validation_environment_blocked", "typed", false),
         ("pr_failure_handoff", "owned", true),
     ] {
         let fx = Fixture::new();
@@ -712,7 +714,7 @@ fn resume_handoff_admission_cases() {
         } else {
             &source
         };
-        let note = if note_kind == "missing" {
+        let note = if matches!(note_kind, "missing" | "typed") {
             "required validation lacked a tool in its environment: failed_step=validate".into()
         } else {
             resume_handoff_note(event, note_run)
@@ -724,6 +726,11 @@ fn resume_handoff_admission_cases() {
                     status: Some(TaskStatus::Blocked),
                     status_event: Some(event.into()),
                     status_note: Some(note),
+                    status_decision: (note_kind == "typed").then(|| {
+                        orbit_types::task::TaskDecision::RunTransition {
+                            run_id: source.clone(),
+                        }
+                    }),
                     ..Default::default()
                 },
             )
@@ -755,7 +762,7 @@ fn resume_handoff_admission_cases() {
                 .retry_source_run_id,
             Some(source.clone()),
         );
-        if note_kind != "owned" {
+        if !matches!(note_kind, "owned" | "typed") {
             assert_eq!(
                 after, before,
                 "{event}/{note_kind}: unauthorized block stays untouched"

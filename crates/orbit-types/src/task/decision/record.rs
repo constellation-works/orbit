@@ -69,6 +69,17 @@ pub enum TaskDecision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         operation_id: Option<String>,
     },
+    /// The run whose automation wrote this status transition: a delivery or
+    /// final-recovery run shelving the task in `blocked` or `backlog`, or
+    /// final recovery settling it. Read it through
+    /// [`TaskHistoryEntry::transition_run_id`]; the note beside it keeps
+    /// naming the run in text for older readers.
+    ///
+    /// [`TaskHistoryEntry::transition_run_id`]: crate::task::TaskHistoryEntry::transition_run_id
+    RunTransition {
+        /// The run that wrote the transition.
+        run_id: String,
+    },
     /// A workflow admitted the task, recorded on the `started` event that
     /// workflow admission writes with the status transition.
     WorkflowAdmission {
