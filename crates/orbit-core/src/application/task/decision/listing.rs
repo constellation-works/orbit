@@ -21,8 +21,8 @@ use crate::OrbitRuntime;
 /// store write to the bundle changes the stamp, and the next scan reads that
 /// task in full; a task the store cannot stamp is read every time. Only a
 /// clean read is recorded, so a corrupt bundle keeps warning. The stamp's
-/// limits are the store's (`task_bundle_stamps`): an out-of-band in-place
-/// edit stays unseen until the bundle's next write.
+/// limits are the store's (`task_bundle_stamps`): out-of-band edits its
+/// stamp does not cover stay unseen until the bundle's next write.
 ///
 /// The set lives for the process, which for the dashboard is the server:
 /// the first scan after start reads every bundle, later ones only what
@@ -191,11 +191,7 @@ impl OrbitRuntime {
     ) -> Result<DecisionRequestListing, OrbitError> {
         let ids: Vec<String> = match task_id {
             Some(task_id) => vec![task_id.to_string()],
-            None => self
-                .list_task_metadata()?
-                .into_iter()
-                .map(|task| task.id)
-                .collect(),
+            None => self.decision_scan_task_ids()?,
         };
         // A workspace scan skips a task proven to raise no request: its whole
         // bundle still carries the stamp taken before an earlier clean read
@@ -245,6 +241,28 @@ impl OrbitRuntime {
             .requests
             .sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
         Ok(listing)
+    }
+
+    /// A scan needs ids, not every envelope's fields. Keep the full task
+    /// population even for open-only reads: terminal bundles must still warn
+    /// when corrupt. Registrations provide the complete population; this
+    /// scan's whole-bundle proofs and reads supply freshness and validation,
+    /// without a second envelope-index freshness pass. Other backends fall
+    /// back to metadata, as do workers whose reads must route through the owner.
+    fn decision_scan_task_ids(&self) -> Result<Vec<String>, OrbitError> {
+        if self.worker_invocation().is_none() {
+            if !self.coordination_task_reads_visible() {
+                return Ok(Vec::new());
+            }
+            if let Some(ids) = self.stores().tasks().registered_task_bundle_ids()? {
+                return Ok(ids);
+            }
+        }
+        Ok(self
+            .list_task_metadata()?
+            .into_iter()
+            .map(|task| task.id)
+            .collect())
     }
 
     /// One decision request by id, with its effective state, or `None`
