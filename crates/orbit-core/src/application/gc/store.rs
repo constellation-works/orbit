@@ -404,7 +404,7 @@ impl OrbitRuntime {
     /// Another registered workspace keeps its own window. The rows are
     /// selected once, by a read, then deleted by primary key in batches of
     /// `RETENTION_BATCH_ROWS`, so no write transaction scans the table.
-    /// `retention_days` overrides [`JOURNAL_RETENTION_DAYS`].
+    /// `retention_days` overrides `JOURNAL_RETENTION_DAYS`.
     pub fn gc_journal(
         &self,
         apply: bool,
