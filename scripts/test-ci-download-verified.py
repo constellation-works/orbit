@@ -486,6 +486,59 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
 
+    def test_publication_races_and_cross_filesystem_cache(self):
+        # sitecustomize intercepts the actual helper's link at publication,
+        # deterministically placing an entry after its preflight check.
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "sitecustomize.py").write_text("""
+import errno, os
+from pathlib import Path
+real_link = os.link
+def link(src, dst, *args, **kwargs):
+    if str(dst) == os.environ.get('RACE_DEST'):
+        mode = os.environ['RACE_MODE']
+        if mode.startswith('exdev') and str(src) == os.environ.get('RACE_CACHE'):
+            raise OSError(errno.EXDEV, 'cross-device link')
+        race = mode.removeprefix('exdev-')
+        if race in ('file', 'symlink'):
+            if race == 'file':
+                Path(dst).write_bytes(b'sentinel')
+            else:
+                os.symlink(os.environ['RACE_TARGET'], dst)
+    return real_link(src, dst, *args, **kwargs)
+os.link = link
+""")
+        cache = self.root / "cache"
+        cache.write_bytes(BODY)
+        target = self.root / "target"
+        target.write_bytes(b'sentinel')
+        self.configure([response()])
+        for warm in (False, True):
+            for mode in ('file', 'symlink'):
+                with self.subTest(warm=warm, mode=mode):
+                    destination = self.root / f"race-{warm}-{mode}"
+                    self.env.update(PYTHONPATH=str(hooks), RACE_DEST=str(destination),
+                                    RACE_MODE=mode, RACE_TARGET=str(target), RACE_CACHE=str(cache))
+                    result = self.invoke(cache_file=cache if warm else None, destination=destination)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(target.read_bytes(), b'sentinel')
+                    self.assertEqual(destination.read_bytes(), b'sentinel')
+                    self.assertEqual(destination.is_symlink(), mode == 'symlink')
+        for mode in ('file', 'symlink'):
+            destination = self.root / f'cross-device-race-{mode}'
+            self.env.update(RACE_DEST=str(destination), RACE_MODE=f'exdev-{mode}')
+            result = self.invoke(cache_file=cache, destination=destination)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(destination.read_bytes(), b'sentinel')
+            self.assertEqual(destination.is_symlink(), mode == 'symlink')
+            self.assertEqual(target.read_bytes(), b'sentinel')
+        destination = self.root / 'cross-device'
+        self.env.update(RACE_DEST=str(destination), RACE_MODE='exdev')
+        result = self.invoke(cache_file=cache, destination=destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(destination.read_bytes(), BODY)
+
     def test_cache_hit_restores_verified_archive_without_network(self):
         cache_file = self.root / "tool-cache" / "archive"
         self.configure([response()])
