@@ -1100,8 +1100,8 @@ main.tasks-layout.task-page-mode { grid-template-columns: minmax(0, 1fr) !import
 main.tasks-layout.task-page-mode > .col-tasks,
 main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
 main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; width: 100%; max-width: 1280px; }
-/* A phone has no room beside the list: the pane is a full-screen sheet with
-   Back in place of the close and full-page controls. */
+/* A phone has no room beside the list, so the pane becomes a full-screen
+   sheet while keeping its close and full-page controls in the head. */
 @media (max-width: 760px) {
   main.tasks-layout.task-pane-open { grid-template-columns: minmax(0, 1fr) !important; }
   main.tasks-layout.task-pane-open > .task-pane-resizer { display: none; }
@@ -1117,8 +1117,6 @@ main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; wid
   /* The active view is a stacking context of its own; lift it so the sheet
      also covers what paints after it, such as the status bar's live dot. */
   .tab-pane.active:has(> main.tasks-layout.task-pane-open) { z-index: 400; }
-  .task-pane-close,
-  .task-pane-full { display: none; }
 }
 
 /* Task creation is a modal <dialog>: the top layer takes it out of the board's
