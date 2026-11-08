@@ -1,8 +1,8 @@
 ---
 title: "Scope: Distributions and workspace presets"
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-07
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Implemented
 stage: shipped
 next: "—"
@@ -22,10 +22,12 @@ unbuilt are called out separately below.
 Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
-11 default routines and 19 default auto-tasks: 30 defaults in total. By default it seeds all
-30 into each workspace; the routines `worktree-gc` and `task-pilot` are seeded enabled, and
-other shipped routines are seeded disabled. Among auto-tasks, `host-health` ([ORB-21596]) alone is
-seeded enabled; other shipped auto-tasks are seeded disabled. The routine
+8 default routines and 19 default auto-tasks: 27 defaults in total. By default it seeds all
+27 into each workspace. The routines `worktree-gc`, `task-pilot` and
+`crew_memory_dream` are seeded enabled; `crew_memory_dream` does nothing until
+`crew_memory.enabled` is set and a memory experiment is running. Other shipped routines are
+seeded disabled. Among auto-tasks, `host-health` ([ORB-21596]) alone is seeded enabled; other
+shipped auto-tasks are seeded disabled. The routine
 `crew_performance_refresh` ([ORB-17816]), once seeded enabled,
 was retired in [ORB-22804]. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
