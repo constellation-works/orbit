@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
+use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
@@ -146,9 +147,13 @@ impl OrbitRuntime {
         );
         let owner = ReservationOwnerContext {
             owner_run_id: run_id.to_string(),
-            owner_metadata_json: Some(
-                json!({"deferred_footprint": true, "activity": activity_name}).to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                extra: serde_json::Map::from_iter([
+                    ("deferred_footprint".to_string(), json!(true)),
+                    ("activity".to_string(), json!(activity_name)),
+                ]),
+                ..Default::default()
+            }),
         };
         let started = Instant::now();
         loop {

@@ -54,7 +54,7 @@ pub(super) fn claimed(
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: attempt.action_id.clone().unwrap(),
-            owner_metadata_json: None,
+            owner_metadata: None,
         }),
         ..ToolContext::default()
     };

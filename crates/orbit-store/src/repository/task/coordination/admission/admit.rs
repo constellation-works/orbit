@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
 
 use super::super::TaskCommitBoundary;
 use super::super::lifecycle::fresh_offer_history;
@@ -379,7 +379,10 @@ impl TaskCommitBoundary {
                     actor: receipt.machine_id.clone(),
                     ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
                     owner_run_id: None,
-                    owner_metadata_json: Some(encode(&serde_json::json!({"claim_id":claim_id}))?),
+                    owner_metadata: Some(ReservationOwnerMetadata {
+                        claim_id: Some(claim_id.clone()),
+                        ..Default::default()
+                    }),
                 }),
                 // [ORB-14338] A kept candidate this claim cannot resume is
                 // never dropped silently: the task's history says why.

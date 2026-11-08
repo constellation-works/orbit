@@ -4,7 +4,7 @@ use std::sync::Arc;
 use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::task::Task;
+use orbit_types::task::{ReservationOwnerMetadata, Task};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed, tools_allowed_by_disallow_list};
 
@@ -347,13 +347,11 @@ pub(super) fn tool_context_for_activity(
         proc_spawn_activity_scoped,
         reservation_owner: run_id.map(|owner_run_id| ReservationOwnerContext {
             owner_run_id: owner_run_id.to_string(),
-            owner_metadata_json: Some(
-                serde_json::json!({
-                    "source": "v2_activity",
-                    "fs_profile": fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE),
-                })
-                .to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                source: Some("v2_activity".to_string()),
+                fs_profile: Some(fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE).to_string()),
+                ..Default::default()
+            }),
         }),
         // The dispatcher adds the task from the activity's run input; the
         // run is this context's own, never a tool's.

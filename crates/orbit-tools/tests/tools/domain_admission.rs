@@ -4,6 +4,7 @@ use orbit_tools::{
     OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, ToolContext,
     ToolRegistry,
 };
+use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
@@ -98,9 +99,14 @@ fn trusted_child_admission_preserves_internal_pipeline_invocation() {
         orbit_host: Some(host.clone()),
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: "jrun-managed".into(),
-            owner_metadata_json: Some(
-                json!({"pipeline_child_admission":{"parent_run_id":"jrun-managed"}}).to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                pipeline_child_admission: Some(PipelineChildAdmissionMeta {
+                    action: "ship".to_string(),
+                    parent_step_id: None,
+                    blocking: false,
+                }),
+                ..Default::default()
+            }),
         }),
         ..Default::default()
     };

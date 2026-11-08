@@ -89,6 +89,11 @@ pub(crate) fn reserve_files_in_tx(
     let expires_at = (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
     let task_ids_json = serialize_string_list(&params.task_ids)?;
     let files_json = serialize_string_list(&params.stored_files)?;
+    let owner_metadata_json = params
+        .owner_metadata
+        .as_ref()
+        .map(serialize_owner_metadata)
+        .transpose()?;
 
     tx.tx
         .execute(
@@ -118,7 +123,7 @@ pub(crate) fn reserve_files_in_tx(
                 created_at,
                 expires_at,
                 params.owner_run_id.as_deref(),
-                params.owner_metadata_json.as_deref(),
+                owner_metadata_json.as_deref(),
             ],
         )
         .map_err(sqlite_store_error)?;
@@ -385,7 +390,7 @@ impl ReservationRow {
             created_at: self.created_at,
             expires_at: self.expires_at,
             owner_run_id: self.owner_run_id,
-            owner_metadata_json: self.owner_metadata_json,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
         })
     }
 
@@ -405,7 +410,7 @@ impl ReservationRow {
             expires_at: self.expires_at,
             released_at,
             owner_run_id: self.owner_run_id,
-            owner_metadata_json: self.owner_metadata_json,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
             release_reason,
             release_metadata_json,
         })
@@ -540,6 +545,28 @@ pub(super) fn find_owned_reservation_conflicts(
 pub(super) fn parse_string_list(raw: &str) -> Result<Vec<String>, OrbitError> {
     serde_json::from_str(raw)
         .map_err(|error| OrbitError::Store(format!("deserialize reservation string list: {error}")))
+}
+
+/// Parse the `owner_metadata_json` TEXT column once, where a reservation
+/// record is constructed from a row. Every in-process carrier past this
+/// edge holds the typed struct.
+pub(super) fn parse_owner_metadata(
+    raw: Option<String>,
+) -> Result<Option<orbit_types::task::ReservationOwnerMetadata>, OrbitError> {
+    raw.map(|raw| {
+        orbit_types::task::ReservationOwnerMetadata::parse_owner_metadata(&raw).map_err(|error| {
+            OrbitError::Store(format!("deserialize reservation owner metadata: {error}"))
+        })
+    })
+    .transpose()
+}
+
+pub(super) fn serialize_owner_metadata(
+    metadata: &orbit_types::task::ReservationOwnerMetadata,
+) -> Result<String, OrbitError> {
+    metadata.encode_owner_metadata().map_err(|error| {
+        OrbitError::Store(format!("serialize reservation owner metadata: {error}"))
+    })
 }
 
 pub(super) fn serialize_string_list(values: &[String]) -> Result<String, OrbitError> {

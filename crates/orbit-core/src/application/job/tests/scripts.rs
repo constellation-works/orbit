@@ -222,7 +222,7 @@ fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
     let context = orbit_tools::ToolContext {
         reservation_owner: Some(orbit_tools::ReservationOwnerContext {
             owner_run_id: run_id.clone(),
-            owner_metadata_json: None,
+            owner_metadata: None,
         }),
         ..Default::default()
     };

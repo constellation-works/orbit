@@ -1496,7 +1496,7 @@ allocation_test!(
                                 actor: "owner".into(),
                                 ttl_seconds: 600,
                                 owner_run_id: None,
-                                owner_metadata_json: None,
+                                owner_metadata: None,
                             },
                         )
                         .unwrap();

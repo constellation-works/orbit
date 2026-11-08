@@ -17,6 +17,7 @@ use orbit_core::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
+use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewAdmission, ReviewLayer};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -242,10 +243,14 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: live.clone(),
-            owner_metadata_json: Some(
-                json!({"pipeline_child_admission": {"action": "ship", "blocking": false}})
-                    .to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                pipeline_child_admission: Some(PipelineChildAdmissionMeta {
+                    action: "ship".to_string(),
+                    parent_step_id: None,
+                    blocking: false,
+                }),
+                ..Default::default()
+            }),
         }),
         session_context: orbit_types::tool::ToolSessionContext {
             effective_capabilities: std::collections::BTreeSet::from([

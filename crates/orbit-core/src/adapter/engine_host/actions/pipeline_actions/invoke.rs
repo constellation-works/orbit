@@ -7,6 +7,7 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
+use orbit_types::task::PipelineChildAdmissionMeta;
 use orbit_types::workflow::{CHILD_TIMEOUT_ERROR_CODE, ChildDispatchPhase};
 use serde_json::Value;
 
@@ -539,24 +540,13 @@ fn child_invoke_context(
     let Some(owner) = tool_context.reservation_owner.as_mut() else {
         return Ok(tool_context);
     };
-    let mut metadata = match owner.owner_metadata_json.as_deref() {
-        Some(raw) => serde_json::from_str::<Value>(raw).map_err(|error| {
-            DispatchError::action_failed(action, format!("invalid run metadata: {error}"))
-        })?,
-        None => serde_json::json!({}),
-    };
-    let object = metadata.as_object_mut().ok_or_else(|| {
-        DispatchError::action_failed(action, "run metadata must be a JSON object".to_string())
-    })?;
-    object.insert(
-        "pipeline_child_admission".to_string(),
-        serde_json::json!({
-            "action": action,
-            "parent_step_id": parent_step_id,
-            "blocking": blocking,
-        }),
-    );
-    owner.owner_metadata_json = Some(metadata.to_string());
+    let mut metadata = owner.owner_metadata.take().unwrap_or_default();
+    metadata.pipeline_child_admission = Some(PipelineChildAdmissionMeta {
+        action: action.to_string(),
+        parent_step_id,
+        blocking,
+    });
+    owner.owner_metadata = Some(metadata);
     Ok(tool_context)
 }
 

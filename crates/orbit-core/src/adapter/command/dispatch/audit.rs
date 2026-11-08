@@ -6,6 +6,7 @@ use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
+use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -94,12 +95,10 @@ pub fn trusted_mcp_audit_context() -> AuditContext {
 
 pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
     managed_run_context_run_id_from_env().map(|owner_run_id| ReservationOwnerContext {
-        owner_metadata_json: Some(
-            serde_json::json!({
-                "source": "orbit_cli",
-            })
-            .to_string(),
-        ),
+        owner_metadata: Some(ReservationOwnerMetadata {
+            source: Some("orbit_cli".to_string()),
+            ..Default::default()
+        }),
         owner_run_id,
     })
 }

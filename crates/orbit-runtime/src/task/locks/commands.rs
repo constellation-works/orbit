@@ -370,9 +370,9 @@ pub fn reserve_with_index(
                 owner_run_id: reservation_owner
                     .as_ref()
                     .map(|owner| owner.owner_run_id.clone()),
-                owner_metadata_json: reservation_owner
+                owner_metadata: reservation_owner
                     .as_ref()
-                    .and_then(|owner| owner.owner_metadata_json.clone()),
+                    .and_then(|owner| owner.owner_metadata.clone()),
             })?
     } else {
         let check = runtime
@@ -484,7 +484,7 @@ pub fn reserve_deferred_footprint(
             actor: actor.clone(),
             ttl_seconds,
             owner_run_id: owner_run_id.clone(),
-            owner_metadata_json: reservation_owner.and_then(|owner| owner.owner_metadata_json),
+            owner_metadata: reservation_owner.and_then(|owner| owner.owner_metadata),
         })?;
     emit_expired_reservation_events(runtime, &result.expired_reservations)?;
     let reservation_id = result.reservation_id.clone().ok_or_else(|| {
