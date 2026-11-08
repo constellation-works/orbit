@@ -104,14 +104,6 @@ pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitE
     backfill_audit_actor_identity_v16(conn)
 }
 
-/// v17 `audit_self_reported_actor` migration (ORB-10890): record the identity
-/// an unauthenticated caller claims for itself in a column of its own.
-///
-/// Strictly additive and deliberately **not** backfilled. Every existing row
-/// was written before any claim was collected, so there is no claim to recover;
-/// deriving one from `role` would retroactively attribute traffic Orbit never
-/// authenticated. Existing `unverified` rows therefore stay valid and read as
-/// anonymous.
 /// v88 `audit_session_model`: the model an MCP tool call is counted under.
 ///
 /// Written by the server from the job's resolved crew model, else the
@@ -125,6 +117,14 @@ pub(super) fn apply_audit_session_model(conn: &Connection) -> Result<(), OrbitEr
     add_column_if_missing(conn, "audit_events", "session_model", "TEXT")
 }
 
+/// v17 `audit_self_reported_actor` migration (ORB-10890): record the identity
+/// an unauthenticated caller claims for itself in a column of its own.
+///
+/// Strictly additive and deliberately **not** backfilled. Every existing row
+/// was written before any claim was collected, so there is no claim to recover;
+/// deriving one from `role` would retroactively attribute traffic Orbit never
+/// authenticated. Existing `unverified` rows therefore stay valid and read as
+/// anonymous.
 pub(super) fn apply_audit_self_reported_actor(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema_v17(conn)?;
 
