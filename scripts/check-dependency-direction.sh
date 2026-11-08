@@ -303,7 +303,8 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # nonzero when one is found. With `$4` set to `crate-root`, `$1` is any layer under
 # the crate source and the modules are crate-root modules: a `super::` chain counts
 # when it climbs out to the crate root, and a `crate::` path or use-tree counts too
-# [ORB-22005].
+# [ORB-22005]. With `$4` set to `application-root`, also expand absolute
+# `crate::application::` paths and nested use-trees into the application modules.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import pathlib
@@ -315,7 +316,7 @@ module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
 crate_root = sys.argv[4] == "crate-root"
 climb_target = [] if crate_root else [app.name]
-path_starts = ("super", "crate") if crate_root else ("super",)
+path_starts = ("super", "crate") if sys.argv[4] in ("crate-root", "application-root") else ("super",)
 token = re.compile(
     r"(?P<line>//[^\n]*)|(?P<block>/\*)"
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
@@ -399,7 +400,9 @@ for path in paths:
             while ups < len(segments) and segments[ups] == "super":
                 ups += 1
             if segments[0] == "crate":
-                named = len(segments) > 1 and segments[1] in upper
+                absolute = segments[1:] if crate_root else segments[2:]
+                named = (len(absolute) > 0 and absolute[0] in upper
+                         and (crate_root or segments[1:2] == (app.name,)))
             else:
                 # Resolve the chain from this file's module depth [ORB-22674]. It
                 # names an upper module when it lands on the climb target and an
@@ -924,6 +927,15 @@ for lower_module in automation review distributed pull_drain admission workspace
     fail=1
   fi
 done
+
+# Selective-review retirement removed review's risk-model freeze and its
+# codebase dependency. Keep that direction closed: review has no codebase
+# exception, including calls indexed from codebase's inherent runtime methods.
+if ! super_chains_into "$app_src" review codebase application-root ||
+  ! inherent_calls_into "$app_src" review codebase '' ''; then
+  echo "orbit-core review must not name codebase or call its inherent methods"
+  fail=1
+fi
 
 # [ORB-22287] `codebase` sits outside the order. The forecast's one authorized
 # edge into it is `runtime.task_riskiness_model()` in `assembly.rs`, whose

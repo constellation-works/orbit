@@ -347,6 +347,24 @@ edges leave or enter it from outside the order:
   `routines/sweep.rs` calls `record_scheduled_backlog_forecast`. `routines` is
   outside the order, above `automation` and `auto_tasks` (next paragraph).
 
+Review has no edge into `codebase`. Selective-review retirement removed
+admission's risk-model freeze and `TaskRiskinessModel::diff_model_identity`;
+admission captures the legacy `selective_before_landing` field as `None`.
+Codebase retains ownership of the estimator for its remaining consumers,
+including the authorized forecast call above. Review owns no risk-model
+identity port. The dependency guard rejects production review paths into
+codebase, including grouped imports and `super::` chains, and calls to
+codebase-owned inherent `OrbitRuntime` methods derived from their defining
+impls. The forecast's exact-line allowance does not apply to review.
+
+Reviewer effort selection still needs the candidate's reviewable lines and
+changed files. It reads them through review's `ReviewCandidateSizePort`;
+`codebase/diff_stats.rs` implements the port on `OrbitRuntime` by delegating to
+the existing `candidate_review_size` calculation. This preserves path filters,
+counting and unreadable-repository or commit fallbacks while removing the
+remaining inherent-method back-edge. The port carries only optional counts,
+with no estimator identity or selective-review policy.
+
 `routines` sits above `automation` and `auto_tasks` [ORB-22623]: the sweep
 calls automation's evaluation and the auto-task scheduler, and reaches `review`,
 `pull_drain` and the forecast. The clock settings `automation` reads for a

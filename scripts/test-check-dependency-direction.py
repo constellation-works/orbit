@@ -279,6 +279,45 @@ class RelativeImportTests(unittest.TestCase):
             with self.subTest(relative=relative, source=source):
                 self.check_files({"codebase/riskiness.rs": codebase, relative: source}, rejected=True)
 
+    def test_review_cannot_name_codebase(self):
+        # Selective-review retirement removed this edge, but the guard still
+        # accepted its reintroduction. Exercise each detector independently.
+        for rows in (
+            [("review/admission.rs", "use crate::application::codebase::Probe;\n"),
+             ("review/gate/context.rs",
+              "fn probe() { crate::application::codebase::probe(); }\n")],
+            [("review/admission.rs", "use crate::application::{codebase::Probe};\n"),
+             ("review/gate/context.rs",
+              "use crate::application::{task::{Other}, codebase::{Probe}};\n")],
+            [("review/mod.rs", "use super::{codebase::Probe};\n"),
+             ("review/admission.rs", "use super::super::codebase::Probe;\n"),
+             ("review/gate/context.rs",
+              "use super::{super::{super::{codebase::Probe}}};\n"),
+             ("review/gate/admit/context.rs",
+              "use super::super::super::super::super::{application::codebase::Probe};\n")],
+        ):
+            with self.subTest(rows=rows):
+                self.check_rows(rows, rejected=True)
+
+    def test_review_cannot_call_indexed_codebase_methods(self):
+        # Derive ownership from the defining impl, including future methods;
+        # the forecast's exact-line allowance must never apply to review.
+        self.check_rows([
+            ("review/admission.rs", f"fn probe(runtime: &OrbitRuntime) {{ {call}; }}\n")
+            for call in (
+                "runtime.fresh_codebase_method()",
+                "OrbitRuntime::fresh_codebase_method(runtime)",
+                "Self::fresh_codebase_method(runtime)",
+                "<crate::OrbitRuntime>::fresh_codebase_method(runtime)",
+                "runtime.task_riskiness_model()",
+            )
+        ], rejected=True, shared={
+            "codebase/riskiness.rs":
+                "impl OrbitRuntime {\n"
+                "    pub(crate) fn fresh_codebase_method(&self) {}\n"
+                "    pub(crate) fn task_riskiness_model(&self) {}\n}\n",
+        })
+
     def test_distributed_reaches_experiment_only_through_its_port(self):
         # [ORB-22416] Admission's capture call into experiment was a hidden
         # cycle: experiment's readout reads distributed's claim receipt.
