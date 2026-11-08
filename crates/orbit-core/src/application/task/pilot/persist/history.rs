@@ -1,27 +1,61 @@
-//! History summary of an applied assessment and material-change detail.
+//! Applied assessment receipts, history summaries and material-change detail.
 
 use std::collections::BTreeSet;
 
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, legacy_decisions};
 
 use super::super::apply::admission::PreparedTaskSnapshot;
 
-/// Only applied no-target assessments carry this marker. The status is kept
+/// Only applied no-target assessments carry this receipt. The status is kept
 /// separately because the shared material hash treats proposed and backlog
 /// as equally eligible under the default predicate.
-pub(in super::super) fn no_target_assessment_marker(note: &str) -> Option<(TaskStatus, &str)> {
-    let (_, marker) = note.split_once(" [no-target-assessed:")?;
-    let (marker, _) = marker.split_once(']')?;
-    let (status, fingerprint) = marker.split_once(':')?;
-    if !super::super::is_operation_id(fingerprint) {
-        return None;
+#[derive(Deserialize, Serialize)]
+pub(in super::super) struct NoTargetPilotAssessment {
+    pub(super) status: TaskStatus,
+    pub(super) fingerprint: String,
+}
+
+/// Only the targetless assessment is typed here; the remaining audit body
+/// retains its existing shape and interpretation.
+#[derive(Deserialize, Serialize)]
+pub(super) struct NoTargetPilotReceipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) no_target_assessment: Option<NoTargetPilotAssessment>,
+    #[serde(flatten)]
+    pub(super) audit: Value,
+}
+
+/// Decode only the receipt belonging to the latest applied history event.
+/// A valid assessment's presence is sufficient, just as the old marker was:
+/// this does not compare its status or fingerprint with current material.
+pub(in super::super) fn no_target_pilot_assessment(
+    applied: &TaskHistoryEntry,
+    comments: &[TaskComment],
+) -> Option<NoTargetPilotAssessment> {
+    // As in atomic::applied_material, the first receipt sealed by the
+    // operation wins over later comments that happen to reuse its id.
+    if let Some(operation_id) = applied.receipt()
+        && let Some((_, receipt)) = super::super::pilot_receipts(comments)
+            .rev()
+            .find(|(_, receipt)| receipt.operation_id == operation_id)
+    {
+        let audit: NoTargetPilotReceipt = serde_json::from_str(receipt.body).ok()?;
+        if let Some(assessment) = audit.no_target_assessment {
+            return super::super::is_operation_id(&assessment.fingerprint).then_some(assessment);
+        }
     }
-    Some((status.parse().ok()?, fingerprint))
+    let (status, fingerprint) =
+        legacy_decisions::no_target_pilot_assessment_marker(applied.note.as_deref()?)?;
+    Some(NoTargetPilotAssessment {
+        status,
+        fingerprint: fingerprint.to_string(),
+    })
 }
 
 pub(super) fn assessment_history_summary(assessment: &Value) -> String {

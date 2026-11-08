@@ -21,7 +21,10 @@ use super::atomic::{
     applied_material, apply_atomic_with_retries, resulting_fingerprint, with_task_locks,
 };
 use super::drift::task_snapshot_drift;
-use super::history::{assessment_history_summary, material_change_detail, status_only_fingerprint};
+use super::history::{
+    NoTargetPilotAssessment, NoTargetPilotReceipt, assessment_history_summary,
+    material_change_detail, status_only_fingerprint,
+};
 #[cfg(test)]
 use super::lock_hook;
 use super::reports::{source_superseded, superseded_task, superseded_with_current};
@@ -293,7 +296,7 @@ pub(in super::super) fn apply_task(
                 history_summary.push_str("; ");
                 history_summary.push_str(warning);
             }
-            if task.after.is_empty() {
+            let no_target_assessment = if task.after.is_empty() {
                 // Record the meaning *after* the atomic write. A marker made
                 // from the prepared task would immediately be stale when the
                 // pilot changes its complexity or status.
@@ -316,7 +319,13 @@ pub(in super::super) fn apply_task(
                     " [no-target-assessed:{}:{fingerprint}]",
                     target_status.cli_name()
                 ));
-            }
+                Some(NoTargetPilotAssessment {
+                    status: target_status,
+                    fingerprint,
+                })
+            } else {
+                None
+            };
             // Only mentions the pilot did not classify as the change's
             // subject hold: a missing or malformed classification holds.
             let mut requirements = super::super::admission::invoked_operator_requirements(
@@ -441,7 +450,9 @@ pub(in super::super) fn apply_task(
                     )
                     .chain(crew_redraw_history)
                     .collect(),
-                audit_note: serde_json::to_string(&json!({
+                audit_note: serde_json::to_value(NoTargetPilotReceipt {
+                    no_target_assessment,
+                    audit: json!({
                     "assessment": task.assessment,
                     "assessed_requirements": super::super::freshness::pilot_requirements_material(&assessed),
                     "operator_validation_hold": operator_hold,
@@ -460,7 +471,9 @@ pub(in super::super) fn apply_task(
                         &assessed.tags,
                         prepared["source"]["source_revision"].as_str(),
                     ),
-                }))
+                    }),
+                })
+                .and_then(|audit| serde_json::to_string(&audit))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
                 })?,

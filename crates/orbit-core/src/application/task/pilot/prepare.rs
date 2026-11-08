@@ -15,7 +15,7 @@ use crate::application::task::TaskListFilter;
 use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::input::{bounded_usize, requested_workspace_root, string_array};
-use super::persist::{no_target_assessment_marker, source_superseded};
+use super::persist::{self, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
@@ -810,13 +810,18 @@ fn already_piloted(
     let history = runtime.get_task_history(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
     })?;
-    Ok(history
+    let Some(applied) = history
         .iter()
         .rev()
         .find(|entry| entry.event == "task_pilot_applied")
-        .and_then(|entry| entry.note.as_deref())
-        .and_then(no_target_assessment_marker)
-        .is_some())
+    else {
+        return Ok(false);
+    };
+    let comments = runtime.get_task_comments(task_id).map_err(|error| {
+        DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
+    })?;
+    let no_target_assessment = persist::no_target_pilot_assessment(applied, &comments);
+    Ok(no_target_assessment.is_some())
 }
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every

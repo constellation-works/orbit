@@ -1,7 +1,7 @@
 //! Readers for decisions recorded as text before [`TaskDecision`] existed.
 //!
-//! Every decision automation acts on is now a typed field on a task history
-//! event. Records written before it carry the decision in text; these readers
+//! Decisions automation acts on now have typed history fields or audit
+//! receipts. Records written before them carry the decision in text; these readers
 //! are the only place that text is parsed, and each is consulted only where a
 //! new record cannot reach it:
 //!
@@ -13,6 +13,10 @@
 //!   history-note marker count only when written before this store's typed
 //!   decisions boundary. Their text is open to writers the decision must not
 //!   trust (any comment author; a pilot agent's rationale).
+//! - a `[no-target-assessed:` history-note marker is read only when the
+//!   matching pilot audit has no typed targetless assessment (or no matching
+//!   receipt exists). This is assessment evidence, not an operator decision,
+//!   so it keeps the existing presence rule without the store-time boundary.
 //!
 //! The boundary is per store: the first writable open of a store by a binary
 //! that writes typed decisions records when that happened, beside the task
@@ -24,8 +28,11 @@
 //! interrupted write left incomplete counts from its modification time, and
 //! the next writable open records that instant in it.
 //!
-//! Retire this module 30 days after the typed field shipped (from
-//! 2026-10-12), once no live task holds a pre-typed decision.
+//! Retire the original decision adapters 30 days after their typed field
+//! shipped (from 2026-10-12), once no live task holds a pre-typed decision.
+//! Retire the targetless assessment adapter and dual-written marker separately,
+//! once every live task's latest targetless pilot assessment has a typed audit
+//! receipt and no supported older binary can still write marker-only records.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
@@ -36,7 +43,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow, write_new_private_text};
 use orbit_store::maintenance::task_registry::task_registry_path;
-use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry};
+use orbit_types::task::{PilotAdmissionVerdict, TaskComment, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
 use super::blocked_recovery::FinalRecoveryRecord;
@@ -169,6 +176,19 @@ impl OrbitRuntime {
 
 const FINAL_RECOVERY_PREFIX: &str = "final_recovery run_id=";
 const DRAIN_HELD_PREFIX: &str = " [drain-approval-held:";
+
+/// Compatibility reader for marker-only targetless pilot assessments. Called
+/// only when the latest applied event has no typed assessment receipt; retire
+/// with the dual-read/dual-write condition in this module's documentation.
+pub(super) fn no_target_pilot_assessment_marker(note: &str) -> Option<(TaskStatus, &str)> {
+    let (_, marker) = note.split_once(" [no-target-assessed:")?;
+    let (marker, _) = marker.split_once(']')?;
+    let (status, fingerprint) = marker.split_once(':')?;
+    if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((status.parse().ok()?, fingerprint))
+}
 
 /// A legacy `final_recovery run_id=<run> decision=<kind> outcome=<outcome>`
 /// comment the applier wrote as `system`.
