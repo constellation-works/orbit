@@ -15,7 +15,6 @@ use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::PostDeployRecord;
 use orbit_types::workflow::handoff::*;
-use serde_json::Value;
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
@@ -600,7 +599,9 @@ impl TaskCommitBoundary {
             ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
-        let displayed = operator_stop_reason(reason);
+        let displayed = LandingStopEvidence::parse(reason)
+            .operator_reason()
+            .to_string();
         attempt.state = LandingAttemptState::Stopped;
         attempt.evidence = Some(reason.to_string());
         attempt.updated_at = Utc::now();
@@ -775,28 +776,6 @@ fn repair_budget_comment(
     comment
 }
 
-/// Operator text for a landing stop.
-///
-/// The landing attempt keeps the raw evidence string. An
-/// `owner_landing_refusal` diagnostic stays there; status notes, revocation
-/// reasons, the repair leaf's stop text and the blocked comment carry its
-/// capped human `reason.value`. Any other evidence, including an older
-/// plain string, is shown unchanged.
-pub(super) fn operator_stop_reason(evidence: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(evidence) else {
-        return evidence.to_string();
-    };
-    if value.get("kind").and_then(Value::as_str) != Some("owner_landing_refusal") {
-        return evidence.to_string();
-    }
-    value
-        .pointer("/reason/value")
-        .and_then(Value::as_str)
-        .filter(|reason| !reason.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| evidence.to_string())
-}
-
 fn retry_id(handoff_id: &str, request_key: &str) -> String {
     orbit_common::security::release::sha256_hex(format!("{handoff_id}\0{request_key}").as_bytes())
 }
@@ -830,8 +809,10 @@ fn repair_exhausted_comment(
     repaired: &AcceptedHandoff,
     reason: &str,
 ) -> String {
-    let first_reason = operator_stop_reason(&first.stop_evidence);
-    let reason = operator_stop_reason(reason);
+    let first_reason = LandingStopEvidence::parse(&first.stop_evidence);
+    let first_reason = first_reason.operator_reason();
+    let reason = LandingStopEvidence::parse(reason);
+    let reason = reason.operator_reason();
     format!(
         "Automatic repair exhausted: the repaired handoff's landing stopped again, so the \
          task is blocked for an operator.\n\n\

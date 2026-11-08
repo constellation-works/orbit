@@ -2,6 +2,7 @@
 //! Nothing in this module performs provider reads or selects landing actions.
 
 use orbit_common::security::redaction::redact_all;
+use orbit_types::workflow::handoff::LandingRefusalReason;
 use serde_json::{Value, json};
 
 use super::answers::{PullRequestStatus, ReviewDecision, StatusCheck};
@@ -22,7 +23,7 @@ pub(in crate::executor::automation::vcs) fn text(raw: &str) -> Value {
 
 /// Recovery reasons already carry bounded excerpts. Keep a larger, bounded
 /// human reason and its final disposition so diagnostics do not crowd it out.
-pub(in crate::executor::automation::vcs) fn reason(raw: &str) -> Value {
+pub(in crate::executor::automation::vcs) fn reason(raw: &str) -> LandingRefusalReason {
     const LIMIT: usize = 4096;
     const MARKER: &str = "\n[… truncated …]\n";
     let redacted = redact_all(raw);
@@ -39,7 +40,11 @@ pub(in crate::executor::automation::vcs) fn reason(raw: &str) -> Value {
         );
         value
     };
-    json!({"value":value,"original_chars":raw.chars().count(),"truncated":count > LIMIT})
+    LandingRefusalReason {
+        value,
+        original_chars: raw.chars().count(),
+        truncated: count > LIMIT,
+    }
 }
 
 fn optional_text(raw: Option<&str>) -> Value {

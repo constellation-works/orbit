@@ -2,7 +2,9 @@
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
-use orbit_types::workflow::handoff::HandoffCandidate;
+use orbit_types::workflow::handoff::{
+    HandoffCandidate, OwnerLandingRefusal, OwnerLandingRefusalKind,
+};
 use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, HandoffLandingUpdate, RuntimeHost};
@@ -105,11 +107,12 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
 ) -> Result<OrbitError, OrbitError> {
     let requeue = matches!(step, HandoffLandingStep::StopForRequeue);
     let repairable = requeue || matches!(step, HandoffLandingStep::Stop { repairable: true });
-    let reason = diagnostics::reason(reason);
-    let mut evidence = json!({
-        "schema_version":1, "kind":"owner_landing_refusal",
-        "reason":reason, "repairable":repairable,
-        "accepted":{
+    let refusal = OwnerLandingRefusal {
+        schema_version: 1,
+        kind: OwnerLandingRefusalKind::OwnerLandingRefusal,
+        reason: diagnostics::reason(reason),
+        repairable,
+        accepted: json!({
             "task":diagnostics::text(&context.task_id),
             "handoff":diagnostics::text(&context.handoff_id),
             "repository":diagnostics::text(&context.candidate.repository),
@@ -118,19 +121,22 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
             "source_branch":diagnostics::text(&context.candidate.source_branch),
             "base_branch":diagnostics::text(&context.candidate.base_branch),
             "landing_branch":diagnostics::text(&context.candidate.landing_branch),
-        },
-        "owner_owed": diagnostics::collection(&context.owed_hosted_checks, |name| diagnostics::text(name)),
-        "observation":observation,
-        "workflow_prerequisites":{"state":"not_collected"},
-        "emission_proof":{"state":"not_collected"},
-    });
-    if requeue {
-        evidence["requeue"] = json!(true);
-    }
+        }),
+        owner_owed: diagnostics::collection(&context.owed_hosted_checks, |name| {
+            diagnostics::text(name)
+        }),
+        observation: observation.clone(),
+        workflow_prerequisites: json!({"state":"not_collected"}),
+        emission_proof: json!({"state":"not_collected"}),
+        requeue: requeue.then_some(true),
+    };
+    let evidence = serde_json::to_value(&refusal).map_err(|error| {
+        OrbitError::Execution(format!("handoff_land: encode landing refusal: {error}"))
+    })?;
     record(host, context, step, None, &evidence)?;
     Ok(OrbitError::Execution(format!(
         "handoff_land: {}",
-        reason["value"].as_str().unwrap_or_default()
+        refusal.reason.value
     )))
 }
 

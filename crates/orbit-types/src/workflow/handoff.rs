@@ -322,6 +322,100 @@ pub struct LandingAttempt {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Discriminator of an [`OwnerLandingRefusal`]: its `kind` is always
+/// `owner_landing_refusal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerLandingRefusalKind {
+    OwnerLandingRefusal,
+}
+
+/// The bounded, redacted human reason of an [`OwnerLandingRefusal`], with
+/// the size of the text it was cut from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingRefusalReason {
+    pub value: String,
+    #[serde(default)]
+    pub original_chars: usize,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// The diagnostic an owner landing stop records as its attempt's evidence.
+///
+/// Fields serialize in this declaration order, which is the stored byte
+/// order: keep it. The bounded observations no reader interprets stay
+/// opaque JSON; they default to `null` when older evidence omits them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnerLandingRefusal {
+    #[serde(default)]
+    pub schema_version: u32,
+    pub kind: OwnerLandingRefusalKind,
+    pub reason: LandingRefusalReason,
+    #[serde(default)]
+    pub repairable: bool,
+    #[serde(default)]
+    pub accepted: serde_json::Value,
+    #[serde(default)]
+    pub owner_owed: serde_json::Value,
+    #[serde(default)]
+    pub observation: serde_json::Value,
+    #[serde(default)]
+    pub workflow_prerequisites: serde_json::Value,
+    #[serde(default)]
+    pub emission_proof: serde_json::Value,
+    /// Present, and `true`, only on a stop that returns the task to the
+    /// backlog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requeue: Option<bool>,
+}
+
+/// [`LandingAttempt::evidence`] read once: the stored string stays opaque
+/// and byte-identical, and every reader decodes it through
+/// [`LandingStopEvidence::parse`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum LandingStopEvidence {
+    /// An `owner_landing_refusal` diagnostic with a non-blank reason.
+    OwnerRefusal(Box<OwnerLandingRefusal>),
+    /// A stop reason the engine recorded as a JSON string literal: `raw`
+    /// is the stored text, quotes included, and `decoded` its content.
+    JsonString { raw: String, decoded: String },
+    /// Anything else, shown as stored: older plain text, merge evidence,
+    /// other JSON, or a refusal whose reason is missing or blank.
+    Text(String),
+}
+
+impl LandingStopEvidence {
+    /// Decode one stored evidence string. Never fails: what is not a
+    /// readable refusal or JSON string stays [`LandingStopEvidence::Text`].
+    pub fn parse(evidence: &str) -> Self {
+        let raw = || evidence.to_string();
+        match serde_json::from_str::<serde_json::Value>(evidence) {
+            Err(_) => Self::Text(raw()),
+            Ok(serde_json::Value::String(decoded)) => Self::JsonString {
+                raw: raw(),
+                decoded,
+            },
+            Ok(value) => match serde_json::from_value::<OwnerLandingRefusal>(value) {
+                Ok(refusal) if !refusal.reason.value.trim().is_empty() => {
+                    Self::OwnerRefusal(Box::new(refusal))
+                }
+                _ => Self::Text(raw()),
+            },
+        }
+    }
+
+    /// The text status notes, revocation reasons, repair stop text and
+    /// blocked comments carry: a refusal's human reason, otherwise the
+    /// evidence exactly as stored.
+    pub fn operator_reason(&self) -> &str {
+        match self {
+            Self::OwnerRefusal(refusal) => &refusal.reason.value,
+            Self::JsonString { raw, .. } | Self::Text(raw) => raw,
+        }
+    }
+}
+
 /// [ORB-16890] Times a task returns to the backlog because its handed-off
 /// candidate fails its own required check at landing, after its one
 /// automatic repair leaf, before the next such stop blocks it.

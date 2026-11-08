@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
 use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, names_task_delivery_pull_request};
 use orbit_types::workflow::ConventionTemplate;
-use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
+use orbit_types::workflow::handoff::{
+    HandoffDelivery, LandingAttemptState, LandingStartState, LandingStopEvidence,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -270,13 +272,9 @@ impl OrbitRuntime {
             stopped_reason: (authority == Some(LandingStartState::Pending))
                 .then(|| attempt.and_then(|attempt| attempt.evidence))
                 .flatten()
-                .and_then(|evidence| match serde_json::from_str::<Value>(&evidence) {
-                    Ok(Value::String(reason)) => Some(reason),
-                    Ok(value) => value
-                        .pointer("/reason/value")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    Err(_) => Some(evidence),
+                .map(|evidence| match LandingStopEvidence::parse(&evidence) {
+                    LandingStopEvidence::JsonString { decoded, .. } => decoded,
+                    other => other.operator_reason().to_string(),
                 }),
         }))
     }
