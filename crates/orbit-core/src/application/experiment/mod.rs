@@ -19,6 +19,7 @@ mod promotion;
 mod readout;
 mod run_policy;
 mod skills;
+mod tag_instruction_port;
 mod task_port;
 mod view;
 

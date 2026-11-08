@@ -912,6 +912,29 @@ if dependency_matches -n 'crate::application::experiment\b' \
   fail=1
 fi
 
+# [ORB-23019] `experiment` sits above `tag_instructions`: its overlays read
+# `LazyRevision`, `TagInstructionFailure` and `read_blob_at`, and call
+# `claim_base_revision`. Tag instructions reach overlay policy only through
+# `tag_instructions::TagInstructionExperimentPort`, which `experiment`
+# implements on `OrbitRuntime`. `tag_instructions` is one file, so the caller
+# scan names that file. A path, a grouped tree, a `super::` chain into
+# `experiment`, or a call to an inherent method it defines (names derived, so
+# the port method keeps a distinct name) is a reintroduced edge. The reverse
+# edge, experiment reading tag-instruction helpers, stays legal.
+if [[ ! -f "$app_src/tag_instructions.rs" ]]; then
+  echo "dependency scan path missing: $app_src/tag_instructions.rs" >&2
+  exit 1
+fi
+if dependency_matches -n 'crate::application::experiment\b' \
+  "$app_src/tag_instructions.rs" ||
+  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
+    "$app_src/tag_instructions.rs" ||
+  ! inherent_calls_into "$app_src" tag_instructions.rs experiment '' '' ||
+  ! super_chains_into "$app_src" tag_instructions.rs experiment; then
+  echo "orbit-core tag_instructions must reach experiment through tag_instructions::TagInstructionExperimentPort and must not call its inherent methods"
+  fail=1
+fi
+
 # [ORB-22708] Landing sits above distributed. Task
 # owns the pure handoff-to-claim read; review records authority and reaches
 # dispatch only through its own ReviewLandingDispatchPort. Refuse paths,

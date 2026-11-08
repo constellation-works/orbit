@@ -132,6 +132,7 @@ source scan, enforces the runtime direction.
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
+| Tag-instruction-owned experiment overlay port | `crates/orbit-core/src/application/tag_instructions.rs` (`TagInstructionExperimentPort`), implemented in `experiment/tag_instruction_port.rs` | [ORB-23019] |
 | Application-owned ports the adapter implements | `crates/orbit-core/src/application/contracts/tool_invocation.rs` (`ToolInvocationPort`) and `crates/orbit-core/src/application/pull_drain/drain/mod.rs` (`PullTransportPort`), implemented in `adapter/tool_execution.rs` and `adapter/engine_host/actions/pull/adapters.rs` | [ORB-22004] |
 | Application-owned port bootstrap implements | `crates/orbit-core/src/application/contracts/task_bundle_maintenance.rs` (`TaskBundleMaintenancePort`), implemented in `bootstrap/task_publication.rs` | [ORB-22005] |
 | Product identity marker | `crates/orbit-core/src/application/workspace/product_profile.rs` | [ORB-22005] |
@@ -278,7 +279,14 @@ moved the backlog forecast out of `task` to its own place in the order:
   check; the pool job draws from is the lower-owned
   `contracts::ExperimentCrewPool`. The public `task_experiments` readout and the
   adapter's `experiment::validate_experiment_capture` call are unchanged
-  [ORB-23015]. `landing` sits above
+  [ORB-23015]. `experiment` also sits above `tag_instructions`: its overlays
+  read `LazyRevision`, `TagInstructionFailure` and `read_blob_at`, and call
+  `claim_base_revision`. Selection reaches live overlays only through
+  `tag_instructions::TagInstructionExperimentPort::tag_instruction_experiment_overlays`,
+  which `experiment` implements on `OrbitRuntime` in
+  `experiment/tag_instruction_port.rs` by forwarding to
+  `experiment_overlays_for_activity`. The `experiment -> tag_instructions`
+  helper edge stays legal [ORB-23019]. `landing` sits above
   `distributed`, outside the order: it consumes authorized handoff requests and
   calls down into `task`, `job` and `distributed`. The pure
   handoff-to-claim read `landing_claim` lives in `task/handoff_claim.rs`, so
@@ -327,6 +335,8 @@ moved the backlog forecast out of `task` to its own place in the order:
   and reused reads wrap, when `contracts` imports any of the ten modules,
   `routines` or `auto_tasks`, when
   `distributed` names `experiment` or calls its inherent methods [ORB-22416],
+  when the single-file `tag_instructions` module names `experiment` or calls
+  its inherent methods [ORB-23019],
   when `automation`, `auto_tasks` or `resident` names `routines` or calls its
   inherent methods [ORB-22623, ORB-22956],
   when `task`, `job`, `review` or `distributed` names `landing` or calls its
@@ -427,7 +437,17 @@ reads commit-pinned repository files through its own `task::base_revision`
 list names `tag_instructions`; its single-file module's inherent names are
 derived like a directory module's. `tag_instructions` re-exports `commit_at`
 and `read_blob_at` as a compatibility shim for experiment overlays and the
-agent corpus; re-pointing them and retiring the shim is a follow-up. Executor
+agent corpus; re-pointing them and retiring the shim is a follow-up.
+`experiment` sits above this module: its overlays read `LazyRevision`,
+`TagInstructionFailure` and `read_blob_at`, and call `claim_base_revision`.
+Selection reaches live overlays only through
+`TagInstructionExperimentPort::tag_instruction_experiment_overlays`, which
+`experiment` implements on `OrbitRuntime` in `experiment/tag_instruction_port.rs`
+by forwarding to `experiment_overlays_for_activity`. Ordering, default
+suppression, role filtering, capture authority, errors and the combined byte
+budget stay here. The guard refuses a path, grouped tree, `super::` chain or
+inherent call from the single-file module into `experiment`; the helper reads
+stay a legal `experiment -> tag_instructions` edge [ORB-23019]. Executor
 `host_os` limits (`task::executor_host_os`) are a task module; the
 host-OS wait that resolves the draw's candidates is
 `job::crew_pools::host_os_wait`.
@@ -518,5 +538,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-22807] — removed visual review: `visual_delivery`, `review::ReviewVisualPort`, `distributed::DistributedVisualPort`, `task::mock_admission` and `task::visual_review_json` are gone, `landing` calls down into `task`, `job` and `distributed` only, and the guard's `visual_delivery` rule is dropped.
 - [ORB-23017] — cut task's done-transition notice closure through `task::TaskNoticePort`, implemented by `notice`, and added `notice` to the guarded `task` upper modules.
 - [ORB-23018] — cut task's post-commit checkpoint cost projection through `task::TaskEvolutionPort`, implemented by `evolution`, and added `evolution` to the guarded `task` upper modules without changing ingestion or replay.
+- [ORB-23019] — cut tag instructions' overlay query through `tag_instructions::TagInstructionExperimentPort`, implemented by `experiment`, and guarded the single-file module's paths and inherent calls into `experiment` while leaving the helper reads legal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

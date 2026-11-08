@@ -40,6 +40,26 @@ pub(crate) enum TagInstructionFailure {
     Refused(TagInstructionError),
 }
 
+/// What tag-instruction selection needs from experiment overlays [ORB-23019].
+///
+/// Experiment owns arm capture and overlay policy, and it reads this module's
+/// revision helpers back, so a direct call from here would close a cycle.
+/// This port is the way in: experiment implements it on
+/// [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
+/// Selection, default suppression, role filtering and the combined prompt
+/// budget stay here. The query name stays distinct from the inherent method
+/// it forwards to, so the dependency guard can index that method.
+pub(in crate::application) trait TagInstructionExperimentPort {
+    /// Live overlays for `activity_name` of `run_id` and the task `input`
+    /// names, in assignment order. Implemented by experiment.
+    fn tag_instruction_experiment_overlays(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<ExperimentActivityOverlay>, TagInstructionFailure>;
+}
+
 impl OrbitRuntime {
     /// The tag instructions `activity_name` of `run_id` receives for the task
     /// `input` names, in application order. A claimed leaf answers from its
@@ -71,7 +91,7 @@ impl OrbitRuntime {
             }
         }
         .map_err(TagInstructionFailure::Refused)?;
-        let overlays = self.experiment_overlays_for_activity(run_id, activity_name, input, None)?;
+        let overlays = self.tag_instruction_experiment_overlays(run_id, activity_name, input)?;
         with_experiment_instructions(selected, &overlays, role)
     }
 
