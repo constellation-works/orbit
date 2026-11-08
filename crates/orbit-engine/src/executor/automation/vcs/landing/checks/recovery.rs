@@ -22,9 +22,12 @@ const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the own
      and returns the task to the backlog, where its next run repairs this candidate";
 
 /// The class of one failed hosted check, ordered so the class that decides
-/// for several jobs is the greatest: one unreadable job spends nothing.
+/// for several jobs is the greatest. [`Unknown`] records a log that could
+/// not be read. It never outranks a readable job, and a set of only unknown
+/// logs spends nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum CheckFailureClass {
+    Unknown,
     Transient,
     Inherited,
     Flaky,
@@ -36,6 +39,7 @@ pub(super) enum CheckFailureClass {
 impl CheckFailureClass {
     pub(super) fn as_str(self) -> &'static str {
         match self {
+            Self::Unknown => "unknown",
             Self::Transient => "transient",
             Self::Inherited => "inherited",
             Self::Flaky => "flaky",
@@ -262,10 +266,20 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             Some(recovery.deadline_ms),
         ) {
             Ok(log) => log,
+            // One unreadable log is unknown evidence. Readable jobs still
+            // decide when they are enough; the outcome names this job.
             Err(error) => {
-                return Ok(unclassified(format!(
-                    "the log of '{label}' could not be read: {error}"
-                )));
+                jobs.push(FailedJob {
+                    run_id: Some(run_id),
+                    job_id,
+                    label,
+                    class: CheckFailureClass::Unknown,
+                    signature: "unreadable".to_string(),
+                    why: error.to_string(),
+                    excerpt: String::new(),
+                    tip_passes: false,
+                });
+                continue;
             }
         };
         let (mut class, mut why, tip_passes, signature) = classify_logged_job(
@@ -336,6 +350,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     }
     let has_aggregates = !aggregates.is_empty();
     jobs.extend(aggregates);
+    // No readable job decided. An unknown log is not itself a class.
+    if jobs.is_empty()
+        || jobs
+            .iter()
+            .all(|job| job.class == CheckFailureClass::Unknown)
+    {
+        return Ok(unclassified(unreadable_job_text(&jobs)));
+    }
     // A conclusion stop still has to reach the planner after its one rerun,
     // so an exhausted budget records the jobs instead of a generic hold.
     let conclusion_stop = jobs
@@ -578,5 +600,23 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             "its evidence could not be read in full, so nothing is rerun, updated or repaired \
              and the candidate stays in review",
         ))),
+        // Reachable only when every job is unknown. The early return above
+        // is the same stop; this arm keeps the match exhaustive.
+        CheckFailureClass::Unknown => Ok(unclassified(unreadable_job_text(&jobs))),
+    }
+}
+
+/// The unclassified reason for logs that could not be read, one job at a time.
+pub(super) fn unreadable_job_text(jobs: &[FailedJob]) -> String {
+    let text = jobs
+        .iter()
+        .filter(|job| job.class == CheckFailureClass::Unknown)
+        .map(|job| format!("the log of '{}' could not be read: {}", job.label, job.why))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if text.is_empty() {
+        "no readable failed-job log decided the classification".to_string()
+    } else {
+        text
     }
 }

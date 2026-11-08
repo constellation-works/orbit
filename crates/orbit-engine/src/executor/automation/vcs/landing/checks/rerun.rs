@@ -165,7 +165,25 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             diagnostic.stage = CiRerunStage::Log;
             diagnostic.run_id = Some(run);
             diagnostic.job_id = Some(id);
-            let log = job_log(host, workspace, run, id, job, Some(deadline_ms))?;
+            let log = match job_log(host, workspace, run, id, job, Some(deadline_ms)) {
+                Ok(log) => log,
+                Err(error) => {
+                    let unknown = classified.is_some_and(|classified| {
+                        classified.iter().any(|failed| {
+                            failed.job_id == id && failed.class == CheckFailureClass::Unknown
+                        })
+                    });
+                    if unknown {
+                        // The landing already recorded this log as unknown.
+                        // A rerun still needs the whole failed set; readable
+                        // jobs keep the route their own class decides.
+                        uncertain = true;
+                        other_failure = true;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             diagnostic.stage = CiRerunStage::Classification;
             let emitted_record =
                 super::super::super::super::ci::log_signature::classify_log_lines(&log)

@@ -17,11 +17,15 @@ branch, base_branch = "orbit/landing-candidate", "agent-main"
 names = ["test", "lint", "independent"]
 
 def outcome(name, is_base=False):
-    if not is_base:
-        named = config.get("conclusions", {}).get(name)
-        if isinstance(named, str):
-            return named
-    return "success" if is_base or (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
+    if is_base:
+        # Absent `base_failures` keeps every base job green.
+        if name in {str(item) for item in config.get("base_failures", [])}:
+            return "failure"
+        return "success"
+    named = config.get("conclusions", {}).get(name)
+    if isinstance(named, str):
+        return named
+    return "success" if (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
 
 def refuse_log(job):
     if str(job) in {str(item) for item in config.get("log_404_jobs", [])}:
