@@ -68,8 +68,15 @@ template:
 
     ## 2. Measure the rate
 
-    For every job with runs in the window, compute runs, failed (`failed` or `interrupted`, and
-    `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. A history
+    For every job with owner-history runs or follower settlements in the window, compute runs,
+    failed (`failed` or `interrupted`, and `cancelled` runs that recorded an error), and failure
+    rate, for 7 days and 30 days. Owner-history runs supply the rate denominator; follower
+    settlements add failure occurrences but do not supply run totals. For a job with follower
+    failures and no owner-history runs, retain its raw and folded failure counts and set both
+    `rate_7d` and `rate_30d` to `null`; set `rate_note` to a nonempty reason such as
+    `no owner-history runs; follower settlements have no run denominator`. More generally, if a
+    window has no owner-history denominator, that window's rate is `null` and `rate_note`
+    explains the missing denominator. A missing follower denominator never blocks a pass. A history
     row with `upgrade_paused: true` is an Orbit upgrade's designed pause, which the clock resumes,
     or a parent that only echoes one: the run stays `interrupted`, but count one per root in the
     job's `held_7d` under `upgrade_paused`, not as a failure. A lost or killed worker has no such
@@ -113,7 +120,9 @@ template:
     failures, cluster its failures by normalized signature: error class (the bracketed code
     such as `[provider_capacity]`, an `error_code`, the guard name, a settlement's `evidence`
     and `failure_class`, or the leading error kind), failing step or deterministic action, and
-    tool. Strip ids, SHAs, paths, PR numbers, timestamps, hosts and counts. Split review
+    tool. A null rate does not exclude a job: the at-least-5 folded-failures rule qualifies it
+    on its own. For a job with no owner-history runs, compute each class's Pareto `share` over
+    that job's folded failures. Strip ids, SHAs, paths, PR numbers, timestamps, hosts and counts. Split review
     refusals by escalation category as before (`base_red`, `external_evidence`,
     `report_revision`, `scope_or_criteria`, `timeout`, `other`), reading `review-gate.json` and
     `review-report.json` with `orbit.task.artifact.get` for the task's latest attempt:
@@ -255,7 +264,12 @@ template:
      "jobs": [{"job": "...", "runs_7d": 0, "occurrences_raw_7d": 0, "failed_raw_7d": 0,
                "failed_folded_7d": 0, "held_7d": 0,
                "held_by_outcome_7d": {"review_decision_hold": 0, "evidence_hold": 0, "operator_cancel": 0, "upgrade_paused": 0},
-               "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0}],
+               "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0, "rate_note": null},
+              {"job": "follower-only example", "runs_7d": 0, "occurrences_raw_7d": 5,
+               "failed_raw_7d": 5, "failed_folded_7d": 5, "held_7d": 0,
+               "held_by_outcome_7d": {"review_decision_hold": 0, "evidence_hold": 0, "operator_cancel": 0, "upgrade_paused": 0},
+               "rate_7d": null, "rate_30d": null, "rate_7d_prev": null,
+               "rate_note": "no owner-history runs; follower settlements have no run denominator"}],
      "prior_cursor": "<RFC 3339 or null>",
      "classes": [{"job": "...", "signature": "...", "occurrences_7d": 0, "new_since_cursor": 0,
                   "new_since_cursor_reason": null,
@@ -276,8 +290,8 @@ template:
     classes with their disposition, the fix-effectiveness verdicts, filed and commented ids,
     deferred classes, and anything unreadable.
   acceptance_criteria:
-  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw occurrences, raw and folded failed counts, a separate held counter by accounting outcome, and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2; the count uses each deduplicated root run's finished_at against the prior cursor, includes its run id and timestamp, and is null with a reason when the needed timestamps are unavailable.
-  - Follower leaf settlements were counted as failures only when their typed `accounting.counts_as_failure` is true, with designed holds and cancellations in `held_7d` by outcome, so `occurrences_raw_7d` equals `failed_raw_7d + held_7d`; settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
+  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw occurrences, raw and folded failed counts, a separate held counter by accounting outcome, and failure rates for 7 days and 30 days (null with a nonempty `rate_note` when an owner-history denominator is missing), and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2; the count uses each deduplicated root run's finished_at against the prior cursor, includes its run id and timestamp, and is null with a reason when the needed timestamps are unavailable.
+  - Follower-only jobs with no owner-history runs retain their raw and folded follower failure counts, have null `rate_7d` and `rate_30d` with a `rate_note` explaining the missing denominator, and do not block a pass; they qualify for section 3 on at least 5 folded failures alone, with each Pareto share computed over that job's folded failures. Follower leaf settlements were counted as failures only when their typed `accounting.counts_as_failure` is true, with designed holds and cancellations in `held_7d` by outcome, so `occurrences_raw_7d` equals `failed_raw_7d + held_7d`; settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
   - Failures were clustered by normalized signature with review refusals split by escalation category, and the Pareto set covers at least 80% of each qualifying job's folded failures plus every class with at least 3 occurrences across 2 runs in 7 days.
   - Every Pareto class carries a category and a disposition in the report, and no class was dismissed by kind alone as designed refusal, provider, agent-declared, CI flake or operator resume.
   - Open tasks covering a Pareto class received one comment with 7-day counts and new-since-cursor counts, and at most 5 new tasks were filed, ranked by folded failures per week they would prevent.
