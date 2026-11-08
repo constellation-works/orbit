@@ -44,6 +44,7 @@ mod attachment_budget;
 pub(crate) mod auto_effort;
 mod blockers;
 mod cfg_gate;
+mod consequential;
 mod drain_promotion;
 mod freshness;
 pub(crate) mod input;

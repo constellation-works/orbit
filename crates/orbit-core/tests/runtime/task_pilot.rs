@@ -32,6 +32,7 @@ mod auto_effort;
 mod backlog_repilot;
 mod blockers;
 mod ci_sweep_races;
+mod consequential_decision;
 mod creation;
 mod crew_selection;
 mod finding_invalid;

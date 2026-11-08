@@ -6,8 +6,9 @@ use super::super::persist::stale_task;
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, contract_conflicts, normalize_evidence_gaps,
-    post_deploy, required_machine, required_os, user_facing_ui, validate_recommendations,
+    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, consequential, contract_conflicts,
+    normalize_evidence_gaps, post_deploy, required_machine, required_os, user_facing_ui,
+    validate_recommendations,
 };
 use super::admission::PreparedTaskSnapshot;
 use super::task::{Assessed, Scope, Settled, refused};
@@ -80,6 +81,9 @@ pub(super) fn assess_with(
     let user_facing_ui =
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
     footprint::hold_unresolved_footprint(&mut assessment, recommended, complexity);
+    // The description-stated subset of an undecided consequential decision.
+    // The activity prompt covers the same choice when only pinned source shows it.
+    consequential::attach_undecided_consequential_decisions(&mut assessment, &current.description);
     attach_host_findings(
         &mut assessment,
         snapshot,

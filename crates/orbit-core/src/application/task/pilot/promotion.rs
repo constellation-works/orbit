@@ -41,6 +41,12 @@ pub(super) const WARNING_FIELDS: [&str; 7] = [
 /// promotion however either is set.
 pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
 
+/// The `hold` marker on the `utility_warnings` finding apply writes when the
+/// description leaves an ownership or policy choice, or an unenumerated
+/// surface a stop rule reaches, undecided [ORB-23255]. The finding holds
+/// even when its text names a done or dependency task.
+pub(crate) const UNDECIDED_CONSEQUENTIAL_DECISION: &str = "undecided_consequential_decision";
+
 /// The footprint hold in an applied assessment, if the apply boundary wrote
 /// one or the pilot declared the same unread source in a form applied
 /// assessments written before the marker was stamped for later-finishing
@@ -169,6 +175,13 @@ pub(super) fn blocked_by_holds_promotion(
             .any(|id| !dependencies.iter().any(|dep| dep == id) && !is_done(id))
 }
 
+/// Whether a finding carries the host marker for an undecided consequential
+/// decision. The marker keeps the hold when the text names a done or
+/// dependency task, the same way [`FOOTPRINT_UNRESOLVED`] does.
+fn declares_undecided_consequential(finding: &Value) -> bool {
+    finding.get("hold").and_then(Value::as_str) == Some(UNDECIDED_CONSEQUENTIAL_DECISION)
+}
+
 /// Whether `field`'s `finding` withholds promotion. Prerequisite, utility and
 /// surface findings share the current dependency and completion exemption.
 fn holds_promotion(
@@ -181,6 +194,7 @@ fn holds_promotion(
     finding_holds_promotion(field, finding)
         && (!PREREQUISITE_FIELDS.contains(&field)
             || declares_unresolved_footprint(finding, gaps)
+            || declares_undecided_consequential(finding)
             || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 

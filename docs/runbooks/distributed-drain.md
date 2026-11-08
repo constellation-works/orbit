@@ -351,7 +351,12 @@ gap that prevents admitting the task as written.
 Use `holds_promotion: false` for advisory observations such as adjacent work
 outside the task's scope. These remain in the pilot assessment comment returned
 by `orbit task show` and in the implementing worker's brief, but do not withhold
-promotion, mark the assessment unready, or appear in held findings. Existing
+promotion, mark the assessment unready, or appear in held findings. An
+undecided consequential decision in the description — an ownership or policy
+choice left open, or a surface difference a stop rule reaches that the spec
+says is omitted and does not resolve — is a holding utility finding. A
+resolved choice, a stop-and-report that is the specified handling, and an
+ordinary implementation choice do not hold. Existing
 plain-string surface and utility warnings continue to hold unless they name only
 recorded dependencies or done tasks, as below. Missing severity or
 malformed structured findings are rejected rather than silently approved.
