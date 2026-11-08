@@ -59,7 +59,8 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
         return;
     }
 
-    use orbit_core::{AutoTaskDefinition, AutoTaskTemplatePatch, AutoTaskUpdateParams};
+    use orbit_core::AutoTaskDefinition;
+    use orbit_core::application::auto_tasks::{AutoTaskTemplatePatch, AutoTaskUpdateParams};
     use orbit_types::task::TaskStatus;
 
     let runtime = runtime();
