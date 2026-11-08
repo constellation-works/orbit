@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-11-07
+last_validated: 2026-11-08
 ---
 
 # Full pre-release QA sweep
@@ -538,7 +538,16 @@ incarnation, re-verify its start time, and signal only through that pidfd,
 never by numeric pid, so a process that exits and is replaced cannot be
 signalled in its place. There is no identity-bound handle in this harness
 on macOS or without pidfd support, so no numeric fallback is used there: a
-found worker stays recorded as not exited and cleanup stays unverified. A
+found worker stays recorded as not exited and cleanup stays unverified.
+The process self-test (`process_self_test`, reached from `--check` and
+`--self-test`) asserts that contract on both hosts: a replaced identity is
+left unsignalled, an unchanged Linux identity is signalled only through the
+pidfd, and a non-Linux host, including macOS, records the identity signal as
+unsupported and sends nothing. The same audit covers the direct harness, the
+embedded supervisor, and the detached-worker settlement that follows.
+`--check --static` skips those fixtures. The macOS workflow's
+`--record-native-command` lane does not run this self-test; macOS workers
+reach it through `make ci-fast` when script inputs change. A
 host with neither a subreaper nor a working-directory source cannot find a
 detached worker, so the run reports
 `cleanup_verified` false with `detached worker cleanup NOT_RUN` in its output,
