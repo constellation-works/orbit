@@ -233,7 +233,8 @@ mod linux {
 /// the Unix-domain member (`SOCK_MAXADDRLEN` is 255); a smaller member does
 /// not change `size_of`. A `proc_pidfdinfo` result that is not exactly that
 /// size is ignored, so a layout drift fails closed instead of reading a
-/// neighboring uid.
+/// neighboring field. The uid comes from the owning process, because xnu
+/// leaves the socket's `soi_stat` zeroed.
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{ClientUid, SocketAddr};
@@ -276,8 +277,12 @@ mod macos {
                 if !same_endpoint(socket_local, peer) || !same_endpoint(socket_foreign, local) {
                     continue;
                 }
-                // `vst_uid` is `uid_t`, which is `u32` on macOS.
-                let uid = info.psi.soi_stat.vst_uid;
+                // xnu leaves `soi_stat` zeroed for sockets, so the owner is
+                // the effective uid of the process holding the client socket.
+                // A process we cannot read is skipped, which fails closed.
+                let Some(uid) = process_uid(pid) else {
+                    continue;
+                };
                 match found {
                     None => found = Some(uid),
                     Some(previous) if previous == uid => {}
@@ -374,6 +379,27 @@ mod macos {
         Some(unsafe { info.assume_init() })
     }
 
+    fn process_uid(pid: libc::pid_t) -> Option<u32> {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+        // SAFETY: `info` is writable for `size` bytes. The result is read only
+        // when the kernel reports a full `proc_bsdinfo`.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if written != size {
+            return None;
+        }
+        // SAFETY: `proc_pidinfo` wrote exactly `size_of::<proc_bsdinfo>()` bytes.
+        Some(unsafe { info.assume_init() }.pbi_uid)
+    }
+
     fn endpoints(ini: &InSockInfo) -> Option<(StdSocketAddr, StdSocketAddr)> {
         // `insi_fport` / `insi_lport` hold the port in network byte order in
         // the low 16 bits (`inp_fport` assigned straight through).
@@ -426,7 +452,7 @@ mod macos {
 
     #[repr(C)]
     struct SocketInfo {
-        soi_stat: libc::vinfo_stat,
+        _soi_stat: libc::vinfo_stat,
         _soi_so: u64,
         _soi_pcb: u64,
         _soi_type: libc::c_int,
@@ -460,6 +486,7 @@ mod macos {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     union SocketInfoProto {
         pri_tcp: TcpSockInfo,
         /// Largest member of the kernel union. Present so `size_of` matches
@@ -468,6 +495,7 @@ mod macos {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct TcpSockInfo {
         tcpsi_ini: InSockInfo,
         tcpsi_state: libc::c_int,
@@ -479,6 +507,7 @@ mod macos {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct InSockInfo {
         insi_fport: libc::c_int,
         insi_lport: libc::c_int,
@@ -495,11 +524,13 @@ mod macos {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct InSiV4 {
         _in4_tos: u8,
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct InSiV6 {
         _in6_hlim: u8,
         _in6_cksum: libc::c_int,
@@ -508,18 +539,21 @@ mod macos {
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     union InSiAddr {
         ina_46: In4In6Addr,
         ina_6: libc::in6_addr,
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct In4In6Addr {
         _i46a_pad32: [u32; 3],
         addr4: libc::in_addr,
     }
 
     #[repr(C)]
+    #[derive(Clone, Copy)]
     struct UnSockInfo {
         _unsi_conn_so: u64,
         _unsi_conn_pcb: u64,
