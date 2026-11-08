@@ -297,6 +297,25 @@ pub(crate) fn run_show_payload(
                 .unwrap_or_default(),
         ));
     }
+    // The run's final-recovery decision and whose fault it found the failure
+    // to be; `pipeline_state.final_recovery` carries the same in JSON.
+    if let Some(checkpoint) = state
+        .as_ref()
+        .and_then(|state| state.final_recovery.as_ref())
+        && let Some(decision) = &checkpoint.decision
+    {
+        header.push_str(&format!(
+            "\nFinal recovery: {} ({}); fault: {}{}",
+            decision.kind(),
+            checkpoint.outcome.as_deref().unwrap_or("not applied"),
+            checkpoint.fault.fault,
+            if checkpoint.fault.fault_evidence.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", checkpoint.fault.fault_evidence)
+            },
+        ));
+    }
     if let Some(assignments) = run
         .input
         .as_ref()

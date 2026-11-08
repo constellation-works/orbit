@@ -88,6 +88,7 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
     state.pipeline["worktree"] = worktree.clone();
     state.pipeline["commit"] = json!({"commit_sha": kept});
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: first.clone(),
             attempt: 1,

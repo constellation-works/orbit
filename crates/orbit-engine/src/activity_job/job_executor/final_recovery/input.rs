@@ -131,7 +131,136 @@ pub(super) fn final_recovery_input(
             input[key] = Value::String(value.clone());
         }
     }
+    withhold_implementer_model(&mut input, &ctx.input);
     Ok(FinalRecoveryInput::Ready(input))
+}
+
+/// Keys whose value names the provider, crew or model a step ran on.
+const MODEL_IDENTITY_KEYS: [&str; 13] = [
+    "model",
+    "models",
+    "provider",
+    "crew",
+    "crew_name",
+    "crew_account",
+    "crew_draw",
+    "crew_draws",
+    "argv_redacted",
+    "agent_execution_id",
+    "effort",
+    "reasoning_effort",
+    "auto_effort",
+];
+
+/// What stands in for a withheld crew or model name inside evidence text.
+const WITHHELD_MODEL: &str = "[implementer model withheld]";
+
+/// Leave the implementer's crew and model out of the recovery packet, so the
+/// recovery agent attributes fault from the evidence alone [model ranking
+/// §5.2]: drop every [`MODEL_IDENTITY_KEYS`] field from the step evidence and
+/// mask the crew and model names those fields and the run input named
+/// wherever else they appear, such as the log tail.
+fn withhold_implementer_model(input: &mut Value, run_input: &Value) {
+    let mut names = std::collections::BTreeSet::new();
+    for key in ["crew", "model"] {
+        collect_model_names(run_input.get(key), &mut names);
+    }
+    let Value::Object(packet) = input else {
+        return;
+    };
+    let mut evidence = packet
+        .iter_mut()
+        .filter(|(key, _)| EVIDENCE_KEYS.contains(&key.as_str()))
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    for value in &mut evidence {
+        strip_model_identity(value, &mut names);
+    }
+    // Short names would mask ordinary words; a provider name is only dropped
+    // with its key, since it also spells paths such as `.claude/`.
+    let mut names = names
+        .into_iter()
+        .filter(|name| name.chars().count() >= 4)
+        .collect::<Vec<_>>();
+    // Longest first, so `opus@high` is masked before a shorter `opus` would
+    // leave `@high` behind.
+    names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+    if !names.is_empty() {
+        for value in evidence {
+            mask_model_names(value, &names);
+        }
+    }
+}
+
+/// Packet fields that carry the failed run's own evidence. The ids, paths and
+/// step lists Orbit set itself are never rewritten.
+const EVIDENCE_KEYS: [&str; 6] = [
+    "error_message",
+    "failed_step_input",
+    "log_tail",
+    "required_check_failures",
+    "step_outputs",
+    "step_recovery_attempts",
+];
+
+fn collect_model_names(value: Option<&Value>, names: &mut std::collections::BTreeSet<String>) {
+    match value {
+        Some(Value::String(name)) if !name.trim().is_empty() => {
+            names.insert(name.trim().to_string());
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                collect_model_names(Some(item), names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_model_identity(value: &mut Value, names: &mut std::collections::BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            for key in MODEL_IDENTITY_KEYS {
+                if let Some(removed) = object.remove(key)
+                    && matches!(key, "model" | "models" | "crew" | "crew_name")
+                {
+                    collect_model_names(Some(&removed), names);
+                }
+            }
+            for nested in object.values_mut() {
+                strip_model_identity(nested, names);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_model_identity(item, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mask_model_names(value: &mut Value, names: &[String]) {
+    match value {
+        Value::String(text) => {
+            for name in names {
+                if text.contains(name.as_str()) {
+                    *text = text.replace(name.as_str(), WITHHELD_MODEL);
+                }
+            }
+        }
+        Value::Object(object) => {
+            for nested in object.values_mut() {
+                mask_model_names(nested, names);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                mask_model_names(item, names);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A compound failure keeps the nested outputs its resumed phase must repair.

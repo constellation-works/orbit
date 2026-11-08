@@ -566,7 +566,7 @@ fn field_edit_after_the_block_is_never_overridden(
             &input,
             &run_id,
             "main",
-            Some(&json!({"decision": "requeue", "reason": "retry"})),
+            Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "retry"})),
         )
         .expect("apply");
     assert!(
@@ -775,7 +775,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             &input,
             &run_id,
             &prepared.base_ref,
-            Some(&json!({"decision": "requeue", "reason": "the flaky dependency was fixed"})),
+            Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "the flaky dependency was fixed"})),
         )
         .expect("apply");
     assert_eq!(outcome, FinalRecoveryOutcome::Requeued);
@@ -802,7 +802,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             &input,
             &run_id,
             "main",
-            Some(&json!({"decision": "resume", "step_id": "implement", "rationale": "retry"})),
+            Some(&json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement", "rationale": "retry"})),
         )
         .expect("apply resume");
     assert!(
@@ -931,7 +931,7 @@ fn requeues_share_the_final_recovery_bound_across_episodes() {
                     &input,
                     &tick.dispatched[0].1,
                     "main",
-                    Some(&json!({"decision": "requeue", "reason": "try again"})),
+                    Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "try again"})),
                 )
                 .expect("apply"),
         );
@@ -1091,7 +1091,7 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
         format!(
             "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{}'\n",
             envelope.display(),
-            r#"{"schemaVersion":1,"status":"success","result":{"decision":"resume","step_id":"agent_implement","rationale":"finished the implementation"},"error":null}"#
+            r#"{"schemaVersion":1,"status":"success","result":{"decision":"resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check","step_id":"agent_implement","rationale":"finished the implementation"},"error":null}"#
         ),
     )
     .expect("write provider");
@@ -1244,7 +1244,7 @@ fn complete_no_diff_needs_a_covering_commit_on_the_base() {
                 run_id,
                 &prepared.base_ref,
                 Some(&json!({
-                    "decision": "complete_no_diff",
+                    "decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
                     "evidence_commit": commit,
                     "rationale": "the outcome is on the base",
                 })),

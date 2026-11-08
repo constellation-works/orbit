@@ -5,6 +5,7 @@ use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_types::task::{
     ArtifactManifestFileV2, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
 };
+use orbit_types::workflow::RecoveryFault;
 
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::super::legacy_decisions;
@@ -138,6 +139,13 @@ pub struct FinalRecoveryRecord {
     pub decision: String,
     /// What the applier did with it.
     pub outcome: String,
+    /// Whose fault the failure was; `unknown` on an older decision.
+    pub fault: RecoveryFault,
+    /// The one line of evidence the fault rests on; empty on an older
+    /// decision.
+    pub fault_evidence: String,
+    /// The model or provider that judged the fault, when Orbit observed one.
+    pub fault_judged_by: Option<String>,
 }
 
 impl FinalRecoveryRecord {
@@ -171,6 +179,9 @@ impl FinalRecoveryRecord {
             run_id,
             decision,
             outcome,
+            fault,
+            fault_evidence,
+            fault_judged_by,
         }) = &entry.decision
         else {
             return None;
@@ -180,6 +191,9 @@ impl FinalRecoveryRecord {
             run_id: run_id.clone(),
             decision: decision.clone(),
             outcome: outcome.as_str().to_string(),
+            fault: *fault,
+            fault_evidence: fault_evidence.clone(),
+            fault_judged_by: fault_judged_by.clone(),
         })
     }
 }

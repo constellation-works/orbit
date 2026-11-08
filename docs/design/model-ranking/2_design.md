@@ -233,6 +233,15 @@ The fault comes with one line of evidence that cites a run, check or file.
 - **Disagreement.** A disagreement rate above 20% in a season suspends the measure (weight
   0, shown) until the rubric is fixed.
 
+As built [ORB-23301]: the fault and evidence sit beside the decision on the run checkpoint
+and the task's typed history decision, and decisions recorded before R1 read `unknown`.
+An agent answer without both is malformed and escalates as `unknown`. Orbit records the
+judge's model as `fault_judged_by`. The packet strips model, provider and crew keys from its
+evidence and masks the run's crew and model names. The audit is the disabled-by-default
+`recovery-fault-audit` auto-task. It samples through the blind `final_recovery` task field
+and skips decisions judged by its own family. Until R2 records seasons, every decision
+counts in `season-0`.
+
 ### 5.3 Tool-call errors by model
 
 Tool audit events already carry a class (`FailureClass`):
@@ -330,6 +339,7 @@ change starts a new season (§4.2).
 - [ORB-23297] — designs the model ranking (this document)
 - [ORB-23066] — `--until` on the scorecards
 - [ORB-23277] — server-derived model on MCP tool audit events
+- [ORB-23301] — records fault and evidence on final-recovery decisions, with the weekly audit
 - [ORB-21789] — size-adjusted escaped regressions for implementers
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
 - [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`

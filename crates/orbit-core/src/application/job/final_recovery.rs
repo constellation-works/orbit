@@ -106,6 +106,7 @@ fn admit(
                     base_ref: request.base_ref.clone(),
                     admitted_at: Utc::now(),
                     decision: None,
+                    fault: Default::default(),
                     repair_commit: None,
                     resume_context: None,
                     outcome: None,
@@ -214,7 +215,8 @@ fn apply(
         },
         requeue_bound: FinalRecoveryRequeueBound::default(),
     };
-    let output = serde_json::to_value(decision)
+    let output = decision
+        .to_attributed_value(&application.fault)
         .map_err(|error| OrbitError::Execution(format!("encode decision: {error}")))?;
     // When a write after the applier's own fails, the task's record of this
     // run's decision is the authority. Reporting an error would escalate
@@ -331,6 +333,7 @@ fn record_decision(
         .update_run_state(run_id, &mut |_, state| {
             if let Some(checkpoint) = state.final_recovery.as_mut() {
                 checkpoint.decision = Some(application.decision.clone());
+                checkpoint.fault = application.fault.clone();
                 checkpoint.outcome = outcome.clone();
                 checkpoint.repair_commit = application.repair_commit.clone();
                 checkpoint.resume_context = application.resume_context.clone();

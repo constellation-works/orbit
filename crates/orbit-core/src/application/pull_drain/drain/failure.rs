@@ -191,9 +191,20 @@ pub(crate) fn leaf_failure_settlement(
     }
     let final_recovery = state
         .and_then(|state| state.final_recovery.as_ref())
-        .and_then(|checkpoint| checkpoint.decision.clone())
-        .filter(|decision| !matches!(decision, FinalRecoveryDecision::Resume { .. }));
-    let failure = leaf_failure(record, run, diagnostic, final_recovery.as_ref(), state);
+        .and_then(|checkpoint| {
+            checkpoint
+                .decision
+                .clone()
+                .map(|decision| (decision, checkpoint.fault.clone()))
+        })
+        .filter(|(decision, _)| !matches!(decision, FinalRecoveryDecision::Resume { .. }));
+    let failure = leaf_failure(
+        record,
+        run,
+        diagnostic,
+        final_recovery.as_ref().map(|(decision, _)| decision),
+        state,
+    );
     // [ORB-14274] An operator who cancelled with `--block` asked for the
     // legacy outcome: the cancel stays typed but fails the claim.
     let operator_blocks = run.state == JobRunState::Cancelled
@@ -244,14 +255,16 @@ pub(crate) fn leaf_failure_settlement(
         return ClaimMutation::Release(evidence);
     }
     let mut summary = terminal_failure_summary_with(run, diagnostic);
-    let final_recovery = final_recovery.map(|decision| {
+    let final_recovery = final_recovery.map(|(decision, fault)| {
         summary.push_str(&format!(
-            "\nFinal recovery decided `{}`; the owner applies it.",
-            decision.kind()
+            "\nFinal recovery decided `{}` (fault: {}); the owner applies it.",
+            decision.kind(),
+            fault.fault
         ));
         ClaimFinalRecovery {
             run_id: run.run_id.clone(),
             decision,
+            fault,
         }
     });
     ClaimMutation::Fail(ClaimEvidence {

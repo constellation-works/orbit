@@ -341,6 +341,10 @@ pub struct ClaimFinalRecovery {
     /// The decision as the leaf's agent proposed it. The owner verifies a
     /// `complete_no_diff` commit against its own base branch.
     pub decision: orbit_types::workflow::FinalRecoveryDecision,
+    /// Whose fault the leaf's recovery found the failure to be; a settlement
+    /// from a follower that predates faults carries `unknown`.
+    #[serde(default)]
+    pub fault: orbit_types::workflow::FaultAttribution,
 }
 
 /// Worker-owned documents and coordination metadata. Lifecycle transitions

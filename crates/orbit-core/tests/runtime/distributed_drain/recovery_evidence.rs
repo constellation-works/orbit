@@ -38,6 +38,7 @@ fn final_recovery_handoff_persists_only_its_claimed_tasks_evidence() {
         .unwrap();
     let mut state = PipelineState::new(leaf.clone(), "claimed_task_pipeline".into(), json!({}));
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: leaf.clone(),
             attempt: 1,

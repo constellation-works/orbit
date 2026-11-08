@@ -211,7 +211,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
-                    json!({"decision": "resume", "step_id": "review_gate_settle",
+                    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
                     "rationale": "repaired the rejected candidate"}),
                 )
             }

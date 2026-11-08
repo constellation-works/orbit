@@ -1,4 +1,4 @@
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryRepairCommit};
+use orbit_types::workflow::{FaultAttribution, FinalRecoveryDecision, FinalRecoveryRepairCommit};
 
 use crate::context::{FinalRecoveryApplication, FinalRecoveryApplied, TaskAutomationUpdate};
 use crate::executor::automation::vcs::absorbed::AbsorbedCandidate;
@@ -30,6 +30,12 @@ pub(super) fn settle_absorbed(
                 candidate.base_sha, candidate.covering_commit, candidate.base_ref
             ),
         },
+        // The task's change reached the base some other way; nothing here
+        // says whose fault the failed run was.
+        fault: FaultAttribution::unknown(format!(
+            "run {} failed at `{}` on a candidate its base already carries at {}",
+            ctx.run_id, step.id, candidate.covering_commit
+        )),
         resume_step_index: None,
         preserved_steps: Vec::new(),
         repair_commit: None,

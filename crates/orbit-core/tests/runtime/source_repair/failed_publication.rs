@@ -49,6 +49,7 @@ fn infra_escalate(
         &f.runtime,
         run_id,
         &FinalRecoveryApplication {
+            fault: Default::default(),
             task_id: f.task.clone(),
             failed_step_id: failed_step.into(),
             decision: orbit_types::workflow::FinalRecoveryDecision::Escalate {

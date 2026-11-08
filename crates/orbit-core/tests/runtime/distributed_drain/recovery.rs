@@ -152,7 +152,7 @@ model = "fixture-b"
     let provider = pair._root.path().join("codex");
     std::fs::write(
         &provider,
-        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"decision\":\"requeue\",\"reason\":\"fixture prerequisite repaired\"},\"error\":null}'\n",
+        "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"decision\":\"requeue\",\"reason\":\"fixture prerequisite repaired\",\"fault\":\"infrastructure\",\"fault_evidence\":\"run fixture: the prerequisite was missing on the host\"},\"error\":null}'\n",
     )
     .unwrap();
     std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -491,6 +491,7 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         .unwrap()
         .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: leaf.clone(),
             attempt: 1,
@@ -637,6 +638,7 @@ fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
         .unwrap()
         .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: leaf.clone(),
             attempt: 1,
@@ -751,6 +753,7 @@ fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
         state.pipeline[step] = output;
     }
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: leaf.clone(),
             attempt: 1,
@@ -1168,6 +1171,7 @@ fn interrupted_claim_recovery_is_fenced_to_the_winning_failure_revision() {
             let evidence = ClaimEvidence {
                 summary: Some("implementation failed".into()),
                 final_recovery: Some(ClaimFinalRecovery {
+                    fault: Default::default(),
                     run_id: leaf.clone(),
                     decision: decision.clone(),
                 }),

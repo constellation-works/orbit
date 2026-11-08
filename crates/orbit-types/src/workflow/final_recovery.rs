@@ -125,9 +125,27 @@ impl FinalRecoveryDecision {
     /// Parse an activity result strictly: one known decision, no unknown
     /// fields, every text field non-empty and bounded, and a full or
     /// abbreviated hexadecimal `evidence_commit`.
+    ///
+    /// The fault fields beside the decision ([`FaultAttribution`]) are
+    /// checked when present but not required here: the applier reads
+    /// decisions Orbit recorded before they existed. An agent's answer is
+    /// read through [`Self::parse_attributed`], which requires them.
     pub fn parse(output: &Value) -> Result<Self, FinalRecoveryError> {
+        let (decision, fault) = split_fault_fields(output);
+        if let Some(fault) = fault.get("fault") {
+            RecoveryFault::deserialize(fault).map_err(|error| FinalRecoveryError::Malformed {
+                reason: format!("`fault`: {error}"),
+            })?;
+        }
+        if let Some(evidence) = fault.get("fault_evidence")
+            && !evidence.is_string()
+        {
+            return Err(FinalRecoveryError::Malformed {
+                reason: "`fault_evidence` must be a string".to_string(),
+            });
+        }
         let decision =
-            Self::deserialize(output).map_err(|error| FinalRecoveryError::Malformed {
+            Self::deserialize(&decision).map_err(|error| FinalRecoveryError::Malformed {
                 reason: error.to_string(),
             })?;
         for (field, value) in decision.text_fields() {
@@ -152,6 +170,80 @@ impl FinalRecoveryDecision {
         Ok(decision)
     }
 
+    /// Parse an agent's answer: [`Self::parse`] plus the required `fault`
+    /// and a non-empty `fault_evidence`. A `fault_judged_by` in the answer is
+    /// dropped; only the caller knows who judged.
+    pub fn parse_attributed(
+        output: &Value,
+    ) -> Result<(Self, FaultAttribution), FinalRecoveryError> {
+        let decision = Self::parse(output)?;
+        let fault = output
+            .get("fault")
+            .ok_or_else(|| FinalRecoveryError::Malformed {
+                reason: format!(
+                    "missing field `fault`; expected one of {}",
+                    RecoveryFault::ALL.map(RecoveryFault::as_str).join(", ")
+                ),
+            })
+            .and_then(|fault| {
+                RecoveryFault::deserialize(fault).map_err(|error| FinalRecoveryError::Malformed {
+                    reason: format!("`fault`: {error}"),
+                })
+            })?;
+        let evidence = output
+            .get("fault_evidence")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if evidence.trim().is_empty() {
+            return Err(FinalRecoveryError::EmptyField {
+                field: "fault_evidence",
+            });
+        }
+        Ok((decision, FaultAttribution::new(fault, evidence)))
+    }
+
+    /// The decision and fault an agent's answer stands for. A missing or
+    /// malformed answer, including one without its fault, escalates with an
+    /// `unknown` fault naming why, so a broken agent never moves a task.
+    pub fn from_attributed_output(output: Option<&Value>) -> (Self, FaultAttribution) {
+        let error = match output {
+            Some(output) => match Self::parse_attributed(output) {
+                Ok(attributed) => return attributed,
+                Err(error) => error.to_string(),
+            },
+            None => "the activity returned no result".to_string(),
+        };
+        (
+            Self::malformed_escalation(&error),
+            FaultAttribution::unknown(format!(
+                "final recovery returned a malformed decision: {error}"
+            )),
+        )
+    }
+
+    /// This decision as an activity result, with `fault` and
+    /// `fault_evidence` beside its own fields: the shape the applier reads.
+    pub fn to_attributed_value(
+        &self,
+        fault: &FaultAttribution,
+    ) -> Result<Value, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        if let Value::Object(object) = &mut value {
+            object.insert("fault".to_string(), Value::from(fault.fault.as_str()));
+            object.insert(
+                "fault_evidence".to_string(),
+                Value::String(fault.fault_evidence.clone()),
+            );
+            if let Some(judge) = &fault.judged_by {
+                object.insert(
+                    FAULT_JUDGED_BY_FIELD.to_string(),
+                    Value::String(judge.clone()),
+                );
+            }
+        }
+        Ok(value)
+    }
+
     /// The decision an activity result stands for. A missing or malformed
     /// result escalates, naming why, so a broken agent never moves a task.
     pub fn from_output(output: Option<&Value>) -> Self {
@@ -162,6 +254,10 @@ impl FinalRecoveryDecision {
             },
             None => "the activity returned no result".to_string(),
         };
+        Self::malformed_escalation(&error)
+    }
+
+    fn malformed_escalation(error: &str) -> Self {
         Self::Escalate {
             diagnosis: format!("final recovery returned a malformed decision: {error}"),
             human_action: "Inspect the failed run and its final-recovery output, then move the \
@@ -271,4 +367,155 @@ impl FinalRecoveryDecision {
 
 fn is_commit_id(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Whose fault a final recovery found the run's failure to be. Model ranking
+/// charges only [`RecoveryFault::Implementer`]; a decision recorded before
+/// faults existed reads as [`RecoveryFault::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryFault {
+    /// The implementing agent's work was wrong, incomplete or unvalidated.
+    Implementer,
+    /// The task was wrong, contradictory, underspecified or obsolete.
+    Specification,
+    /// The review refused or demanded something it should not have.
+    Review,
+    /// The host, sandbox, network, provider or CI runner failed.
+    Infrastructure,
+    /// An Orbit defect: the pipeline, a gate or the applier misbehaved.
+    Orbit,
+    /// Something outside Orbit and the task: an upstream service, a
+    /// dependency or a concurrent change on the base.
+    External,
+    /// The evidence does not settle whose fault it was.
+    #[default]
+    Unknown,
+}
+
+impl RecoveryFault {
+    /// Every fault, in contract order.
+    pub const ALL: [Self; 7] = [
+        Self::Implementer,
+        Self::Specification,
+        Self::Review,
+        Self::Infrastructure,
+        Self::Orbit,
+        Self::External,
+        Self::Unknown,
+    ];
+
+    /// The serialized spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Implementer => "implementer",
+            Self::Specification => "specification",
+            Self::Review => "review",
+            Self::Infrastructure => "infrastructure",
+            Self::Orbit => "orbit",
+            Self::External => "external",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for RecoveryFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Longest `fault_evidence` kept; a longer one is cut at a character
+/// boundary and marked.
+pub const MAX_FAULT_EVIDENCE_CHARS: usize = 500;
+
+/// A final-recovery decision's fault and the one line of evidence, citing a
+/// run, check or file, it rests on. Stored beside the decision; an older
+/// record without it reads as `unknown` with no evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FaultAttribution {
+    #[serde(default)]
+    pub fault: RecoveryFault,
+    #[serde(default)]
+    pub fault_evidence: String,
+    /// The model (or, when the dispatch named none, the provider) of the
+    /// recovery agent that judged the fault, as Orbit observed it: never read
+    /// from the agent's answer. A fault audit uses it to pick a judge from a
+    /// different family. Absent for a fault Orbit set itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judged_by: Option<String>,
+}
+
+/// The key a decision object carries [`FaultAttribution::judged_by`] under.
+pub const FAULT_JUDGED_BY_FIELD: &str = "fault_judged_by";
+
+impl FaultAttribution {
+    /// `fault` with `evidence` folded onto one bounded line.
+    pub fn new(fault: RecoveryFault, evidence: impl AsRef<str>) -> Self {
+        let line = evidence
+            .as_ref()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let fault_evidence = if line.chars().count() > MAX_FAULT_EVIDENCE_CHARS {
+            let kept: String = line.chars().take(MAX_FAULT_EVIDENCE_CHARS - 1).collect();
+            format!("{kept}…")
+        } else {
+            line
+        };
+        Self {
+            fault,
+            fault_evidence,
+            judged_by: None,
+        }
+    }
+
+    /// This attribution, judged by `judge` when Orbit observed one.
+    pub fn judged_by(mut self, judge: Option<String>) -> Self {
+        self.judged_by = judge
+            .map(|judge| judge.trim().to_string())
+            .filter(|judge| !judge.is_empty());
+        self
+    }
+
+    /// An `unknown` fault, with why it could not be determined.
+    pub fn unknown(evidence: impl AsRef<str>) -> Self {
+        Self::new(RecoveryFault::Unknown, evidence)
+    }
+
+    /// The fault recorded beside a decision object: `unknown` with no
+    /// evidence when the object predates faults or carries an unreadable one.
+    pub fn of_output(output: Option<&Value>) -> Self {
+        let Some(output) = output else {
+            return Self::default();
+        };
+        let fault = output
+            .get("fault")
+            .and_then(|fault| RecoveryFault::deserialize(fault).ok())
+            .unwrap_or_default();
+        let evidence = output
+            .get("fault_evidence")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        Self::new(fault, evidence).judged_by(
+            output
+                .get(FAULT_JUDGED_BY_FIELD)
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )
+    }
+}
+
+/// `output` without its fault fields, and those fields alone.
+fn split_fault_fields(output: &Value) -> (Value, serde_json::Map<String, Value>) {
+    let mut decision = output.clone();
+    let mut fault = serde_json::Map::new();
+    if let Value::Object(object) = &mut decision {
+        for key in ["fault", "fault_evidence", FAULT_JUDGED_BY_FIELD] {
+            if let Some(value) = object.remove(key) {
+                fault.insert(key.to_string(), value);
+            }
+        }
+    }
+    (decision, fault)
 }

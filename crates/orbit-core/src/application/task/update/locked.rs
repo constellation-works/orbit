@@ -427,6 +427,10 @@ impl OrbitRuntime {
                         run_id,
                         decision: "operator_requeue".to_string(),
                         outcome: RecordedFinalRecovery::Requeued,
+                        // An operator requeue judges no fault.
+                        fault: Default::default(),
+                        fault_evidence: String::new(),
+                        fault_judged_by: None,
                     }),
                 });
             }

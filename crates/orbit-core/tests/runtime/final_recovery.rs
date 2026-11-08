@@ -174,6 +174,7 @@ impl Fixture {
             &self.runtime,
             run,
             &FinalRecoveryApplication {
+                fault: Default::default(),
                 task_id: task.to_string(),
                 failed_step_id: "implement".to_string(),
                 decision,
@@ -354,6 +355,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
                 &fixture.runtime,
                 &run,
                 &FinalRecoveryApplication {
+                    fault: Default::default(),
                     task_id: task.clone(),
                     failed_step_id: "implement".to_string(),
                     decision: resume.clone(),

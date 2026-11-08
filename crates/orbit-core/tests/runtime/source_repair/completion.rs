@@ -909,6 +909,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
             .unwrap()
     );
     let application = orbit_engine::FinalRecoveryApplication {
+        fault: Default::default(),
         task_id: f.task.clone(),
         failed_step_id: "complete_pr".into(),
         decision: orbit_types::workflow::FinalRecoveryDecision::Resume {

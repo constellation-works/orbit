@@ -1,4 +1,6 @@
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryResume};
+use orbit_types::workflow::{
+    FaultAttribution, FinalRecoveryDecision, FinalRecoveryResume, RecoveryFault,
+};
 
 use crate::context::{
     CompletionObservationAdmission, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
@@ -134,13 +136,14 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         return skip("the run has no assigned worktree for final recovery to inspect");
     };
 
-    if let types::FinalRecoveryBudget::Replay(decision) =
+    if let types::FinalRecoveryBudget::Replay(decision, fault) =
         std::mem::replace(budget, types::FinalRecoveryBudget::Spent)
     {
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),
             decision,
+            fault,
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -241,6 +244,15 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                     .into(),
                 summary: None,
             },
+            fault: FaultAttribution::new(
+                RecoveryFault::Infrastructure,
+                format!(
+                    "run {} step `{}` failed on transient infrastructure ({})",
+                    ctx.run_id,
+                    step.id,
+                    class.as_str()
+                ),
+            ),
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -276,6 +288,14 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                         step_id: step.id.clone(),
                         rationale: rationale.clone(),
                     },
+                    fault: FaultAttribution::new(
+                        RecoveryFault::Infrastructure,
+                        format!(
+                            "run {} step `{}` could not observe completion of an unchanged, \
+                             authenticated publication",
+                            ctx.run_id, step.id
+                        ),
+                    ),
                     resume_step_index: Some(step_index as u32),
                     preserved_steps: Vec::new(),
                     repair_commit: None,
@@ -317,6 +337,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                             "policy-changed: {reason}; transient completion observation requires current-policy source repair"
                         ),
                     },
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` could not observe completion and its policy changed \
+                         since publication",
+                        ctx.run_id, step.id
+                    )),
                     resume_step_index: None,
                     preserved_steps: Vec::new(),
                     repair_commit: None,
@@ -342,6 +367,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                 diagnosis: format!("unchanged completion reuse refused: candidate-changed: {refusal}; original error: {error_message}"),
                 human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(), summary: None,
             },
+            fault: FaultAttribution::unknown(format!(
+                "run {} step `{}` could not observe completion and reuse of its publication \
+                 was refused",
+                ctx.run_id, step.id
+            )),
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -363,6 +393,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                 let application = FinalRecoveryApplication {
                     task_id,
                     failed_step_id: step.id.clone(),
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` spent its watch budget before the required checks \
+                         concluded",
+                        ctx.run_id, step.id
+                    )),
                     decision: FinalRecoveryDecision::Requeue { reason },
                     resume_step_index: None,
                     preserved_steps: Vec::new(),
@@ -403,23 +438,33 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             input
         })
         .and_then(|input| decision::dispatch_final_recovery(ctx, step, activity, &input));
-    let (decision, recovery_model) = match dispatch {
-        Ok((output, model)) => (
-            FinalRecoveryDecision::from_output(Some(&decision::decision_payload(&output))),
-            model,
-        ),
+    let ((decision, fault), recovery_model) = match dispatch {
+        Ok(dispatched) => {
+            let (decision, fault) =
+                FinalRecoveryDecision::from_attributed_output(Some(&dispatched.payload));
+            (
+                (decision, fault.judged_by(dispatched.judge)),
+                dispatched.model,
+            )
+        }
         Err(message) => (
-            FinalRecoveryDecision::Escalate {
-                diagnosis: format!(
-                    "final recovery activity `{}` did not return a decision: {message}",
-                    activity.name
-                ),
-                human_action:
-                    "Inspect the failed run and its final-recovery invocation, then move \
+            (
+                FinalRecoveryDecision::Escalate {
+                    diagnosis: format!(
+                        "final recovery activity `{}` did not return a decision: {message}",
+                        activity.name
+                    ),
+                    human_action:
+                        "Inspect the failed run and its final-recovery invocation, then move \
                                the task by hand."
-                        .to_string(),
-                summary: None,
-            },
+                            .to_string(),
+                    summary: None,
+                },
+                FaultAttribution::unknown(format!(
+                    "final recovery activity `{}` for run {} returned no decision",
+                    activity.name, ctx.run_id
+                )),
+            ),
             None,
         ),
     };
@@ -508,6 +553,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
+        fault,
         resume_step_index: resume_index.map(|index| index as u32),
         preserved_steps,
         repair_commit,

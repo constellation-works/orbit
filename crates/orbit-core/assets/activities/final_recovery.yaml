@@ -144,15 +144,22 @@ spec:
       # draws under.
       crew_config_key:
         const: workflow.final_recovery_crews
-  # Mirrors orbit_types::workflow::FinalRecoveryDecision plus an optional
+  # Mirrors orbit_types::workflow::FinalRecoveryDecision plus the required
+  # fault and fault_evidence every decision carries, and an optional
   # repair_evidence handoff on resume. The host imports that field before
   # Orbit strictly parses the remaining decision; anything else escalates.
   output_schema_json:
     type: object
     oneOf:
       - additionalProperties: false
-        required: [decision, step_id, rationale]
+        required: [decision, step_id, rationale, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           repair_evidence:
             type: object
             additionalProperties: false
@@ -185,8 +192,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, evidence_commit, rationale]
+        required: [decision, evidence_commit, rationale, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: complete_no_diff
           evidence_commit:
@@ -196,8 +209,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason, evidence]
+        required: [decision, reason, evidence, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: reject
           reason:
@@ -207,24 +226,42 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason]
+        required: [decision, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: archive
           reason:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason]
+        required: [decision, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: requeue
           reason:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, diagnosis, human_action]
+        required: [decision, diagnosis, human_action, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: escalate
           diagnosis:
@@ -237,8 +274,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, summary, options, recommended]
+        required: [decision, summary, options, recommended, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: decide
           summary:
@@ -293,8 +336,14 @@ spec:
             minimum: 1
             maximum: 3
       - additionalProperties: false
-        required: [decision, run_id, reason]
+        required: [decision, run_id, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: resume_run
           run_id:
@@ -304,8 +353,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, head_sha, reason]
+        required: [decision, head_sha, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: rerun_ci
           head_sha:
@@ -315,8 +370,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, human_action]
+        required: [decision, human_action, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: friction_reported
           friction_id:
@@ -463,6 +524,32 @@ spec:
        injected execution envelope, is absent when empty, and is not an
        `orbit.task.show` field.
 
+    Fault:
+    Every decision also names whose fault the failure was, as `fault`, with
+    `fault_evidence`: one line citing the run, check or file that shows it
+    (for example `run jrun-… step validate: the test suite fails in
+    tests/parser.rs on the candidate only`). Judge from the evidence, not
+    from who did the work: the packet leaves out the implementer's crew and
+    model, and you must not look them up (the task's `crew`, run crew draws or
+    invocation records). Pick the first that the evidence supports:
+    - `implementer`: the candidate itself was wrong, incomplete, unvalidated
+      or broke a check the base passes; the task was clear and achievable.
+    - `specification`: the task was wrong, contradictory, underspecified,
+      obsolete or already done; a correct implementer could not satisfy it
+      as written.
+    - `review`: a review refused or demanded something the task and the
+      workspace guide do not require.
+    - `infrastructure`: the host, sandbox, network, provider, credentials or
+      CI runner failed; the candidate was not judged.
+    - `orbit`: an Orbit defect (a gate, pipeline step or the applier
+      misbehaved); a `friction_reported` decision is usually this.
+    - `external`: something outside Orbit and the task, such as a concurrent
+      change on the base, an upstream service or a dependency release.
+    - `unknown`: the evidence does not settle it. Prefer it to a guess.
+    Fault is about the failure, not the decision: a `resume` after you
+    finished an incomplete implementation is `implementer`; a `requeue` after
+    a provider outage is `infrastructure`.
+
     Evidence handoff:
     - When a repair produces evidence and will `resume`, add `repair_evidence` beside
       the typed decision:
@@ -511,8 +598,10 @@ spec:
 
     Return:
     Exactly one Orbit response envelope whose `result` is one of these, limited
-    to `decisions` when listed:
-    - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "..."}
+    to `decisions` when listed, each with `"fault": "<one of the faults
+    above>"` and `"fault_evidence": "<one line citing a run, check or file>"`
+    beside its fields (a decision without them escalates):
+    - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "...", "fault": "implementer", "fault_evidence": "..."}
     - {"decision": "complete_no_diff", "evidence_commit": "<sha on base_ref>", "rationale": "..."}
     - {"decision": "reject", "reason": "...", "evidence": "..."}
     - {"decision": "archive", "reason": "..."}

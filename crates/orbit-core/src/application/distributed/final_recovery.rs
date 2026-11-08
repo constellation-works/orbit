@@ -84,9 +84,12 @@ impl OrbitRuntime {
             completion: FinalRecoveryCompletion::Review,
             requeue_bound: FinalRecoveryRequeueBound::default(),
         };
-        let output = serde_json::to_value(&final_recovery.decision).map_err(|error| {
-            orbit_common::OrbitError::Execution(format!("encode decision: {error}"))
-        })?;
+        let output = final_recovery
+            .decision
+            .to_attributed_value(&final_recovery.fault)
+            .map_err(|error| {
+                orbit_common::OrbitError::Execution(format!("encode decision: {error}"))
+            })?;
         let outcome = self.apply_final_recovery(&request, Some(&output))?;
         tracing::info!(
             target: "orbit.distributed.final_recovery",

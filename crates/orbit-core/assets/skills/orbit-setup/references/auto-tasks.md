@@ -704,6 +704,17 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
 
+- **`recovery-fault-audit`** (`medium`) — weekly. Re-judges 10 final-recovery
+  fault attributions that another model family recorded, blind to the
+  implementer's crew and model: it reads decisions through the
+  `final_recovery` task field and judges each from the task's title,
+  description, criteria and recorded evidence. Each run attaches
+  `recovery-fault-audit.json` with per-season cumulative disagreement rates
+  carried from the previous run, marks a season above 20% `suspended`, and
+  files at most one `proposed` rubric-revision task. It never changes a
+  recorded decision. Seasons read `season-0` until model ranking records
+  them.
+
 - **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,
   `copilot-instructions.md` under `.github`, and Cursor rule files) at one pinned
