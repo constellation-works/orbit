@@ -77,7 +77,7 @@ Run pipeline state:
 Per-minute resource history:
 
 - Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
-- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, independent of `retention.runs_days`, except the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per workspace, work class and complexity, which stay at any age.
+- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, independent of `retention.runs_days`, except the newest 200 deliveries per workspace, work class and complexity, which stay at any age.
 
 Admission forecasts:
 
@@ -91,10 +91,10 @@ Admission reservations:
 
 Applied task commit journal:
 
-- `retention.journal_days` (default 14) removes older applied rows only, preserving each
+- A fixed 14-day window ([ORB-22808]) removes older applied rows only, preserving each
   task's newest applied row plus all prepared, committed and aborted rows. Published
   task history and recovery inputs stay; older raw transition diagnostics are lost.
-- `retention.store_warn_bytes` controls a warning only and deletes nothing.
+- The fixed 1 GiB store-size warning deletes nothing.
 - Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
   across audit, run and journal pruning. Auto-concurrency profiles and forecast accuracy
   keep working on the rows the count exceptions keep at any age; raw samples outside

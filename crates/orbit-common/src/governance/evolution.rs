@@ -136,7 +136,7 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::Decline,
     cli_path: &["decline"],
     tool_name: "orbit.evolution.decline",
-    tool_description: "Operator-only: decline an evolution signature and suppress proposals for days (default resident.evolution.decline_suppress_days, initially 30). Occurrences keep accumulating. Suppression ends early only when window cost at least doubles.",
+    tool_description: "Operator-only: decline an evolution signature and suppress proposals for days (default 30). Occurrences keep accumulating. Suppression ends early only when window cost at least doubles.",
     cli_about: "Suppress proposals for a signature (operator only)",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -145,7 +145,7 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
         both(
             "days",
             ParamType::Integer,
-            "Suppression days, 1-3650; defaults to resident.evolution.decline_suppress_days (initially 30).",
+            "Suppression days, 1-3650; defaults to 30.",
             CliArgKind::flag("days"),
             "Suppression days (default: configured suppression, initially 30)",
         ),

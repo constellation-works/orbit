@@ -590,7 +590,7 @@ A fetch that keeps failing while that ref is missing, or still matches the
 cursor, is visible on each tick as `source_fetch_failed`; doctor does not
 contact the network to rediscover it.
 
-A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
+A recorded stall that outlives 60 minutes (fixed since [ORB-22808]) is
 logged once at `warn` and filed once as friction; before that window it is
 recorded but quiet. A `history_diverged` stall clears itself only when the orphaned revision is
 provably reachable from the branch head again, which moves no debt and needs no

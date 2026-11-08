@@ -95,10 +95,9 @@ fn blocked_workspace_finishes_then_the_tick_reports_all_deferred_workspaces() {
     );
 }
 
-/// Inside the configured horizon the tick skips every routine and mints
-/// nothing. Past it, the first observation baselines and the next due minute
-/// fires. The horizon here is 30 minutes, inside the 180 default, so a
-/// hardcoded default would still hold the far side.
+/// Inside the fixed 180-minute horizon the tick skips every routine and
+/// mints nothing. Past it, the first observation baselines and the next due
+/// minute fires.
 #[test]
 fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() {
     if crate::application::run_isolated_test(std::any::type_name_of_val(
@@ -112,11 +111,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
     let orbit = repo.join(".orbit");
     std::fs::create_dir_all(&orbit).unwrap();
     std::fs::create_dir_all(&global).unwrap();
-    std::fs::write(
-        global.join("config.toml"),
-        "[machine]\nhost_shutdown_hold_minutes = 30\n",
-    )
-    .unwrap();
+    std::fs::write(global.join("config.toml"), "").unwrap();
     let init = crate::git_test_support::command()
         .args(["init", "--initial-branch=main", "-q"])
         .current_dir(&repo)
@@ -174,7 +169,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
         .expect("tick")
     };
 
-    let held = tick(30, now);
+    let held = tick(180, now);
     assert!(
         held.reports.iter().any(|report| {
             report.routine == "every-minute"
@@ -194,7 +189,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
     );
     assert!(held.load_errors.is_empty(), "{:?}", held.load_errors);
 
-    let baselined = tick(32, now);
+    let baselined = tick(182, now);
     assert!(
         baselined
             .reports
@@ -212,7 +207,7 @@ fn a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires() 
         baselined.auto_task_reports
     );
 
-    let fired = tick(32, now + chrono::Duration::minutes(1));
+    let fired = tick(182, now + chrono::Duration::minutes(1));
     assert!(
         fired
             .reports

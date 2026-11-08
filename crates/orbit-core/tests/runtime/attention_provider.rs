@@ -452,46 +452,6 @@ fn ci_red_folds_into_existing_repair_task() {
     assert_eq!(items[0]["severity"], "high");
 }
 
-fn ci_red_timeout_degrades() {
-    // Fixture with a 1s source timeout and a provider that sleeps 3s.
-    let fixture = Fixture::new(true);
-    std::fs::write(
-        fixture.repo.join(".orbit/config.toml"),
-        "[attention]\nsource_timeout_seconds = 1\n",
-    )
-    .unwrap();
-    // Re-open so the new config is admitted.
-    let runtime = OrbitRuntime::from_roots(
-        &fixture._root.path().join("home/.orbit"),
-        &fixture.repo.join(".orbit"),
-    )
-    .unwrap();
-    std::fs::write(fixture.state.join("runs.json"), "[]").unwrap();
-    // Replace gh with a sleeping run-list.
-    let bin = fixture._root.path().join("bin/gh");
-    std::fs::write(&bin, "#!/bin/sh\ncase \"$1 ${2:-}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") sleep 3; printf '[]\\n' ;;\n  *) exit 2 ;;\nesac\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    fixture.set_runs(json!([fixture.run(42, "failure", &now, &fixture.head)]));
-    let started = std::time::Instant::now();
-    let response = call(&runtime, json!({"kind": "ci_red"}));
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(3),
-        "timeout was not bounded"
-    );
-    let degraded = response["degraded"].as_array().unwrap();
-    assert!(
-        degraded
-            .iter()
-            .any(|d| d["kind"] == "ci_red" && d["code"] == "source_unavailable"),
-        "{response}"
-    );
-}
-
 fn friction_untriaged_lists_only_open() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -684,6 +644,5 @@ crate::scenario_table!(
     ci_red_ignores_retained_failure_on_stale_local_head,
     ci_red_advancing_remote_head_invalidates_cache,
     ci_red_unavailable_base_head_degrades,
-    ci_red_timeout_degrades,
     friction_untriaged_lists_only_open,
 );

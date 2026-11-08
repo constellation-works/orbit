@@ -1,4 +1,3 @@
-mod machine;
 mod retired_providers;
 mod seed;
 

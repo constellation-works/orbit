@@ -41,8 +41,9 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// A host in `mode`, with `extra` config lines, and no profiles yet.
-    fn new(mode: &str, extra: &str) -> Self {
+    /// A host in `mode`, with the starvation guard's `(max wait minutes,
+    /// stuck passes)` overridden when `guard` is set, and no profiles yet.
+    fn new(mode: &str, guard: Option<(u32, u32)>) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let workspace = root.path().join("repo/.orbit");
@@ -52,7 +53,7 @@ impl Fixture {
         }
         write_proc(&proc_root, 2);
         let probe = PressureProbe::calm();
-        let runtime = build(&global, &workspace, &proc_root, &probe, mode, extra);
+        let runtime = build(&global, &workspace, &proc_root, &probe, mode, guard);
         Self {
             _root: root,
             global,
@@ -65,14 +66,14 @@ impl Fixture {
     }
 
     /// The same host and store under another mode.
-    fn with_mode(&self, mode: &str, extra: &str) -> OrbitRuntime {
+    fn with_mode(&self, mode: &str) -> OrbitRuntime {
         build(
             &self.global,
             &self.workspace,
             &self.proc_root,
             &self.probe,
             mode,
-            extra,
+            None,
         )
     }
 
@@ -250,26 +251,26 @@ fn build(
     proc_root: &Path,
     probe: &std::sync::Arc<PressureProbe>,
     mode: &str,
-    extra: &str,
+    guard: Option<(u32, u32)>,
 ) -> OrbitRuntime {
-    // A horizon in `extra` replaces the fixtures' 10 minutes.
-    let horizon = if extra.contains("horizon_cap_minutes") {
-        ""
-    } else {
-        "horizon_cap_minutes = 10\n"
-    };
     std::fs::write(
         global.join("config.toml"),
         format!(
             "[machine.auto_concurrency]\nmode = \"{mode}\"\nmin_profile_deliveries = 1\n\
-             {horizon}admit_cpu_percent = 80\nadmit_memory_percent = 75\n{extra}"
+             admit_cpu_percent = 80\n"
         ),
     )
     .unwrap();
-    OrbitRuntime::from_roots(global, workspace)
+    let runtime = OrbitRuntime::from_roots(global, workspace)
         .unwrap()
         .with_host_resource_probe(probe.clone())
-        .with_host_load_proc_root(proc_root.to_path_buf())
+        .with_host_load_proc_root(proc_root.to_path_buf());
+    match guard {
+        Some((max_wait_minutes, stuck_passes)) => {
+            runtime.with_auto_concurrency_head_guard(max_wait_minutes, stuck_passes)
+        }
+        None => runtime,
+    }
 }
 
 /// Ten CPUs whose ticks never move, so the CPU baseline is unknown and
@@ -365,7 +366,7 @@ fn ids(entries: impl IntoIterator<Item = String>) -> Vec<String> {
 /// admitted in the same pass, and the admission is reserved for the next
 /// admitter on the host.
 fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.seed_profiles();
     fixture.running_hard_delivery();
     let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -424,7 +425,7 @@ fn enforce_skips_a_colliding_candidate_and_admits_a_lighter_one_behind_it() {
 /// on an idle host two 3-core `low` deliveries fit under 8 cores, and the
 /// third, which would make 9, does not.
 fn candidates_admitted_in_one_pass_count_each_other() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.finished_delivery("low", &[3.0, 3.0]);
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
     let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Low);
@@ -453,7 +454,7 @@ fn candidates_admitted_in_one_pass_count_each_other() {
 /// it, however many passes repeat, so its profile never stacks onto the
 /// forecast. A candidate the section admits keeps its one reservation.
 fn a_candidate_the_section_refuses_leaves_no_reservation() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.finished_delivery("low", &[1.0, 1.0]);
     let refused = fixture.task("refused", TaskPriority::High, TaskComplexity::Low);
     let claim = ExecutionClaim {
@@ -524,7 +525,7 @@ fn a_candidate_the_section_refuses_leaves_no_reservation() {
 /// about 16.9 GiB, fits over 2 GiB in use and is admitted. Over 10 GiB in
 /// use it does not, and the candidate is refused for memory.
 fn memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     for index in 0..10 {
         let memory = if index < 2 { 9 * GIB } else { GIB };
         fixture.finished_delivery_using("low", &[0.5; 3], memory);
@@ -564,7 +565,7 @@ fn memory_fits_by_the_quantile_of_the_sum_not_the_sum_of_p90s() {
 /// decisions `enforce` would have made, and reserves nothing. `off` builds
 /// no forecast and records no block.
 fn shadow_admits_as_off_and_records_what_enforce_would_do() {
-    let fixture = Fixture::new("off", "");
+    let fixture = Fixture::new("off", None);
     fixture.seed_profiles();
     fixture.running_hard_delivery();
     let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -588,7 +589,7 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
         .unwrap();
     assert!(off_pass.admission_forecast.is_none());
 
-    let shadow_runtime = fixture.with_mode("shadow", "");
+    let shadow_runtime = fixture.with_mode("shadow");
     let shadow = classify(&shadow_runtime, &drain, 4);
     assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
     let record = recorded(&shadow_runtime, &drain, &shadow);
@@ -623,7 +624,7 @@ fn shadow_admits_as_off_and_records_what_enforce_would_do() {
 /// and continue deciding identically after the host runtime is reopened.
 fn per_run_mode_overrides_the_host_and_survives_reopen() {
     for mode in ["off", "shadow", "enforce"] {
-        let fixture = Fixture::new("shadow", "");
+        let fixture = Fixture::new("shadow", None);
         fixture.seed_profiles();
         fixture.running_hard_delivery();
         let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -635,7 +636,7 @@ fn per_run_mode_overrides_the_host_and_survives_reopen() {
         );
         let other = fixture.drain();
         let config = std::fs::read(fixture.global.join("config.toml")).unwrap();
-        let reopened = fixture.with_mode("shadow", "");
+        let reopened = fixture.with_mode("shadow");
         let input = reopened.show_job_run(&drain).unwrap().input.unwrap();
         let pass = crate::scenarios::with_immutable_host_load(|| {
             reopened.run_deterministic(
@@ -669,7 +670,7 @@ fn per_run_mode_overrides_the_host_and_survives_reopen() {
 /// Inherited local modes follow host edits; explicit modes continue to win.
 fn a_live_local_drain_refreshes_only_its_inherited_mode() {
     for explicit in ["off", "shadow"] {
-        let fixture = Fixture::new("shadow", "");
+        let fixture = Fixture::new("shadow", None);
         fixture.seed_profiles();
         fixture.running_hard_delivery();
         let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -713,7 +714,7 @@ fn a_live_local_drain_refreshes_only_its_inherited_mode() {
 /// skipped. With the slot taken, the next pass builds no forecast and counts
 /// as `ceiling_full`.
 fn the_ceiling_holds_before_gap_fit() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.seed_profiles();
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Low);
     fixture.task("second", TaskPriority::Medium, TaskComplexity::Low);
@@ -754,7 +755,7 @@ fn the_ceiling_holds_before_gap_fit() {
 /// Sustained pressure holds the pass whatever the forecast says: nothing is
 /// admitted, and no forecast is built for a pass that cannot admit.
 fn the_throttle_holds_enforce_whatever_the_forecast_says() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.seed_profiles();
     fixture.task("light", TaskPriority::Medium, TaskComplexity::Low);
     let drain = fixture.drain();
@@ -772,13 +773,13 @@ fn the_throttle_holds_enforce_whatever_the_forecast_says() {
 
 /// A host with no profiles admits in `enforce` exactly what `off` admits.
 fn a_host_without_profiles_admits_in_enforce_as_off_does() {
-    let fixture = Fixture::new("off", "");
+    let fixture = Fixture::new("off", None);
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Hard);
     let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Medium);
     let drain = fixture.drain();
 
     let off = classify(&fixture.runtime, &drain, 4);
-    let enforce_runtime = fixture.with_mode("enforce", "");
+    let enforce_runtime = fixture.with_mode("enforce");
     let enforce = classify(&enforce_runtime, &drain, 4);
     assert_eq!(admitted(&off), vec![first.clone(), second.clone()]);
     assert_eq!(admitted(&enforce), admitted(&off), "{enforce:#}");
@@ -793,12 +794,15 @@ fn a_host_without_profiles_admits_in_enforce_as_off_does() {
     );
 }
 
-/// Once the head has failed gap fit for longer than `head_max_wait_minutes`
+/// Once the head has failed gap fit for longer than the guard's maximum wait
 /// (zero here, so from its second failing pass), nothing behind it is
 /// admitted, even work that fits, and the drain polls rather than idles.
 /// When the head fits it is admitted and the guard lifts.
 fn a_starving_head_holds_backfill_until_it_fits() {
-    let fixture = Fixture::new("enforce", "head_max_wait_minutes = 0\n");
+    let fixture = Fixture::new(
+        "enforce",
+        Some((0, orbit_config::AUTO_CONCURRENCY_HEAD_STUCK_PASSES)),
+    );
     fixture.seed_profiles();
     let running = fixture.running_hard_delivery();
     let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -848,7 +852,7 @@ fn a_starving_head_holds_backfill_until_it_fits() {
 /// When gap fit refuses every candidate while the backlog has work, the pass
 /// waits the short poll, not the idle wait, and counts as `gap_fit_held`.
 fn a_pass_gap_fit_refuses_entirely_polls() {
-    let fixture = Fixture::new("enforce", "");
+    let fixture = Fixture::new("enforce", None);
     fixture.seed_profiles();
     fixture.running_hard_delivery();
     let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);
@@ -876,12 +880,12 @@ fn a_pass_gap_fit_refuses_entirely_polls() {
 }
 
 /// `shadow` and `enforce` passes each record the forecast at the offsets
-/// inside the horizon (10 minutes here, so +5 and +10), counting what the
+/// inside the horizon (+5, +10, +20 and +30), counting what the
 /// pass admitted, with the pass's decisions; `off` records nothing. The
 /// accuracy report counts, per drain, what shadow would have held and what
 /// enforce admitted or held.
 fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
-    let fixture = Fixture::new("off", "");
+    let fixture = Fixture::new("off", None);
     fixture.finished_delivery("hard", &[1.0, 1.0, 1.0, 6.0, 1.0]);
     fixture.finished_delivery("medium", &[1.0, 6.0, 1.0]);
     // Long enough to still run at +5.
@@ -897,9 +901,9 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
     assert_eq!(admitted(&off), vec![heavy.clone(), light.clone()]);
     assert!(store.admission_forecasts(since).unwrap().is_empty());
 
-    let shadow = classify(&fixture.with_mode("shadow", ""), &drain, 4);
+    let shadow = classify(&fixture.with_mode("shadow"), &drain, 4);
     assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
-    let enforce = classify(&fixture.with_mode("enforce", ""), &drain, 4);
+    let enforce = classify(&fixture.with_mode("enforce"), &drain, 4);
     assert_eq!(admitted(&enforce), vec![light.clone()], "{enforce:#}");
 
     let records = store.admission_forecasts(since).unwrap();
@@ -921,6 +925,16 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
         },
         AdmissionForecastPoint {
             offset_minutes: 10,
+            cpu_cores: 0.0,
+            memory_bytes: 2 * GIB,
+        },
+        AdmissionForecastPoint {
+            offset_minutes: 20,
+            cpu_cores: 0.0,
+            memory_bytes: 2 * GIB,
+        },
+        AdmissionForecastPoint {
+            offset_minutes: 30,
             cpu_cores: 0.0,
             memory_bytes: 2 * GIB,
         },
@@ -970,7 +984,7 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
         .iter()
         .map(|offset| (offset.offset_minutes, offset.unmeasured))
         .collect();
-    assert_eq!(unmeasured, vec![(5, 2), (10, 2), (20, 0), (30, 0)]);
+    assert_eq!(unmeasured, vec![(5, 2), (10, 2), (20, 2), (30, 2)]);
 }
 
 /// Each `shadow` and `enforce` pass keeps its forecast's first hour as 13
@@ -980,8 +994,7 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
 /// +25m bucket, whose point is the CPU peak; memory is flat at the 2 GiB in
 /// use plus its 1 GiB until it ends, so its peak is minute 0.
 fn a_pass_records_its_forecast_hour_as_bucket_maxima() {
-    let horizon = "horizon_cap_minutes = 60\n";
-    let fixture = Fixture::new("off", horizon);
+    let fixture = Fixture::new("off", None);
     let mut hard = vec![1.0; 40];
     hard[24] = 7.0;
     fixture.finished_delivery("hard", &hard);
@@ -997,7 +1010,7 @@ fn a_pass_records_its_forecast_hour_as_bucket_maxima() {
     let mut memory = vec![3.0 / 32.0 * 100.0; 13];
     memory[9..].fill(2.0 / 32.0 * 100.0);
     for mode in ["shadow", "enforce"] {
-        let runtime = fixture.with_mode(mode, horizon);
+        let runtime = fixture.with_mode(mode);
         let pass = classify(&runtime, &drain, 4);
         assert_eq!(admitted(&pass), vec![light.clone()], "{mode}: {pass:#}");
         let record = recorded(&runtime, &drain, &pass);
@@ -1077,7 +1090,7 @@ fn a_candidate_that_cannot_fit_beside_running_work_is_admitted_on_an_idle_host()
         ),
     ];
     for (cpu, memory, refused, admitted_over) in cases {
-        let fixture = Fixture::new("enforce", "");
+        let fixture = Fixture::new("enforce", None);
         // The running `hard` delivery borrows this profile too, as the
         // heaviest of its class: one core and `memory` at +0m.
         fixture.finished_delivery_using("medium", cpu, memory);
@@ -1120,7 +1133,10 @@ fn a_protected_head_too_big_for_a_busy_host_is_admitted_once_the_host_is_idle() 
     ) {
         return;
     }
-    let fixture = Fixture::new("enforce", "head_max_wait_minutes = 0\n");
+    let fixture = Fixture::new(
+        "enforce",
+        Some((0, orbit_config::AUTO_CONCURRENCY_HEAD_STUCK_PASSES)),
+    );
     fixture.finished_delivery("hard", &[1.0, 9.0, 1.0]);
     fixture.finished_delivery("low", &[0.5, 0.5]);
     let running = fixture.running_hard_delivery();
@@ -1173,7 +1189,7 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
     ) {
         return;
     }
-    let fixture = Fixture::new("off", "");
+    let fixture = Fixture::new("off", None);
     fixture.finished_delivery("hard", &[1.0, 9.0, 1.0]);
     let first = fixture.task("first", TaskPriority::High, TaskComplexity::Hard);
     let second = fixture.task("second", TaskPriority::Medium, TaskComplexity::Hard);
@@ -1182,13 +1198,13 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
     let off = classify(&fixture.runtime, &drain, 4);
     assert_eq!(admitted(&off), vec![first.clone(), second.clone()]);
 
-    let shadow_runtime = fixture.with_mode("shadow", "");
+    let shadow_runtime = fixture.with_mode("shadow");
     let shadow = classify(&shadow_runtime, &drain, 4);
     assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
     let shadow_record = recorded(&shadow_runtime, &drain, &shadow);
     assert!(fixture.reserved(&shadow_runtime).is_empty());
 
-    let enforce_runtime = fixture.with_mode("enforce", "");
+    let enforce_runtime = fixture.with_mode("enforce");
     let enforce = classify(&enforce_runtime, &drain, 4);
     assert_eq!(admitted(&enforce), vec![first.clone()], "{enforce:#}");
     let enforce_record = recorded(&enforce_runtime, &drain, &enforce);
@@ -1210,7 +1226,7 @@ fn an_idle_host_admits_one_candidate_too_big_to_fit_per_pass_in_every_mode() {
         assert_eq!(skip.detail, "cpu 180% at +1m");
     }
 }
-/// A protected head whose miss stays put over `head_stuck_passes` is
+/// A protected head whose miss stays put over the guard's stuck passes is
 /// reported stuck once: its record names the profile, the miss and
 /// the baseline, one friction names the head, and both last only while it is
 /// the head. A head whose miss improves every pass is never reported. Neither
@@ -1276,10 +1292,7 @@ fn a_protected_head_whose_miss_never_improves_is_reported_stuck_once() {
         ),
     ];
     for (case, mode, threshold, used, passes, friction_counts, retries) in cases {
-        let fixture = Fixture::new(
-            mode,
-            &format!("head_max_wait_minutes = 0\nhead_stuck_passes = {threshold}\n"),
-        );
+        let fixture = Fixture::new(mode, Some((0, threshold)));
         fixture.seed_profiles();
         let running = fixture.running_hard_delivery();
         let heavy = fixture.task("heavy", TaskPriority::High, TaskComplexity::Medium);

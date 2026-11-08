@@ -31,17 +31,24 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 
-use crate::OrbitError;
-
-const DEFAULT_RETENTION_DAYS: u64 = 7;
-const DEFAULT_MAX_TOTAL_MB: u64 = 500;
-const DEFAULT_MAX_FILE_MB: u64 = 100;
+/// Days after which operational and agent log archives are deleted.
+///
+/// The former `runtime.log_retention_days` default, fixed when the key was removed [ORB-22808].
+pub const LOG_RETENTION_DAYS: u64 = 7;
+/// Mebibyte budget for operational log archives before the oldest are pruned.
+///
+/// The former `runtime.log_max_total_mb` default, fixed when the key was removed [ORB-22808].
+pub const LOG_MAX_TOTAL_MB: u64 = 500;
+/// Mebibytes the active operational log may reach before it rolls.
+///
+/// The former `runtime.log_max_file_mb` default, fixed when the key was removed [ORB-22808].
+pub const LOG_MAX_FILE_MB: u64 = 100;
 const BYTES_PER_MB: u64 = 1024 * 1024;
 const SECONDS_PER_DAY: u64 = 86_400;
 
-/// Resolved rotation/retention budgets for the global JSONL feed. Overridable
-/// via the `[runtime]` section of `~/.orbit/config.toml`
-/// (`log_retention_days`, `log_max_total_mb`, `log_max_file_mb`).
+/// Rotation/retention budgets for the global JSONL feed. The operational
+/// feed uses the fixed [`LogRotationConfig::default`]; the agent feed derives
+/// its own byte budgets from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogRotationConfig {
     /// Delete archives whose mtime is older than this many days.
@@ -56,9 +63,9 @@ pub struct LogRotationConfig {
 impl Default for LogRotationConfig {
     fn default() -> Self {
         Self {
-            retention_days: DEFAULT_RETENTION_DAYS,
-            max_total_bytes: DEFAULT_MAX_TOTAL_MB * BYTES_PER_MB,
-            max_file_bytes: DEFAULT_MAX_FILE_MB * BYTES_PER_MB,
+            retention_days: LOG_RETENTION_DAYS,
+            max_total_bytes: LOG_MAX_TOTAL_MB * BYTES_PER_MB,
+            max_file_bytes: LOG_MAX_FILE_MB * BYTES_PER_MB,
         }
     }
 }
@@ -74,85 +81,6 @@ impl LogRotationConfig {
             max_file_bytes: 50 * BYTES_PER_MB,
         }
     }
-
-    /// Build from raw `[runtime]` values (megabytes / days), validating each.
-    /// A `None` field falls back to the conservative default. Returns a clear
-    /// [`OrbitError::InvalidInput`] for out-of-range values so the config
-    /// loader can reject a malformed config at load time.
-    pub fn from_parts(
-        retention_days: Option<u64>,
-        max_total_mb: Option<u64>,
-        max_file_mb: Option<u64>,
-    ) -> Result<Self, OrbitError> {
-        let retention_days = retention_days.unwrap_or(DEFAULT_RETENTION_DAYS);
-        let max_total_mb = max_total_mb.unwrap_or(DEFAULT_MAX_TOTAL_MB);
-        let max_file_mb = max_file_mb.unwrap_or(DEFAULT_MAX_FILE_MB);
-
-        if retention_days == 0 {
-            return Err(OrbitError::InvalidInput(
-                "[runtime] log_retention_days must be >= 1".to_string(),
-            ));
-        }
-        if max_total_mb == 0 {
-            return Err(OrbitError::InvalidInput(
-                "[runtime] log_max_total_mb must be >= 1".to_string(),
-            ));
-        }
-        if max_file_mb == 0 {
-            return Err(OrbitError::InvalidInput(
-                "[runtime] log_max_file_mb must be >= 1".to_string(),
-            ));
-        }
-        if max_file_mb > max_total_mb {
-            return Err(OrbitError::InvalidInput(format!(
-                "[runtime] log_max_file_mb ({max_file_mb}) must be <= log_max_total_mb ({max_total_mb})"
-            )));
-        }
-
-        // `max_file_mb <= max_total_mb`, so only the total can overflow.
-        let max_total_bytes = max_total_mb.checked_mul(BYTES_PER_MB).ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "[runtime] log_max_total_mb ({max_total_mb}) is too large"
-            ))
-        })?;
-        Ok(Self {
-            retention_days,
-            max_total_bytes,
-            max_file_bytes: max_file_mb * BYTES_PER_MB,
-        })
-    }
-
-    /// Read rotation config from the global `~/.orbit/config.toml` `[runtime]`
-    /// section, falling back to [`LogRotationConfig::default`] on any error
-    /// (missing file, parse error, or invalid values). Lenient by design: the
-    /// subscriber initializes before argument parsing and config load, so it
-    /// must never fail here. `orbit-core`'s config loader validates the same
-    /// keys strictly and surfaces a clear load-time error.
-    pub fn load_global_best_effort() -> Self {
-        load_global().unwrap_or_default()
-    }
-}
-
-fn load_global() -> Option<LogRotationConfig> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .filter(|value| !value.is_empty())?;
-    let path = Path::new(&home).join(".orbit").join("config.toml");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let value: toml::Value = toml::from_str(&raw).ok()?;
-    let runtime = value.get("runtime")?;
-    let read_u64 = |key: &str| {
-        runtime
-            .get(key)
-            .and_then(toml::Value::as_integer)
-            .and_then(|integer| u64::try_from(integer).ok())
-    };
-    LogRotationConfig::from_parts(
-        read_u64("log_retention_days"),
-        read_u64("log_max_total_mb"),
-        read_u64("log_max_file_mb"),
-    )
-    .ok()
 }
 
 /// Opportunistically roll the active log if oversized, then prune archives by

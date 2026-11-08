@@ -120,18 +120,18 @@ state for terminal runs past the run window, including those unregistered ids, w
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
 against it (`admission_forecasts`) older than 30 days, except rows kept at any age by
-count: the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per
+count: the newest 200 deliveries per
 workspace, work class and complexity, the newest 10,000 forecasts, and host minutes
 from the oldest kept forecast onward. `orbit gc journal --apply` deletes
 applied rows of the task commit journal (`task_commit_journal`) older than
-`retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
+14 days, for this workspace and unregistered ids. Recovery
 replays only prepared and committed rows, so those, aborted rows and each task's newest
 applied row stay. The journal grows fastest, at about 600 rows of about 80 KB a day, which
 is why its window is shorter than the others; the `store_gc` routine does not run it. The
 seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
-`orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
-1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
+`orbit doctor` warns when the store file exceeds 1 GiB and that routine is not
+enabled. Freed pages stay in the file until `VACUUM`.
 See [runtime configuration](../CONFIG.md) for the retention settings.
 
 The cost of each retention setting:
@@ -149,9 +149,8 @@ The cost of each retention setting:
   days are pruned except rows kept at any age by count, so older raw samples outside
   those counts disappear; auto-concurrency profiles and forecast accuracy keep working
   on the rows the counts keep.
-- `retention.journal_days`: older applied transition diagnostics disappear, while
-  published task history and recovery inputs stay.
-- `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
+- The fixed 14-day journal window: older applied transition diagnostics disappear,
+  while published task history and recovery inputs stay.
 
 Across these settings, Cost, the task-store Codebase rankings, `orbit task flow` and
 friction stats keep working. These read retained invocation, task, reservation and

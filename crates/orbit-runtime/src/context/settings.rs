@@ -7,9 +7,6 @@ use orbit_types::identity::Crew;
 pub struct OrbitRuntimeSettings {
     pub(super) persistence: PersistenceConfig,
     pub(super) actor: ActorIdentity,
-    /// Minutes a deferred delivery-automation reason may persist before the
-    /// evaluator escalates it (`[automation] stall_window_minutes`).
-    automation_stall_window_minutes: u32,
     publication_routine_attachments: String,
     publication_routine_allow_unscanned_attachments: bool,
     pr_config: PrConfig,
@@ -64,12 +61,21 @@ pub struct OrbitRuntimeSettings {
     worker_containment: orbit_config::WorkerContainmentSettings,
     /// Existing machine identity's task namespace; ORB for legacy runtimes.
     machine_task_prefix: String,
-    /// `machine.host_shutdown_hold_minutes`: how close a scheduled shutdown
-    /// must be before unattended admission holds.
+    /// How close a scheduled shutdown must be before unattended admission
+    /// holds: [`crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`] unless a
+    /// fixture overrides it.
     host_shutdown_hold_minutes: u32,
     worktree_reclaim: Vec<String>,
     worktree_reclaim_below_free_mib: Option<u64>,
+    /// How long a task stays parked before worktree GC may remove its
+    /// worktree: [`orbit_engine::WORKTREE_PARKED_RECLAIM_AFTER_HOURS`] unless
+    /// a fixture overrides it.
     worktree_parked_reclaim_after_hours: u64,
+    /// The auto-concurrency starvation guard's wait and stuck-pass count:
+    /// [`orbit_config::AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES`] and
+    /// [`orbit_config::AUTO_CONCURRENCY_HEAD_STUCK_PASSES`] unless a fixture
+    /// overrides them.
+    auto_concurrency_head_guard: (u32, u32),
     /// `[workflow.mid_run_steering]`: whether task-context prompts record
     /// the run's steering watermark (default off).
     mid_run_steering: orbit_config::MidRunSteeringSettings,
@@ -79,7 +85,6 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.review_skip_tags]`: mapped tags whose candidates may
     /// skip agent review under their own paths and guard.
     review_skip_tags: orbit_config::ReviewSkipSettings,
-    attention: orbit_config::AttentionSettings,
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
     unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
@@ -116,9 +121,6 @@ pub struct OrbitRuntimeSettings {
     /// Admitted `machine.labels`: the capability labels this host carries,
     /// beside its OS as an implicit label.
     machine_labels: Vec<String>,
-    /// Admitted `machine.application_consent_max_days`: the longest lifetime
-    /// of a constrained (schema v2) application consent.
-    application_consent_max_days: u32,
 }
 
 impl OrbitRuntimeSettings {
@@ -126,7 +128,6 @@ impl OrbitRuntimeSettings {
     pub(crate) fn new(
         persistence: PersistenceConfig,
         actor: ActorIdentity,
-        automation_stall_window_minutes: u32,
         publication_routine_attachments: String,
         publication_routine_allow_unscanned_attachments: bool,
         pr_config: PrConfig,
@@ -152,14 +153,11 @@ impl OrbitRuntimeSettings {
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
         machine_task_prefix: String,
-        host_shutdown_hold_minutes: u32,
         worktree_reclaim: Vec<String>,
         worktree_reclaim_below_free_mib: Option<u64>,
-        worktree_parked_reclaim_after_hours: u64,
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
         review_skip_tags: orbit_config::ReviewSkipSettings,
-        attention: orbit_config::AttentionSettings,
         unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
         footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
         unlocked_path_validation_commands: Vec<String>,
@@ -176,12 +174,10 @@ impl OrbitRuntimeSettings {
         experiments: orbit_config::ExperimentSettings,
         notice: orbit_config::NoticeSettings,
         machine_labels: Vec<String>,
-        application_consent_max_days: u32,
     ) -> Self {
         Self {
             persistence,
             actor,
-            automation_stall_window_minutes,
             publication_routine_attachments,
             publication_routine_allow_unscanned_attachments,
             pr_config,
@@ -207,14 +203,17 @@ impl OrbitRuntimeSettings {
             operation,
             worker_containment,
             machine_task_prefix,
-            host_shutdown_hold_minutes,
+            host_shutdown_hold_minutes: crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES,
             worktree_reclaim,
             worktree_reclaim_below_free_mib,
-            worktree_parked_reclaim_after_hours,
+            worktree_parked_reclaim_after_hours: orbit_engine::WORKTREE_PARKED_RECLAIM_AFTER_HOURS,
+            auto_concurrency_head_guard: (
+                orbit_config::AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
+                orbit_config::AUTO_CONCURRENCY_HEAD_STUCK_PASSES,
+            ),
             mid_run_steering,
             tag_instructions,
             review_skip_tags,
-            attention,
             unlocked_context_paths,
             footprint_lock_modes,
             unlocked_path_validation_commands,
@@ -229,16 +228,11 @@ impl OrbitRuntimeSettings {
             experiments,
             notice,
             machine_labels,
-            application_consent_max_days,
         }
     }
 
     pub(crate) fn machine_labels(&self) -> &[String] {
         &self.machine_labels
-    }
-
-    pub(crate) fn application_consent_max_days(&self) -> u32 {
-        self.application_consent_max_days
     }
 
     pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {
@@ -285,11 +279,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn review_skip_tags(&self) -> &orbit_config::ReviewSkipSettings {
         &self.review_skip_tags
-    }
-
-    /// Shared admitted attention configuration.
-    pub fn attention_settings(&self) -> &orbit_config::AttentionSettings {
-        &self.attention
     }
 
     pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {
@@ -344,6 +333,19 @@ impl OrbitRuntimeSettings {
         self.worktree_parked_reclaim_after_hours
     }
 
+    pub(crate) fn set_worktree_parked_reclaim_after_hours(&mut self, hours: u64) {
+        self.worktree_parked_reclaim_after_hours = hours;
+    }
+
+    /// The starvation guard's `(max wait minutes, stuck passes)`.
+    pub fn auto_concurrency_head_guard(&self) -> (u32, u32) {
+        self.auto_concurrency_head_guard
+    }
+
+    pub(crate) fn set_auto_concurrency_head_guard(&mut self, guard: (u32, u32)) {
+        self.auto_concurrency_head_guard = guard;
+    }
+
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
         &self.operation
     }
@@ -354,10 +356,6 @@ impl OrbitRuntimeSettings {
 
     pub fn machine_task_prefix(&self) -> &str {
         &self.machine_task_prefix
-    }
-
-    pub(crate) fn automation_stall_window_minutes(&self) -> u32 {
-        self.automation_stall_window_minutes
     }
 
     pub(crate) fn pr_config(&self) -> &PrConfig {

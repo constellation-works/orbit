@@ -85,10 +85,9 @@ forecasting, or start another drain to bypass a wait without operator
 authorization.
 
 `orbit run readiness --json` names `host_shutdown_scheduled` when a shutdown or
-reboot is within `machine.host_shutdown_hold_minutes` (default 180), holding
+reboot is within the fixed 180-minute hold, holding
 new unattended admissions while leaving running work alone. Later schedules
-are reported while admissions continue. Preserve the configured window and
-schedule; diagnostics do not authorize cancelling shutdown or overriding the
+are reported while admissions continue. Preserve the schedule; diagnostics do not authorize cancelling shutdown or overriding the
 hold. See [operational-logs.md](../../orbit-setup/references/operational-logs.md#delivery-profiles-and-admission-diagnostics).
 
 Sustained host pressure throttles admissions on its own: readiness tasks read

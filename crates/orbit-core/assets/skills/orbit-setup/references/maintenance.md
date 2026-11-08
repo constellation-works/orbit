@@ -25,7 +25,7 @@ orbit gc worktrees --target-only --confirm  # delete target/ and keep the checko
 
 Collection is conservative: it reaps only worktrees whose associated task has
 settled to `done`, `rejected`, or `archived`, or that has been parked in
-`someday` for `worktree.parked_reclaim_after_hours` (default 336), counted from
+`someday` for 336 hours (14 days), counted from
 the status change. A parked worktree also stays while its worker or claim is
 live, while Git holds it locked, or while its run branch has commits that
 exist on no published ref and in no rescue patch
@@ -520,7 +520,7 @@ orbit gc audit                        # rows and bytes past retention.audit_days
 orbit gc audit --apply                # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
 orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
-orbit gc journal                      # applied commit journal rows past retention.journal_days
+orbit gc journal                      # applied commit journal rows older than 14 days
 orbit gc journal --apply              # delete them; unsettled rows and each task's newest stay
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
@@ -543,7 +543,7 @@ the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
 `host_resource_minutes`) and admission forecasts older than 30 days, whatever the
 run window, except the rows its counts keep at any age: each workspace, work class
-and complexity's newest `max(200, machine.auto_concurrency.profile_window)`
+and complexity's newest 200
 deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept
 forecast onward. Auto-concurrency profiles and forecast accuracy keep working on
 those rows; older raw samples outside them are lost.
@@ -554,7 +554,7 @@ rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
 working. See the retention runbook for each setting's history boundary.
 
 `gc journal` deletes applied task commit journal rows of this workspace, and of
-unregistered workspace ids, older than `retention.journal_days` (default 14).
+unregistered workspace ids, older than 14 days.
 Recovery replays only prepared and committed rows; an applied row is a decision
 already published to its task, kept only to diagnose recent transitions. So
 prepared, committed and aborted rows stay, and so does each task's newest
@@ -574,7 +574,7 @@ sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 
 `orbit doctor` reports what audit and run retention could reclaim now
 (`store-retention`); it does not count journal rows. It warns
-when the store file is larger than `retention.store_warn_bytes` (default 1 GiB)
+when the store file is larger than 1 GiB
 and no store-gc routine is enabled, and it names the enable command. To run the
 audit and run sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
 On a replica checkout the same cron routine runs against that host's own store

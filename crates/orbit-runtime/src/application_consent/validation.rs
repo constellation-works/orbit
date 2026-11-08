@@ -52,6 +52,13 @@ pub(crate) enum OperationRole<'a> {
     Callback { entry: &'a ApplicationOperation },
 }
 
+/// Longest lifetime, in days, of an application consent with constrained,
+/// named or rate-limited scopes, so a stolen credential has a bounded window
+/// and the operator re-reviews the profile at least monthly.
+///
+/// The former `machine.application_consent_max_days` default, fixed when the key was removed [ORB-22808].
+pub(crate) const APPLICATION_CONSENT_MAX_DAYS: u32 = 30;
+
 /// Request-level schema v2 rules. A v1 request (every scope exact, unnamed
 /// and unlimited) passes untouched and keeps its 4 KiB request budget.
 pub(crate) fn validate_consent_request_v2(
@@ -65,7 +72,7 @@ pub(crate) fn validate_consent_request_v2(
     if request.expires_at > now + Duration::days(i64::from(max_days)) {
         return Err(OrbitError::InvalidInput(format!(
             "application consent with constrained, named or rate-limited scopes must expire \
-             within {max_days} days (machine.application_consent_max_days)"
+             within {max_days} days"
         )));
     }
     let mut names = BTreeSet::new();

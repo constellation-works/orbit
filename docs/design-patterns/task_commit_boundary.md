@@ -88,7 +88,7 @@ ordinary regression check without a timed performance assertion.
 | Apply | After the admission section has released the partition, still under the bundle lock and lease: truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml` durably, settle the row `applied`, update the registry index, then unname the lease and release the bundle | Still decided: the next entrant replays it again |
 
 Recovery reads only `prepared` and `committed` rows; an `applied` or `aborted` row is never read
-again. `orbit gc journal` deletes applied rows older than `retention.journal_days`, keeping each
+again. `orbit gc journal` deletes applied rows older than 14 days, keeping each
 task's newest applied row. It selects candidates in one read and deletes them by key in short
 batches, and it never selects a row recovery would replay.
 

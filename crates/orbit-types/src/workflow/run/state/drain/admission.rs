@@ -210,7 +210,7 @@ pub struct GapFitHead {
     pub task_id: String,
     /// The first pass, of an unbroken run of passes, in which it failed.
     pub failing_since: DateTime<Utc>,
-    /// It has failed for longer than `head_max_wait_minutes`, so nothing else
+    /// It has failed for longer than the 30-minute wait, so nothing else
     /// is admitted until it fits.
     pub protected: bool,
     /// Where it failed in the last pass that judged it; carried through
@@ -256,7 +256,7 @@ pub struct GapFitHeadStall {
     /// Consecutive protected passes, counting the one that set `reference`,
     /// whose miss did not improve on it.
     pub passes: u32,
-    /// `passes` has reached `head_stuck_passes`: the head is stuck, and the
+    /// `passes` has reached 20: the head is stuck, and the
     /// drain says so until its miss improves or it stops being the head.
     #[serde(default)]
     pub stuck: bool,

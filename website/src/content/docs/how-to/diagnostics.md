@@ -174,15 +174,13 @@ Preserve evidence before cleanup. History is finite:
   workspace's unreferenced audit blobs. Another registered workspace
   keeps its own retention window. Deletion requires `--apply` or an
   enabled `store-gc` routine; the setting alone does not delete history.
-- `runtime.log_retention_days` defaults to seven days for archives of
-  both operational and agent feeds. Their separate size budgets can
+- Archives of both operational and agent feeds are kept for seven days. Their separate size budgets can
   evict archives sooner. `log tail` merges active feeds, not every archive.
 
 Check the effective values and the non-destructive GC report:
 
 ```bash
 orbit --workspace my-project config get retention.audit_days
-orbit config get runtime.log_retention_days
 orbit --workspace my-project gc audit
 ```
 

@@ -61,7 +61,7 @@ pub struct ReadoutExperiment {
     pub guardrails: BTreeMap<String, String>,
     pub min_sample: Option<u32>,
     pub max_days: Option<u32>,
-    /// `experiments.min_delivered_rate`: below this delivered rate in any
+    /// The fixed 0.9 minimum delivered rate: below it in any
     /// treatment arm the verdict is withheld.
     pub min_delivered_rate: f64,
     pub started_at: Option<String>,

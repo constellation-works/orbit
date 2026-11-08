@@ -230,8 +230,6 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
-| `execution.agent_stall_minutes` | **Advanced.** Default `30`; integer `0..=1440` minutes. A provider with no stdout/stderr and no CPU use for this long fails its step as stalled, entering normal retry/recovery. `0` disables this check; the wall-clock timeout remains. Verify a stalled step's failure in `orbit run show` and provider logs; do not induce a production stall. |
-| `execution.proc_spawn_max_timeout_minutes` | **Advanced.** Default `45`; integer `1..=1440` minutes. Ceiling for one `proc.spawn` call inside a managed activity, also capped at the activity's remaining wall-clock budget. Outside an activity the ceiling is 60 seconds. Verify `timeout_ceiling_ms` and its source in the tool result. |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
 | `execution.codex.approval_policy` | `untrusted`, `on-request`, or `never`. |
@@ -243,14 +241,8 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.resource_throttle.disk_high_percent`, `workflow.resource_throttle.disk_resume_percent` | Space-used hold/resume marks for each watched filesystem; defaults `90` / `85`, integers `1..=100`, resume strictly below high. |
 | `workflow.resource_throttle.cpu_light_leaves` | **Advanced.** Default `2`; integer `0..=32`. Local-drain `no-diff-expected` auto-task leaves still admitted while CPU alone is held. Memory, disk or I/O holds stop these too; `0` holds all new leaves. |
 | `workflow.resource_throttle.io_full_high_percent`, `workflow.resource_throttle.io_full_resume_percent` | Linux disk I/O stall marks on `/proc/pressure/io` `full avg60` (defaults 20 and 10; 1..=100, resume below high). Admission-only: running work is untouched, and hosts without PSI are not gated. |
-| `machine.auto_concurrency.admit_cpu_percent`, `machine.auto_concurrency.admit_memory_percent` | Forecast limits as percentages of host cores and non-reclaimable memory (defaults 90 and 75; 1..=100). Memory must be below global `workflow.resource_throttle.memory_high_percent`. |
-| `machine.auto_concurrency.profile_window`, `machine.auto_concurrency.min_profile_deliveries` | Recent completed deliveries per profile key (default 50) and minimum before using it without fallback (default 10); the window must be at least the minimum. |
-| `machine.auto_concurrency.horizon_cap_minutes` | Maximum candidate forecast horizon (default 120 minutes). |
-| `machine.auto_concurrency.head_max_wait_minutes`, `machine.auto_concurrency.head_stuck_passes` | Queue-head starvation guard: protect the head after its maximum wait (default 30 minutes), then report it stuck after consecutive protected passes without improvement (default 20; at least 1). A stuck report does not change admission. |
-| `machine.host_shutdown_hold_minutes` | Hold new unattended admissions when a scheduled shutdown or reboot is this many minutes away or sooner (default 180; at least 1). Later schedules are reported while admission continues. |
-| `runtime.log_retention_days` | Delete JSONL archives older than N days. |
-| `runtime.log_max_total_mb` | Total archive budget; oldest pruned first. |
-| `runtime.log_max_file_mb` | Roll the active log past N MiB. Must not exceed the total budget. |
+| `machine.auto_concurrency.admit_cpu_percent` | Forecast CPU limit as a percentage of host cores (default 90; 1..=100). The memory limit is fixed at 75% of non-reclaimable memory, so global `workflow.resource_throttle.memory_high_percent` must be above 75. |
+| `machine.auto_concurrency.min_profile_deliveries` | Completed deliveries a profile key needs before admission uses it without fallback (default 10; at most the fixed 50-delivery profile window). |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived, when an operator moves it back to backlog or someday with no run delivering them, and when a newer attempt opens its own PR (default `true`). Branches are kept; a forge error is only a warning. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for closing them (`pr.close_on_terminal`) and for settling a task to done from its delivery PR merged outside Orbit. Empty uses the `gh` login on this machine. |
@@ -272,6 +264,25 @@ reading, threshold and CPU source (`capacity.resource_cpu_source`), and
 `orbit doctor` for the effective source and host diagnosis. Explain a hold from
 those readings and let pressure clear; do not raise marks or disable the
 throttle to push waiting work through.
+
+Some limits are fixed rather than configured. A provider with no
+stdout/stderr and no CPU use for 30 minutes fails its step as stalled, entering
+normal retry/recovery. One `proc.spawn` call inside a managed activity may run
+at most 45 minutes, also capped at the activity's remaining wall-clock budget
+(60 seconds outside an activity). Forecast admission keeps each profile key's
+last 50 completed deliveries, forecasts at most 120 minutes ahead, protects a
+queue head that has failed to fit for 30 minutes, and reports it stuck after 20
+protected passes without improvement; a stuck report does not change
+admission. New unattended admissions hold when a scheduled shutdown or reboot
+is 180 minutes away or sooner; later schedules are reported while admission
+continues. The JSONL log rolls past 100 MiB, keeps archives for 7 days and
+prunes the oldest past a 500 MiB total. The keys that once set these
+(`execution.agent_stall_minutes`, `execution.proc_spawn_max_timeout_minutes`,
+`machine.auto_concurrency.admit_memory_percent`, `profile_window`,
+`horizon_cap_minutes`, `head_max_wait_minutes` and `head_stuck_passes`,
+`machine.host_shutdown_hold_minutes` and `runtime.log_*`) load with a
+deprecation warning, are ignored, and stop being recognised after 2026-12-08.
+Delete them.
 
 `[machine]` settings are global-only. An authorized local drain can select its
 own forecast mode with `orbit run auto --auto-concurrency <MODE>` (`off`,
@@ -423,38 +434,24 @@ defaults and ranges below match `orbit config keys --json` for the
 installed version; check that command before applying version-dependent
 values.
 
-### Failing-job warning: `jobs.failure_streak_warn`
+### Failing-job warning
 
-| Key | Type | Default | Range | What it changes |
-|---|---|---|---|---|
-| `jobs.failure_streak_warn` | integer | `5` | `0`–`1000` | Consecutive failed runs of one job at which the dashboard Jobs catalogue shows a failing badge. Display only; it never pauses, disables or changes a job. `0` turns the warning off. |
+The dashboard Jobs catalogue shows a failing badge on a job after 5
+consecutive failed runs. The badge is display only: it never pauses, disables
+or changes a job. `jobs.failure_streak_warn` loads with a deprecation warning,
+is ignored, and stops being recognised after 2026-12-08. Delete it.
 
-```bash
-orbit config set jobs.failure_streak_warn 5
-orbit config get jobs.failure_streak_warn
-orbit config show
-```
-
-### Resident evolution ledger: `resident.evolution.*`
+### Resident evolution ledger
 
 Resident checkpoints record capability gaps in the evolution ledger, which
 `orbit evolution` and `orbit resident digest` read. Nothing files evolution
 proposal tasks automatically: the weekly evolution pass was removed.
 A declined record reopens early only when its cost inside the window doubles.
-
-| Key | Type | Default | Range | What it changes |
-|---|---|---|---|---|
-| `resident.evolution.window_days` | integer | `14` | `1`–`3650` | Days of ledger cost the resident digest reads by default and a decline measures. |
-| `resident.evolution.decline_suppress_days` | integer | `30` | `1`–`3650` | Days a record stays declined after its proposal task is rejected. |
-
-```bash
-orbit config set resident.evolution.window_days 14
-orbit config get resident.evolution.window_days
-orbit config show --all
-```
-
-In TOML the same values live under `[resident.evolution]`, for example
-`window_days = 14`. Workspace settings override the global layer.
+The resident digest reads 14 days of ledger cost by default, a decline
+measures the same 14 days, and a record stays declined for 30 days after its
+proposal task is rejected. `resident.evolution.window_days` and
+`decline_suppress_days` load with a deprecation warning, are ignored, and stop
+being recognised after 2026-12-08.
 `min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`,
 `min_cost_minutes` and `max_proposals` belonged to the removed pass: they load
 with a deprecation warning, are ignored, and stop being recognised after
@@ -499,29 +496,16 @@ orbit config get notice.brief_max_items
 orbit config show --all
 ```
 
-### Attention: `attention.*`
+### Attention
 
-These settings bound the attention feed that reports work needing a
-human or operator. Querying attention changes none of them.
-
-| Key | Type | Default | Range | What it changes |
-|---|---|---|---|---|
-| `attention.cursor_ttl_hours` | integer | `24` | `1`–`8760` | Cursor validity, in hours, for delta polling. |
-| `attention.run_window_hours` | integer | `48` | `1`–`87600` | Failed-run lookback, in hours. |
-| `attention.run_stuck_after_minutes` | integer | `120` | `1`–`525600` | Running wall-clock bound, in minutes, after which a run counts as stuck. |
-| `attention.ci_cache_seconds` | integer | `60` | `1`–`86400` | Provider cache lifetime, in seconds, for the base-branch CI reading. |
-| `attention.source_timeout_seconds` | integer | `10` | `1`–`3600` | Per-source read deadline, in seconds. |
-| `attention.fanout_budget_seconds` | integer | `20` | `1`–`3600` | Cross-host call deadline, in seconds. |
-| `attention.per_workspace_item_cap` | integer | `200` | `1`–`10000` | Maximum candidates per workspace. |
-| `attention.age_bump_hours` | array of integer | `[24, 72]` | strictly increasing positive hours, each at most `87600` | Severity age thresholds, in hours, at which an item steps up. |
-
-```bash
-orbit config set attention.run_window_hours 48
-orbit config set attention.age_bump_hours '[24, 72]'
-orbit config get attention.run_window_hours
-orbit config get attention.age_bump_hours
-orbit config show --all
-```
+The attention feed that reports work needing a human or operator has fixed
+bounds: a delta-polling cursor stays valid for 24 hours, failed runs are read
+over the last 48 hours, a run counts as stuck after 120 minutes of wall clock,
+the base-branch CI reading is cached for 60 seconds, each source read has 10
+seconds, a cross-host call has 20 seconds, each workspace contributes at most
+200 candidates, and an item's severity steps up at 24 and 72 hours. The
+`attention.*` keys load with a deprecation warning, are ignored, and stop being
+recognised after 2026-12-08. Delete them.
 
 ### Commit regression trailers: `commit.regression_trailers`
 
@@ -571,9 +555,7 @@ configuration value. The `[experiments]` table is workspace policy:
 | Key | Default | Bound or effect |
 |---|---|---|
 | `experiments.enabled` | `false` | Boolean switch that permits experiments to start. |
-| `experiments.max_running` | `3` | Advanced integer from `1` to `20`; maximum running experiments in the workspace. |
 | `experiments.config_keys` | `[]` | Advanced list of config keys an experiment may override. Empty allows no config overlays. |
-| `experiments.min_delivered_rate` | `0.9` | Advanced share from `0` to `1`; below it in any treatment arm, a readout withholds its verdict because the treatment did not reach enough runs. |
 
 For workspace policy, add or merge this table in
 `<workspace>/.orbit/config.toml`:
@@ -581,8 +563,12 @@ For workspace policy, add or merge this table in
 ```toml
 [experiments]
 enabled = true
-max_running = 2
 ```
+
+At most 3 experiments run at once in a workspace, and a readout withholds its
+verdict when any treatment arm's delivered rate is below 0.9.
+`experiments.max_running` and `experiments.min_delivered_rate` load with a
+deprecation warning, are ignored, and stop being recognised after 2026-12-08.
 
 Each overlay config key needs two permissions: the built-in typed allowlist
 and `experiments.config_keys`. The workspace list alone enables nothing else;

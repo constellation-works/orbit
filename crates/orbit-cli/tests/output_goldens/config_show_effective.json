@@ -14,79 +14,9 @@
       "path": null,
       "shadowed_by": []
     },
-    "attention.age_bump_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.ci_cache_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.cursor_ttl_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.fanout_budget_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.per_workspace_item_cap": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.run_stuck_after_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.run_window_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "attention.source_timeout_seconds": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "automation.stall_window_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "branch.name_template": {
       "scope": "built-in",
       "state": "unset",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "ci_failure.operator_suppression_hours": {
-      "scope": "built-in",
-      "state": "default",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
@@ -169,13 +99,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "execution.agent_stall_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "execution.codex.approval_policy": {
       "scope": "built-in",
       "state": "unset",
@@ -203,13 +126,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "execution.proc_spawn_max_timeout_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "experiments.config_keys": {
       "scope": "built-in",
       "state": "default",
@@ -218,27 +134,6 @@
       "shadowed_by": []
     },
     "experiments.enabled": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "experiments.max_running": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "experiments.min_delivered_rate": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "jobs.failure_streak_warn": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -434,45 +329,10 @@
       "path": null,
       "shadowed_by": []
     },
-    "machine.application_consent_max_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "machine.auto_concurrency.admit_cpu_percent": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.admit_memory_percent": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.head_max_wait_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.head_stuck_passes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.horizon_cap_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -487,20 +347,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.auto_concurrency.profile_window": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "machine.host_shutdown_hold_minutes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -882,20 +728,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "resident.evolution.decline_suppress_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "resident.evolution.window_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
     "retention.audit_days": {
       "scope": "built-in",
       "state": "default",
@@ -903,24 +735,10 @@
       "path": null,
       "shadowed_by": []
     },
-    "retention.journal_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "retention.runs_days": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "retention.store_warn_bytes": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -977,34 +795,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "runtime.log_max_file_mb": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "runtime.log_max_total_mb": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
-    "runtime.log_retention_days": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "security_alert_sweep.min_severity": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -1440,13 +1230,6 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
-      "path": null,
-      "shadowed_by": []
-    },
-    "worktree.parked_reclaim_after_hours": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

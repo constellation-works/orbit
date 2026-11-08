@@ -5,7 +5,6 @@ use crate::OrbitRuntime;
 use crate::application::contracts::ToolInvocationPort;
 use chrono::{DateTime, Utc};
 use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
-use orbit_config::AttentionSettings;
 use orbit_types::tool::{
     AttentionDegraded, AttentionHost, AttentionItem, AttentionKind, AttentionNext,
     AttentionSeverity, AttentionTask, AttentionWorkspace, ToolSessionContext,
@@ -171,17 +170,12 @@ fn find_repair_task(
     None
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input the reader needs (workspace, host, filter, clock, settings, caller session) plus the candidate sink the aggregator collects into"
-)]
 pub(super) fn read_ci_attention(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
     host: &AttentionHost,
     filter: &AttentionFilter,
     now: DateTime<Utc>,
-    settings: &AttentionSettings,
     session: &ToolSessionContext,
     candidates: &mut AttentionCandidates,
 ) {
@@ -242,7 +236,7 @@ pub(super) fn read_ci_attention(
             if entry.base_branch == base_branch
                 && entry.head_sha == head_sha
                 && entry.fetched_at.elapsed()
-                    < Duration::from_secs(u64::from(settings.ci_cache_seconds))
+                    < Duration::from_secs(super::ATTENTION_CI_CACHE_SECONDS)
             {
                 Some(entry.runs.clone())
             } else {
@@ -253,7 +247,7 @@ pub(super) fn read_ci_attention(
     let runs = match cached_runs {
         Some(runs) => runs,
         None => {
-            let timeout = Duration::from_secs(u64::from(settings.source_timeout_seconds).max(1));
+            let timeout = Duration::from_secs(super::ATTENTION_SOURCE_TIMEOUT_SECONDS);
             match call_provider(runtime, session, &base_branch, timeout) {
                 Ok(runs) => {
                     if let Ok(mut cache) = ci_cache().lock() {
@@ -348,8 +342,7 @@ pub(super) fn read_ci_attention(
             continue;
         };
         let age = (now - since).num_seconds().max(0) as u64;
-        let critical = settings.age_bump_hours.len() >= 2
-            && age >= u64::from(settings.age_bump_hours[1]) * 3600;
+        let critical = age >= u64::from(super::ATTENTION_AGE_BUMP_HOURS[1]) * 3600;
         let severity = if critical {
             AttentionSeverity::Critical
         } else {

@@ -199,7 +199,7 @@ fn application_consent_refuses_an_operation_over_8_kib() {
 }
 
 #[test]
-fn application_consent_expiry_cap_defaults_to_30_days_and_follows_host_config() {
+fn application_consent_expiry_cap_is_30_days() {
     let fixture = Fixture::new();
     let beyond_default = request(json!([dismiss_scope()]), 45);
     let stderr = refused(&fixture, &beyond_default, "cap-default");
@@ -211,25 +211,6 @@ fn application_consent_expiry_cap_defaults_to_30_days_and_follows_host_config() 
         None,
     );
     assert_eq!(grant["schema_version"], 2);
-
-    fixture
-        .operator_command([
-            "config",
-            "set",
-            "--global",
-            "machine.application_consent_max_days",
-            "60",
-        ])
-        .assert()
-        .success();
-    let (grant, _) = consent(&fixture, &beyond_default, "cap-raised", None);
-    assert_eq!(grant["schema_version"], 2);
-    let stderr = refused(
-        &fixture,
-        &request(json!([dismiss_scope()]), 90),
-        "cap-raised-over",
-    );
-    assert!(stderr.contains("within 60 days"), "{stderr}");
 }
 
 #[test]

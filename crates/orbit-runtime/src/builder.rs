@@ -256,15 +256,8 @@ pub(crate) fn build_context_from_roots(
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
-    let proc_spawn_max_timeout_ms = u64::from(
-        runtime_config
-            .snapshot
-            .execution_proc_spawn_max_timeout_minutes,
-    ) * 60_000;
-    let agent_stall_minutes = runtime_config.snapshot.execution_agent_stall_minutes;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
-    let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
@@ -329,13 +322,10 @@ pub(crate) fn build_context_from_roots(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
             codex_execution_policy,
-            proc_spawn_max_timeout_ms,
-            agent_stall_minutes,
         ),
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            automation_stall_window_minutes,
             runtime_config
                 .snapshot
                 .publication_routine_attachments
@@ -370,14 +360,11 @@ pub(crate) fn build_context_from_roots(
                 .machine()
                 .task_prefix
                 .unwrap_or_else(|| "ORB".to_string()),
-            runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
-            runtime_config.snapshot.worktree_parked_reclaim_after_hours,
             runtime_config.snapshot.mid_run_steering(),
             runtime_config.tag_instructions.clone(),
             runtime_config.review_skip_tags.clone(),
-            orbit_config::AttentionSettings::from_snapshot(&runtime_config.snapshot),
             crate::task::locks::UnlockedContextPaths::new(
                 &runtime_config.snapshot.workflow_unlocked_context_paths,
             )?,
@@ -411,7 +398,6 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.experiments(),
             runtime_config.snapshot.notice(),
             runtime_config.snapshot.machine_labels.clone(),
-            runtime_config.snapshot.machine_application_consent_max_days,
         ),
     ))
 }

@@ -221,10 +221,8 @@ Forecast fit, the fixed worker-slot ceiling, and sustained resource throttling
 are separate admission checks; diagnostics authorize no policy change.
 
 Readiness names `host_shutdown_scheduled` with the scheduled time and mode.
-New unattended admissions hold within `machine.host_shutdown_hold_minutes`
-(default 180); later schedules are still visible while admissions continue.
-Running work is left alone by the hold. Report the schedule and configured
-window; preserve the hold and operator capacity policy rather than raising
+New unattended admissions hold within the fixed 180-minute window; later schedules are still visible while admissions continue.
+Running work is left alone by the hold. Report the schedule; preserve the hold and operator capacity policy rather than raising
 concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
 
 ## Provider failure holds

@@ -37,8 +37,8 @@ CLI command only.
   orbit config set experiments.enabled true
   ```
 
-- Leave room under `experiments.max_running` (default `3`, range `1`–`20`).
-  Starting or resuming past it is refused. A paused experiment does not
+- Leave room: at most 3 experiments run at once in a workspace.
+  Starting or resuming past that is refused. A paused experiment does not
   count. Conclude, pause, or abandon one first.
 - If a treatment sets a `config` overlay, list every key it sets under
   `experiments.config_keys` (default `[]`). Starting refuses an arm that
@@ -349,8 +349,7 @@ Read the warnings before the verdict:
   delivered) and `rate`, the delivered share of its settled tasks; the CLI
   prints it in the `DELIVERED` column and the dashboard arm card shows
   `Delivered: <n> of <m> runs`. When any arm's rate is below
-  `experiments.min_delivered_rate` (default `0.9`, set it under
-  `[experiments]` in `.orbit/config.toml`), the readout adds an
+  0.9, the readout adds an
   `undelivered` warning and withholds the verdict, from the first settled
   task on. Crew overlays also need the latest delivery's captured experiment
   crew selection and overlay digest, without a deviation or suppression. An
@@ -482,5 +481,5 @@ edit open and names each cleared field instead of saving. See
 
 - [CLI commands: Experiments](../../reference/cli/#experiments) — every
   verb and flag.
-- [Configuration](../../reference/config/) — `experiments.enabled`,
-  `experiments.max_running`, and `experiments.config_keys`.
+- [Configuration](../../reference/config/) — `experiments.enabled` and
+  `experiments.config_keys`.

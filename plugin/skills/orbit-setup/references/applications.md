@@ -74,8 +74,7 @@ in place of `input` (never both). Such a scope needs a `name` and may carry a
 `rate_limit`. Orbit records it as a version 2 consent, validates every
 constraint against the built-in ceiling at consent time, refuses any operation
 or input that needs host operator authority, caps each operation at 8 KiB, and
-refuses an `expires_at` beyond `machine.application_consent_max_days` (global
-config, default 30 days). Exact scopes keep working as described above.
+refuses an `expires_at` more than 30 days out. Exact scopes keep working as described above.
 
 A direct call (or a plugin entry) under a constrained scope is admitted when
 every field it sends is listed and every listed field that is not `optional`

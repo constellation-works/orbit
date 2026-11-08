@@ -44,7 +44,6 @@ pub const HISTORY_DIVERGED: &str = "history_diverged";
 pub const CREW_OS_INELIGIBLE: &str = "crew_os_ineligible";
 
 /// How long any other deferred reason may persist before it is escalated.
-/// Hosts override it from `automation.stall_window_minutes`.
 pub const DEFAULT_WINDOW_MINUTES: u32 = DEFAULT_STALL_WINDOW_MINUTES;
 
 /// How many obligations a divergence record names before it truncates.
@@ -373,7 +372,7 @@ fn mark(
     // A proven-unsafe history rewrite is reported the moment it is found: the
     // debt is already unreachable, so waiting out the window buys nothing.
     if stall.escalated_at.is_none()
-        && (stall.reason == HISTORY_DIVERGED || due(host, request.now, &stall))
+        && (stall.reason == HISTORY_DIVERGED || due(request.now, &stall))
     {
         stall.friction_id = host.report_stall(&StallReport {
             consumer: request.consumer,
@@ -406,16 +405,16 @@ fn escalate_if_due(
     state: &AutomationState,
     stall: AutomationStall,
 ) -> Result<AutomationState, AutomationError> {
-    if stall.escalated_at.is_some() || !due(host, request.now, &stall) {
+    if stall.escalated_at.is_some() || !due(request.now, &stall) {
         return Ok(state.clone());
     }
 
     mark(store, host, request, state, stall)
 }
 
-/// True once the reason has persisted for the host's escalation window.
-fn due(host: &dyn DeliveryHost, now: DateTime<Utc>, stall: &AutomationStall) -> bool {
-    let window = Duration::minutes(i64::from(host.stall_window_minutes().max(1)));
+/// True once the reason has persisted for the escalation window.
+fn due(now: DateTime<Utc>, stall: &AutomationStall) -> bool {
+    let window = Duration::minutes(i64::from(DEFAULT_WINDOW_MINUTES));
     now.signed_duration_since(stall.since) >= window
 }
 

@@ -462,7 +462,7 @@ fn readiness_snapshot(
                 .and_then(|drain| drain.refusal.clone()),
             // [ORB-12968] A pending host shutdown or reboot. `host_shutdown`
             // names it however far away it is. `host_shutdown_holding` is
-            // true only inside `machine.host_shutdown_hold_minutes`, which is
+            // true only inside the 180-minute hold, which is
             // when drains, the sweep and routines start no new work. A missing
             // flag on an older payload means holding.
             "host_shutdown": host_shutdown,

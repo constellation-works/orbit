@@ -119,9 +119,10 @@ dashboard reading "the same feed" a later, small step.
 
 ## 5. Configuration
 
-An `[attention]` table, all keys optional:
+The bounds below were an `[attention]` table of optional keys. [ORB-22808] fixed each at its
+default; the keys load with a deprecation warning and are ignored until 2026-12-08.
 
-| Key | Default | Meaning |
+| Former key | Fixed value | Meaning |
 |---|---|---|
 | `cursor_ttl_hours` | `24` | Cursor validity after `issued_at` |
 | `age_bump_hours` | `[24, 72]` | Age thresholds that raise severity |

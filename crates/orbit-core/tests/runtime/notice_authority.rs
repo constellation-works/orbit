@@ -1170,10 +1170,8 @@ fn runtime_at_roots_config(global: &Path, orbit: &Path, config: &str) -> OrbitRu
     OrbitRuntime::from_roots(global, orbit).unwrap()
 }
 
-fn attention_notice_config(per_workspace_item_cap: u32) -> String {
-    format!(
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[attention]\nper_workspace_item_cap = {per_workspace_item_cap}\n\n[notice]\nmax_open_per_workspace = 60\nmax_open_global_per_owner = 60\n"
-    )
+fn attention_notice_config() -> String {
+    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[notice]\nmax_open_per_workspace = 60\nmax_open_global_per_owner = 60\n".to_string()
 }
 
 fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
@@ -1181,7 +1179,7 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     let global = root.path().join("home/.orbit");
     let home_root = root.path().join("home-ws/.orbit");
     let other_root = root.path().join("other-ws/.orbit");
-    let config = attention_notice_config(200);
+    let config = attention_notice_config();
     let home = runtime_at_roots_config(&global, &home_root, &config);
     let other = runtime_at_roots_config(&global, &other_root, &config);
     let operator = session(McpCapability::Operator);
@@ -1256,20 +1254,6 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     assert_eq!(filtered["counts"]["matching"], 0);
     assert!(filtered["items"].as_array().unwrap().is_empty());
     assert!(filtered["degraded"].as_array().unwrap().is_empty());
-
-    drop(home);
-    drop(other);
-    let capped_home = runtime_at_roots_config(&global, &home_root, &attention_notice_config(40));
-    let capped = query(&capped_home, json!({"kind": "notice_open", "limit": 100}));
-    assert_eq!(capped["counts"]["returned"], 40);
-    assert_eq!(capped["items"].as_array().map(Vec::len), Some(40));
-    assert!(
-        capped["degraded"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| { entry["kind"] == "notice_open" && entry["code"] == "item_cap" })
-    );
 }
 
 /// A notice in one workspace may link a task in another workspace the

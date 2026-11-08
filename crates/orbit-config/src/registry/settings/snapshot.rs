@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 use orbit_types::workflow::{
@@ -11,7 +10,8 @@ use orbit_types::workflow::{
 };
 
 use super::machine::{
-    AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, MachineSettings,
+    ResourceThrottleSettings, WorkerContainmentSettings,
 };
 use super::resolve::{DEFAULT_FINAL_RECOVERY_CREWS, resolve_default_crew};
 use super::table::ConfigSnapshot;
@@ -32,14 +32,8 @@ pub struct MidRunSteeringSettings {
 pub struct ExperimentSettings {
     /// `experiments.enabled` (default `false`).
     pub enabled: bool,
-    /// `experiments.max_running` (default 3).
-    pub max_running: u32,
     /// `experiments.config_keys` (default empty).
     pub config_keys: Vec<String>,
-    /// `experiments.min_delivered_rate` (default 0.9): below this share of
-    /// a treatment arm's settled tasks receiving its treatment, a readout
-    /// withholds its verdict.
-    pub min_delivered_rate: f64,
 }
 
 /// Admitted `notice.*`: fleet-notice expiry defaults and caps, and the size,
@@ -151,11 +145,6 @@ impl ConfigSnapshot {
         require_default_crew: bool,
         scope: AdmissionScope,
     ) -> Result<(), OrbitError> {
-        LogRotationConfig::from_parts(
-            Some(self.runtime_log_retention_days),
-            Some(self.runtime_log_max_total_mb),
-            Some(self.runtime_log_max_file_mb),
-        )?;
         crate::crew_auto_effort::admit_auto_effort_bands(&self.workflow_auto_effort_bands, crews)?;
         // `<crew>@auto` needs bands for its crew. A single-file view may
         // take them from the other layer, so it checks only where the entry
@@ -247,11 +236,11 @@ impl ConfigSnapshot {
         )?;
         let resources = self.resource_throttle();
         let auto_concurrency = self.auto_concurrency();
-        if auto_concurrency.profile_window < auto_concurrency.min_profile_deliveries {
-            return Err(OrbitError::InvalidInput(
-                "machine.auto_concurrency.profile_window must be at least machine.auto_concurrency.min_profile_deliveries"
-                    .to_string(),
-            ));
+        if AUTO_CONCURRENCY_PROFILE_WINDOW < auto_concurrency.min_profile_deliveries {
+            return Err(OrbitError::InvalidInput(format!(
+                "machine.auto_concurrency.min_profile_deliveries must be at most the \
+                 {AUTO_CONCURRENCY_PROFILE_WINDOW}-delivery profile window"
+            )));
         }
         for (resource, high, resume) in [
             (
@@ -507,18 +496,8 @@ impl ConfigSnapshot {
         AutoConcurrencySettings {
             mode: self.machine_auto_concurrency_mode.clone(),
             admit_cpu_percent: self.machine_auto_concurrency_admit_cpu_percent,
-            admit_memory_percent: self.machine_auto_concurrency_admit_memory_percent,
-            profile_window: self.machine_auto_concurrency_profile_window,
             min_profile_deliveries: self.machine_auto_concurrency_min_profile_deliveries,
-            horizon_cap_minutes: self.machine_auto_concurrency_horizon_cap_minutes,
-            head_max_wait_minutes: self.machine_auto_concurrency_head_max_wait_minutes,
-            head_stuck_passes: self.machine_auto_concurrency_head_stuck_passes,
         }
-    }
-
-    /// Admitted `machine.host_shutdown_hold_minutes`.
-    pub fn host_shutdown_hold_minutes(&self) -> u32 {
-        self.machine_host_shutdown_hold_minutes
     }
 
     /// The admitted `workflow.lock_modes` entries, compiled. Admission has
@@ -544,9 +523,7 @@ impl ConfigSnapshot {
     pub fn experiments(&self) -> ExperimentSettings {
         ExperimentSettings {
             enabled: self.experiments_enabled,
-            max_running: self.experiments_max_running,
             config_keys: self.experiments_config_keys.clone(),
-            min_delivered_rate: self.experiments_min_delivered_rate,
         }
     }
 

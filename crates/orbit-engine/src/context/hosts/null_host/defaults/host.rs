@@ -572,8 +572,9 @@ pub trait NullRuntimeHost: Send + Sync {
         HashMap::new()
     }
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        // Matches the built-in `execution.agent_stall_minutes` of 30.
-        Some(std::time::Duration::from_secs(30 * 60))
+        Some(std::time::Duration::from_secs(
+            crate::context::AGENT_STALL_MINUTES * 60,
+        ))
     }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)

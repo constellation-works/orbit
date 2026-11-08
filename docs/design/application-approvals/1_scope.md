@@ -138,7 +138,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
 |---|---|---|
 | Consented operation size | 8 KiB per operation in a v2 consent; a v1 (exact-only) request keeps its 4 KiB total | A constrained profile for one app is about 3-5 KiB |
 | Plugin callback session record | 8 KiB | Current `MAX_SESSION_BYTES` in `crates/orbit-tools/src/plugin/callback/session.rs`; the proposed 16 KiB increase has not shipped |
-| Constrained-scope consent expiry | `machine.application_consent_max_days`, default 30 days (1-365) | Renewed with `orbit application rotate` |
+| Constrained-scope consent expiry | 30 days, fixed since [ORB-22808] | Renewed with `orbit application rotate` |
 | Scope rate limit | optional `rate_limit`, default none | `admissions` (1-10000) per `window_seconds` (1-86400) |
 | `text` / `token` maxima | 4096 chars / 128 bytes | Per field |
 

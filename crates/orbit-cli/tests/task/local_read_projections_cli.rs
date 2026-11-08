@@ -25,7 +25,7 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["key"] == "automation.stall_window_minutes")
+        .find(|row| row["key"] == "retention.audit_days")
         .unwrap();
     assert!(
         supported["description"]
@@ -33,17 +33,11 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
             .is_some_and(|value| !value.is_empty())
     );
     fixture
-        .command(&[
-            "config",
-            "set",
-            "--global",
-            "automation.stall_window_minutes",
-            "45",
-        ])
+        .command(&["config", "set", "--global", "retention.audit_days", "45"])
         .assert()
         .success();
     assert_eq!(
-        fixture.json(&["config", "get", "automation.stall_window_minutes", "--json"])["value"],
+        fixture.json(&["config", "get", "retention.audit_days", "--json"])["value"],
         45
     );
 

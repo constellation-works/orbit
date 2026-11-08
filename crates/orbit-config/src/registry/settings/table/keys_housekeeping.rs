@@ -5,76 +5,6 @@ macro_rules! with_housekeeping_keys {
         with_workflow_keys! {
             [
                 $($head)*
-    attention_cursor_ttl_hours: u32 => u32 {
-        key: "attention.cursor_ttl_hours", value_type: "integer",
-        description: "Cursor validity in hours.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 8760, "hours"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 24, "attention.cursor_ttl_hours"),
-    },
-    attention_run_window_hours: u32 => u32 {
-        key: "attention.run_window_hours", value_type: "integer",
-        description: "Failed-run lookback in hours.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 87600, "hours"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 48, "attention.run_window_hours"),
-    },
-    attention_run_stuck_after_minutes: u32 => u32 {
-        key: "attention.run_stuck_after_minutes", value_type: "integer",
-        description: "Running wall-clock bound in minutes.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 525600, "minutes"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 120, "attention.run_stuck_after_minutes"),
-    },
-    attention_ci_cache_seconds: u32 => u32 {
-        key: "attention.ci_cache_seconds", value_type: "integer",
-        description: "Provider cache lifetime in seconds.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 86400, "seconds"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 60, "attention.ci_cache_seconds"),
-    },
-    attention_source_timeout_seconds: u32 => u32 {
-        key: "attention.source_timeout_seconds", value_type: "integer",
-        description: "Per-source read deadline in seconds.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 3600, "seconds"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 10, "attention.source_timeout_seconds"),
-    },
-    attention_fanout_budget_seconds: u32 => u32 {
-        key: "attention.fanout_budget_seconds", value_type: "integer",
-        description: "Cross-host call deadline in seconds.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 3600, "seconds"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 20, "attention.fanout_budget_seconds"),
-    },
-    attention_per_workspace_item_cap: u32 => u32 {
-        key: "attention.per_workspace_item_cap", value_type: "integer",
-        description: "Maximum candidates per workspace.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 10000, ""),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 200, "attention.per_workspace_item_cap"),
-    },
-    attention_age_bump_hours: Vec<u32> => Vec<u32> {
-        key: "attention.age_bump_hours", value_type: "array<integer>",
-        description: "Severity age thresholds, in hours.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: format("strictly increasing positive hours, such as [24, 72]"),
-        resolve: crate::attention::resolve_attention_age_bumps,
-    },
-    resident_evolution_window_days: u32 => u32 {
-        key: "resident.evolution.window_days", value_type: "integer",
-        description: "Days of evolution-ledger cost the resident digest and a decline baseline count.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 3650, "days"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 14, "resident.evolution.window_days"),
-    },
-    resident_evolution_decline_suppress_days: u32 => u32 {
-        key: "resident.evolution.decline_suppress_days", value_type: "integer",
-        description: "Days a rejected evolution proposal stays declined.",
-        section: ConfigSection::Housekeeping, order: 96,
-        allowed: integers(1, 3650, "days"),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 30, "resident.evolution.decline_suppress_days"),
-    },
     assistance_settings: crate::assistance::AssistanceSettings => crate::assistance::AssistanceSettings {
         key: "assistance", value_type: "table",
         description: "Host-only bounded decision assistance; off by default.",
@@ -336,23 +266,6 @@ macro_rules! with_housekeeping_keys {
         section: ConfigSection::Housekeeping, order: 160,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
-    experiments_max_running: u32 => u32 {
-        key: "experiments.max_running", value_type: "integer",
-        description: "Experiments that may run at once in this workspace.",
-        section: ConfigSection::Housekeeping, order: 161,
-        tier: ConfigKeyTier::Advanced,
-        allowed: integers(1, 20, ""),
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 3, "experiments.max_running"),
-    },
-    experiments_min_delivered_rate: f64 => f64 {
-        key: "experiments.min_delivered_rate", value_type: "number",
-        description: "Share of a treatment arm's settled tasks that must have received its treatment.",
-        section: ConfigSection::Housekeeping, order: 163,
-        tier: ConfigKeyTier::Advanced,
-        allowed: numbers(0.0, 1.0),
-        detail: "Below it, a readout gives no verdict.",
-        resolve: |raw: Option<f64>| resolve_experiments_min_delivered_rate(raw),
-    },
     seeding_routines: crate::SeedingPolicy => crate::seeding::RawSeedingPolicy {
         key: "seeding.routines", value_type: "string|array<string>",
         description: "Which shipped default routines this workspace seeds.",
@@ -549,14 +462,6 @@ macro_rules! with_housekeeping_keys {
         tier: ConfigKeyTier::Advanced,
         allowed: integers(1, 60000, "ms"),
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, 2000, "notice.brief_read_timeout_ms"),
-    },
-    jobs_failure_streak_warn: u32 => u32 {
-        key: "jobs.failure_streak_warn", value_type: "integer",
-        description: "Consecutive failed runs of one job at which the dashboard warns it is failing.",
-        section: ConfigSection::Housekeeping, order: 186,
-        allowed: integers(0, 1000, ""),
-        detail: "0 turns the warning off.",
-        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 5, "jobs.failure_streak_warn"),
     },
         }
     };

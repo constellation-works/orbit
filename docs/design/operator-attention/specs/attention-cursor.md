@@ -100,7 +100,7 @@ correct for a caller that has not been shown them.
 
 ## Validity and expiry
 
-- A cursor is valid for `attention.cursor_ttl_hours` (default 24) after `issued_at`. Every
+- A cursor is valid for 24 hours after `issued_at`. Every
   response mints a fresh cursor with a fresh `issued_at`, so a caller that reads at least daily
   never expires; expiry measures the *gap* between calls.
 - Validity is judged by the process that serves the call, against its own clock. An
@@ -112,7 +112,7 @@ correct for a caller that has not been shown them.
 |---|---|---|
 | `none` | no `--since` supplied | full list |
 | `accepted` | decoded and within TTL | delta list |
-| `expired` | past `cursor_ttl_hours` | full list, flagged |
+| `expired` | past 24 hours | full list, flagged |
 | `invalid` | not `atc` prefixed, bad base64, wrong length, future `issued_at` | full list, flagged |
 | `unsupported` | a version this build does not read | full list, flagged |
 

@@ -331,7 +331,7 @@ impl OrbitRuntime {
                 // Only a managed run's envelope carries an activity deadline;
                 // an interactive call keeps the unscoped ceiling.
                 let proc_spawn_budget = if proc_spawn_activity_scoped {
-                    read_proc_spawn_budget_from_env(self.proc_spawn_max_timeout_ms())
+                    read_proc_spawn_budget_from_env()
                 } else {
                     None
                 };

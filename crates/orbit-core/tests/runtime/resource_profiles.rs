@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW as WINDOW;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::host_resource::profile::{
     BaseClass, ProfileLookup, ProfileSource, ResourceProfile,
@@ -216,8 +217,8 @@ impl Fixture {
 
 /// Ten deliveries lasting one to ten minutes, delivery `i` at `i + 1` cores
 /// and GiB throughout: at minute `m` the deliveries `m..10` are alive.
-fn a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon() {
-    let fixture = Fixture::new("horizon_cap_minutes = 8\n");
+fn a_profile_holds_alive_mean_cpu_p90_memory_and_an_alive_horizon() {
+    let fixture = Fixture::new("");
     let workspace = fixture.workspace.clone();
     for index in 0..10_u64 {
         let load = (index + 1) as f64;
@@ -268,11 +269,11 @@ fn a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon() {
         );
     }
     assert_eq!(
-        profile.horizon_minutes, 8,
-        "alive stays at or above 0.1 for all ten minutes; the cap of 8 applies"
+        profile.horizon_minutes, 10,
+        "alive stays at or above 0.1 for all ten minutes, well inside the fixed cap"
     );
-    assert_eq!(profile.peak_cpu_cores.minute, 7);
-    assert!((profile.peak_cpu_cores.value - 9.0).abs() < 1e-9);
+    assert_eq!(profile.peak_cpu_cores.minute, 9);
+    assert!((profile.peak_cpu_cores.value - 10.0).abs() < 1e-9);
     assert!(profile.cpu_spread > 0.0);
 
     let short = fixture.profile("change", Some("small"));
@@ -975,8 +976,8 @@ fn profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes() {
 
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
-    a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon_scenarios,
-    a_profile_holds_alive_mean_cpu_p90_memory_and_a_capped_horizon,
+    a_profile_holds_alive_mean_cpu_p90_memory_and_an_alive_horizon_scenarios,
+    a_profile_holds_alive_mean_cpu_p90_memory_and_an_alive_horizon,
     a_delivery_sums_its_run_chain_from_admission_and_skips_resumed_and_live_ones,
     lookups_walk_the_fallback_chain_and_keep_no_diff_work_off_change_profiles,
     host_fallback_uses_template_history_with_or_without_opposite_class_history,
@@ -998,10 +999,10 @@ crate::scenario_table!(
 /// A month off must not blank admission: the newest deliveries of each key
 /// still make its profile when every one of them is older than 30 days.
 fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
-    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let fixture = Fixture::new("min_profile_deliveries = 3\n");
     let workspace = fixture.workspace.clone();
     fixture.days_ago.set(45);
-    for index in 0..5 {
+    for index in 0..=WINDOW {
         fixture.delivery(
             &workspace,
             &format!("ORB-old-{index}"),
@@ -1013,12 +1014,13 @@ fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
 
     let profile = fixture.profile("change", Some("medium"));
     assert_eq!(
-        profile.delivery_count, 4,
-        "the window is the last profile_window deliveries, whatever their age"
+        profile.delivery_count, WINDOW as usize,
+        "the window is the last {WINDOW} deliveries, whatever their age"
     );
     assert!(!profile.sparse);
     assert_eq!(
-        profile.deliveries[0].task_id, "ORB-old-4",
+        profile.deliveries[0].task_id,
+        format!("ORB-old-{WINDOW}"),
         "the window starts at the newest delivery"
     );
     let found = fixture
@@ -1035,10 +1037,10 @@ fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
 
 /// GC must retain the usable window even when newer deliveries cannot train it.
 fn gc_preserves_profiles_behind_ineligible_deliveries() {
-    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let fixture = Fixture::new("min_profile_deliveries = 3\n");
     let workspace = fixture.workspace.clone();
     fixture.days_ago.set(60);
-    for index in 0..5 {
+    for index in 0..=WINDOW {
         fixture.delivery(
             &workspace,
             &format!("ORB-good-{index}"),
@@ -1095,26 +1097,30 @@ fn gc_preserves_profiles_behind_ineligible_deliveries() {
         .unwrap();
     assert_eq!(found.source, ProfileSource::Exact);
     let profile = found.profile.unwrap();
-    assert_eq!(profile.delivery_count, 4);
-    assert_eq!(profile.series[0].cpu_cores, 3.5);
+    assert_eq!(profile.delivery_count, WINDOW as usize);
+    // The mean of the newest window's 2..=WINDOW + 1 cores.
+    assert_eq!(profile.series[0].cpu_cores, f64::from(WINDOW + 3) / 2.0);
     assert_eq!(
         profile
             .deliveries
             .iter()
-            .map(|d| d.task_id.as_str())
+            .map(|d| d.task_id.clone())
             .collect::<Vec<_>>(),
-        vec!["ORB-good-4", "ORB-good-3", "ORB-good-2", "ORB-good-1"]
+        (1..=WINDOW)
+            .rev()
+            .map(|index| format!("ORB-good-{index}"))
+            .collect::<Vec<_>>()
     );
 }
 
 /// Retention must keep each crew model's newest window, even when another
 /// model's deliveries fill the key's newest by admission and by finish.
 fn gc_keeps_each_crew_models_newest_window() {
-    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let fixture = Fixture::new("min_profile_deliveries = 3\n");
     let workspace = fixture.workspace.clone();
     fixture.days_ago.set(80);
     fixture.sampled_under.borrow_mut().0 = Some("model-a".into());
-    for index in 0..4 {
+    for index in 0..WINDOW {
         fixture.delivery(
             &workspace,
             &format!("ORB-a-{index}"),
@@ -1156,7 +1162,7 @@ fn gc_keeps_each_crew_models_newest_window() {
     assert_eq!(found.source, ProfileSource::Crew);
     let profile = found.profile.unwrap();
     assert_eq!(profile.crew_model.as_deref(), Some("model-a"));
-    assert_eq!(profile.delivery_count, 4);
+    assert_eq!(profile.delivery_count, WINDOW as usize);
     assert_eq!(profile.series[0].cpu_cores, 2.0);
 }
 
@@ -1165,7 +1171,7 @@ fn gc_keeps_each_crew_models_newest_window() {
 /// model newest, each model keeps its own history, and the union holds both.
 fn interleaved_crew_models_keep_their_own_history_beside_a_union() {
     let fixture = Fixture::new(
-        "min_profile_deliveries = 3\nprofile_window = 10\n\n\
+        "min_profile_deliveries = 3\n\n\
          [workflow]\ndefault_crew = \"major\"\n\n\
          [crews.major]\nprovider = \"codex\"\nmodel = \"model-major\"\n",
     );
@@ -1245,7 +1251,7 @@ fn interleaved_crew_models_keep_their_own_history_beside_a_union() {
 /// A routine release does not change what a delivery costs: an Orbit version
 /// change alone leaves every earlier delivery in the window.
 fn an_orbit_version_change_keeps_every_delivery() {
-    let fixture = Fixture::new("min_profile_deliveries = 2\nprofile_window = 10\n");
+    let fixture = Fixture::new("min_profile_deliveries = 2\n");
     let workspace = fixture.workspace.clone();
     let seed = |task: String| {
         fixture.delivery(

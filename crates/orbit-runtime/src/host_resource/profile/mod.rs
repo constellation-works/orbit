@@ -17,7 +17,7 @@
 //!   reads its crew profile first and falls back to the union while that is
 //!   sparse, so a mixed crew pool keeps each model's history and a newly
 //!   finished delivery of one model never hides the others'.
-//! - **Window.** The last `profile_window` completed deliveries of the key,
+//! - **Window.** The last 50 completed deliveries of the key,
 //!   or of the key and crew model, whatever their age, so a month without
 //!   deliveries leaves every profile as it was. The Orbit version a delivery
 //!   ran under is recorded but never narrows a window: a release does not
@@ -28,7 +28,7 @@
 //!   cores and `mem` the 90th-percentile memory over the deliveries alive
 //!   then, each with its spread; memory also keeps its mean, from which the
 //!   forecast sums several deliveries' memory. The horizon is the first
-//!   minute `alive` falls below 0.1, capped at `horizon_cap_minutes`.
+//!   minute `alive` falls below 0.1, capped at 120 minutes.
 //! - **Delivery peaks.** The nearest-rank p50 and p90 of each delivery's own
 //!   highest minute, for cores and for memory. Averaging minute by minute
 //!   blurs peaks that fall at different times, so these quantiles can be
@@ -65,7 +65,7 @@ pub(crate) use cache::{ResourceProfileCache, build_uncached};
 pub use lookup::{ProfileLookup, ProfileMatch, ProfileSource};
 
 /// Deliveries of each workspace, work class and complexity whose run minutes
-/// retention keeps whatever their age, or `profile_window` when larger.
+/// retention keeps whatever their age.
 pub const RESOURCE_HISTORY_DELIVERIES_PER_KEY: usize = 200;
 
 /// Cores above which a no-diff delivery's minute looks like build work.

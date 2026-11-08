@@ -112,24 +112,11 @@ pub(crate) fn federated_aggregate_client(
     )
 }
 
-/// The attention fan-out's deadline and cursor lifetime from the machine's
-/// global `[attention]` settings, and the registered host names items are
-/// attributed to. Unreadable settings fall back to the defaults: the read
-/// still runs, and the host file was already validated by the caller.
+/// The attention fan-out with the registered host names items are
+/// attributed to. Its deadline is fixed; an unreadable host file leaves the
+/// names empty, since the caller already validated it.
 pub(crate) fn attention_fanout(global_root: &std::path::Path) -> federated::AttentionFanout {
     let mut fanout = federated::AttentionFanout::default();
-    match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root)) {
-        Ok(config) => {
-            let settings = orbit_config::AttentionSettings::from_snapshot(&config.snapshot);
-            fanout.budget = std::time::Duration::from_secs(settings.fanout_budget_seconds.into());
-            fanout.cursor_ttl_hours = settings.cursor_ttl_hours;
-        }
-        Err(error) => tracing::warn!(
-            target: "orbit.mcp",
-            %error,
-            "could not read [attention]; the fan-out uses its defaults"
-        ),
-    }
     if let Ok(registry) = orbit_registry::hosts::load_host_registry(global_root) {
         fanout.host_names = registry
             .hosts()

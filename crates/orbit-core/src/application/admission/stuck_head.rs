@@ -1,7 +1,7 @@
 //! The friction an `enforce` drain files for a stuck gap-fit head.
 //!
 //! Gap fit marks a protected head stuck once its miss has not improved over
-//! `head_stuck_passes` passes (`gap_fit.rs`). While the guard holds it the
+//! 20 protected passes (`gap_fit.rs`). While the guard holds it the
 //! drain admits nothing behind it, so a stuck head idles the drain: this
 //! module makes that visible once per stall, beside the record `run show`
 //! and readiness read. It never changes what is admitted.

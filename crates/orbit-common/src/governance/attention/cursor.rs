@@ -52,12 +52,12 @@ pub fn attention_seen_hash(item: &AttentionItem) -> [u8; 8] {
     entry.copy_from_slice(&digest[..8]);
     entry
 }
+/// Hours an issued cursor stays valid.
+///
+/// The former `attention.cursor_ttl_hours` default, fixed when the key was removed [ORB-22808].
+pub const ATTENTION_CURSOR_TTL_HOURS: u32 = 24;
 /// Decode a caller's token; every unusable token restarts the full list.
-pub fn decode_attention_cursor(
-    token: Option<&str>,
-    now: u64,
-    ttl_hours: u32,
-) -> (AttentionCursorStatus, Seen) {
+pub fn decode_attention_cursor(token: Option<&str>, now: u64) -> (AttentionCursorStatus, Seen) {
     use AttentionCursorStatus as S;
     let fallback = |status| (status, Seen::new());
     let Some(token) = token else {
@@ -89,7 +89,7 @@ pub fn decode_attention_cursor(
     if count > 1000 || bytes.len() != 11 + count * 8 || issued > now.saturating_add(300) {
         return fallback(S::Invalid);
     }
-    if now.saturating_sub(issued) > u64::from(ttl_hours) * 3600 {
+    if now.saturating_sub(issued) > u64::from(ATTENTION_CURSOR_TTL_HOURS) * 3600 {
         return fallback(S::Expired);
     }
     let seen = bytes[11..].as_chunks::<8>().0.iter().copied().collect();

@@ -42,13 +42,17 @@ const UNREACHABLE: &str = "unreachable_destination";
 /// Routing identity of a reachable destination whose binary lacks the tool.
 const TOOL_MISSING: &str = "tool_not_on_this_host";
 
-/// What the fan-out needs from the caller's configuration.
+/// Seconds the cross-host attention fan-out waits for every hop.
+///
+/// The former `attention.fanout_budget_seconds` default, fixed when the key was removed [ORB-22808].
+pub const ATTENTION_FANOUT_BUDGET_SECONDS: u64 = 20;
+
+/// What the fan-out needs from its caller.
 #[derive(Debug, Clone)]
 pub struct AttentionFanout {
-    /// `attention.fanout_budget_seconds`: the outer deadline for every hop.
+    /// The outer deadline for every hop, [`ATTENTION_FANOUT_BUDGET_SECONDS`]
+    /// unless a fixture shortens it.
     pub budget: Duration,
-    /// `attention.cursor_ttl_hours`, applied to the outer cursor.
-    pub cursor_ttl_hours: u32,
     /// Registered host names by `machine_id`, for attribution and `--host`.
     pub host_names: BTreeMap<String, String>,
 }
@@ -56,8 +60,7 @@ pub struct AttentionFanout {
 impl Default for AttentionFanout {
     fn default() -> Self {
         Self {
-            budget: Duration::from_secs(20),
-            cursor_ttl_hours: 24,
+            budget: Duration::from_secs(ATTENTION_FANOUT_BUDGET_SECONDS),
             host_names: BTreeMap::new(),
         }
     }
@@ -284,7 +287,6 @@ impl FederatedMcpHost {
             AttentionPageCursor {
                 since: input.get("since").and_then(Value::as_str),
                 limit: filter.limit,
-                ttl_hours: settings.cursor_ttl_hours,
             },
             now,
         );

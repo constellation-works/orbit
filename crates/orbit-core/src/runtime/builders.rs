@@ -69,6 +69,21 @@ impl OrbitRuntime {
         Self::from_kernel(self.kernel.with_host_shutdown_hold_minutes(minutes))
     }
 
+    pub fn with_worktree_parked_reclaim_after_hours(self, hours: u64) -> Self {
+        Self::from_kernel(self.kernel.with_worktree_parked_reclaim_after_hours(hours))
+    }
+
+    pub fn with_auto_concurrency_head_guard(
+        self,
+        max_wait_minutes: u32,
+        stuck_passes: u32,
+    ) -> Self {
+        Self::from_kernel(
+            self.kernel
+                .with_auto_concurrency_head_guard(max_wait_minutes, stuck_passes),
+        )
+    }
+
     pub fn with_task_pr_forge(self, forge: Arc<dyn task_pr_forge::TaskPrForge>) -> Self {
         Self::from_kernel(self.kernel.with_task_pr_forge(forge))
     }

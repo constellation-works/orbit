@@ -95,7 +95,11 @@ impl RuntimeKernel {
                 "application consent exceeds the 4 KiB session scope budget".into(),
             ));
         }
-        validate_consent_request_v2(&request, self.application_consent_max_days(), Utc::now())?;
+        validate_consent_request_v2(
+            &request,
+            super::validation::APPLICATION_CONSENT_MAX_DAYS,
+            Utc::now(),
+        )?;
         for scope in &request.scopes {
             self.validate_application_operation(&scope.operation, OperationRole::Entry)?;
             if !scope.callbacks.is_empty() && scope.operation.plugin.is_none() {

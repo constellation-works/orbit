@@ -119,9 +119,9 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
         );
     }
 }
-fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
+fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
     let fixture = Fixture::init();
-    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", "min_severity=critical", "critical", "input"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", null, "high", "workspace"]]});
+    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["", "min_severity=critical", "critical", "input"]]});
     for case in case_table["cases"].as_array().unwrap() {
         let (config, input, floor, source) = (
             case[0].as_str().unwrap(),
@@ -2116,7 +2116,7 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
 contract!(
     run_observation_contracts_0,
     successful_security_sweep_shows_filing_floor_source_and_excluded_alerts,
-    shipped_security_job_uses_config_unless_run_input_overrides_it,
+    shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it,
     readiness_bootstrap_preserves_stale_runs_and_held_reservations,
     readiness_reports_total_and_notifies_only_when_backlog_is_truncated
 );

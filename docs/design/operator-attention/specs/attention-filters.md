@@ -90,7 +90,7 @@ than 500 is still fully returned across successive polls, because 500 is only th
 public page.
 
 An aggregator candidate read does not take `--limit` and does not take this default. Its
-bound is `attention.per_workspace_item_cap` per workspace on the destination. The call
+bound is the fixed 200-item cap per workspace on the destination. The call
 shape, who may send it, and the rule that a truncated public body is not a complete
 candidate set are specified in
 [attention-federation](./attention-federation.md#candidate-read).

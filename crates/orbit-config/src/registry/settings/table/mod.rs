@@ -5,7 +5,6 @@ use orbit_common::OrbitError;
 use orbit_common::fs::lock_mode::FootprintLockModeEntry;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::{MaterialField, SourceSensitivity};
-use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{
     CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_REVIEW_MINUTES, MissingSectionPolicy, ScreenshotSection,
 };
@@ -17,7 +16,6 @@ use super::super::allowed::{
 use super::super::{
     CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues,
     ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
-    SECURITY_ALERT_SEVERITIES,
 };
 use super::lease_listener::{
     LeaseListenerTlsSettings, resolve_lease_listener_failed_auth,
@@ -31,17 +29,13 @@ use super::lease_listener::{
     resolve_listener_token_writes_per_minute,
 };
 use super::resolve::{
-    DEFAULT_APPLICATION_CONSENT_MAX_DAYS, DEFAULT_JOURNAL_RETENTION_DAYS,
-    DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES, DEFAULT_RETENTION_DAYS, DEFAULT_STORE_WARN_BYTES,
-    DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX, default_log_rotation, default_pass_list,
-    normalize_logins, normalize_pass_list, resolve_agent_stall_minutes, resolve_at,
-    resolve_bounded_number, resolve_bounded_range, resolve_branch_template,
-    resolve_build_output_env, resolve_choice, resolve_commit_subject_template,
-    resolve_cpu_light_leaves, resolve_distributed_completion,
-    resolve_experiments_min_delivered_rate, resolve_generated_paths,
-    resolve_host_shutdown_hold_minutes, resolve_lease_intake_peer_user,
-    resolve_light_delivery_paths, resolve_machine_id, resolve_machine_labels, resolve_machine_name,
-    resolve_material_fields, resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
+    DEFAULT_RETENTION_DAYS, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
+    default_pass_list, normalize_logins, normalize_pass_list, resolve_at, resolve_bounded_number,
+    resolve_bounded_range, resolve_branch_template, resolve_build_output_env, resolve_choice,
+    resolve_commit_subject_template, resolve_cpu_light_leaves, resolve_distributed_completion,
+    resolve_generated_paths, resolve_lease_intake_peer_user, resolve_light_delivery_paths,
+    resolve_machine_id, resolve_machine_labels, resolve_machine_name, resolve_material_fields,
+    resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,
     resolve_mid_run_steering_max_rounds, resolve_name_list, resolve_non_code_paths,
     resolve_non_empty, resolve_non_reviewable_paths, resolve_optional_choice,
     resolve_optional_non_empty, resolve_percent, resolve_pr_body_template, resolve_reclaim,
@@ -240,7 +234,7 @@ macro_rules! define_config_settings {
                 };
                 snapshot.finish_admission(crews, env_default, require_default_crew, scope)?;
                 if validate_auto_memory {
-                    snapshot.auto_concurrency().validate_memory_high_percent(
+                    super::machine::AutoConcurrencySettings::validate_memory_high_percent(
                         global_memory_high_percent
                             .unwrap_or(snapshot.workflow_resource_throttle_memory_high_percent),
                     )?;

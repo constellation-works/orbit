@@ -2370,15 +2370,15 @@ pub(super) fn admitted_frozen_batch(
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
 
-/// A shutdown inside the configured horizon holds a local wave and readiness.
-/// One minute past that horizon admits, while readiness and the entry decision
-/// still name the schedule.
+/// A shutdown inside the fixed 180-minute horizon holds a local wave and
+/// readiness. One minute past that horizon admits, while readiness and the
+/// entry decision still name the schedule.
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
-    let (_root, runtime, _probe) = configured_runtime(
-        "[machine]\nhost_shutdown_hold_minutes = 30\n",
-        &["src/queued.rs"],
+    let (_root, runtime, _probe) = configured_runtime("", &["src/queued.rs"]);
+    assert_eq!(
+        runtime.host_shutdown_hold_minutes(),
+        orbit_runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES
     );
-    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
     let queued = seed(&runtime, Seed::default().files(&["file:src/queued.rs"]));
     let schedule = |minutes: i64| {
         orbit_core::runtime::host_signal::FixedHostSignals::scheduled(
@@ -2395,8 +2395,8 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
             .with_host_signal_probe(Arc::new(schedule(minutes)))
     };
 
-    // 30 minutes is inside the horizon and holds; 31 admits. Both still name the schedule.
-    for (minutes, holding) in [(30_i64, true), (31, false)] {
+    // 180 minutes is inside the horizon and holds; 181 admits. Both still name the schedule.
+    for (minutes, holding) in [(180_i64, true), (181, false)] {
         let runtime = presented(minutes);
         let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
         let wave = classify(&runtime, &drain);
