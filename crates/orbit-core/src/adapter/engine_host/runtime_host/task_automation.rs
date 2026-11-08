@@ -145,7 +145,10 @@ fn apply_task_automation_update_under_lock(
                 implemented_by: attribution.implemented_by.clone(),
                 external_refs,
                 status_event: update.status_event.clone(),
-                status_note: update.status_note.clone(),
+                status_note: update
+                    .status_note
+                    .as_deref()
+                    .map(orbit_common::security::redaction::redact_all),
                 status_decision: update.status_decision.clone(),
                 append_comments: update.append_comments.clone(),
                 append_history: update.append_history.clone(),

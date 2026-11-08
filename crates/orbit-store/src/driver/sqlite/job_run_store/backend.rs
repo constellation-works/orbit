@@ -724,7 +724,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             agent_response_json: params.agent_response_json.clone(),
             state: params.state,
             error_code: params.error_code.clone(),
-            error_message: params.error_message.clone(),
+            error_message: params
+                .error_message
+                .as_deref()
+                .map(orbit_common::security::redaction::redact_all),
         };
         self.store
             .upsert_job_run_step_for_workspace(&self.workspace_id, run_id, &step)?;

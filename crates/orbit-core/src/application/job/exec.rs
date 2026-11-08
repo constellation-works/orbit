@@ -899,7 +899,9 @@ impl OrbitRuntime {
                     agent_response_json: None,
                     state,
                     error_code: None,
-                    error_message: step.error_message,
+                    error_message: step
+                        .error_message
+                        .map(|m| orbit_common::security::redaction::redact_all(&m)),
                 },
             )?;
         }

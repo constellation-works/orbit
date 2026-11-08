@@ -181,7 +181,14 @@ pub(crate) fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<
         .iter()
         .rev()
         .find(|step| step.error_code.is_some() || step.error_message.is_some())
-        .map(|step| (step.error_code.clone(), step.error_message.clone()))
+        .map(|step| {
+            (
+                step.error_code.clone(),
+                step.error_message
+                    .as_deref()
+                    .map(orbit_common::security::redaction::redact_all),
+            )
+        })
         .unwrap_or((None, None))
 }
 

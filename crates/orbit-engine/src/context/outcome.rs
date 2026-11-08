@@ -65,7 +65,8 @@ fn workflow_run_note(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("-");
-    let error_message = elide_note_error(run_id, error_message);
+    let error_message = orbit_common::security::redaction::redact_all(error_message);
+    let error_message = elide_note_error(run_id, &error_message);
 
     format!(
         "workflow run {outcome}: job={job_id}, run_id={run_id}, error_code={error_code}, error={error_message}"

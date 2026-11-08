@@ -513,7 +513,9 @@ fn long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them() 
             assert_eq!(entry("short")["stderr"], "boom");
             assert_eq!(entry("short")["truncated"], false);
 
-            // Both feeds link the row to its run, whose step keeps the full text.
+            // Both feeds link the row to its run, whose step keeps the full text,
+            // redacted at persistence [ORB-23048]: the run detail carries the
+            // full redacted message, never the raw secret.
             assert_eq!(row("long")["job_run"], "long");
             let run = json_ok(server.get("/api/runs/long?workspace=ws_http_fixture"));
             let step = run["steps"]
@@ -522,9 +524,18 @@ fn long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them() 
                 .iter()
                 .find(|step| step["target_id"] == "X")
                 .unwrap();
+            let expected = orbit_common::security::redaction::redact_all(long.as_str());
+            assert!(
+                !expected.contains("ghp_"),
+                "redacted expectation carries no raw secret"
+            );
             assert_eq!(
-                step["error_message"], long,
-                "the run link reaches the full message"
+                step["error_message"], expected,
+                "the run link reaches the full redacted message"
+            );
+            assert!(
+                !step["error_message"].as_str().unwrap().contains("ghp_"),
+                "run detail carries no raw secret"
             );
         },
     );
