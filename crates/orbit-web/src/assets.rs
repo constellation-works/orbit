@@ -242,6 +242,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/agents-implementers.js"),
     ),
     (
+        "/static/js/agents-rank.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank.js"),
+    ),
+    (
         "/static/js/scoreboard.js",
         JS,
         include_bytes!("../assets/dashboard/js/scoreboard.js"),

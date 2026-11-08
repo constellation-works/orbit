@@ -20,6 +20,7 @@ mod measures;
 mod sample;
 mod season;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -32,7 +33,9 @@ use self::sample::{DRAWS, Record};
 pub use self::season::RankSeasons;
 use self::season::{DEFINITION_VERSION, Season, SeasonScale};
 use super::query::{SpanError, parse_span};
-use super::{AgentFacts, AgentQuery, MODEL_UNKNOWN, WindowBounds, WindowSpan, roles};
+use super::{
+    AgentFacts, AgentQuery, ExecutionMode, MODEL_UNKNOWN, Owner, WindowBounds, WindowSpan, roles,
+};
 use crate::OrbitRuntime;
 
 const DEFAULT_SETTLE_LAG: &str = "14d";
@@ -183,6 +186,9 @@ pub fn agent_rank(
 ) -> Value {
     let window = query.query.bounds(facts);
     let execution = query.query.execution;
+    // Shown beside the ranking, not filtered by the execution selector, so
+    // interactive work stays visible while the default counts leave it out.
+    let (execution_board, execution_by_model) = execution_census(facts, window);
     let rows = board::pool(roles::implementer_ledger(facts, window, execution));
     let scales = match seasons.current() {
         Some(season) => Scales {
@@ -229,12 +235,28 @@ pub fn agent_rank(
         "tasks": unattributed.map_or(0, ModelRow::units),
         "crews": unattributed.map(crews_json).unwrap_or_default(),
     });
+    payload["execution_split"] = execution_json(&execution_board);
+    payload["not_scored"] = not_scored(facts, window);
     payload["rows"] = Value::Array(
         board
             .order
             .iter()
             .filter(|&&index| rows[index].model != MODEL_UNKNOWN)
-            .map(|&index| row_json(facts, window, &rows[index], &board, index, &scales))
+            .map(|&index| {
+                let execution = execution_by_model
+                    .get(&rows[index].model)
+                    .cloned()
+                    .unwrap_or_default();
+                row_json(
+                    facts,
+                    window,
+                    &rows[index],
+                    &board,
+                    index,
+                    &scales,
+                    &execution,
+                )
+            })
             .collect(),
     );
     let mut paired = Map::new();
@@ -262,6 +284,7 @@ fn row_json(
     board: &board::Board,
     index: usize,
     scales: &Scales,
+    execution: &ExecutionCounts,
 ) -> Value {
     let placed = &board.placed[index];
     let totals = row.totals();
@@ -335,6 +358,105 @@ fn row_json(
         "landed_rate": (units > 0).then(|| round4(row.landed / units as f64)),
         "crews": crews_json(row),
         "effort_split": effort_split(facts, window, &row.model),
+        "tiers": tiers_json(row, &scales.scales),
+        "lines": { "changed": row.lines, "tasks": row.sized_tasks },
+        "execution": execution_json(execution),
+    })
+}
+
+fn tiers_json(row: &ModelRow, scales: &[Option<f64>; MEASURE_COUNT]) -> Vec<Value> {
+    board::tier_points(row, scales)
+        .into_iter()
+        .map(|point| {
+            json!({
+                "tier": point.tier,
+                "tasks": point.tasks,
+                "score": point.score.map(round),
+                "cost_per_task": point.cost_per_task.map(round4),
+                "cost_coverage": round4(point.cost_coverage),
+                "cost_unknown": point.cost_unknown,
+            })
+        })
+        .collect()
+}
+
+/// Managed, interactive and unclassified task counts.
+#[derive(Clone, Default)]
+struct ExecutionCounts {
+    managed: usize,
+    interactive: usize,
+    unclassified: usize,
+}
+
+impl ExecutionCounts {
+    fn add(&mut self, mode: ExecutionMode) {
+        match mode {
+            ExecutionMode::Managed => self.managed += 1,
+            ExecutionMode::Interactive => self.interactive += 1,
+            ExecutionMode::Unclassified => self.unclassified += 1,
+        }
+    }
+}
+
+fn execution_json(counts: &ExecutionCounts) -> Value {
+    json!({
+        "managed_tasks": counts.managed,
+        "interactive_tasks": counts.interactive,
+        "unclassified_tasks": counts.unclassified,
+    })
+}
+
+/// Window-wide, and not filtered by the ranking's execution selector.
+fn execution_census(
+    facts: &AgentFacts,
+    window: WindowBounds,
+) -> (ExecutionCounts, BTreeMap<String, ExecutionCounts>) {
+    let mut board = ExecutionCounts::default();
+    let mut by_model: BTreeMap<String, ExecutionCounts> = BTreeMap::new();
+    for task in &facts.tasks {
+        let mut models = BTreeSet::new();
+        let mut counted = false;
+        for attempt in &task.attempts {
+            if !window.admits(attempt.start) || attempt.no_diff() {
+                continue;
+            }
+            counted = true;
+            if let Some(model) = attempt.runner.model.as_deref()
+                && !model.is_empty()
+                && model != MODEL_UNKNOWN
+            {
+                models.insert(model.to_string());
+            }
+        }
+        if !counted {
+            continue;
+        }
+        board.add(task.execution);
+        for model in models {
+            by_model.entry(model).or_default().add(task.execution);
+        }
+    }
+    (board, by_model)
+}
+
+/// Not-scored charges whose anchor falls in the window. These are problems,
+/// not tasks, and they are board-level: a Not-scored charge usually names no model.
+fn not_scored(facts: &AgentFacts, window: WindowBounds) -> Value {
+    let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut count = 0usize;
+    for charge in &facts.charges {
+        let Owner::NotScored(reason) = charge.owner else {
+            continue;
+        };
+        if !window.admits(charge.anchor) {
+            continue;
+        }
+        count += 1;
+        *reasons.entry(reason).or_default() += 1;
+    }
+    json!({
+        "count": count,
+        "reasons": reasons,
     })
 }
 
