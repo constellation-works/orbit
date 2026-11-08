@@ -500,9 +500,10 @@ workspace, and use an isolated checkout as well as isolated `HOME` and install
 target for smoke checks. The JSON report's `workspace_root` and
 `admission_roots` show what was selected and held. The staged copy is what
 installs even if the candidate path changes, an equal version with a different
-digest replaces, and live MCP/dashboard/clock/drain clients that report a
+digest replaces, and live MCP/dashboard/drain clients that report a
 handover capability the candidate resumes are admitted beside it and hand
-over after the swap, while short-lived clients are waited for — do not
+over after the swap, while short-lived clients, including clock ticks, are
+waited for — do not
 quiesce idle handover-capable clients. Only a client that cannot hand over
 (unsupported, v1-owned, or the `mcp listen` listener) makes it refuse before
 anything changes; quiesce that client, retry, then reconnect. Rerunning the
