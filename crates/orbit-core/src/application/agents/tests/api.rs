@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
@@ -15,7 +15,9 @@ use super::super::{AgentFacts, AgentQuery, AgentRole, agent_scorecard, attributi
 type Cohort<'a> = (&'a str, Option<TaskComplexity>, usize, usize, usize, usize);
 
 fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
-    let now = Utc.with_ymd_and_hms(2026, 11, 8, 0, 0, 0).unwrap();
+    // The served window is the rolling span ending at the query clock, so the
+    // events are placed relative to that clock; fixed timestamps age out of it.
+    let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
     let mut tasks = Vec::new();
     for (cohort, &(crew, complexity, units, landed, reviewed, accepted)) in
