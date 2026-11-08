@@ -206,6 +206,67 @@ only bytes it can prove it wrote; anything else it copies to
 Changing a routine's cadence, target, policy, or description is a real edit
 and is preserved and reported; a comment-only edit remains managed.
 
+## Retired features and their keys
+
+Orbit removes features across releases. A removed feature can leave configuration
+keys or an MCP toolset name behind; a removed command simply stops existing.
+Orbit still loads the leftover keys and toolset names, warns on every load and
+ignores them. Delete each leftover, then verify the load is clean. Keys that were
+only renamed or moved are translated on load and rewritten by
+`--fix-retired-config-keys`; this table lists removed features only.
+
+| Removed feature | Leftovers to delete | Replacement | Recognized until |
+|---|---|---|---|
+| Explorer and agent invocation | `[workflow.explore]` table; `workflow.purpose_crews.explorer`; `agent-invoke` in `machine.mcp.toolsets` and in any `--toolset`. `orbit run agent` and the `orbit.agent.invoke` tool are gone. Stored runs and experiment readouts stay readable. | None in Orbit: use task workflows or a provider CLI. | No date set; warns until a later release makes it an error |
+| Crew ladder | `[workflow.crew_ladder]` table. `orbit agents ladder` is gone. | Route each tier with `workflow.<tier>_complexity_crews`; compare crews with [experiments](configuration.md#experiments). | 2026-12-07 |
+| Regression-risk prompt marks | `[workflow.regression_risk]` table, including `record_sites` | None. Task riskiness scores use fixed defaults: a 30-day window and at least 5 done tasks. | 2026-12-07 |
+| Pilot explore brief | `[workflow.explore_brief]` table | None. Existing `explore-brief.json` artifacts stay readable. | 2026-12-07 |
+| Visual review | `[visual_review]` table; `workflow.purpose_crews.visual_review`. `orbit visual` and the `orbit.visual.*` tools are gone. | None. `mocks/` and `visual/` are ordinary artifact names now. | 2026-12-07 |
+| Crew-performance weighting | `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap` and `crew_performance_window_days` | None for the weighting. The older `workflow.crew_performance_types` name is read as `workflow.task_types`; the repair rewrites it. | 2026-12-07 |
+| Weekly evolution pass | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes` and `max_proposals` | None. `orbit evolution`, `orbit resident digest` and `resident.evolution.window_days` stay; nothing files proposal tasks automatically. | 2026-12-07 |
+| UX rules | `[ux_rules]` table | None. No routine or installed command runs the rules. | 2026-12-07 |
+| Finding verification | `review.verify_findings` | None. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | 2026-12-07 |
+| Agent scoreboard | `[scoring]` table (`scoring.enabled`) | None; nothing records scoreboard metrics. | 2026-11-12 |
+
+The `finding-verification`, `evolution-pass`, `ux-rules` and `pilot-warning-triage`
+routines are retired too. `orbit workspace sync` retires their seeded copies. A
+routine you wrote that targets one of their jobs, or the `pilot_warnings_held`
+trigger, loads as retired and never fires; remove it or retarget it. Triage a
+task held on pilot warnings from the dashboard's Triage action.
+
+### Verify the cleanup
+
+1. List what still sets a retired key, with the file that sets it. The check
+   covers the global and workspace `config.toml`:
+
+   ```bash
+   orbit doctor --check retired-config-keys
+   ```
+
+2. Remove the leftover keys in one pass. It backs up each edited `config.toml`,
+   writes each translated replacement before removing the old key, and writes
+   nothing on a second run. It refuses while a legacy `after-landing` review
+   policy is set; migrate that first, as [Diagnose and repair](#diagnose-and-repair)
+   describes. The repair removes keys, not list entries, so delete
+   `agent-invoke` from `machine.mcp.toolsets` and from any `--toolset` argument
+   by hand.
+
+   ```bash
+   orbit doctor --fix-retired-config-keys
+   ```
+
+3. Confirm the load is clean and the removed commands are gone:
+
+   ```bash
+   orbit doctor --problems      # no retired-config-keys warning should appear
+   orbit config show --all      # loads with no deprecation warning
+   orbit agents --help          # `ladder` is not listed
+   orbit visual                 # reports an unrecognized subcommand
+   ```
+
+A key that stays past its recognized date becomes an unknown setting. The same
+`retired-config-keys` check reports it, so one check covers both states.
+
 ## Task locks
 
 ```bash
