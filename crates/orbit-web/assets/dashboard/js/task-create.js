@@ -157,11 +157,16 @@ export function initTaskCreate({ getWorkspaces }) {
         // A body-definitive refusal is a pure function of the frozen bytes,
         // so it proves this submission created nothing, on a first attempt
         // and on a retry alike, and the frozen copy goes. An environmental
-        // refusal (401/403/404) on a retry of an uncertain submission says
-        // nothing about the earlier attempt, so the frozen copy stays.
+        // refusal (401/403/404, or the typed workspace_unavailable refusal:
+        // the destination workspace is missing/inactive in the live registry,
+        // which can change between attempts and is checked before the
+        // idempotent request_id lookup) on a retry of an uncertain submission
+        // says nothing about the earlier attempt, so the frozen copy stays.
+        const workspaceUnavailable = receipt?.code === 'workspace_unavailable';
         const clears = [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)
-          && !(wasUncertain && [401, 403, 404].includes(response.status));
-        if (clears) persist(null);
+          && !(wasUncertain && [401, 403, 404].includes(response.status))
+          && !(wasUncertain && workspaceUnavailable);
+        if (clears || (workspaceUnavailable && !wasUncertain)) persist(null);
         throw new Error((receipt && receipt.error) || rawBody.trim() || `Request refused (HTTP ${response.status}).`);
       }
       if (!receipt) throw new Error('The creation receipt is incomplete. Retry the saved submission.');

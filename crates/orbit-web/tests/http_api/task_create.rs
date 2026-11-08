@@ -1,5 +1,5 @@
 //! Public proposed-only capture, retry and live authority guarantees.
-use super::support::{Fixture, Server, isolated, json_ok};
+use super::support::{Fixture, Server, error_code, isolated, json_ok};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_types::workspace::WorkspaceCheckoutRole;
 use serde_json::{Value, json};
@@ -506,6 +506,85 @@ fn proposed_creation_refuses_invalid_selection_authority_and_input_without_write
             });
             assert!(!server.send("POST", ACTION, body).status().is_success());
             assert!(fixture.runtime.list_tasks().unwrap().is_empty());
+        },
+    );
+}
+
+#[test]
+fn uncertain_retry_workspace_unavailable_is_typed_and_recovers_original_receipt() {
+    isolated(
+        "task_create::uncertain_retry_workspace_unavailable_is_typed_and_recovers_original_receipt",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let body = proposal(&server);
+            // First attempt commits; discarding this receipt models the lost
+            // response that leaves the browser with only its frozen key.
+            let receipt = json_ok(server.send("POST", ACTION, body.clone()));
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 1);
+            // The workspace becomes unavailable before the uncertain retry.
+            // The refusal is environmental (live registry state, checked
+            // before the idempotent key lookup), so it stays a 400 but must
+            // carry the typed workspace_unavailable code that tells the
+            // client to retain its frozen submission, and must not create
+            // or leak a receipt.
+            let registry_path =
+                orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+            let original_registry = std::fs::read(&registry_path).unwrap();
+            edit_registry(&fixture, |registry| {
+                registry.checkouts[0].repo_root = fixture.path("missing-checkout");
+            });
+            let refused = error_code(
+                server.send("POST", ACTION, body.clone()),
+                400,
+                "workspace_unavailable",
+            );
+            assert!(refused.get("id").is_none(), "{refused}");
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 1);
+            // A fresh first attempt while unavailable is likewise refused
+            // before any write, so clearing it on the client loses nothing.
+            let mut fresh = body.clone();
+            fresh["request_id"] = json!("proposal-while-unavailable");
+            let fresh_refused = error_code(
+                server.send("POST", ACTION, fresh.clone()),
+                400,
+                "workspace_unavailable",
+            );
+            assert!(fresh_refused.get("id").is_none(), "{fresh_refused}");
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 1);
+            // After reactivation the retained frozen submission (same
+            // request_id and payload) returns the original receipt, and the
+            // fresh attempt can still be submitted as its own proposal.
+            std::fs::write(&registry_path, &original_registry).unwrap();
+            assert_eq!(json_ok(server.send("POST", ACTION, body.clone())), receipt);
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 1);
+            let fresh_receipt = json_ok(server.send("POST", ACTION, fresh));
+            assert_ne!(fresh_receipt["id"], receipt["id"]);
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 2);
+            // A genuinely body-definitive refusal (changed payload under a
+            // committed key) stays a plain 400 without the environmental
+            // code, so the client may clear and correct it.
+            let mut changed = body.clone();
+            changed["title"] = json!("Another task");
+            let response = server.send("POST", ACTION, changed);
+            assert_eq!(response.status().as_u16(), 400);
+            let refused_body: Value = response.json().unwrap();
+            assert!(refused_body.get("id").is_none(), "{refused_body}");
+            assert_ne!(
+                refused_body.get("code"),
+                Some(&json!("workspace_unavailable")),
+                "{refused_body}"
+            );
+            // A 415 framework refusal is likewise not environmental.
+            let unsupported = server
+                .request("POST", ACTION)
+                .header("origin", &server.origin)
+                .header("content-type", "text/plain")
+                .body("{}")
+                .send()
+                .unwrap();
+            assert_eq!(unsupported.status().as_u16(), 415);
+            assert_eq!(fixture.runtime.list_tasks().unwrap().len(), 2);
         },
     );
 }
