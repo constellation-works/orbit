@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::admission::auto_admission::{AdmissionHolders, select_admissions};
 use crate::application::admission::backlog_exclusion::{
-    backlog_snapshot_observed, sort_tasks_for_automatic_dispatch,
+    BacklogSnapshot, backlog_snapshot_observed, sort_tasks_for_automatic_dispatch,
 };
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::cpu_light::{LightBudget, ResourceGate};
@@ -45,6 +45,71 @@ enum ReadinessDepth<'a> {
     FleetRow(&'a FleetReadinessFacts),
 }
 
+/// The tasks a second projection of one shared snapshot produced, or the
+/// dashboard's unavailable marker when that projection's id is not in the
+/// workspace. Invalid selections stay on this path so a missing `also_task`
+/// cannot fail the bounded listing.
+enum ReadinessDetail {
+    Tasks(Vec<Value>),
+    Unavailable { task_id: String },
+}
+
+struct ProjectedReadinessTasks {
+    tasks: Vec<Value>,
+    total: usize,
+    forecast_view: Option<Value>,
+    last_forecast_view: Option<Value>,
+}
+
+/// Ids the readiness `tasks` array explains: the bounded backlog when `task_ids`
+/// is empty, otherwise those ids, sorted and de-duplicated.
+fn readiness_selected_ids(
+    snapshot: &BacklogSnapshot,
+    task_ids: &[String],
+    limit: usize,
+) -> Result<Vec<String>, OrbitError> {
+    if task_ids.is_empty() {
+        let mut backlog = snapshot
+            .task_lookup
+            .values()
+            .filter(|task| task.status == TaskStatus::Backlog)
+            .collect::<Vec<_>>();
+        sort_tasks_for_automatic_dispatch(
+            &mut backlog,
+            &snapshot.expiring_batches,
+            &snapshot.dispatch_order,
+        );
+        return Ok(backlog
+            .into_iter()
+            .take(limit)
+            .map(|task| task.id.clone())
+            .collect());
+    }
+    let mut ids = task_ids.to_vec();
+    ids.sort();
+    ids.dedup();
+    if let Some(missing) = ids
+        .iter()
+        .find(|id| !snapshot.task_lookup.contains_key(*id))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "task `{missing}` was not found in this workspace"
+        )));
+    }
+    if ids.len() > limit {
+        return Err(OrbitError::InvalidInput(format!(
+            "readiness selection contains {} tasks; limit is {limit}",
+            ids.len()
+        )));
+    }
+    Ok(ids)
+}
+
+fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
+    payload["replica"] = json!(runtime.replica_owner_machine().is_some());
+    payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
+}
+
 /// Explain the same snapshot that auto-drain uses without performing its
 /// stale-run reconciliation. This is deliberately an observation API: it
 /// neither reserves work nor creates a pipeline run, and its answer can go
@@ -74,6 +139,34 @@ fn readiness_snapshot(
     allowed_crews: &[String],
     depth: ReadinessDepth<'_>,
 ) -> Result<Value, OrbitError> {
+    Ok(readiness_snapshot_with_detail(
+        runtime,
+        task_ids,
+        &[],
+        max_active_leaf_runs,
+        limit,
+        allowed_crews,
+        depth,
+    )?
+    .0)
+}
+
+/// One admission snapshot, projected for `task_ids`, and when `detail_task_ids`
+/// is non-empty a second projection of those ids from the same snapshot.
+///
+/// The detail ids are loaded only after the primary payload is built. A task
+/// the bounded listing does not already hold — a closed task, or one this
+/// workspace does not have — therefore cannot change that listing, its totals
+/// or its forecast titles.
+fn readiness_snapshot_with_detail(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    detail_task_ids: &[String],
+    max_active_leaf_runs: Option<u32>,
+    limit: usize,
+    allowed_crews: &[String],
+    depth: ReadinessDepth<'_>,
+) -> Result<(Value, Option<ReadinessDetail>), OrbitError> {
     let snapshot = runtime.admission_policy_snapshot();
     let runtime = &snapshot;
     if !(1..=MAX_READINESS_LIMIT).contains(&limit) {
@@ -279,86 +372,86 @@ fn readiness_snapshot(
             .collect::<Vec<_>>(),
         &snapshot.lock_holders,
     )?;
-    let selected_ids = if task_ids.is_empty() {
-        let mut backlog = snapshot
-            .task_lookup
-            .values()
-            .filter(|task| task.status == TaskStatus::Backlog)
-            .collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(
-            &mut backlog,
-            &snapshot.expiring_batches,
-            &snapshot.dispatch_order,
+    // Project the listing and, later, `detail_task_ids` from this one wave.
+    // Admission does not depend on which ids the response explains: the wave
+    // was selected from `admissible_leaves`, which `include_tasks` does not
+    // change. Rebuilding it per id was the `also_task` request's second snapshot.
+    // The follower census and the recorded forecast views are the same for both
+    // projections; reading them again made `also_task` about twice the plain read.
+    let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
+    let follower_evidence = super::readiness_hosts::FollowerEvidence::read(runtime);
+    let project_tasks = |snapshot: &BacklogSnapshot,
+                         ids: &[String],
+                         build_views: bool|
+     -> Result<ProjectedReadinessTasks, OrbitError> {
+        let selected_ids = readiness_selected_ids(snapshot, ids, limit)?;
+        let mut tasks = super::projection::project_readiness_tasks(
+            runtime,
+            super::projection::ReadinessProjection {
+                snapshot,
+                selected_ids: &selected_ids,
+                pools: &pools,
+                allowlist: &allowlist,
+                holders: &holders,
+                claim_holders: &claim_holders,
+                claimed_by_task: &claimed_by_task,
+                host_shutdown_holding: &host_shutdown_holding,
+                resource: &resource,
+                gate,
+                admissions_stopped,
+                admitted: &admitted,
+                selection: &selection,
+                light_budget: &light_budget,
+                examined,
+                live_leaves: &live_leaves,
+                host_os_limits: &host_os_limits,
+                follower_evidence: &follower_evidence,
+            },
         );
-        backlog
-            .into_iter()
-            .take(limit)
-            .map(|task| task.id.clone())
-            .collect()
-    } else {
-        let mut ids = task_ids.to_vec();
-        ids.sort();
-        ids.dedup();
-        if let Some(missing) = ids
-            .iter()
-            .find(|id| !snapshot.task_lookup.contains_key(*id))
-        {
-            return Err(OrbitError::InvalidInput(format!(
-                "task `{missing}` was not found in this workspace"
-            )));
-        }
-        if ids.len() > limit {
-            return Err(OrbitError::InvalidInput(format!(
-                "readiness selection contains {} tasks; limit is {limit}",
-                ids.len()
-            )));
-        }
-        ids
+        let (forecast_view, last_forecast_view) = if build_views {
+            super::projection::project_readiness_forecasts(
+                runtime,
+                snapshot,
+                &status_state,
+                status_run_id,
+                active_drain.is_some(),
+                drain_phase,
+                &mut tasks,
+            )
+        } else {
+            // Detail keeps the per-task annotation and skips the forecast views
+            // the bounded payload already owns.
+            super::projection::annotate_readiness_task_forecasts(
+                &status_state,
+                drain_phase,
+                &mut tasks,
+            );
+            (None, None)
+        };
+        // `total` describes the current view: the full backlog for the default
+        // bounded listing, or the number of explicitly selected tasks.
+        let total = if ids.is_empty() {
+            snapshot
+                .task_lookup
+                .values()
+                .filter(|task| task.status == TaskStatus::Backlog)
+                .count()
+        } else {
+            selected_ids.len()
+        };
+        Ok(ProjectedReadinessTasks {
+            tasks,
+            total,
+            forecast_view,
+            last_forecast_view,
+        })
     };
-
-    let mut tasks = super::projection::project_readiness_tasks(
-        runtime,
-        super::projection::ReadinessProjection {
-            snapshot: &snapshot,
-            selected_ids: &selected_ids,
-            pools: &pools,
-            allowlist: &allowlist,
-            holders: &holders,
-            claim_holders: &claim_holders,
-            claimed_by_task: &claimed_by_task,
-            host_shutdown_holding: &host_shutdown_holding,
-            resource: &resource,
-            gate,
-            admissions_stopped,
-            admitted: &admitted,
-            selection: &selection,
-            light_budget: &light_budget,
-            examined,
-            live_leaves: &live_leaves,
-        },
-    );
-
-    let (forecast_view, last_forecast_view) = super::projection::project_readiness_forecasts(
-        runtime,
-        &snapshot,
-        &status_state,
-        status_run_id,
-        active_drain.is_some(),
-        drain_phase,
-        &mut tasks,
-    );
-
-    // `total` describes the current view: the full backlog for the default
-    // bounded listing, or the number of explicitly selected tasks.
-    let total = if task_ids.is_empty() {
-        snapshot
-            .task_lookup
-            .values()
-            .filter(|task| task.status == TaskStatus::Backlog)
-            .count()
-    } else {
-        selected_ids.len()
-    };
+    let ProjectedReadinessTasks {
+        tasks,
+        total,
+        forecast_view,
+        last_forecast_view,
+    } = project_tasks(&snapshot, task_ids, true)?;
 
     // [ORB-14117] The status drain's proposed-task approvals, when it was
     // started with `--approve-proposed`.
@@ -529,7 +622,21 @@ fn readiness_snapshot(
     if !repairs.is_empty() {
         payload["out_of_run_auto_fix"] = json!(repairs);
     }
-    Ok(payload)
+    // After the primary payload owns its forecast titles. Loading a closed
+    // detail task into the lookup before this point would add its title.
+    let detail = if let Some(task_id) = detail_task_ids.first() {
+        snapshot.include_tasks(runtime, detail_task_ids)?;
+        match project_tasks(&snapshot, detail_task_ids, false) {
+            Ok(detail) => Some(ReadinessDetail::Tasks(detail.tasks)),
+            Err(OrbitError::InvalidInput(_)) => Some(ReadinessDetail::Unavailable {
+                task_id: task_id.clone(),
+            }),
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    Ok((payload, detail))
 }
 
 /// The status drain's progress: the most recent finished drain when no local
@@ -631,16 +738,64 @@ impl OrbitRuntime {
         limit: usize,
         allowed_crews: &[String],
     ) -> Result<Value, OrbitError> {
-        let mut snapshot = explain_workspace_auto_readiness(
+        let mut payload = explain_workspace_auto_readiness(
             self,
             task_ids,
             max_active_leaf_runs,
             limit,
             allowed_crews,
         )?;
-        snapshot["replica"] = json!(self.replica_owner_machine().is_some());
-        snapshot["validation_env_warning"] = json!(self.readiness_validation_env_warning());
-        Ok(snapshot)
+        attach_readiness_runtime_fields(self, &mut payload);
+        Ok(payload)
+    }
+
+    /// [`Self::workspace_auto_readiness`] plus one task's entry under
+    /// `detail_tasks`, from a single read of the shared admission snapshot.
+    ///
+    /// `detail_task_id` is the dashboard's `also_task` id. An id this workspace
+    /// does not have leaves the snapshot in place and sets `detail_unavailable`
+    /// (`reason: task_not_found`) instead of failing the listing. `None`
+    /// is [`Self::workspace_auto_readiness`].
+    pub fn workspace_auto_readiness_with_detail(
+        &self,
+        task_ids: &[String],
+        detail_task_id: Option<&str>,
+        max_active_leaf_runs: Option<u32>,
+        limit: usize,
+        allowed_crews: &[String],
+    ) -> Result<Value, OrbitError> {
+        let Some(detail_task_id) = detail_task_id else {
+            return self.workspace_auto_readiness(
+                task_ids,
+                max_active_leaf_runs,
+                limit,
+                allowed_crews,
+            );
+        };
+        let detail_ids = vec![detail_task_id.to_string()];
+        let (mut payload, detail) = readiness_snapshot_with_detail(
+            self,
+            task_ids,
+            &detail_ids,
+            max_active_leaf_runs,
+            limit,
+            allowed_crews,
+            ReadinessDepth::Full,
+        )?;
+        attach_readiness_runtime_fields(self, &mut payload);
+        if let Some(detail) = detail {
+            match detail {
+                ReadinessDetail::Tasks(tasks) => payload["detail_tasks"] = json!(tasks),
+                ReadinessDetail::Unavailable { task_id } => {
+                    payload["detail_tasks"] = json!([]);
+                    payload["detail_unavailable"] = json!({
+                        "task_id": task_id,
+                        "reason": "task_not_found",
+                    });
+                }
+            }
+        }
+        Ok(payload)
     }
 
     /// The registry-global facts one fleet read shares across its workspaces.

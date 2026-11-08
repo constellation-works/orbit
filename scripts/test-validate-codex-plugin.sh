@@ -90,6 +90,30 @@ payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@latest", "mcp"
 (broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "stale launch pin", "stale @latest pin")
 
+broken = clone_fixture("codex-missing-orbit-args")
+payload = json.loads((broken / "plugin" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+del payload["mcpServers"]["orbit"]["args"]
+(broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "mcpServers.orbit.args", "absent orbit args")
+
+broken = clone_fixture("codex-malformed-orbit-args")
+payload = json.loads((broken / "plugin" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+payload["mcpServers"]["orbit"]["args"] = "mcp serve"
+(broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "mcpServers.orbit.args", "malformed orbit args")
+
+broken = clone_fixture("codex-empty-orbit-args")
+payload = json.loads((broken / "plugin" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+payload["mcpServers"]["orbit"]["args"] = []
+(broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "mcpServers.orbit must launch", "empty orbit args")
+
+broken = clone_fixture("codex-helper-only")
+payload = json.loads((broken / "plugin" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+payload["mcpServers"] = {"helper": {"command": "true", "args": []}}
+(broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "mcpServers.orbit", "absent orbit server")
+
 broken = clone_fixture("codex-missing-manifest")
 (broken / "plugin" / ".codex-plugin" / "plugin.json").unlink()
 expect_failure(broken, "plugin/.codex-plugin/plugin.json is missing", "missing Codex manifest")

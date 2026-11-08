@@ -2861,8 +2861,12 @@ def process_self_test():
         try:
             # Deterministic PID-reuse regression: the incarnation changes
             # between identity observation and signaling. No numeric signal
-            # may reach the replacement; the unchanged control signals only
-            # through the pidfd bound to the observed incarnation.
+            # may reach the replacement. An unchanged Linux identity is
+            # signalled only through the pidfd bound to that incarnation.
+            # Non-Linux has no identity-bound handle: the same fixture sends
+            # nothing and reports the signal unsupported, even if pidfd APIs
+            # are patched onto the process.
+            host_signal = _pidfd_supported()
             fake_pid = 424242
             original_info = {"pid": fake_pid, "ppid": 1, "pgrp": fake_pid, "sid": fake_pid,
                              "starttime": 11, "state": "S", "cwd": str(temp), "cmdline": "worker"}
@@ -2878,22 +2882,39 @@ def process_self_test():
 
                 return fake_identity
 
-            for label, infos, expected, expected_sends in (
-                    ("replacement", [original_info, replacement_info], False, 0),
-                    ("unchanged", [original_info, original_info], True, 1)):
+            def assert_direct_identity(label, infos, platform_override, expected, expected_sends):
                 sent = []
                 killed = []
-                with (mock.patch.dict(globals(), {"_proc_identity": sequenced_identity(infos)}),
-                      mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
-                      mock.patch.object(signal, "pidfd_send_signal",
-                                        side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
-                      mock.patch.object(os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig)))):
+                patches = [
+                    mock.patch.dict(globals(), {"_proc_identity": sequenced_identity(infos)}),
+                    mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                    mock.patch.object(signal, "pidfd_send_signal",
+                                      side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
+                    mock.patch.object(os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig))),
+                ]
+                if platform_override is not None:
+                    patches.append(mock.patch("sys.platform", platform_override))
+                started = []
+                try:
+                    for patch in patches:
+                        patch.start()
+                        started.append(patch)
                     confirmed = _signal_confirmed(original_info, signal.SIGTERM)
+                finally:
+                    for patch in reversed(started):
+                        patch.stop()
                 if confirmed is not expected or killed or len(sent) != expected_sends:
                     raise AssertionError(
                         f"{label} identity signal: confirmed={confirmed} killed={killed} sent={sent}")
                 ownership_cases.append({"name": f"signal-identity-{label}", "pid": fake_pid,
                                         "starttime": 11, "signaled": expected})
+
+            assert_direct_identity("replacement", [original_info, replacement_info], None, False, 0)
+            assert_direct_identity(
+                "unchanged", [original_info, original_info], None, host_signal, 1 if host_signal else 0)
+            # Patched pidfd APIs must not make a non-Linux host signal.
+            assert_direct_identity(
+                "unchanged-unsupported", [original_info, original_info], "darwin", False, 0)
 
             # Run the embedded supervisor head in a child so its subreaper
             # prctl and signal handlers stay out of this process.
@@ -2919,13 +2940,17 @@ def process_self_test():
                 "os.pidfd_open = lambda pid, flags: 9999\n"
                 "signal.pidfd_send_signal = lambda fd, sig: sent.append((fd, sig))\n"
                 "os.kill = lambda pid, sig: killed.append((pid, sig))\n"
+                "if mode == 'unchanged-darwin':\n"
+                "    sys.platform = 'darwin'\n"
                 "confirmed = ns['signal_confirmed'](original, signal.SIGTERM)\n"
                 "print(json.dumps({'confirmed': confirmed, 'killed': killed, 'sent': sent}))\n")
             supervisor_head = _PROCESS_SUPERVISOR.split("def reap(", 1)[0]
-            for label, expected, expected_sends in (
-                    ("replacement", False, 0), ("unchanged", True, 1)):
+            for label, mode, expected, expected_sends in (
+                    ("replacement", "replacement", False, 0),
+                    ("unchanged", "unchanged", host_signal, 1 if host_signal else 0),
+                    ("unchanged-unsupported", "unchanged-darwin", False, 0)):
                 completed = subprocess.run(
-                    [sys.executable, "-c", supervisor_driver, label, supervisor_head],
+                    [sys.executable, "-c", supervisor_driver, mode, supervisor_head],
                     capture_output=True, text=True, timeout=10)
                 if completed.returncode != 0:
                     raise AssertionError(f"supervisor {label} driver failed: {completed.stderr}")
@@ -2957,6 +2982,57 @@ def process_self_test():
                                     "starttime": 11, "signaled": False,
                                     "record": identity_workers[0]})
 
+            def assert_unchanged_settlement(case_name, platform_override, supported):
+                sent = []
+                killed = []
+                patches = [
+                    mock.patch.dict(globals(), {
+                        "_proc_identity": sequenced_identity([original_info, original_info]),
+                        "_proc_snapshot": lambda: {fake_pid: original_info},
+                    }),
+                    mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                    mock.patch.object(signal, "pidfd_send_signal",
+                                      side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
+                    mock.patch.object(os, "kill",
+                                      side_effect=lambda pid, sig: killed.append((pid, sig))),
+                ]
+                if platform_override is not None:
+                    patches.append(mock.patch("sys.platform", platform_override))
+                started = []
+                try:
+                    for patch in patches:
+                        patch.start()
+                        started.append(patch)
+                    settlement = settle_detached_workers_under(
+                        temp, deadline_s=0.2, kill_grace_s=0.2)
+                finally:
+                    for patch in reversed(started):
+                        patch.stop()
+                workers = settlement.get("workers") or []
+                available = settlement.get("identity_signal_available")
+                exited = bool(workers) and workers[0].get("exited") is True
+                if supported:
+                    honest = (
+                        available is True and sent and not killed and not exited
+                        and len(workers) == 1 and workers[0].get("starttime") == 11
+                        and all(item[0] == 9999 for item in sent))
+                else:
+                    honest = (
+                        available is False and not sent and not killed and not exited
+                        and len(workers) == 1 and workers[0].get("starttime") == 11)
+                if not honest:
+                    raise AssertionError(
+                        f"{case_name} identity settlement: available={available} "
+                        f"killed={killed} sent={sent} workers={workers}")
+                ownership_cases.append({
+                    "name": case_name, "pid": fake_pid, "starttime": 11,
+                    "signaled": bool(supported), "record": workers[0]})
+
+            assert_unchanged_settlement(
+                "settle-signal-identity-unchanged", None, host_signal)
+            assert_unchanged_settlement(
+                "settle-signal-identity-unchanged-unsupported", "darwin", False)
+
             complete_root = Path(env["TMPDIR"]) / "complete-root"
             complete_root.mkdir()
             complete_ready = Path(env["TMPDIR"]) / "complete-ready"
@@ -2986,169 +3062,178 @@ def process_self_test():
                                     "subreaper": complete.get("subreaper"),
                                     "detached_workers": complete_workers})
 
-            hold_root = Path(env["TMPDIR"]) / "cancel-hold-root"
-            hold_root.mkdir()
-            hold_ready = Path(env["TMPDIR"]) / "cancel-hold-ready"
-            hold_release = Path(env["TMPDIR"]) / "cancel-hold-release"
-            os.mkfifo(hold_release)
-            hold_box = {}
+            ignore_script = (
+                "import os, signal, sys\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "open(sys.argv[2], 'w').write("
+                "'fixture=qa-held-worker\\npid=%s\\nwaiting=1\\nmode=ignore-term\\n' % os.getpid())\n"
+                "while True:\n"
+                "    signal.pause()\n")
 
-            def run_hold():
-                hold_box["evidence"] = run(
-                    [sys.executable, "-c", _HELD_WORKER, str(hold_root), str(hold_release),
-                     str(hold_ready), "cancel-hold"], cwd=temp, env=env, timeout=15)
+            if _pidfd_supported():
+                hold_root = Path(env["TMPDIR"]) / "cancel-hold-root"
+                hold_root.mkdir()
+                hold_ready = Path(env["TMPDIR"]) / "cancel-hold-ready"
+                hold_release = Path(env["TMPDIR"]) / "cancel-hold-release"
+                os.mkfifo(hold_release)
+                hold_box = {}
 
-            hold_thread = threading.Thread(target=run_hold)
-            hold_thread.start()
-            try:
-                wait_until(lambda: marker_values(hold_ready).get("root_held") == "1", 8,
-                           "cancellation did not retain the worker and root")
-                hold_marker = marker_values(hold_ready)
-                hold_pid = int(hold_marker["pid"])
-                hold_info = _proc_identity(hold_pid)
-                if (not hold_thread.is_alive() or hold_info is None or hold_info.get("state") == "Z"
-                        or not hold_root.exists() or hold_info.get("pgrp") != hold_pid
-                        or "qa-held-worker" not in hold_info.get("cmdline", "")
-                        or not _cwd_under(hold_info.get("cwd"), hold_root)):
-                    raise AssertionError(
-                        f"held worker was not alive inside the root: {hold_marker} {hold_info}")
-                observed_hold = {"pid": hold_pid, "pgid": hold_info.get("pgrp"),
-                                 "sid": hold_info.get("sid"), "ppid": hold_info.get("ppid"),
-                                 "cwd": hold_info.get("cwd"), "cmdline": hold_info.get("cmdline"),
-                                 "starttime": hold_info.get("starttime"),
-                                 "root_held_while_alive": True, "root": str(hold_root)}
-                release_fifo(hold_release)
-                hold_thread.join(timeout=12)
-                if hold_thread.is_alive():
-                    raise AssertionError("cancellation did not finish after the worker was released")
-                hold_evidence = hold_box.get("evidence") or {}
-                matched = [worker for worker in hold_evidence.get("detached_workers") or []
-                           if worker.get("pid") == hold_pid
-                           and worker.get("starttime") == hold_info["starttime"]]
-                if (hold_evidence.get("exit_code") != 0 or not hold_evidence.get("cleanup_verified")
-                        or _proc_alive(hold_pid, hold_info["starttime"]) or len(matched) != 1
-                        or matched[0].get("exited") is not True or matched[0].get("pgid") != hold_pid
-                        or "qa-held-worker" not in matched[0].get("cmdline", "")):
-                    raise AssertionError(
-                        f"cancellation did not record the worker exit: {hold_evidence}")
-                if sys.platform.startswith("linux") and hold_evidence.get("subreaper") is not True:
-                    raise AssertionError("cancellation supervisor was not a subreaper")
-                ownership_cases.append({"name": "cancellation", "observed_alive": observed_hold,
-                                        "exited": True, "cleanup_verified": True,
-                                        "record": matched[0], "root": str(hold_root)})
-            finally:
-                if hold_thread.is_alive():
-                    try:
-                        release_fifo(hold_release)
-                    except OSError:
-                        pass
-                    hold_thread.join(timeout=12)
+                def run_hold():
+                    hold_box["evidence"] = run(
+                        [sys.executable, "-c", _HELD_WORKER, str(hold_root), str(hold_release),
+                         str(hold_ready), "cancel-hold"], cwd=temp, env=env, timeout=15)
 
-            unwind_root = Path(env["TMPDIR"]) / "unwind-root"
-            unwind_root.mkdir()
-            unwind_ready = Path(env["TMPDIR"]) / "unwind-ready"
-            unwind_observed = {}
-            real_select = select.select
-            raised = {"done": False}
-
-            def mocked_select(read_fds, write_fds, except_fds, timeout=None):
-                if not raised["done"]:
-                    def ready_waiting():
-                        values = marker_values(unwind_ready)
-                        if values.get("waiting") == "1" and values.get("pid"):
-                            unwind_observed["marker"] = values
-                            return True
-                        return False
-                    # The predicate returns as soon as the worker reports ready. The
-                    # launcher stays alive in "cancel-parent-live" mode, so the
-                    # waiting marker remains until this interrupt instead of being
-                    # overwritten by the supervisor's reap within the poll interval.
-                    wait_until(ready_waiting, 60, "unwind worker did not become ready")
-                    unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
-                    raised["done"] = True
-                    raise KeyboardInterrupt
-                return real_select(read_fds, write_fds, except_fds, timeout)
-
-            unwind_raised = False
-            try:
-                with mock.patch("select.select", side_effect=mocked_select):
-                    run([sys.executable, "-c", _HELD_WORKER, str(unwind_root),
-                         str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready),
-                         "cancel-parent-live"],
-                        cwd=temp, env=env, timeout=15)
-            except KeyboardInterrupt:
-                unwind_raised = True
-            unwind_marker = marker_values(unwind_ready)
-            unwind_info = unwind_observed.get("info")
-            if (not unwind_raised or unwind_marker.get("root_held") != "1" or not unwind_root.exists()
-                    or unwind_info is None
-                    or _proc_alive(int(unwind_marker["pid"]), unwind_info["starttime"])):
-                raise AssertionError(
-                    f"unwind left the worker or dropped the root: {unwind_marker} {unwind_info}")
-            ownership_cases.append({"name": "unwind", "pid": int(unwind_marker["pid"]),
-                                    "pgid": unwind_info.get("pgrp"), "sid": unwind_info.get("sid"),
-                                    "cwd": unwind_info.get("cwd"), "cmdline": unwind_info.get("cmdline"),
-                                    "starttime": unwind_info.get("starttime"), "root": str(unwind_root),
-                                    "root_held": True, "exited": True})
-
-            death_root = Path(env["TMPDIR"]) / "owner-death-root"
-            death_root.mkdir()
-            death_ready = Path(env["TMPDIR"]) / "owner-death-ready"
-            death_release = Path(env["TMPDIR"]) / "owner-death-release"
-            launcher = ("import importlib.util; from pathlib import Path; "
-                        "s=importlib.util.spec_from_file_location('qa',"
-                        + repr(str(Path(__file__).resolve())) + "); "
-                        "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
-                        "q.run([" + repr(sys.executable) + ",'-c',q._HELD_WORKER,"
-                        + repr(str(death_root)) + "," + repr(str(death_release)) + ","
-                        + repr(str(death_ready)) + ",'cancel-parent-live'],cwd=Path(" + repr(str(temp))
-                        + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
-            death_owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
-                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            death_info = {}
-            try:
-                def death_started():
-                    if death_owner.poll() is not None:
-                        return False
-                    values = marker_values(death_ready)
-                    if values.get("waiting") != "1":
-                        return False
-                    info = _proc_identity(int(values["pid"]))
-                    if info is None or info.get("state") == "Z":
-                        return False
-                    death_info["info"] = info
-                    return True
+                hold_thread = threading.Thread(target=run_hold)
+                hold_thread.start()
                 try:
-                    wait_until(death_started, 8, "owner-death worker did not start")
-                except AssertionError:
-                    output, errors = death_owner.communicate(timeout=2)
+                    wait_until(lambda: marker_values(hold_ready).get("root_held") == "1", 8,
+                               "cancellation did not retain the worker and root")
+                    hold_marker = marker_values(hold_ready)
+                    hold_pid = int(hold_marker["pid"])
+                    hold_info = _proc_identity(hold_pid)
+                    if (not hold_thread.is_alive() or hold_info is None or hold_info.get("state") == "Z"
+                            or not hold_root.exists() or hold_info.get("pgrp") != hold_pid
+                            or "qa-held-worker" not in hold_info.get("cmdline", "")
+                            or not _cwd_under(hold_info.get("cwd"), hold_root)):
+                        raise AssertionError(
+                            f"held worker was not alive inside the root: {hold_marker} {hold_info}")
+                    observed_hold = {"pid": hold_pid, "pgid": hold_info.get("pgrp"),
+                                     "sid": hold_info.get("sid"), "ppid": hold_info.get("ppid"),
+                                     "cwd": hold_info.get("cwd"), "cmdline": hold_info.get("cmdline"),
+                                     "starttime": hold_info.get("starttime"),
+                                     "root_held_while_alive": True, "root": str(hold_root)}
+                    release_fifo(hold_release)
+                    hold_thread.join(timeout=12)
+                    if hold_thread.is_alive():
+                        raise AssertionError("cancellation did not finish after the worker was released")
+                    hold_evidence = hold_box.get("evidence") or {}
+                    matched = [worker for worker in hold_evidence.get("detached_workers") or []
+                               if worker.get("pid") == hold_pid
+                               and worker.get("starttime") == hold_info["starttime"]]
+                    if (hold_evidence.get("exit_code") != 0 or not hold_evidence.get("cleanup_verified")
+                            or _proc_alive(hold_pid, hold_info["starttime"]) or len(matched) != 1
+                            or matched[0].get("exited") is not True or matched[0].get("pgid") != hold_pid
+                            or "qa-held-worker" not in matched[0].get("cmdline", "")):
+                        raise AssertionError(
+                            f"cancellation did not record the worker exit: {hold_evidence}")
+                    if sys.platform.startswith("linux") and hold_evidence.get("subreaper") is not True:
+                        raise AssertionError("cancellation supervisor was not a subreaper")
+                    ownership_cases.append({"name": "cancellation", "observed_alive": observed_hold,
+                                            "exited": True, "cleanup_verified": True,
+                                            "record": matched[0], "root": str(hold_root)})
+                finally:
+                    if hold_thread.is_alive():
+                        try:
+                            release_fifo(hold_release)
+                        except OSError:
+                            pass
+                        hold_thread.join(timeout=12)
+
+                unwind_root = Path(env["TMPDIR"]) / "unwind-root"
+                unwind_root.mkdir()
+                unwind_ready = Path(env["TMPDIR"]) / "unwind-ready"
+                unwind_observed = {}
+                real_select = select.select
+                raised = {"done": False}
+
+                def mocked_select(read_fds, write_fds, except_fds, timeout=None):
+                    if not raised["done"]:
+                        def ready_waiting():
+                            values = marker_values(unwind_ready)
+                            if values.get("waiting") == "1" and values.get("pid"):
+                                unwind_observed["marker"] = values
+                                return True
+                            return False
+                        # The predicate returns as soon as the worker reports ready. The
+                        # launcher stays alive in "cancel-parent-live" mode, so the
+                        # waiting marker remains until this interrupt instead of being
+                        # overwritten by the supervisor's reap within the poll interval.
+                        wait_until(ready_waiting, 60, "unwind worker did not become ready")
+                        unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
+                        raised["done"] = True
+                        raise KeyboardInterrupt
+                    return real_select(read_fds, write_fds, except_fds, timeout)
+
+                unwind_raised = False
+                try:
+                    with mock.patch("select.select", side_effect=mocked_select):
+                        run([sys.executable, "-c", _HELD_WORKER, str(unwind_root),
+                             str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready),
+                             "cancel-parent-live"],
+                            cwd=temp, env=env, timeout=15)
+                except KeyboardInterrupt:
+                    unwind_raised = True
+                unwind_marker = marker_values(unwind_ready)
+                unwind_info = unwind_observed.get("info")
+                if (not unwind_raised or unwind_marker.get("root_held") != "1" or not unwind_root.exists()
+                        or unwind_info is None
+                        or _proc_alive(int(unwind_marker["pid"]), unwind_info["starttime"])):
                     raise AssertionError(
-                        f"owner-death worker did not start: {output!r} {errors!r}") from None
-                death_owner.kill()
-                death_owner.wait(timeout=5)
-                wait_until(lambda: marker_values(death_ready).get("root_held") == "1"
-                           and not _proc_alive(death_info["info"]["pid"], death_info["info"]["starttime"]),
-                           8, "owner death left the detached worker running")
-                if not death_root.exists():
-                    raise AssertionError("owner death removed the worker root before exit was observed")
-                ownership_cases.append({"name": "owner-death", "pid": death_info["info"]["pid"],
-                                        "pgid": death_info["info"].get("pgrp"),
-                                        "sid": death_info["info"].get("sid"),
-                                        "cwd": death_info["info"].get("cwd"),
-                                        "cmdline": death_info["info"].get("cmdline"),
-                                        "starttime": death_info["info"].get("starttime"),
-                                        "root": str(death_root), "root_held": True, "exited": True})
-            finally:
-                if death_owner.poll() is None:
+                        f"unwind left the worker or dropped the root: {unwind_marker} {unwind_info}")
+                ownership_cases.append({"name": "unwind", "pid": int(unwind_marker["pid"]),
+                                        "pgid": unwind_info.get("pgrp"), "sid": unwind_info.get("sid"),
+                                        "cwd": unwind_info.get("cwd"), "cmdline": unwind_info.get("cmdline"),
+                                        "starttime": unwind_info.get("starttime"), "root": str(unwind_root),
+                                        "root_held": True, "exited": True})
+
+                death_root = Path(env["TMPDIR"]) / "owner-death-root"
+                death_root.mkdir()
+                death_ready = Path(env["TMPDIR"]) / "owner-death-ready"
+                death_release = Path(env["TMPDIR"]) / "owner-death-release"
+                launcher = ("import importlib.util; from pathlib import Path; "
+                            "s=importlib.util.spec_from_file_location('qa',"
+                            + repr(str(Path(__file__).resolve())) + "); "
+                            "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
+                            "q.run([" + repr(sys.executable) + ",'-c',q._HELD_WORKER,"
+                            + repr(str(death_root)) + "," + repr(str(death_release)) + ","
+                            + repr(str(death_ready)) + ",'cancel-parent-live'],cwd=Path(" + repr(str(temp))
+                            + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
+                death_owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                death_info = {}
+                try:
+                    def death_started():
+                        if death_owner.poll() is not None:
+                            return False
+                        values = marker_values(death_ready)
+                        if values.get("waiting") != "1":
+                            return False
+                        info = _proc_identity(int(values["pid"]))
+                        if info is None or info.get("state") == "Z":
+                            return False
+                        death_info["info"] = info
+                        return True
+                    try:
+                        wait_until(death_started, 8, "owner-death worker did not start")
+                    except AssertionError:
+                        output, errors = death_owner.communicate(timeout=2)
+                        raise AssertionError(
+                            f"owner-death worker did not start: {output!r} {errors!r}") from None
                     death_owner.kill()
                     death_owner.wait(timeout=5)
+                    wait_until(lambda: marker_values(death_ready).get("root_held") == "1"
+                               and not _proc_alive(death_info["info"]["pid"], death_info["info"]["starttime"]),
+                               8, "owner death left the detached worker running")
+                    if not death_root.exists():
+                        raise AssertionError("owner death removed the worker root before exit was observed")
+                    ownership_cases.append({"name": "owner-death", "pid": death_info["info"]["pid"],
+                                            "pgid": death_info["info"].get("pgrp"),
+                                            "sid": death_info["info"].get("sid"),
+                                            "cwd": death_info["info"].get("cwd"),
+                                            "cmdline": death_info["info"].get("cmdline"),
+                                            "starttime": death_info["info"].get("starttime"),
+                                            "root": str(death_root), "root_held": True, "exited": True})
+                finally:
+                    if death_owner.poll() is None:
+                        death_owner.kill()
+                        death_owner.wait(timeout=5)
 
-            settle_root = Path(env["TMPDIR"]) / "settle-root"
-            settle_root.mkdir()
-            settle_ready = Path(env["TMPDIR"]) / "settle-ready"
-            settle_release = Path(env["TMPDIR"]) / "settle-release"
-            os.mkfifo(settle_release)
-            settle_script = r"""# qa-held-worker
+                settle_root = Path(env["TMPDIR"]) / "settle-root"
+                settle_root.mkdir()
+                settle_ready = Path(env["TMPDIR"]) / "settle-ready"
+                settle_release = Path(env["TMPDIR"]) / "settle-release"
+                os.mkfifo(settle_release)
+                settle_script = r"""# qa-held-worker
 import os, signal, sys
 root, release, ready = sys.argv[1:4]
 def finish(_signum, _frame):
@@ -3164,111 +3249,147 @@ open(ready, "w").write("fixture=qa-held-worker\npid=%s\nwaiting=1\nmode=settle\n
 while True:
     signal.pause()
 """
-            settle_proc = subprocess.Popen(
-                [sys.executable, "-c", settle_script, str(settle_root), str(settle_release),
-                 str(settle_ready)],
-                cwd=settle_root, start_new_session=True, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            settle_box = {}
-            try:
-                wait_until(lambda: marker_values(settle_ready).get("waiting") == "1", 5,
-                           "direct settle worker did not start")
-
-                def run_settle():
-                    settle_box["settlement"] = settle_detached_workers_under(settle_root)
-
-                settle_thread = threading.Thread(target=run_settle)
-                settle_thread.start()
+                settle_proc = subprocess.Popen(
+                    [sys.executable, "-c", settle_script, str(settle_root), str(settle_release),
+                     str(settle_ready)],
+                    cwd=settle_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                settle_box = {}
                 try:
-                    wait_until(lambda: marker_values(settle_ready).get("root_held") == "1", 8,
-                               "direct settlement did not signal the worker while the root existed")
-                    settle_info = _proc_identity(settle_proc.pid)
-                    if (not settle_thread.is_alive() or settle_proc.poll() is not None
-                            or not settle_root.exists() or settle_info is None
-                            or settle_info.get("state") == "Z" or settle_info.get("pgrp") != settle_proc.pid
-                            or "qa-held-worker" not in settle_info.get("cmdline", "")):
-                        raise AssertionError(
-                            f"direct settle worker was not held alive: {settle_info}")
-                    release_fifo(settle_release)
-                    settle_thread.join(timeout=8)
-                    if settle_thread.is_alive():
-                        raise AssertionError("direct settlement did not observe worker exit")
-                    settle_workers = (settle_box.get("settlement") or {}).get("workers") or []
-                    if (len(settle_workers) != 1 or settle_workers[0].get("pid") != settle_proc.pid
-                            or settle_workers[0].get("exited") is not True):
-                        raise AssertionError(f"direct settlement record: {settle_workers}")
-                    settle_proc.wait(timeout=5)
-                    if _proc_alive(settle_proc.pid, settle_info["starttime"]):
-                        raise AssertionError("direct settle worker still alive")
-                    ownership_cases.append({"name": "scratch-root-settlement",
-                                            "pid": settle_proc.pid, "pgid": settle_info.get("pgrp"),
-                                            "sid": settle_info.get("sid"), "cwd": settle_info.get("cwd"),
-                                            "cmdline": settle_info.get("cmdline"),
-                                            "starttime": settle_info.get("starttime"),
-                                            "root": str(settle_root), "root_held_while_alive": True,
-                                            "exited": True, "record": settle_workers[0]})
+                    wait_until(lambda: marker_values(settle_ready).get("waiting") == "1", 5,
+                               "direct settle worker did not start")
+
+                    def run_settle():
+                        settle_box["settlement"] = settle_detached_workers_under(settle_root)
+
+                    settle_thread = threading.Thread(target=run_settle)
+                    settle_thread.start()
+                    try:
+                        wait_until(lambda: marker_values(settle_ready).get("root_held") == "1", 8,
+                                   "direct settlement did not signal the worker while the root existed")
+                        settle_info = _proc_identity(settle_proc.pid)
+                        if (not settle_thread.is_alive() or settle_proc.poll() is not None
+                                or not settle_root.exists() or settle_info is None
+                                or settle_info.get("state") == "Z" or settle_info.get("pgrp") != settle_proc.pid
+                                or "qa-held-worker" not in settle_info.get("cmdline", "")):
+                            raise AssertionError(
+                                f"direct settle worker was not held alive: {settle_info}")
+                        release_fifo(settle_release)
+                        settle_thread.join(timeout=8)
+                        if settle_thread.is_alive():
+                            raise AssertionError("direct settlement did not observe worker exit")
+                        settle_workers = (settle_box.get("settlement") or {}).get("workers") or []
+                        if (len(settle_workers) != 1 or settle_workers[0].get("pid") != settle_proc.pid
+                                or settle_workers[0].get("exited") is not True):
+                            raise AssertionError(f"direct settlement record: {settle_workers}")
+                        settle_proc.wait(timeout=5)
+                        if _proc_alive(settle_proc.pid, settle_info["starttime"]):
+                            raise AssertionError("direct settle worker still alive")
+                        ownership_cases.append({"name": "scratch-root-settlement",
+                                                "pid": settle_proc.pid, "pgid": settle_info.get("pgrp"),
+                                                "sid": settle_info.get("sid"), "cwd": settle_info.get("cwd"),
+                                                "cmdline": settle_info.get("cmdline"),
+                                                "starttime": settle_info.get("starttime"),
+                                                "root": str(settle_root), "root_held_while_alive": True,
+                                                "exited": True, "record": settle_workers[0]})
+                    finally:
+                        if settle_thread.is_alive():
+                            try:
+                                release_fifo(settle_release)
+                            except OSError:
+                                pass
+                            settle_thread.join(timeout=8)
                 finally:
-                    if settle_thread.is_alive():
+                    if settle_proc.poll() is None:
                         try:
-                            release_fifo(settle_release)
+                            os.kill(settle_proc.pid, signal.SIGKILL)
                         except OSError:
                             pass
-                        settle_thread.join(timeout=8)
-            finally:
-                if settle_proc.poll() is None:
-                    try:
-                        os.kill(settle_proc.pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-                    settle_proc.wait(timeout=5)
+                        settle_proc.wait(timeout=5)
 
-            # A SIGTERM-ignoring setsid worker must be observed actually
-            # exited (identity gone at return, with no intervening sleep)
-            # before settle returns, on both the direct settlement path
-            # and the supervisor reap path.
-            ignore_root = Path(env["TMPDIR"]) / "settle-ignore-term-root"
-            ignore_root.mkdir()
-            ignore_ready = Path(env["TMPDIR"]) / "settle-ignore-term-ready"
-            ignore_script = (
-                "import os, signal, sys\n"
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                "open(sys.argv[2], 'w').write("
-                "'fixture=qa-held-worker\\npid=%s\\nwaiting=1\\nmode=ignore-term\\n' % os.getpid())\n"
-                "while True:\n"
-                "    signal.pause()\n")
-            ignore_proc = subprocess.Popen(
-                [sys.executable, "-c", ignore_script, str(ignore_root), str(ignore_ready)],
-                cwd=ignore_root, start_new_session=True, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            try:
-                wait_until(lambda: marker_values(ignore_ready).get("waiting") == "1", 5,
-                           "SIGTERM-ignoring settle worker did not start")
-                ignore_info = _proc_identity(ignore_proc.pid)
-                if ignore_info is None or ignore_info.get("pgrp") != ignore_proc.pid:
-                    raise AssertionError(f"SIGTERM-ignoring settle worker not setsid: {ignore_info}")
-                ignore_settlement = settle_detached_workers_under(
-                    ignore_root, deadline_s=1, kill_grace_s=5)
-                if _proc_alive(ignore_proc.pid, ignore_info["starttime"]):
-                    raise AssertionError("settle returned before SIGKILLed worker exited")
-                ignore_workers = ignore_settlement.get("workers") or []
-                if (len(ignore_workers) != 1 or ignore_workers[0].get("pid") != ignore_proc.pid
-                        or ignore_workers[0].get("exited") is not True):
-                    raise AssertionError(f"SIGTERM-ignoring settle record: {ignore_workers}")
-                ignore_proc.wait(timeout=5)
-                ownership_cases.append({"name": "settle-ignore-term",
-                                        "pid": ignore_proc.pid, "pgid": ignore_info.get("pgrp"),
-                                        "sid": ignore_info.get("sid"), "cwd": ignore_info.get("cwd"),
-                                        "cmdline": ignore_info.get("cmdline"),
-                                        "starttime": ignore_info.get("starttime"),
-                                        "root": str(ignore_root), "exited": True,
-                                        "record": ignore_workers[0]})
-            finally:
-                if ignore_proc.poll() is None:
-                    try:
-                        os.kill(ignore_proc.pid, signal.SIGKILL)
-                    except OSError:
-                        pass
+                # A SIGTERM-ignoring setsid worker must be observed actually
+                # exited (identity gone at return, with no intervening sleep)
+                # before settle returns, on both the direct settlement path
+                # and the supervisor reap path.
+                ignore_root = Path(env["TMPDIR"]) / "settle-ignore-term-root"
+                ignore_root.mkdir()
+                ignore_ready = Path(env["TMPDIR"]) / "settle-ignore-term-ready"
+                ignore_proc = subprocess.Popen(
+                    [sys.executable, "-c", ignore_script, str(ignore_root), str(ignore_ready)],
+                    cwd=ignore_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    wait_until(lambda: marker_values(ignore_ready).get("waiting") == "1", 5,
+                               "SIGTERM-ignoring settle worker did not start")
+                    ignore_info = _proc_identity(ignore_proc.pid)
+                    if ignore_info is None or ignore_info.get("pgrp") != ignore_proc.pid:
+                        raise AssertionError(f"SIGTERM-ignoring settle worker not setsid: {ignore_info}")
+                    ignore_settlement = settle_detached_workers_under(
+                        ignore_root, deadline_s=1, kill_grace_s=5)
+                    if _proc_alive(ignore_proc.pid, ignore_info["starttime"]):
+                        raise AssertionError("settle returned before SIGKILLed worker exited")
+                    ignore_workers = ignore_settlement.get("workers") or []
+                    if (len(ignore_workers) != 1 or ignore_workers[0].get("pid") != ignore_proc.pid
+                            or ignore_workers[0].get("exited") is not True):
+                        raise AssertionError(f"SIGTERM-ignoring settle record: {ignore_workers}")
                     ignore_proc.wait(timeout=5)
+                    ownership_cases.append({"name": "settle-ignore-term",
+                                            "pid": ignore_proc.pid, "pgid": ignore_info.get("pgrp"),
+                                            "sid": ignore_info.get("sid"), "cwd": ignore_info.get("cwd"),
+                                            "cmdline": ignore_info.get("cmdline"),
+                                            "starttime": ignore_info.get("starttime"),
+                                            "root": str(ignore_root), "exited": True,
+                                            "record": ignore_workers[0]})
+                finally:
+                    if ignore_proc.poll() is None:
+                        try:
+                            os.kill(ignore_proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        ignore_proc.wait(timeout=5)
+
+            else:
+                # Production refuses identity-bound signals on this host. A live
+                # setsid worker is discovered, not signalled, and stays not exited.
+                unsupported_root = Path(env["TMPDIR"]) / "unsupported-signal-root"
+                unsupported_root.mkdir()
+                unsupported_ready = Path(env["TMPDIR"]) / "unsupported-signal-ready"
+                unsupported_proc = subprocess.Popen(
+                    [sys.executable, "-c", ignore_script, str(unsupported_root), str(unsupported_ready)],
+                    cwd=unsupported_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    wait_until(lambda: marker_values(unsupported_ready).get("waiting") == "1", 5,
+                               "unsupported-signal worker did not start")
+                    unsupported_info = _proc_identity(unsupported_proc.pid)
+                    if (unsupported_info is None
+                            or unsupported_info.get("pgrp") != unsupported_proc.pid
+                            or "qa-held-worker" not in unsupported_info.get("cmdline", "")):
+                        raise AssertionError(
+                            f"non-Linux discovery did not see the held worker: {unsupported_info}")
+                    unsupported_settlement = settle_detached_workers_under(
+                        unsupported_root, deadline_s=0.3, kill_grace_s=0.3)
+                    unsupported_workers = unsupported_settlement.get("workers") or []
+                    if (unsupported_settlement.get("identity_signal_available") is not False
+                            or unsupported_proc.poll() is not None
+                            or len(unsupported_workers) != 1
+                            or unsupported_workers[0].get("pid") != unsupported_proc.pid
+                            or unsupported_workers[0].get("exited") is not False):
+                        raise AssertionError(
+                            "unsupported identity signaling was not honest: "
+                            f"poll={unsupported_proc.poll()} settlement={unsupported_settlement}")
+                    ownership_cases.append({
+                        "name": "unsupported-identity-settlement",
+                        "pid": unsupported_proc.pid, "signaled": False, "exited": False,
+                        "identity_signal_available": False,
+                        "record": unsupported_workers[0]})
+                finally:
+                    if unsupported_proc.poll() is None:
+                        try:
+                            os.kill(unsupported_proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        unsupported_proc.wait(timeout=5)
 
             # An identity that survives the bounded grace stays exited=False.
             stuck_root = Path(env["TMPDIR"]) / "settle-stuck-root"
@@ -3296,27 +3417,28 @@ while True:
                         pass
                 stuck_proc.wait(timeout=5)
 
-            reap_root = Path(env["TMPDIR"]) / "reap-ignore-term-root"
-            reap_root.mkdir()
-            reap_ready = Path(env["TMPDIR"]) / "reap-ignore-term-ready"
-            reap_evidence = run(
-                [sys.executable, "-c", _HELD_WORKER, str(reap_root),
-                 str(Path(env["TMPDIR"]) / "reap-ignore-term-release"), str(reap_ready),
-                 "ignore-term"], cwd=temp, env=env, timeout=30)
-            reap_marker = marker_values(reap_ready)
-            reap_pid = int(reap_marker["pid"]) if reap_marker.get("pid") else None
-            reap_workers = [worker for worker in reap_evidence.get("detached_workers") or []
-                            if worker.get("pid") == reap_pid]
-            if (reap_evidence.get("exit_code") != 0 or not reap_evidence.get("cleanup_verified")
-                    or reap_marker.get("mode") != "ignore-term" or len(reap_workers) != 1
-                    or reap_workers[0].get("exited") is not True
-                    or _proc_alive(reap_pid, reap_workers[0].get("starttime"))):
-                raise AssertionError(
-                    f"supervisor reap did not observe SIGTERM-ignoring worker exit: {reap_evidence}")
-            ownership_cases.append({"name": "reap-ignore-term", "pid": reap_pid,
-                                    "root": str(reap_root), "exited": True,
-                                    "cleanup_verified": reap_evidence["cleanup_verified"],
-                                    "record": reap_workers[0]})
+            if _pidfd_supported():
+                reap_root = Path(env["TMPDIR"]) / "reap-ignore-term-root"
+                reap_root.mkdir()
+                reap_ready = Path(env["TMPDIR"]) / "reap-ignore-term-ready"
+                reap_evidence = run(
+                    [sys.executable, "-c", _HELD_WORKER, str(reap_root),
+                     str(Path(env["TMPDIR"]) / "reap-ignore-term-release"), str(reap_ready),
+                     "ignore-term"], cwd=temp, env=env, timeout=30)
+                reap_marker = marker_values(reap_ready)
+                reap_pid = int(reap_marker["pid"]) if reap_marker.get("pid") else None
+                reap_workers = [worker for worker in reap_evidence.get("detached_workers") or []
+                                if worker.get("pid") == reap_pid]
+                if (reap_evidence.get("exit_code") != 0 or not reap_evidence.get("cleanup_verified")
+                        or reap_marker.get("mode") != "ignore-term" or len(reap_workers) != 1
+                        or reap_workers[0].get("exited") is not True
+                        or _proc_alive(reap_pid, reap_workers[0].get("starttime"))):
+                    raise AssertionError(
+                        f"supervisor reap did not observe SIGTERM-ignoring worker exit: {reap_evidence}")
+                ownership_cases.append({"name": "reap-ignore-term", "pid": reap_pid,
+                                        "root": str(reap_root), "exited": True,
+                                        "cleanup_verified": reap_evidence["cleanup_verified"],
+                                        "record": reap_workers[0]})
         finally:
             scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
             scratch.mkdir(parents=True, exist_ok=True)

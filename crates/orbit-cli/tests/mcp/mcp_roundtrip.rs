@@ -5330,6 +5330,7 @@ fn runtime_opens(log_path: &Path) -> usize {
         .count()
 }
 
+mod task_show_write_lock;
 mod upgrade;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod workspace_authority;

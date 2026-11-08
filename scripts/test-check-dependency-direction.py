@@ -431,6 +431,50 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::application::backlog_forecast::record;\n",
         }, rejected=False)
 
+    def test_resident_reaches_routine_status_only_through_its_port(self):
+        # Resident's status lookup closed routines -> automation -> resident
+        # -> routines. Exercise each detector separately so no hit masks one.
+        for rows in (
+            [("resident/probe.rs", "use crate::application::routines::Probe;\n"),
+             ("resident/deep/probe.rs",
+              "fn probe() { crate::application::routines::status::checkout_routine_statuses(); }\n")],
+            [("resident/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n")],
+            [("resident/mod.rs", "use super::routines::Probe;\n"),
+             ("resident/probe.rs", "use super::super::routines::Probe;\n"),
+             ("resident/grouped.rs", "use super::super::{routines::Probe};\n"),
+             ("resident/deep/probe.rs", "use super::super::super::{routines::Probe};\n")],
+        ):
+            self.check_rows(rows, rejected=True)
+        method = {
+            "routines/status/report.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn fresh_routine_method(&self) {}\n}\n",
+        }
+        self.check_rows([
+            (f"resident/call_{index}.rs", f"fn probe() {{ {call}; }}\n")
+            for index, call in enumerate((
+                "self.fresh_routine_method()", "runtime.fresh_routine_method()",
+                "OrbitRuntime::fresh_routine_method(runtime)",
+                "Self::fresh_routine_method(runtime)",
+                "<OrbitRuntime>::fresh_routine_method(runtime)",
+                "<crate::OrbitRuntime>::fresh_routine_method(runtime)",
+            ))
+        ], rejected=True, shared=method)
+        self.check_files({
+            **method,
+            "resident/routine_status_port.rs":
+                "pub(in crate::application) trait ResidentRoutineStatusPort {\n"
+                "    fn disabled_resident_cycle_routine_name(&self) -> Option<String>;\n}\n",
+            "resident/mandate_reads.rs":
+                "use super::ResidentRoutineStatusPort;\n"
+                "impl OrbitRuntime {\n    pub(crate) fn resident_cycle_routine_disabled(&self) {\n"
+                "        self.disabled_resident_cycle_routine_name();\n    }\n}\n",
+            "routines/resident_port.rs":
+                "use crate::application::resident::ResidentRoutineStatusPort;\n"
+                "impl ResidentRoutineStatusPort for OrbitRuntime {\n"
+                "    fn disabled_resident_cycle_routine_name(&self) -> Option<String> {\n"
+                "        self.fresh_routine_method();\n        None\n    }\n}\n",
+        }, rejected=False)
+
     def test_contracts_cannot_reach_routines_or_auto_tasks(self):
         # [ORB-22623] The moved leaves stay below the modules that read them.
         # Grouped relative imports escaped the guard; each super chain must

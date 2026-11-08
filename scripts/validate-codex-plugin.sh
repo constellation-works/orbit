@@ -197,6 +197,8 @@ if manifest is not None:
         errors.append("plugin.json.mcpServers must be a non-empty object for Orbit")
     else:
         reject_user_specific_paths(mcp_servers, "plugin.json.mcpServers")
+        if not isinstance(mcp_servers.get("orbit"), dict):
+            errors.append("plugin.json.mcpServers.orbit must be an object")
         for server_name, server in mcp_servers.items():
             if not isinstance(server_name, str) or not server_name.strip():
                 errors.append("plugin.json.mcpServers keys must be non-empty strings")
@@ -207,16 +209,22 @@ if manifest is not None:
             if not isinstance(command, str) or not command.strip():
                 errors.append(f"plugin.json.mcpServers.{server_name}.command must be non-empty")
             args = server.get("args")
-            if args is not None and (
-                not isinstance(args, list)
-                or not all(isinstance(arg, str) and arg.strip() for arg in args)
-            ):
-                errors.append(f"plugin.json.mcpServers.{server_name}.args must be an array of strings")
+            # Orbit's launch args are required. Another server may omit args.
+            args_required = server_name == "orbit" or args is not None
+            args_well_formed = (
+                isinstance(args, list)
+                and all(isinstance(arg, str) and arg.strip() for arg in args)
+            )
+            if args_required and not args_well_formed:
+                errors.append(
+                    f"plugin.json.mcpServers.{server_name}.args must be an array of strings"
+                )
             elif (
-                version is not None
-                and server_name == "orbit"
+                server_name == "orbit"
+                and version is not None
                 and isinstance(command, str)
-                and isinstance(args, list)
+                and command.strip()
+                and args_well_formed
             ):
                 expected_args = ["-y", f"@orbit-tools/cli@{version}", "mcp", "serve"]
                 stale = any(

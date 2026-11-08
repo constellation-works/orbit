@@ -169,6 +169,56 @@ payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@0.5.1", "mcp",
 (broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "stale launch pin", "stale 0.5.1 pin")
 
+# The Orbit launch is required on every packaged manifest, not only when args
+# are already a list and the server key is named orbit.
+def write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+broken = clone_fixture("absent-orbit-server")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"] = {"helper": {"type": "stdio", "command": "true", "args": []}}
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit", "absent orbit server")
+
+broken = clone_fixture("absent-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+del payload["mcpServers"]["orbit"]["args"]
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit.args", "absent orbit args")
+
+broken = clone_fixture("malformed-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"]["orbit"]["args"] = {"cmd": "serve"}
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit.args", "malformed orbit args")
+
+broken = clone_fixture("empty-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"]["orbit"]["args"] = []
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "MCP launch must be", "empty orbit args")
+
+for label, relative in (
+    ("claude", "plugin/.mcp.json"),
+    ("codex", "plugin/.codex-plugin/plugin.json"),
+):
+    broken = clone_fixture(f"absent-orbit-{label}")
+    payload = load(broken / relative)
+    payload["mcpServers"] = {"helper": {"command": "true", "args": []}}
+    write_json(broken / relative, payload)
+    expect_failure(broken, "mcpServers.orbit", f"absent orbit server in {label}")
+
+    broken = clone_fixture(f"absent-orbit-args-{label}")
+    payload = load(broken / relative)
+    del payload["mcpServers"]["orbit"]["args"]
+    write_json(broken / relative, payload)
+    expect_failure(broken, "mcpServers.orbit.args", f"absent orbit args in {label}")
+
 # Negative: missing required mcp.json.
 broken = clone_fixture("missing-mcp")
 (broken / "plugin" / "mcp.json").unlink()

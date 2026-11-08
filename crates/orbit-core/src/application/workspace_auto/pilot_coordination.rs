@@ -279,7 +279,7 @@ pub(super) fn read_pilots(
 }
 
 /// The tasks this drain approved, read back from the approve transition's
-/// history note rather than from the pilot's output.
+/// history decision rather than from the pilot's output.
 fn approved_by(runtime: &OrbitRuntime, run_id: &str, task_ids: &[String]) -> Vec<String> {
     task_ids
         .iter()
@@ -289,11 +289,7 @@ fn approved_by(runtime: &OrbitRuntime, run_id: &str, task_ids: &[String]) -> Vec
                 .is_ok_and(|task| task.status != TaskStatus::Proposed)
                 && runtime.get_task_history(task_id).is_ok_and(|history| {
                     history.iter().any(|entry| {
-                        entry.event == "proposal_approved"
-                            && entry
-                                .note
-                                .as_deref()
-                                .is_some_and(|note| approved_by_drain(note, run_id))
+                        entry.event == "proposal_approved" && approved_by_drain(entry, run_id)
                     })
                 })
         })

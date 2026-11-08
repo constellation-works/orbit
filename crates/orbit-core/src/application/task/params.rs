@@ -43,6 +43,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) origin: Option<TaskOrigin>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
+    /// Typed decision recorded on the status event; set only with one.
+    pub(crate) status_decision: Option<TaskDecision>,
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,

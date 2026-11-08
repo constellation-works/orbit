@@ -536,7 +536,9 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `.cargo/`, the root manifests, `install.sh`, `RELEASING.md`, `plugin/`,
   `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
   always runs its inventory check and runs its fixture self-test under the
-  same rule. A push runs every self-test. It builds no workspace target, so
+  same rule. That process fixture accepts an identity-bound pidfd signal only
+  on Linux. On macOS and other hosts it records an unsupported identity-signal
+  result and does not send a numeric kill. A push runs every self-test. It builds no workspace target, so
   it carries the compiler-cache namespace regression's sccache and Bubblewrap
   setup.
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
