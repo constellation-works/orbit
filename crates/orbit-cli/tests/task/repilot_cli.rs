@@ -74,11 +74,10 @@ fn repilot_and_update_flag_submit_once_and_refuse_pending_duplicates() {
             String::from_utf8_lossy(&duplicate.stderr).contains("already held by pilot run"),
             "{duplicate:?}"
         );
-        if !update {
-            // The refusal keeps its stable code instead of `invalid_input`.
-            let refused: serde_json::Value = serde_json::from_slice(&duplicate.stderr).unwrap();
-            assert_eq!(refused["code"], "task_pilot_already_running", "{refused}");
-        }
+        // The refusal keeps its stable code instead of `invalid_input`, for
+        // both the `repilot` and the `update --repilot` forms [ORB-22949].
+        let refused: serde_json::Value = serde_json::from_slice(&duplicate.stderr).unwrap();
+        assert_eq!(refused["code"], "task_pilot_already_running", "{refused}");
         let shown = fixture.json(&["task", "show", id, "--json"]);
         assert_eq!(shown["status"], "proposed");
         if update {
