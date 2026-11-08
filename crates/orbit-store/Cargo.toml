@@ -19,6 +19,7 @@ test-support = []
 [dependencies]
 blake3.workspace = true
 chrono.workspace = true
+getrandom.workspace = true
 jsonschema.workspace = true
 libc.workspace = true
 orbit-common = { path = "../orbit-common", features = ["sqlite"] }
