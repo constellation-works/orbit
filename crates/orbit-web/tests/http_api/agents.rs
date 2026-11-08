@@ -1777,3 +1777,32 @@ fn count_windows_exclude_old_attempts_on_recently_commented_tasks() {
         },
     );
 }
+
+/// `window` on the CI-failures read is `all` or a duration: an RFC 3339
+/// instant is refused with the documented window error, not served as the
+/// window start.
+#[test]
+fn ci_failures_window_rejects_rfc3339_instants() {
+    isolated(
+        "agents::ci_failures_window_rejects_rfc3339_instants",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(false);
+            for window in ["all", "30d"] {
+                let served =
+                    json_ok(server.get(&format!("/api/agents/ci-failures?{WS}&window={window}")));
+                assert_eq!(served["window"], window, "{served}");
+            }
+            for window in ["2026-11-01T00:00:00Z", "1y"] {
+                let response = server.get(&format!("/api/agents/ci-failures?{WS}&window={window}"));
+                assert_eq!(response.status().as_u16(), 400, "{window}");
+                let body: Value = response.json().unwrap();
+                let message = body["error"].as_str().unwrap();
+                assert!(
+                    message.contains("window must be all or a duration"),
+                    "{body}"
+                );
+            }
+        },
+    );
+}
