@@ -64,7 +64,13 @@ impl OrbitRuntime {
                 Some(attempt) if self.landing_job_is_live(attempt)? => continue,
                 _ => {}
             }
-            dispatched.push(self.land_handoff(&request.handoff_id)?);
+            // One request whose landing cannot be dispatched stays pending for a
+            // later pass and must not stop the other pending landings of this one.
+            match self.land_handoff(&request.handoff_id) {
+                Ok(dispatch) => dispatched.push(dispatch),
+                Err(error) => tracing::warn!(%error, handoff_id = %request.handoff_id,
+                    "owner landing dispatch deferred for this handoff"),
+            }
         }
         Ok(dispatched)
     }

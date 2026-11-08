@@ -426,6 +426,157 @@ fn the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not() {
     );
 }
 
+/// Two owner handoffs accepted and approved for two backlog tasks, each with a
+/// `Pending` landing start request. Returns the owner and each handoff's
+/// `(claim_id, handoff_id)`.
+fn two_approved_landings() -> (OwnerLocal, Vec<(String, String)>) {
+    let mut pair = Pair::with_owner_config(
+        "[workflow]\ndistributed_completion = \"done\"\n",
+        &[None, None],
+    );
+    let workers = LandingWorkers::new();
+    let jobs = pair.wire.owner.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs/task_landing_pipeline.yaml"),
+        jobs.join("task_landing_pipeline.yaml"),
+    )
+    .unwrap();
+    let repo = pair.owner_repo.clone();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
+    let drain = pair.run_drain();
+    let mut approved = Vec::new();
+    for (slots, file, number) in [(1, "src/f0.rs", 42), (2, "src/f1.rs", 43)] {
+        let leaf = pair.running_leaf(&drain, slots);
+        let record = pair.admission(&leaf);
+        let mut delivered = handoff(&record);
+        let branch = delivered.candidate.source_branch.clone();
+        git(&repo, &["checkout", "-q", "-b", &branch]);
+        std::fs::write(repo.join(file), "fn changed() {}\n").unwrap();
+        git(&repo, &["add", file]);
+        git(&repo, &["commit", "-q", "-m", "candidate"]);
+        git(&repo, &["checkout", "-q", "main"]);
+        delivered.candidate = orbit_engine::observe_candidate(
+            &repo,
+            Some(&branch),
+            "main",
+            "main",
+            HandoffDelivery::PullRequest { number },
+            "owner/repository",
+            orbit_engine::BaseSyncMode::Local,
+        )
+        .unwrap();
+        pair.wire.accept(delivered.clone()).unwrap();
+        let runtime = &pair.wire.owner;
+        let accepted = runtime.accepted_task_handoff(&delivered.claim_id).unwrap();
+        let context = ClaimInvocation::trusted_operator(
+            delivered.task_id.clone(),
+            delivered.claim_id.clone(),
+            "owner-landing".into(),
+        )
+        .with_handoff_observation(HandoffObservation {
+            candidate: delivered.candidate.clone(),
+            footprint_widening: vec![],
+            required_commands: vec![],
+            owner_completion_authority: None,
+            review: None,
+            known_red: vec![],
+            light_delivery: vec![],
+        });
+        runtime
+            .mutate_execution_claim(
+                Some(&context),
+                "approve-waiting-fixture",
+                &ClaimMutation::ApproveHandoff {
+                    handoff_id: accepted.handoff_id.clone(),
+                    candidate: delivered.candidate.clone(),
+                },
+            )
+            .unwrap();
+        approved.push((delivered.claim_id.clone(), accepted.handoff_id.clone()));
+    }
+    // Dispatch as the authorized-handoff path does, opening each landing job.
+    pair.wire.owner.dispatch_landing_requests().unwrap();
+    pair.follower_jobs = orbit_store::compose::workspace_job_run_store(
+        pair.wire.owner.sqlite_store().unwrap(),
+        pair.wire.owner.workspace_id().unwrap(),
+    );
+    (
+        OwnerLocal {
+            pair,
+            drain,
+            workers,
+        },
+        approved,
+    )
+}
+
+/// Leave a claim's landing context invalidated while its handoff authority
+/// stays unrevoked, so its landing start request remains `Pending`.
+fn invalidate_landing_context(runtime: &OrbitRuntime, claim_id: &str) {
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            let workspace = runtime.workspace_id().unwrap();
+            let payload: String = tx.connection().query_row(
+                "SELECT payload_json FROM task_coordination_rows WHERE workspace_id=?1 AND kind='distributed-claim-lifecycle-v1' AND row_id=?2",
+                rusqlite::params![workspace, claim_id],
+                |row| row.get(0),
+            ).unwrap();
+            let mut state: Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(
+                state["landing_invalidated"], false,
+                "the claim starts with its landing context open"
+            );
+            state["landing_invalidated"] = json!(true);
+            let changed = tx.connection().execute(
+                "UPDATE task_coordination_rows SET payload_json=?1 WHERE workspace_id=?2 AND kind='distributed-claim-lifecycle-v1' AND row_id=?3",
+                rusqlite::params![state.to_string(), workspace, claim_id],
+            ).unwrap();
+            assert_eq!(changed, 1, "the claim lifecycle row is invalidated in isolation");
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// [ORB-23238] A Pending landing whose claim is invalidated fails its own
+/// dispatch, and the owner pass still dispatches the other Pending landing.
+fn an_invalidated_pending_landing_does_not_starve_later_landings() {
+    let (owner, mut approved) = two_approved_landings();
+    let runtime = &owner.pair.wire.owner;
+    // The fixture's dispatch opened one landing job per handoff. Ending both
+    // jobs leaves each handoff open without a live job, so the next pass
+    // reaches the landing path for both.
+    let attempts = runtime.landing_attempts().unwrap();
+    assert_eq!(
+        attempts.len(),
+        2,
+        "one landing attempt per approved handoff"
+    );
+    for attempt in attempts {
+        owner.finish_landing_worker(
+            attempt.job_run_id.as_deref().unwrap(),
+            JobRunState::Cancelled,
+        );
+    }
+    // The pass walks start requests in handoff-id order, so the invalidated
+    // request is the one reached first.
+    approved.sort_by(|a, b| a.1.cmp(&b.1));
+    let (failing_claim, _) = &approved[0];
+    let (_, valid) = &approved[1];
+    invalidate_landing_context(runtime, failing_claim);
+    let dispatched = runtime
+        .dispatch_landing_requests_at(Utc::now())
+        .expect("one failing landing request does not fail the owner pass");
+    let handoffs: Vec<&str> = dispatched.iter().map(|d| d.handoff_id.as_str()).collect();
+    assert_eq!(handoffs, vec![valid.as_str()], "{dispatched:?}");
+    assert!(dispatched[0].submitted, "{dispatched:?}");
+}
+
 #[cfg(unix)]
 fn install_waiting_forge() {
     use std::os::unix::fs::PermissionsExt;
@@ -480,5 +631,6 @@ crate::scenario_table!(
     automatic_waiting_landing_scenarios,
     waiting_gates_resume_and_land_the_same_handoff,
     waiting_retries_are_bounded_and_candidate_stops_stay_parked,
-    the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not
+    the_owner_clock_resumes_waiting_landings_but_dry_runs_do_not,
+    an_invalidated_pending_landing_does_not_starve_later_landings
 );
