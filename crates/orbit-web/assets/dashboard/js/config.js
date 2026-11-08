@@ -53,7 +53,6 @@ function throttleResources(host) {
 
 let activeSubtab = "workflow";
 let lastPayload = null;
-let filterText = "";
 // The row (or crew) currently being edited with its draft values. It is
 // operator state, so a background refresh must not discard it.
 let editing = null;
@@ -199,20 +198,6 @@ function renderControls() {
   if (controls.hidden) return;
 
   controls.appendChild(reloadButton());
-  return;
-
-  const filter = el("input", { class: "config-filter" });
-  filter.type = "search";
-  filter.placeholder = "Filter keys…";
-  filter.value = filterText;
-  filter.setAttribute("aria-label", "Filter configuration keys");
-  filter.addEventListener("input", () => {
-    filterText = filter.value.trim().toLowerCase();
-    if (lastPayload) render(lastPayload);
-    $("config-controls").querySelector(".config-filter")?.focus();
-  });
-  controls.appendChild(filter);
-  controls.appendChild(reloadButton());
 }
 
 /// Crews has no controls; the file views carry their own actions.
@@ -294,6 +279,11 @@ function cancelEdit() {
 /// After an editor closes, focus returns to the pencil that opened it.
 function focusEditAffordance(session) {
   if (!session) return;
+  // A new crew that was never saved has no row yet: focus the Add button.
+  if (session.kind === "crew" && !session.name) {
+    $("config-body")?.querySelector(".config-add-crew")?.focus();
+    return;
+  }
   const key = session.kind === "crew" ? `crews.${session.name}` : session.key;
   const rows = $("config-body")?.querySelectorAll("[data-key]") || [];
   for (const row of rows) {
@@ -544,7 +534,7 @@ async function submitKeyClear(row) {
 /// only on the session that issued it: a workspace switch or Reload while the
 /// write was in flight has already ended that session, and a later edit must
 /// not inherit its error or be closed by its success.
-async function submitConfigMutation(request) {
+async function submitConfigMutation(request, afterWrite) {
   const session = editing;
   if (!session || session.pending || !session.visit.isCurrent()) return;
   const ownsSubmission = () => editing === session && session.visit.isCurrent();
@@ -553,12 +543,6 @@ async function submitConfigMutation(request) {
   if (lastPayload) render(lastPayload);
   try {
     await request(session.visit);
-    if (!ownsSubmission()) return;
-    await fetchAndRenderConfig();
-    if (!ownsSubmission()) return;
-    editing = null;
-    if (lastPayload) render(lastPayload);
-    focusEditAffordance(session);
   } catch (error) {
     // The admission layer's message is the useful part; it names the key, the
     // value, and what was expected instead. The draft is untouched, so the
@@ -567,7 +551,21 @@ async function submitConfigMutation(request) {
     session.pending = false;
     session.error = error.message || String(error);
     if (editing === session && lastPayload) render(lastPayload);
+    return;
   }
+  if (!ownsSubmission()) return;
+  afterWrite?.(session);
+  try {
+    await fetchAndRenderConfig();
+  } catch (_) {
+    // The write landed; only the re-read failed. requestPanel already left
+    // its stale-data note on the panel, so close as a successful save rather
+    // than reporting the re-read error as a refused write.
+  }
+  if (!ownsSubmission()) return;
+  editing = null;
+  if (lastPayload) render(lastPayload);
+  focusEditAffordance(session);
 }
 
 // ------------------------------------------------------------------ system
@@ -890,7 +888,7 @@ function renderCrewMore(container, status, total, onShrink, onReveal) {
 }
 
 function addCrewButton() {
-  const button = el("button", { class: "config-action", text: "+ Add crew" });
+  const button = el("button", { class: "config-action config-add-crew", text: "+ Add crew" });
   button.type = "button";
   button.addEventListener("click", () => startEdit({ kind: "crew", name: "" }));
   return button;
@@ -1138,7 +1136,9 @@ async function submitCrew(crew, fields, isNew, init) {
       scope: writeScope(),
       ...(init ? { init } : {}),
     }, visit),
-  );
+  // Only a landed write earns the typed name, so a refused save keeps the
+  // new-crew editor (keyed by "") open and focus finds the row on success.
+  isNew ? (session) => { session.name = name; } : undefined);
 }
 
 async function submitCrewDelete(crew) {

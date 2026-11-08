@@ -115,8 +115,12 @@ export function parseDraft(row, text) {
     return inAllowedRange(row, n);
   }
   const choices = row.allowed?.kind === 'enum' ? row.allowed.values : null;
-  if (choices && !isTable(row) && !Array.isArray(row.value) && !choices.includes(text.trim())) {
-    throw new Error(`${row.key} takes one of: ${choices.join(', ')}`);
+  if (choices && !isTable(row) && !Array.isArray(row.value)) {
+    const trimmed = text.trim();
+    if (!choices.includes(trimmed)) {
+      throw new Error(`${row.key} takes one of: ${choices.join(', ')}`);
+    }
+    return trimmed;
   }
   if (isTable(row)) {
     let parsed;
@@ -160,10 +164,10 @@ export function cliCmd(row, scope, text) {
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
-  } else if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(text) || text === '') {
-    v = shellQuote(JSON.stringify(text));
+  } else if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(text.trim()) || text.trim() === '') {
+    v = shellQuote(JSON.stringify(text.trim()));
   } else {
-    v = shellWord(text);
+    v = shellWord(text.trim());
   }
   return `orbit config set ${row.key} ${v}${scope === 'global' ? ' --global' : ''}`;
 }
