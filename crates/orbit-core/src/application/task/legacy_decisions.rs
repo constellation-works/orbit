@@ -17,6 +17,10 @@
 //!   matching pilot audit has no typed targetless assessment (or no matching
 //!   receipt exists). This is assessment evidence, not an operator decision,
 //!   so it keeps the existing presence rule without the store-time boundary.
+//! - a `task_pilot_unresolved` event's `{"pilot_run_id": ...}` JSON note is
+//!   read only when the entry has no typed decision. Only `system` writes
+//!   that event, through the task store, so its note is not open to an
+//!   untrusted writer and keeps the presence rule without the boundary.
 //!
 //! The boundary is per store: the first writable open of a store by a binary
 //! that writes typed decisions records when that happened, beside the task
@@ -33,6 +37,8 @@
 //! Retire the targetless assessment adapter and dual-written marker separately,
 //! once every live task's latest targetless pilot assessment has a typed audit
 //! receipt and no supported older binary can still write marker-only records.
+//! Retire the undecided-pilot note reader once no live proposed or backlog
+//! task holds a `task_pilot_unresolved` entry without a typed decision.
 //!
 //! [`TaskDecision`]: orbit_types::task::TaskDecision
 
@@ -300,6 +306,13 @@ pub(crate) fn drain_held_classification<'a>(
     let (_, marker) = entry.note.as_deref()?.split_once(DRAIN_HELD_PREFIX)?;
     let (classification, _) = marker.split_once(']')?;
     (entry.at < typed_since()).then_some(classification)
+}
+
+/// The run a `task_pilot_unresolved` entry written before its typed decision
+/// names in its JSON note. Callers consult it only for an entry without one.
+pub(crate) fn unresolved_pilot_note_run_id(entry: &TaskHistoryEntry) -> Option<String> {
+    let note: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    note["pilot_run_id"].as_str().map(str::to_string)
 }
 
 /// The `key=value` token in a comment header.

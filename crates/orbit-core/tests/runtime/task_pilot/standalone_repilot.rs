@@ -1,7 +1,9 @@
 //! Failed standalone repilots hold unchanged requirements after the run ends.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 
+use super::admission::append_history;
 use super::freshness::apply_explicit_pilot_assessment;
 use super::races::apply_input;
 use super::*;
@@ -78,8 +80,15 @@ fn standalone_task_dependent_failures_hold_proposed_and_backlog_repilots() {
                 .collect::<Vec<_>>();
             assert_eq!(holds.len(), 1, "apply replay must not duplicate the hold");
             assert_eq!(
-                serde_json::from_str::<Value>(holds[0].note.as_deref().unwrap()).unwrap()["pilot_run_id"],
-                run_id
+                holds[0].note.as_deref(),
+                Some(json!({ "pilot_run_id": run_id }).to_string().as_str()),
+                "history views keep showing the same note"
+            );
+            assert_eq!(
+                holds[0].decision,
+                Some(TaskDecision::PilotUnresolved {
+                    pilot_run_id: run_id.clone()
+                })
             );
             assert_eq!(
                 workspace.prepare(&[&task.id])["task_ids"],
@@ -191,8 +200,48 @@ fn standalone_partition_failure_holds_only_task_dependent_repilots() {
     }
 }
 
+/// A hold written before `task_pilot_unresolved` carried a typed decision
+/// names its run only in the JSON note. A replay of that run's settlement
+/// still finds it and adds no second hold.
+fn a_legacy_note_only_hold_still_dedupes_the_replay_of_its_run() {
+    let workspace = Workspace::new();
+    let task = stale_task(&workspace, TaskStatus::Proposed);
+    let run_id = workspace.live_run();
+    let prepared = workspace.prepare_in_run(&run_id, &[]);
+    assert_eq!(prepared["task_ids"], json!([task.id]));
+    append_history(
+        &workspace,
+        &task,
+        TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: "task_pilot_unresolved".into(),
+            note: Some(json!({ "pilot_run_id": run_id }).to_string()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        },
+    );
+    let mut input = apply_input(&workspace, &prepared);
+    input["run_id"] = json!(run_id);
+    input["results"][0]["tasks"][0]["context_files_after"] = json!(["file:missing.rs"]);
+    let failed = workspace.action("apply_task_pilot_results", input);
+    assert_eq!(failed["status"], "failed", "{failed}");
+    finish_failed_run(&workspace, &run_id);
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    let holds = history
+        .iter()
+        .filter(|entry| entry.event == "task_pilot_unresolved")
+        .collect::<Vec<_>>();
+    assert_eq!(holds.len(), 1, "the legacy hold already records this run");
+    assert_eq!(holds[0].decision, None);
+    assert_eq!(discover(&workspace)["task_ids"], json!([]));
+}
+
 crate::scenario_table!(
     standalone_failed_repilot_scenarios,
+    a_legacy_note_only_hold_still_dedupes_the_replay_of_its_run,
     standalone_task_dependent_failures_hold_proposed_and_backlog_repilots,
     standalone_partition_failure_holds_only_task_dependent_repilots
 );
