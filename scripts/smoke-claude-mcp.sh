@@ -33,7 +33,8 @@ fi
 mkdir -p "$REPO_ROOT/.orbit/tmp"
 observed=$(mktemp "$REPO_ROOT/.orbit/tmp/orbit-smoke-observed-XXXXXX")
 export ORBIT_SMOKE_OBSERVED="$observed"
-trap 'python3 -c "from pathlib import Path; import sys; Path(sys.argv[1]).unlink(missing_ok=True)" "$observed"' EXIT
+export ORBIT_SMOKE_COMMAND_STATUS="$observed.status"
+trap 'python3 -c "from pathlib import Path; import sys; [Path(name).unlink(missing_ok=True) for name in sys.argv[1:]]" "$observed" "$ORBIT_SMOKE_COMMAND_STATUS"' EXIT
 
 before_id=$(sqlite3 "$DB" "SELECT COALESCE(MAX(id), 0) FROM audit_events;")
 echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it, bound to this invocation)"
@@ -61,7 +62,8 @@ if [[ "$rc" -eq 2 ]]; then
   exit 2
 fi
 if [[ "$rc" -ne 0 ]]; then
-  echo "FAIL: claude exited $rc; a later audit row is not evidence for this invocation." >&2
+  command_rc="$(cat "$ORBIT_SMOKE_COMMAND_STATUS" 2>/dev/null || echo "$rc")"
+  echo "FAIL: claude exited $command_rc; a later audit row is not evidence for this invocation." >&2
   exit 1
 fi
 

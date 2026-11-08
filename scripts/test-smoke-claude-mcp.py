@@ -16,7 +16,7 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 
-FAKE_CLAUDE = r'''import json, os, sqlite3, subprocess, sys, time
+FAKE_CLAUDE = r'''import json, os, sqlite3, subprocess, sys, time, threading
 prompt = sys.argv[-1]
 mode = os.environ["SMOKE_FIXTURE_MODE"]
 exit_code = int(os.environ.get("SMOKE_FIXTURE_EXIT", "0"))
@@ -67,7 +67,19 @@ try:
         # A different client, not an orbit process of this invocation.
         insert(424242)
     elif mode != "none":
-        proc = subprocess.Popen(["orbit", "-c", CHILD], executable=sys.executable)
+        ready = threading.Event()
+        def spawn():
+            global proc
+            proc = subprocess.Popen(["orbit", "-c", CHILD], executable=sys.executable)
+            ready.set()
+            if mode == "threaded":
+                proc.wait()
+        if mode == "threaded":
+            worker = threading.Thread(target=spawn)
+            worker.start()
+            ready.wait(timeout=5)
+        else:
+            spawn()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and str(proc.pid) not in observed_lines():
             if proc.poll() is not None:
@@ -84,6 +96,8 @@ finally:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+    if mode == "threaded":
+        worker.join(timeout=5)
 if missing:
     print("fixture orbit pid was not observed", file=sys.stderr)
     raise SystemExit(3)
@@ -246,7 +260,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_only_new_successful_mcp_task_list_evidence_passes(self):
         for script in ('smoke-claude-mcp.sh', 'smoke-claude-mcp-sandbox.sh'):
-            for mode, accepted in (('requested', True), ('cli', False), ('unrelated', False),
+            for mode, accepted in (('requested', True), ('threaded', True), ('cli', False), ('unrelated', False),
                                    ('failed', False), ('none', False), ('foreign', False)):
                 with self.subTest(script=script, mode=mode):
                     result = self._run(script, mode)
@@ -257,18 +271,51 @@ class McpSmokeTests(unittest.TestCase):
                     else:
                         self.assertNotIn('PASS:', result.stdout)
 
+    def test_unreadable_process_tree_is_an_attribution_failure(self):
+        # Inject an OS permission refusal into the supervisor only. Its child
+        # is a real subprocess and still exits normally, so this distinguishes
+        # failed observation from an ordinary command failure at the CLI.
+        runner = self.root / "denied-proc.py"
+        runner.write_text('''import os, runpy, subprocess, sys
+original_listdir, original_scandir = os.listdir, os.scandir
+def denied_listdir(path):
+    if str(path).startswith("/proc"):
+        raise PermissionError("fixture proc denied")
+    return original_listdir(path)
+def denied_scandir(path):
+    if str(path).startswith("/proc"):
+        raise PermissionError("fixture proc denied")
+    return original_scandir(path)
+original_run = subprocess.run
+def denied_ps(command, *args, **kwargs):
+    if command[0] == "ps":
+        raise PermissionError("fixture ps denied")
+    return original_run(command, *args, **kwargs)
+os.listdir, os.scandir = denied_listdir, denied_scandir
+subprocess.run = denied_ps
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+''')
+        result = subprocess.run(
+            [sys.executable, str(runner), str(SCRIPTS / "smoke-claude-mcp-invoke.py"),
+             "--", sys.executable, "-c", "pass"],
+            env=dict(self.env, ORBIT_SMOKE_OBSERVED=str(self.root / "observed")),
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot observe the process tree", result.stderr)
+
     def test_foreign_row_and_nonzero_exit_cannot_pass(self):
         """A matching row inserted beside this call, or a bound row after a
         non-zero exit, is not a pass. The smoke reports its own failure (1),
         not the provider's exit status."""
         for script in ('smoke-claude-mcp.sh', 'smoke-claude-mcp-sandbox.sh'):
-            for mode, exit_code in (('foreign', '0'), ('foreign', '17'), ('requested', '17')):
+            for mode, exit_code in (('foreign', '0'), ('foreign', '17'), ('requested', '17'), ('requested', '2')):
                 with self.subTest(script=script, mode=mode, exit_code=exit_code):
                     result = self._run(script, mode, exit_code)
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertNotIn('PASS:', result.stdout)
-                    if exit_code == '17':
-                        self.assertIn('exited 17', result.stdout + result.stderr)
+                    if exit_code != '0':
+                        self.assertIn(f'exited {exit_code}', result.stdout + result.stderr)
                         self.assertNotEqual(result.returncode, 17)
 
 

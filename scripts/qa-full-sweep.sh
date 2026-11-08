@@ -61,10 +61,10 @@ fi
 if [[ "$build_candidate" == 1 ]]; then
   extra_args+=(--build-candidate)
 fi
-for evidence in "${platform_evidence[@]}"; do
+for evidence in ${platform_evidence[@]+"${platform_evidence[@]}"}; do
   extra_args+=(--platform-evidence "$evidence")
 done
 
 python3 "$repo_root/scripts/test-qa-full-sweep.py" \
   --repo-root "$repo_root" --orbit-bin "$orbit_bin" --output "$output" \
-  "${extra_args[@]}"
+  ${extra_args[@]+"${extra_args[@]}"}

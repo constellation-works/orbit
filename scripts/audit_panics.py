@@ -8,13 +8,15 @@ human-readable report and as a JSON oracle for the panic-audit task
 (``T20260509-6``) baseline / regression tracking.
 
 The heuristic for "inside `#[cfg(test)]`" is intentionally simple but
-matches every Rust convention used in this repo today:
+approximates the repository's usual end-of-file test-module layout:
 
 * Files whose path matches ``*_tests.rs``, ``*/tests/*``, ``*test_support*``,
   or ``*/fixtures/*`` are treated as test-only end-to-end.
-* Otherwise, a brace-counting walk tracks whether each line lives inside
-  any nested ``#[cfg(test)]`` (or ``#[cfg(any(test, ...))]`` /
-  ``#[cfg(all(test, ...))]``) scope.
+* Otherwise, every line from the last column-zero ``#[cfg(...test...)]``
+  inline module to EOF is treated as test-only, including any production code
+  placed after that module. Nested cfg expressions are recognized.
+* ``#[test]`` and ``#[tokio::test]`` function bodies are also marked using
+  brace counting. Other nested test-only scopes are not tracked.
 
 Workspace membership comes from Cargo.toml, including extracted crates;
 the execution-critical blast-radius set remains explicit. Pattern and test
@@ -38,9 +40,6 @@ PATTERN = re.compile(
     r"|\bunimplemented!\("
     r"|\btodo!\("
 )
-
-CFG_TEST_ATTR = re.compile(
-    r"^\s*#\[\s*cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\s*\]")
 
 EXEC_CRITICAL_CRATES = {"orbit-engine", "orbit-agent", "orbit-tools", "orbit-exec"}
 
@@ -87,12 +86,6 @@ def strip_string_and_char_literals(line: str) -> str:
     return line
 
 
-TOP_LEVEL_CFG_TEST_MOD = re.compile(
-    r"^#\[cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\]\s*\n"
-    r"(?:#\[[^\]]*\]\s*\n)*"
-    r"\s*(?:pub\s+)?mod\s+\w+\s*\{",
-    re.MULTILINE,
-)
 INLINE_TEST_FN = re.compile(r"^\s*#\[(?:test|tokio::test)\b", re.MULTILINE)
 
 

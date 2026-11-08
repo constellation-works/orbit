@@ -9,13 +9,16 @@ is not evidence unless that process's command name is ``orbit``.
 Descendants are read from the OS (Linux ``/proc``, otherwise ``ps``). Each
 matching pid is appended to ``$ORBIT_SMOKE_OBSERVED`` as soon as it is seen,
 one complete line at a time, so a caller can wait for its own server to be
-recorded. Exit status is the command's status. Exit 2 when the process tree
-cannot be observed or the invocation is not usable.
+recorded. Exit 1 for command or invocation failures, and exit 2 only when the
+process tree cannot be observed. The command's original status is written to
+``$ORBIT_SMOKE_COMMAND_STATUS`` when supplied, so callers can report exit 2
+from a command separately from attribution failure.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -40,24 +43,28 @@ def _cmdline_basename(pid: int) -> str | None:
 
 
 def _linux_children(pid: int) -> list[int] | None:
-    """Direct children, or None when this kernel has no children file.
-
-    An empty file is a real answer (the process has no children). A missing
-    file is the signal to fall back to a parent-pid scan. ``FileNotFoundError``
-    is raised for both a missing file and an exited process; the caller treats
-    that as "use the parent-pid scan" only when the file is absent on a live
-    process, and an empty result when the process is already gone.
-    """
-    path = f"/proc/{pid}/task/{pid}/children"
-    if not os.path.isdir(f"/proc/{pid}"):
-        return []
+    """Children of every thread, or None when the live tree is unreadable."""
+    tasks = Path(f"/proc/{pid}/task")
     try:
-        text = open(path, encoding="ascii").read()
+        threads = list(tasks.iterdir())
     except FileNotFoundError:
-        return None
+        return [] if not os.path.isdir(f"/proc/{pid}") else None
     except OSError:
-        return []
-    return [int(part) for part in text.split() if part.isdigit()]
+        return None
+    children: set[int] = set()
+    for task in threads:
+        try:
+            text = (task / "children").read_text(encoding="ascii")
+        except FileNotFoundError:
+            # Threads can exit between listing and reading. A missing children
+            # file on a live thread means this kernel needs the ppid fallback.
+            if task.is_dir():
+                return None
+            continue
+        except OSError:
+            return None
+        children.update(int(part) for part in text.split() if part.isdigit())
+    return sorted(children)
 
 
 def _stat_ppid(pid: int) -> int | None:
@@ -75,13 +82,16 @@ def _stat_ppid(pid: int) -> int | None:
     return int(fields[1])
 
 
-def _descendants_by_ppid(root: int) -> list[int]:
+def _descendants_by_ppid(root: int) -> list[int] | None:
     children: dict[int, list[int]] = {}
     names: dict[int, str | None] = {}
     try:
         entries = os.listdir("/proc")
     except OSError:
-        return []
+        return None
+    # Unlike unrelated processes, the command itself must be observable.
+    if _stat_ppid(root) is None and os.path.isdir(f"/proc/{root}"):
+        return None
     for name in entries:
         if not name.isdigit():
             continue
@@ -107,7 +117,7 @@ def _descendants_by_ppid(root: int) -> list[int]:
     return found
 
 
-def _sample_linux(root: int) -> list[int]:
+def _sample_linux(root: int) -> list[int] | None:
     direct = _linux_children(root)
     if direct is None:
         return _descendants_by_ppid(root)
@@ -131,12 +141,13 @@ def _sample_linux(root: int) -> list[int]:
 
 
 def _sample_ps(root: int) -> list[int] | None:
-    result = subprocess.run(
-        ["ps", "-ax", "-o", "pid=,ppid=,args="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid=,args="],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
     if result.returncode != 0:
         return None
     children: dict[int, list[int]] = {}
@@ -198,11 +209,11 @@ def main(argv: list[str]) -> int:
         args = args[1:]
     if not args:
         print("FAIL: smoke invoke: missing command", file=sys.stderr)
-        return 2
+        return 1
     observed = os.environ.get("ORBIT_SMOKE_OBSERVED")
     if not observed:
         print("FAIL: smoke invoke: ORBIT_SMOKE_OBSERVED is unset", file=sys.stderr)
-        return 2
+        return 1
     try:
         proc = subprocess.Popen(
             args,
@@ -211,7 +222,7 @@ def main(argv: list[str]) -> int:
         )
     except OSError as error:
         print(f"FAIL: smoke invoke: cannot start {args[0]}: {error}", file=sys.stderr)
-        return 2
+        return 1
     chunks: list[bytes] = []
 
     def drain() -> None:
@@ -244,14 +255,19 @@ def main(argv: list[str]) -> int:
         else:
             _record(observed, seen, again)
     rc = proc.wait()
+    status_path = os.environ.get("ORBIT_SMOKE_COMMAND_STATUS")
+    if status_path:
+        with open(status_path, "w", encoding="ascii") as handle:
+            handle.write(f"{rc}\n")
     thread.join()
     sys.stdout.buffer.write(b"".join(chunks))
     if not observable:
         print("FAIL: smoke invoke: cannot observe the process tree", file=sys.stderr)
         return 2
-    if rc < 0:
+    if rc:
+        print(f"FAIL: smoke invoke: command exited {rc}", file=sys.stderr)
         return 1
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

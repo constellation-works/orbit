@@ -969,10 +969,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         # Every selection adds the always-run security and recovery crates.
         self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"),
                          "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
-        # The skill mirror is checked against its source by the sync guard, so
-        # it selects no crate; other plugin/ paths run in full.
-        self.assertEqual(self.pull_request("plugin/skills/x.md"),
-                         "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        # default_catalog reads setup reference pages in the generated mirror.
+        core_scope = self.pull_request("crates/orbit-core/src/lib.rs")
+        self.assertEqual(self.pull_request("plugin/skills/x.md"), core_scope)
         self.assertEqual(self.pull_request("plugin/plugin.json"), "full")
         # A governed tool added to orbit-tools still selects orbit-mcp's
         # task_route boundary test and orbit-cli's tool goldens.
@@ -991,10 +990,10 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("scripts/unit-test-baseline.json", "crates/orbit-store/src/lib.rs"),
                          self.pull_request("crates/orbit-store/src/lib.rs"))
         # The UX rules, their lib helpers, README and Node tests have no
-        # Cargo reader; the guardrail runs the QA sweep, so that script
-        # selects no crate either. run.mjs is undeclared and stays a full run.
+        # Cargo reader. The sweep script is also read by orbit-core tests.
+        # run.mjs is undeclared and stays a full run.
         always_run = "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store"
-        self.assertEqual(self.pull_request("scripts/test-qa-full-sweep.py"), always_run)
+        self.assertEqual(self.pull_request("scripts/test-qa-full-sweep.py"), core_scope)
         self.assertEqual(self.pull_request("scripts/ux-rules/cli/mcp-cli-parity.mjs"), always_run)
         self.assertEqual(self.pull_request("scripts/ux-rules/tests/implementer-detail-browser.test.mjs"),
                          always_run)
@@ -1018,6 +1017,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
 
     def test_pull_request_test_selection(self):
+        engine_scope = self.pull_request("crates/orbit-engine/src/lib.rs")
         selections = {
             "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"],
                            "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store"),
@@ -1029,7 +1029,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
             "toolchain file": (["crates/orbit-cli/src/main.rs", "rust-toolchain.toml"], "full"),
             "member manifest": (["crates/orbit-cli/Cargo.toml"], "full"),
             "non-crate path": (["crates/orbit-cli/src/main.rs", "scripts/ci-guardrails.sh"], "full"),
-            "workflow": (["crates/orbit-cli/src/main.rs", ".github/workflows/ci.yml"], "full"),
+            "workflow": (["crates/orbit-cli/src/main.rs", ".github/workflows/ci.yml"], engine_scope),
             "path no crate owns": (["crates/orbit-retired/src/lib.rs"], "full"),
             # Read across crates by tests the dependency graph cannot see.
             "cross-crate fixture": (["crates/orbit-web/assets/dashboard/vendor/marked.umd.js"],

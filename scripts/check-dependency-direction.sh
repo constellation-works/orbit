@@ -10,6 +10,19 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 fail=0
 
+# Conditional scans intentionally accept rg's no-match status (1), but an IO
+# error is itself a violation. Emit a match on stdout too, so command
+# substitutions and exclusion pipelines cannot turn a scan error into clean.
+dependency_matches() {
+  local status=0
+  command rg "$@" || status=$?
+  if [[ "$status" -gt 1 ]]; then
+    printf 'dependency scan failed (ripgrep exit %s)\n' "$status"
+    return 0
+  fi
+  return "$status"
+}
+
 allowed_internal_deps() {
   case "$1" in
     orbit-types)
@@ -279,7 +292,7 @@ done < <(load_workspace_dependencies)
 # cases or adapters (the dependency policy above); composition is the only
 # owner allowed to join resolved config, bootstrap, runtime construction, and
 # adapter registration.
-if rg -n 'crate::adapter' \
+if dependency_matches -n 'crate::adapter' \
   "$repo_root/crates/orbit-core/src/application" \
   -g '*.rs' -g '!**/tests/**'; then
   echo "forbidden orbit-core application-to-adapter import"
@@ -427,9 +440,9 @@ PY
 
 # Resolve relative use trees at each file's module depth: grouped and multiline
 # imports into higher modules count, while imports within contracts stay legal.
-if rg -n "crate::application::(${contracts_higher})\\b" \
+if dependency_matches -n "crate::application::(${contracts_higher})\\b" \
   "$app_src/contracts" -g '*.rs' ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
+  dependency_matches -n -U "crate::application::\\{[^}]*\\b(${contracts_higher})\\b" \
     "$app_src/contracts" -g '*.rs' ||
   ! super_chains_into "$app_src" contracts "$contracts_higher"; then
   echo "orbit-core application contracts must not import the application modules"
@@ -438,28 +451,33 @@ fi
 
 # Config path primitives are below aliases and operation, which must not
 # depend on layered admission. The leaf may only use TOML and std.
-# Skip absent paths so the self-test's isolated fixture (which stubs only
-# orbit-core) runs without ripgrep IO errors; production checkouts always
-# carry these files.
 config_src="$repo_root/crates/orbit-config/src"
+# These are policy owners, not optional files. A rename must update the rule,
+# rather than silently dropping that boundary from the scan.
+for module in aliases.rs seeding.rs config_document.rs crew operation provider_limit \
+  layering plugin_enablement.rs unknown.rs resolved/compatibility.rs config_io.rs \
+  registry crew_defaults.rs; do
+  if [[ ! -e "$config_src/$module" ]]; then
+    echo "dependency scan path missing: $config_src/$module" >&2
+    exit 1
+  fi
+done
 for module in aliases.rs operation; do
-  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" layering crate-root; then
+  if ! super_chains_into "$config_src" "$module" layering crate-root; then
     echo "orbit-config ${module} must not name layering"
     fail=1
   fi
 done
 # [ORB-22707] The leaf also owns the typed path read, so it may use serde and
 # orbit-common's error and redaction, but never a sibling module.
-if [ -f "$config_src/config_document.rs" ]; then
-  if rg -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_document.rs"; then
-    echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
-    fail=1
-  fi
-  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_document.rs" |
-    grep -vE '[[:space:]]use[[:space:]]+(std|toml|serde|orbit_common)::|:use[[:space:]]+(std|toml|serde|orbit_common)::'; then
-    echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
-    fail=1
-  fi
+if dependency_matches -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_document.rs"; then
+  echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+  fail=1
+fi
+if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_document.rs" |
+  grep -vE '[[:space:]]use[[:space:]]+(std|toml|serde|orbit_common)::|:use[[:space:]]+(std|toml|serde|orbit_common)::'; then
+  echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+  fail=1
 fi
 
 # [ORB-22707] The key registry sits above the domain admission modules whose
@@ -467,8 +485,8 @@ fi
 # config_document and leave snapshot projections to registry/settings, so none
 # names the registry; its crate-root re-exports count as the same edge.
 config_registry_names='registry|AutoConcurrencySettings|CONFIG_KEY_REGISTRY|ConfigKeyDescriptor|ConfigKeyTier|ConfigSection|ConfigSnapshot|ExperimentSettings|ExploreBriefSettings|ExploreSettings|LeaseListenerSettings|LeaseListenerTlsSettings|MachineSettings|MidRunSteeringSettings|NoticeKindHours|NoticeSettings|RegressionRiskSettings|ResourceThrottleSettings|WorkerContainmentSettings|admit_config_key|admit_settable_config_key|config_key_options|describe_config_key|immutable_key_note|is_global_only_key'
-for module in aliases.rs attention.rs seeding.rs crew operation provider_limit; do
-  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" "$config_registry_names" crate-root; then
+for module in aliases.rs seeding.rs crew operation provider_limit; do
+  if ! super_chains_into "$config_src" "$module" "$config_registry_names" crate-root; then
     echo "orbit-config ${module} must not name the registry; read TOML through config_document"
     fail=1
   fi
@@ -481,25 +499,23 @@ done
 # TOML or serde parsing.
 config_store_names='store|ConfigStore|ConfigScope|WorkspaceInitMode'
 for module in layering plugin_enablement.rs unknown.rs seeding.rs; do
-  if [ -e "$config_src/$module" ] && ! super_chains_into "$config_src" "$module" "$config_store_names" crate-root; then
+  if ! super_chains_into "$config_src" "$module" "$config_store_names" crate-root; then
     echo "orbit-config ${module} must not name the store; read through config_io"
     fail=1
   fi
 done
-if [ -e "$config_src/resolved/compatibility.rs" ] && ! super_chains_into "$config_src" resolved/compatibility.rs store crate-root; then
+if ! super_chains_into "$config_src" resolved/compatibility.rs store crate-root; then
   echo "orbit-config resolved/compatibility must read through config_io, not the store"
   fail=1
 fi
-if [ -f "$config_src/config_io.rs" ]; then
-  if rg -n '\b(crate|super|self|toml|toml_edit|serde)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_io.rs"; then
-    echo "orbit-config config_io must remain a std/orbit-common leaf"
-    fail=1
-  fi
-  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_io.rs" |
-    grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common)::|:use[[:space:]]+(std|orbit_common)::'; then
-    echo "orbit-config config_io must remain a std/orbit-common leaf"
-    fail=1
-  fi
+if dependency_matches -n '\b(crate|super|self|toml|toml_edit|serde)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_io.rs"; then
+  echo "orbit-config config_io must remain a std/orbit-common leaf"
+  fail=1
+fi
+if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_io.rs" |
+  grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common)::|:use[[:space:]]+(std|orbit_common)::'; then
+  echo "orbit-config config_io must remain a std/orbit-common leaf"
+  fail=1
 fi
 
 # [ORB-22417] Built-in crew defaults live in the crew_defaults leaf, below
@@ -508,20 +524,18 @@ fi
 # re-exports of resolved config count as the same edge). The leaf itself uses
 # only std, orbit-common and orbit-types: no sibling module.
 config_resolved_names='resolved|ResolvedConfig|PrSettings|CodexExecutionPolicy|ExecutionEnvPolicy|CompatibilityConfigKey|CompatibilityConfigKeyDisposition|RETIRED_SYSTEM_CREW|RETIRED_SYSTEM_CREW_WARNING|compatibility_config_keys_at|compatibility_config_keys_present|disabled_crew_message|executor_host_os|names_retired_system_crew'
-if [ -e "$config_src/registry" ] && ! super_chains_into "$config_src" registry "$config_resolved_names" crate-root; then
+if ! super_chains_into "$config_src" registry "$config_resolved_names" crate-root; then
   echo "orbit-config registry must not name resolved config; read crew defaults through crew_defaults"
   fail=1
 fi
-if [ -f "$config_src/crew_defaults.rs" ]; then
-  if rg -n '\b(crate|super|self|toml|toml_edit|serde|serde_json|jsonschema|tracing)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/crew_defaults.rs"; then
-    echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
-    fail=1
-  fi
-  if rg -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/crew_defaults.rs" |
-    grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common|orbit_types)::|:use[[:space:]]+(std|orbit_common|orbit_types)::'; then
-    echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
-    fail=1
-  fi
+if dependency_matches -n '\b(crate|super|self|toml|toml_edit|serde|serde_json|jsonschema|tracing)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/crew_defaults.rs"; then
+  echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
+  fail=1
+fi
+if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/crew_defaults.rs" |
+  grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common|orbit_types)::|:use[[:space:]]+(std|orbit_common|orbit_types)::'; then
+  echo "orbit-config crew_defaults must remain a std/orbit-common/orbit-types leaf"
+  fail=1
 fi
 
 # Print every call in production code under application module `$2` (outside
@@ -730,9 +744,9 @@ fi
 # `Source` Git reader only through `task::TaskAutomationPort` and
 # `task::SourceGit`, with no allowlist. A call to an inherent `OrbitRuntime`
 # method that automation defines is the same edge by name [ORB-22035].
-if rg -n 'crate::application::automation\b|(super::)+automation\b' \
+if dependency_matches -n 'crate::application::automation\b|(super::)+automation\b' \
   "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
+  dependency_matches -n -U 'crate::application::\{[^}]*\bautomation\b' \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   ! super_chains_into "$app_src" task automation ||
   ! inherent_calls_into "$app_src" task automation '' ''; then
@@ -780,10 +794,10 @@ task_forecast_shim_allowed='/application/task/mod\.rs:[0-9]+:pub use crate::appl
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
 task_upper_store_allowed='^task/steering\.rs:[0-9]+:.*stores\(\)\.jobs\(\)\.read_run_state|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/steering\.rs:[0-9]+:\s+\.read_run_state\(&source\.run_id\)|^task/pilot/drain_promotion\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_start_requests\(\)'
-task_upper_paths="$(rg -n "crate::application::(${task_upper_modules})\\b" \
+task_upper_paths="$(dependency_matches -n "crate::application::(${task_upper_modules})\\b" \
   "$app_src/task" -g '*.rs' -g '!**/tests/**' | grep -Ev "$task_forecast_shim_allowed" || true)"
 if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${task_upper_modules})\\b" \
+  dependency_matches -n -U "crate::application::\\{[^}]*\\b(${task_upper_modules})\\b" \
     "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
@@ -800,9 +814,9 @@ fi
 # inherent method either defines (derived from their `impl OrbitRuntime`
 # blocks [ORB-22003]) is a reintroduced edge.
 job_drain_modules='distributed|pull_drain'
-if rg -n "crate::application::(${job_drain_modules})\\b" \
+if dependency_matches -n "crate::application::(${job_drain_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${job_drain_modules})\\b" \
+  dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_drain_modules})\\b" \
     "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" job "$job_drain_modules" '' '' ||
   ! super_chains_into "$app_src" job "$job_drain_modules"; then
@@ -825,9 +839,9 @@ fi
 # `JobExperimentPort`, and the pool they read is the
 # `contracts::ExperimentCrewPool` value.
 job_upper_modules='admission|experiment|automation|backlog_forecast|review|sweep_filing|workspace_auto'
-if rg -n "crate::application::(${job_upper_modules})\\b" \
+if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
+  dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
     "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" job "$job_upper_modules" '' '' ||
   ! super_chains_into "$app_src" job "$job_upper_modules"; then
@@ -855,11 +869,11 @@ fi
 # methods and functions `$3` (empty for none).
 guard_upper_layer() {
   local module="$1" higher="$2" calls="$3"
-  if rg -n "crate::application::(${higher})\\b" \
+  if dependency_matches -n "crate::application::(${higher})\\b" \
     "$app_src/$module" -g '*.rs' -g '!**/tests/**' ||
-    rg -n -U "crate::application::\\{[^}]*\\b(${higher})\\b" \
+    dependency_matches -n -U "crate::application::\\{[^}]*\\b(${higher})\\b" \
       "$app_src/$module" -g '*.rs' -g '!**/tests/**' ||
-    { [[ -n "$calls" ]] && rg -n "\\b(${calls})\\s*(::<[^>]*>)?\\s*\\(" \
+    { [[ -n "$calls" ]] && dependency_matches -n "\\b(${calls})\\s*(::<[^>]*>)?\\s*\\(" \
       "$app_src/$module" -g '*.rs' -g '!**/tests/**'; } ||
     ! super_chains_into "$app_src" "$module" "$higher"; then
     echo "orbit-core ${module} must reach ${higher//|/, } only through ports the lower module owns"
@@ -884,9 +898,9 @@ guard_upper_layer backlog_forecast 'sweep_filing' ''
 # or a call to an inherent method it defines (names derived, so the port method
 # keeps a distinct name) is a reintroduced edge. The reverse edge, `experiment`
 # reading the claim receipt, stays legal.
-if rg -n 'crate::application::experiment\b' \
+if dependency_matches -n 'crate::application::experiment\b' \
   "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U 'crate::application::\{[^}]*\bexperiment\b' \
+  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
     "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" distributed experiment '' '' ||
   ! super_chains_into "$app_src" distributed experiment; then
@@ -901,9 +915,9 @@ fi
 # These exact lines read the task store, whose method shares a runtime name.
 landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
 for lower_module in task job review distributed; do
-  if rg -n 'crate::application::landing\b' \
+  if dependency_matches -n 'crate::application::landing\b' \
     "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    rg -n -U 'crate::application::\{[^}]*\blanding\b' \
+    dependency_matches -n -U 'crate::application::\{[^}]*\blanding\b' \
       "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
     ! inherent_calls_into "$app_src" "$lower_module" landing "$landing_store_reads_allowed" '' ||
     ! super_chains_into "$app_src" "$lower_module" landing; then
@@ -922,9 +936,9 @@ done
 # ResidentRoutineStatusPort, implemented by routines [ORB-22956], so the
 # routines -> automation -> resident path has no back-edge into routines.
 for lower_module in automation auto_tasks resident; do
-  if rg -n 'crate::application::routines\b' \
+  if dependency_matches -n 'crate::application::routines\b' \
     "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    rg -n -U 'crate::application::\{[^}]*\broutines\b' \
+    dependency_matches -n -U 'crate::application::\{[^}]*\broutines\b' \
       "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
     ! inherent_calls_into "$app_src" "$lower_module" routines '' '' ||
     ! super_chains_into "$app_src" "$lower_module" routines; then
@@ -958,18 +972,18 @@ fi
 # call into `codebase`, or any `codebase` path or call back into the forecast,
 # is a new edge.
 forecast_codebase_allowed='^backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = runtime\.task_riskiness_model\(\)\?;$'
-if rg -n 'crate::application::codebase\b' \
+if dependency_matches -n 'crate::application::codebase\b' \
   "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U 'crate::application::\{[^}]*\bcodebase\b' \
+  dependency_matches -n -U 'crate::application::\{[^}]*\bcodebase\b' \
     "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" backlog_forecast codebase "$forecast_codebase_allowed" '' ||
   ! super_chains_into "$app_src" backlog_forecast codebase; then
   echo "orbit-core backlog_forecast may reach codebase only through runtime.task_riskiness_model() in assembly.rs"
   fail=1
 fi
-if rg -n 'crate::application::backlog_forecast\b' \
+if dependency_matches -n 'crate::application::backlog_forecast\b' \
   "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
-  rg -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
+  dependency_matches -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
     "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" codebase backlog_forecast '' '' ||
   ! super_chains_into "$app_src" codebase backlog_forecast; then
@@ -978,17 +992,17 @@ if rg -n 'crate::application::backlog_forecast\b' \
 fi
 
 shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery|PrecedentAssistState|PrecedentAssistOutcomeSource|PrecedentAssistOutcome|PrecedentAssistDemotion|PrecedentAssistEnd|PrecedentAssistEnablement|ClockSettings|DEFAULT_CLOCK_CADENCE_SECONDS|LAUNCHD_LABEL|SYSTEMD_UNIT|load_clock_settings|save_clock_settings|ScheduleDisplayState'
-if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
+if dependency_matches -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
-  rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \
+  dependency_matches -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \
     "$repo_root/crates" -g '*.rs' ||
-  rg -n -U "\\b(${app_modules})(::[a-z_]+)*::\\{[^}]*\\b(${shared_contracts})\\b" \
+  dependency_matches -n -U "\\b(${app_modules})(::[a-z_]+)*::\\{[^}]*\\b(${shared_contracts})\\b" \
     "$repo_root/crates" -g '*.rs'; then
   echo "shared application contracts are defined and imported only at application::contracts"
   fail=1
 fi
 
-if rg -n 'ResolvedConfig::load|ConfigRoots::' \
+if dependency_matches -n 'ResolvedConfig::load|ConfigRoots::' \
   "$repo_root/crates/orbit-runtime/src" \
   -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-runtime must consume resolved config supplied by composition"
@@ -999,25 +1013,25 @@ fi
 # is directional: contracts and shared fs mechanics are leaves; each driver is
 # isolated; only repositories, workflows, and composition may join drivers.
 store_src="$repo_root/crates/orbit-store/src"
-if rg -n 'crate::(driver|repository|workflow)|\brusqlite\b' \
+if dependency_matches -n 'crate::(driver|repository|workflow)|\brusqlite\b' \
   "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store contracts must not import persistence implementations"
   fail=1
 fi
 
-if rg -n 'crate::(driver::sqlite|repository|workflow)|use crate::(Store|StoreTx)' \
+if dependency_matches -n 'crate::(driver::sqlite|repository|workflow)|use crate::(Store|StoreTx)' \
   "$store_src/driver/file" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store file driver must not import SQLite, repositories, or workflows"
   fail=1
 fi
 
-if rg -n 'crate::(driver::file|repository|workflow)' \
+if dependency_matches -n 'crate::(driver::file|repository|workflow)' \
   "$store_src/driver/sqlite" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store SQLite driver must not import file drivers, repositories, or workflows"
   fail=1
 fi
 
-if rg -n 'crate::(driver|repository|workflow)' \
+if dependency_matches -n 'crate::(driver|repository|workflow)' \
   "$store_src/fs" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store filesystem primitives must not import drivers or orchestration"
   fail=1
@@ -1048,7 +1062,7 @@ done
 # State consumers share Automation's evaluator and Store checkpoint owner.
 # Core may gather authoritative facts, but must not grow a second checkpoint
 # implementation or hashing/coverage acceptance path [ORB-11331].
-if rg -n 'automation_commit\(|Sha256' \
+if dependency_matches -n 'automation_commit\(|Sha256' \
   "$repo_root/crates/orbit-core/src/application/automation" \
   --glob '*.rs' --glob '!**/tests/**'; then
   echo "Core automation must use the shared scheduling/checkpoint contract"
@@ -1060,14 +1074,14 @@ fi
 # meaning digests, and landing classification stay in Automation's `review`
 # module. Core's review module must not grow its own digest, validator,
 # checkpoint, or evaluator.
-if rg -n 'automation_commit\(|Sha256|fn evaluate\b|fn exclusion\b|fn certificate_acceptable\b|fn task_meaning_digest\b|definition_epoch' \
+if dependency_matches -n 'automation_commit\(|Sha256|fn evaluate\b|fn exclusion\b|fn certificate_acceptable\b|fn task_meaning_digest\b|definition_epoch' \
   "$repo_root/crates/orbit-core/src/application/review" \
   --glob '*.rs' --glob '!**/tests/**'; then
   echo "Core review must use orbit-automation's shared coverage rules and Store persistence"
   fail=1
 fi
 
-if rg -n 'ReviewStoreBackend|review_certificate_record|review_reserve' \
+if dependency_matches -n 'ReviewStoreBackend|review_certificate_record|review_reserve' \
   "$repo_root/crates/orbit-automation/src" \
   --glob '*.rs' --glob '!**/tests/**'; then
   echo "orbit-automation must not persist review evidence; Store owns ledgers and certificates"

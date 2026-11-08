@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Every src/**/*.rs file (excluding mod.rs/lib.rs/main.rs and anything under a
-# tests/ dir) must be reachable from the module tree: declared as `mod <stem>`
+# Every src/**/*.rs file, including directory and sibling-test mod.rs owners,
+# must be reachable from the module tree: declared as `mod <stem>`
 # resolved through its enclosing module directories, or referenced by a direct
 # `#[path = "..."]` attribute (Rust escapes, whitespace, comments and raw strings) in
 # the crate's src tree.
@@ -12,8 +12,9 @@ set -euo pipefail
 # docs/design/orbit-cleanup/orbitenginecleanup.md §1/§11.
 #
 # Under the sibling-test layout (docs/design-patterns/test_layout.md), every
-# src/**/tests/<name>.rs file must likewise be declared as `mod <name>` in its
-# own tests/mod.rs (or reached via a `#[path]` attribute). A file that looks
+# src/**/tests/*.rs file must likewise be declared by a reachable enclosing
+# module (or reached via a `#[path]` attribute), including tests/mod.rs itself.
+# A file that looks
 # like a registered test but isn't compiles to nothing and silently drops its
 # coverage — see F2026-08-108.
 
@@ -304,23 +305,16 @@ sub is_declared {
       push @paths, $path if -f $path && $path =~ /\.rs$/;
     }}, $crate_src);
     my (%targets, %indexed);
-    # Resolve owners before their children so redirected files never acquire a
-    # guessed stem directory. Keep disconnected owners visible as before, after
-    # walking declarations from crate/directory roots (including ignored ones).
-    @paths = sort {
-      (basename($b) =~ /^(?:mod|lib|main)\.rs$/ ? 1 : 0)
-        <=> (basename($a) =~ /^(?:mod|lib|main)\.rs$/ ? 1 : 0)
-        || $a cmp $b
-    } @paths;
-    for my $path (@paths) {
+    # Only Cargo's conventional entrypoints seed traversal. Directory mod.rs
+    # owners (and ordinary files) must first be reached by a declaration;
+    # otherwise a disconnected subtree would license its own children.
+    for my $path (sort @paths) {
+      my $relative = File::Spec->abs2rel($path, $crate_src);
+      next unless $relative =~ m{^(?:lib|main)\.rs$|^bin/[^/]+\.rs$|^bin/[^/]+/main\.rs$};
       my $resolved = abs_path($path);
-      my $is_root = basename($path) =~ /^(?:mod|lib|main)\.rs$/;
-      # Roots sharing one physical source can still own different logical
-      # directories. Other owners retain their declaration-derived contexts.
-      next if !defined($resolved) || (!$is_root && exists $indexed{$resolved});
+      next unless defined($resolved);
       my $source_directory = abs_path(dirname($path));
-      my $directory = $is_root
-        ? $source_directory : File::Spec->catdir($source_directory, basename($path, '.rs'));
+      my $directory = $source_directory;
       my @pending = ([$resolved, $source_directory, $directory]);
       while (my $owner = pop @pending) {
         my ($owner_path, $owner_source_directory, $owner_directory) = @$owner;
@@ -344,10 +338,9 @@ my (@modules, @tests);
 find({ no_chdir => 1, wanted => sub {
   my $file = $File::Find::name;
   return unless -f $file && !-l $file && $file =~ /\.rs$/;
-  my $base = basename($file);
   if ($file =~ m{/tests/}) {
-    push @tests, $file unless $base eq 'mod.rs';
-  } elsif ($file !~ m{/src/bin/} && $base !~ /^(?:mod|lib|main)\.rs$/) {
+    push @tests, $file;
+  } elsif ($file !~ m{/src/(?:lib|main)\.rs$|/src/bin/[^/]+\.rs$|/src/bin/[^/]+/main\.rs$}) {
     push @modules, $file;
   }
 }}, glob('crates/*/src'));

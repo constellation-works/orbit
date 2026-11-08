@@ -249,6 +249,7 @@ cmd_remove() {
 }
 
 main() {
+  require_home
   local cmd="${1:-}"
   shift || true
   case "$cmd" in
