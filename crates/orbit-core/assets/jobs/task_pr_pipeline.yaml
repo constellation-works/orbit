@@ -835,6 +835,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
+        completion: "{{ input.completion }}"
         already_landed_checkpoint: "{{ steps.commit.output }}"
 
     # ORB-23003: landing follow-through for a delivery that ends in review
