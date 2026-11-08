@@ -599,7 +599,7 @@ the Start control. The server validates the request before starting a run.
 
 | Control | Effect |
 |---|---|
-| **Window length** | `1h`, `2h`, `4h`, `8h`, `12h` or `24h` (`--for`). The default is `1h`. |
+| **Window length** | A stepper for whole hours from 1 to 24, shown as `<n>h` and submitted as `for_duration: <n>h` (`--for`). The default is `1h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
 | **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session on the owner; disabled on a replica. |
 | **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. A hold for pilot warnings also shows each finding's kind and first line. |

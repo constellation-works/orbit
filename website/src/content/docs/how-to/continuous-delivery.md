@@ -277,8 +277,9 @@ end with some tasks still in the backlog.
 
 ## 4. Start a bounded window
 
-- **Dashboard:** on **Drain → Start**, pick a **Window length** (`1h`, `2h`, `4h`,
-  `8h`, `12h`, or `24h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+- **Dashboard:** on **Drain → Start**, use the **Window length** stepper to select
+  whole hours from 1 to 24 (default `1h`), shown as `<n>h` and submitted as
+  `for_duration: <n>h`; set **Parallel tasks**, and turn on **Mark shipped tasks done** to
   complete them (off stops at review). Optionally turn on **Approve qualifying
   proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
   window's blocked PRs. Click **Start … window** and
