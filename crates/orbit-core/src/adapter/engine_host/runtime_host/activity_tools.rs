@@ -5,7 +5,7 @@ use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::task::{ReservationOwnerMetadata, Task};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{ToolSessionContext, tool_requirement_name};
 use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed, tools_allowed_by_disallow_list};
 
 use crate::OrbitRuntime;
@@ -207,7 +207,13 @@ fn resolve_granted_deny_lifts(
 ) -> Result<GrantedDenyLifts, DispatchError> {
     let mut grants = GrantedDenyLifts::default();
     for task in tasks {
-        for tool_name in &task.granted_tools {
+        // A grant stored before tool families reads as its family action.
+        for tool_name in task
+            .granted_tools
+            .iter()
+            .map(|name| tool_requirement_name(name).into_owned())
+        {
+            let tool_name = &tool_name;
             let refuse = |reason: String| DispatchError::RequiredToolAdmission {
                 task_id: task.id.clone(),
                 tool_name: tool_name.clone(),
@@ -270,7 +276,14 @@ fn admit_required_tools(
         deny_policy.is_some_and(|policy| drops_disallowed_requirements(&policy.activity));
     for task in tasks {
         let task_id = &task.id;
-        for tool_name in task.required_tools.iter().cloned() {
+        // A requirement stored before tool families (a task minted, or an
+        // auto-task definition written, by an earlier release) reads as its
+        // family action rather than refusing admission [ORB-23280].
+        for tool_name in task
+            .required_tools
+            .iter()
+            .map(|name| tool_requirement_name(name).into_owned())
+        {
             let reason = granted_tool_refusal(runtime, &tool_name).map_err(|error| {
                 DispatchError::CliInvocationFailed(format!(
                     "read tool `{tool_name}` admission state for task `{task_id}`: {error}"
