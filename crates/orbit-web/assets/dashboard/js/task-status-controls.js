@@ -1,7 +1,7 @@
 // Orbit dashboard task status and crew controls: the status and crew selects, their forced-status confirmation and their apply functions.
 
 import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
-import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS } from './task-shared.js';
+import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
 import { collapseTask, stopRowInteraction } from './task-nav.js';
@@ -29,7 +29,7 @@ export function buildStatusUpdateControl(task, context) {
     (status) => status && status !== task.status && !targets.includes(status),
   );
   const mutable = canMutateTask(task);
-  const feedback = taskState.statusFeedback.get(task.id);
+  const feedback = taskState.statusFeedback.get(taskDispatchIdentity(task));
   const label = `Update status for ${task.id}`;
   const select = el("select", {
     class: "task-status-select mono",
@@ -103,7 +103,7 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   }
 
   const mutable = canMutateTask(task);
-  const feedback = taskState.crewFeedback.get(task.id);
+  const feedback = taskState.crewFeedback.get(taskDispatchIdentity(task));
   const label = `Update crew for ${task.id}`;
   const select = el("select", {
     class: "task-crew-select mono",
@@ -156,7 +156,7 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
     select.appendChild(option);
   }
 
-  if (crews.length === 0) {
+  if (crews.length === 0 && humanCrews.length === 0) {
     select.disabled = true;
     defaultOption.textContent = "crew unavailable";
   }
@@ -178,7 +178,7 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   if (withChip) {
     const chip = el("span", {
       class: "task-select-chip",
-      text: crews.length === 0 ? "unavailable" : staleCurrentValue
+      text: crews.length === 0 && humanCrews.length === 0 ? "unavailable" : staleCurrentValue
         ? `${currentValue} (missing)`
         : currentValue || resolvedCrewName(task),
     });
@@ -212,17 +212,17 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   // the next change; on a folded row or notice it expires like the feedback it
   // replaced, so a refused undo does not linger there.
   const refuse = (text) => {
-    taskState.statusFeedback.set(task.id, { kind: "error", text });
+    taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "error", text });
     rerender(context);
-    if (taskState.foldedStatusTasks.has(task.id) && taskState.selectedTaskId !== task.id) {
-      scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+    if (taskState.foldedStatusTasks.has(taskDispatchIdentity(task)) && !isSelectedTask(task)) {
+      scheduleFeedbackExpiry(taskState.statusFeedback, taskDispatchIdentity(task), context, MUTATION_UNDO_WINDOW_MS + 500);
     }
   };
   // A summary row lists the governed targets but not what each one requires —
   // the `done` requirement depends on the task's job run, which only the
   // detail endpoint reads. Ask it before deciding whether to prompt.
   if (!humanBypass && !forced && !("required_field" in transition)) {
-    taskState.statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
+    taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "checking…" });
     rerender(context);
     let detail;
     try {
@@ -262,12 +262,12 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const previousValue = task.status;
-  taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "saving…" });
   rerender(context);
   const sendStatus = async (payloadToSend, wasForced) => {
     const updatedTask = await patchJson(mutationPath, payloadToSend);
     if (!visit.isCurrent()) return;
-    const merged = applyUpdatedTask(updatedTask, context) || task;
+    const merged = applyUpdatedTask(updatedTask, context, task) || task;
     const feedback = {
       kind: "success",
       text: wasForced ? "status forced" : "status saved",
@@ -276,15 +276,15 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
     if (usesHumanCrewBypass(updatedTask) || (reverse && !reverse.required_field)) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
-    taskState.statusFeedback.set(task.id, feedback);
+    taskState.statusFeedback.set(taskDispatchIdentity(task), feedback);
     // Fold the open detail in; an undo from a folded row keeps it folded. A
     // pinned detail is the only view of a filtered-out task, so it stays open.
     // A full page is that task's own view, so it stays too.
     const pinned = taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id;
-    if (!pinned && taskState.taskPageId !== task.id && (taskState.selectedTaskId === task.id || taskState.foldedStatusTasks.has(task.id))) {
-      if (taskState.selectedTaskId === task.id) taskState.rowFocusAfterRender = task.id;
+    if (!pinned && taskState.taskPageId !== task.id && (isSelectedTask(task) || taskState.foldedStatusTasks.has(taskDispatchIdentity(task)))) {
+      if (isSelectedTask(task)) taskState.rowFocusAfterRender = task.id;
       collapseTask(task.id);
-      taskState.foldedStatusTasks.set(task.id, merged);
+      taskState.foldedStatusTasks.set(taskDispatchIdentity(task), merged);
     }
   };
   try {
@@ -305,20 +305,20 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
         refuse("status update cancelled");
         return;
       }
-      taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
+      taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "saving…" });
       rerender(context);
       try {
         await sendStatus({ ...payload, force: true }, true);
       } catch (retryError) {
         if (!visit.isCurrent()) return;
-        taskState.statusFeedback.set(task.id, {
+        taskState.statusFeedback.set(taskDispatchIdentity(task), {
           kind: "error",
           text: `status update failed: ${retryError.message || String(retryError)}`,
         });
         console.error(retryError);
       }
     } else {
-      taskState.statusFeedback.set(task.id, {
+      taskState.statusFeedback.set(taskDispatchIdentity(task), {
         kind: "error",
         text: `status update failed: ${error.message || String(error)}`,
       });
@@ -327,7 +327,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
   if (!visit.isCurrent()) return;
   rerender(context);
-  scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.statusFeedback, taskDispatchIdentity(task), context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // One confirm, naming the exact move, before the override leaves the browser.
@@ -363,25 +363,25 @@ async function applyTaskCrewChange(task, nextValue, context) {
   const mutationPath = visit.path(taskMutationPath(currentTask));
   const previousValue = explicitCrewValue(currentTask);
   if (nextValue === previousValue || !canMutateTask(currentTask)) return;
-  taskState.crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
+  taskState.crewFeedback.set(taskDispatchIdentity(currentTask), { kind: "pending", text: "saving…" });
   rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
-    applyUpdatedTask(updatedTask, context);
-    taskState.crewFeedback.set(currentTask.id, {
+    applyUpdatedTask(updatedTask, context, currentTask);
+    taskState.crewFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.crewFeedback.set(currentTask.id, {
+    taskState.crewFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   rerender(context);
-  scheduleFeedbackExpiry(taskState.crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.crewFeedback, taskDispatchIdentity(currentTask), context, MUTATION_UNDO_WINDOW_MS + 500);
 }

@@ -28,6 +28,7 @@ import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, runStartedAt, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { taskState } from './js/task-shared.js';
 import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
+import { taskDispatchIdentity } from './js/task-shared.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
@@ -197,7 +198,7 @@ function taskContext() {
     navigateTaskPage,
     resetTaskPagination,
     replaceTask: (updatedTask) => {
-      const index = lastTasks.findIndex((task) => task.id === updatedTask.id);
+      const index = lastTasks.findIndex((task) => taskDispatchIdentity(task) === taskDispatchIdentity(updatedTask));
       if (index >= 0) {
         lastTasks[index] = updatedTask;
       }
@@ -1301,7 +1302,7 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
   const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
-  const detailSnapshot = taskDetailSnapshot(detailId);
+  const detailSnapshot = taskDetailSnapshot({ id: detailId });
   const includeRuns = Boolean(detailId && taskRunsTabActive());
   const base = aggregate ? "/api/tasks/all" : "/api/tasks";
   const path = tasksListPath(base, detailId, includeRuns);
@@ -1340,7 +1341,7 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
       if (summary) primeTaskDetail(summary, refreshedDetail, detailSnapshot);
     }
     if (includeRuns && (payload?.detail_runs || payload?.detail_runs_error)) {
-      primeTaskRuns(detailId, payload.detail_runs || { error: payload.detail_runs_error }, selectedTaskSummary);
+      primeTaskRuns(selectedTaskSummary || { id: detailId }, payload.detail_runs || { error: payload.detail_runs_error });
     }
     lastTasks = tasks;
     lastTasksMeta = payload && !Array.isArray(payload)

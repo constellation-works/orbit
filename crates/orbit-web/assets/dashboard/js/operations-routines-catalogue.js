@@ -39,6 +39,12 @@ export function createRoutineCatalogue({ payload, routines, workspaceId, renderR
   search.setAttribute("aria-controls", groups.id);
   catalogue.append(el("div", { class: "routine-list-toolbar" }, [label, search, clear, count]), renderTimeline(routines), groups);
 
+  const syncControls = () => {
+    const editing = editorVisibleIn(groups);
+    search.disabled = editing;
+    search.title = editing ? "Close the trigger editor to filter routines." : "";
+    clear.disabled = editing || !routineList.query;
+  };
   const paintGroups = () => {
     groups.textContent = "";
     const query = routineList.query.trim().toLocaleLowerCase();
@@ -70,7 +76,10 @@ export function createRoutineCatalogue({ payload, routines, workspaceId, renderR
         summary.append(...group.firstChild.childNodes);
         container.appendChild(summary);
         container.addEventListener("toggle", () => {
-          if (container.isConnected) routineList.pausedOpen = container.open;
+          if (container.isConnected) {
+            routineList.pausedOpen = container.open;
+            syncControls();
+          }
         });
       }
       if (filtered.length) {
@@ -81,10 +90,7 @@ export function createRoutineCatalogue({ payload, routines, workspaceId, renderR
       }
       groups.appendChild(container);
     }
-    const editing = editorVisibleIn(groups);
-    search.disabled = editing;
-    search.title = editing ? "Close the trigger editor to filter routines." : "";
-    clear.disabled = editing || !routineList.query;
+    syncControls();
   };
   search.addEventListener("input", () => {
     routineList.query = search.value;

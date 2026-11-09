@@ -6,7 +6,8 @@
 // Readiness card asks for its own task's entry and words it with the same
 // `drainReadinessView`, so the dot and the card never disagree.
 
-import { el, onWorkspaceChange } from './common.js';
+import { el, getWorkspace, onWorkspaceChange } from './common.js';
+import { taskDispatchIdentity } from './task-shared.js';
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
 // grouped member, a reserved surface, a same-wave deferral, a live child's claim, or a task with no
@@ -245,7 +246,7 @@ export function setDrainReadiness(payload) {
   const next = new Map();
   for (const entry of tasks) {
     if (typeof entry?.task_id !== "string" || !entry.task_id) continue;
-    next.set(entry.task_id, { entry, view: drainReadinessView(entry) });
+    next.set(taskDispatchIdentity({ id: entry.task_id, workspace_id: getWorkspace() }), { entry, view: drainReadinessView(entry) });
   }
   const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
   const changed = nextSignature !== signature || readinessErrors.size > 0;
@@ -259,16 +260,17 @@ export function setDrainReadiness(payload) {
 // Replace one task's snapshot entry with a fresher read, as after an operator
 // write that changes its admission, so the row dot and the Readiness card show
 // the new state before the next poll.
-export function replaceDrainReadinessEntry(entry) {
+export function replaceDrainReadinessEntry(entry, task) {
   if (typeof entry?.task_id !== "string" || !entry.task_id) return;
-  waits.set(entry.task_id, { entry, view: drainReadinessView(entry) });
-  readinessErrors.delete(entry.task_id);
+  waits.set(taskDispatchIdentity(task), { entry, view: drainReadinessView(entry) });
+  readinessErrors.delete(taskDispatchIdentity(task));
   signature = [...waits].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
   for (const listener of listeners) listener();
 }
 
-export function setDrainReadinessFailure(taskId, error) {
-  if (typeof taskId !== "string" || !taskId) return;
+export function setDrainReadinessFailure(task, error) {
+  if (!task?.id) return;
+  const taskId = taskDispatchIdentity(task);
   const message = typeof error === "string" && error.trim() ? error : "readiness unavailable";
   if (readinessErrors.get(taskId) === message) return;
   readinessErrors.set(taskId, message);
@@ -282,8 +284,8 @@ export function onDrainReadinessChange(listener) {
   return () => listeners.delete(listener);
 }
 
-export function drainWaitSignature(taskId) {
-  const item = waits.get(taskId);
+export function drainWaitSignature(task) {
+  const item = waits.get(taskDispatchIdentity(task));
   if (!item) return "";
   const { view } = item;
   return `${view.pool}|${view.label}|${view.title}`;
@@ -292,18 +294,18 @@ export function drainWaitSignature(taskId) {
 // The readiness dot for a backlog task: its `drainReadinessView`. Null when
 // there is no snapshot or it does not mention the task, so a row never claims
 // a readiness it does not know.
-export function drainReadinessFor(taskId) {
-  return waits.get(taskId)?.view || null;
+export function drainReadinessFor(task) {
+  return waits.get(taskDispatchIdentity(task))?.view || null;
 }
 
 // The snapshot's raw entry for a task, or null; a Readiness card falls back to
 // it until its own read answers, and it stands in when that read fails.
-export function drainReadinessEntry(taskId) {
-  return waits.get(taskId)?.entry || null;
+export function drainReadinessEntry(task) {
+  return waits.get(taskDispatchIdentity(task))?.entry || null;
 }
 
-export function drainReadinessFailure(taskId) {
-  return readinessErrors.get(taskId) || null;
+export function drainReadinessFailure(task) {
+  return readinessErrors.get(taskDispatchIdentity(task)) || null;
 }
 
 // How the Backlog group's rows split across the pools. `known` is false until
@@ -311,7 +313,7 @@ export function drainReadinessFailure(taskId) {
 export function backlogReadiness(tasks) {
   const counts = { eligible: 0, locks: 0, capacity: 0, other: 0, unknown: 0 };
   for (const task of tasks) {
-    const item = waits.get(task.id);
+    const item = waits.get(taskDispatchIdentity(task));
     counts[item ? item.view.pool : "unknown"] += 1;
   }
   return { known: haveSnapshot, counts };

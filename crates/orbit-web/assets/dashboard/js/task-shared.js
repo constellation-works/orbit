@@ -14,6 +14,7 @@ export const taskState = {
   // beside the list replaces the inline accordion, so selecting another row
   // moves the pane to it and the list itself never reflows around a detail.
   selectedTaskId: null,
+  selectedTaskWorkspace: null,
   taskActionNotice: null,
   pinnedExternalTask: null,
   // The task the Tasks hash names with `open=`: the one selected and still
@@ -46,12 +47,12 @@ export const taskState = {
   // A status change made from a task's open detail folds that detail in: the row
   // has moved to its new status group. The change's feedback and undo then show
   // on the collapsed row, or in a notice above the list while the new status is
-  // filtered out, until the feedback expires. Keyed by task id; the value is the
+  // filtered out, until the feedback expires. Keyed by workspace-scoped task identity; the value is the
   // updated record, which the undo acts on when the list no longer holds the row.
   foldedStatusTasks: new Map(),
   // ORB-12235: the same feedback shape for the writable fields in the expanded
   // detail — the complexity select and the inline text editors. `fieldFeedback`
-  // is keyed `<task id>:<field>` because one detail can hold several editors.
+  // is keyed `<workspace>:<task id>:<field>` because one detail can hold several editors.
   complexityFeedback: new Map(),
   fieldFeedback: new Map(),
   // Operator records (pilot-admission / post-deploy): a refused record's typed
@@ -62,7 +63,7 @@ export const taskState = {
   // a task returned to backlog be shipped again without reloading the page.
   shipInFlightTaskIds: new Set(),
   // ORB-12645: which comments the operator has opened, keyed
-  // `<task id>#<index into task.comments>` so a refresh that rebuilds the detail
+  // `<workspace>:<task id>#<index into task.comments>` so a refresh that rebuilds the detail
   // restores the thread the way it was left.
   expandedComments: new Set(),
   restoredCommentHash: null,
@@ -236,6 +237,11 @@ export function plural(count, word) {
 
 export function taskDispatchIdentity(task) {
   return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
+}
+
+export function isSelectedTask(task) {
+  return task.id === taskState.selectedTaskId &&
+    (!taskState.selectedTaskWorkspace || taskDispatchIdentity(task) === `${taskState.selectedTaskWorkspace}:${task.id}`);
 }
 
 export const MUTATION_UNDO_WINDOW_MS = 8000;

@@ -4,7 +4,7 @@ import { captureWorkspaceVisit, el, patchJson, copyText, copyWithFeedback, bindT
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { onTaskRuntimeChange, taskContextContenders } from './task-runtime.js';
-import { taskState, rerender, canMutateTask, aggregateRefusalTitle, taskMutationPath, isOsTag, MUTATION_UNDO_WINDOW_MS } from './task-shared.js';
+import { taskState, rerender, canMutateTask, aggregateRefusalTitle, taskMutationPath, isOsTag, MUTATION_UNDO_WINDOW_MS, taskDispatchIdentity } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback } from './task-crew.js';
 import { applyUpdatedTask, currentTaskRecord } from './task-data.js';
 
@@ -309,8 +309,8 @@ function splitTagText(text) {
     .filter(Boolean);
 }
 
-export function fieldFeedbackKey(taskId, field) {
-  return `${taskId}:${field}`;
+export function fieldFeedbackKey(task, field) {
+  return `${taskDispatchIdentity(task)}:${field}`;
 }
 
 export function taskFieldHasValue(task, spec) {
@@ -355,13 +355,13 @@ export function buildTaskFieldEditor(task, field, detail, context, editSlot = nu
       disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
       save: (text, options) => patchJson(mutationPath, spec.toPayload(text, options)),
       onSaved: (updatedTask) => {
-        if (visit.isCurrent()) completeFieldSave(task.id, field, updatedTask, context);
+        if (visit.isCurrent()) completeFieldSave(task, field, updatedTask, context);
       },
       onEditingChange: (open) => setDetailEditing(detail, field, open),
       editSlot,
     }),
   );
-  const feedback = taskState.fieldFeedback.get(fieldFeedbackKey(task.id, field));
+  const feedback = taskState.fieldFeedback.get(fieldFeedbackKey(task, field));
   const feedbackNode = buildMutationFeedback(feedback);
   if (feedbackNode) wrap.appendChild(feedbackNode);
   return wrap;
@@ -373,7 +373,7 @@ function fieldCellSignature(task, field) {
   return JSON.stringify([
     TASK_FIELD_EDITORS[field].toText(task),
     canMutateTask(task),
-    taskState.fieldFeedback.get(fieldFeedbackKey(task.id, field)) || null,
+    taskState.fieldFeedback.get(fieldFeedbackKey(task, field)) || null,
   ]);
 }
 
@@ -394,9 +394,9 @@ export function refreshFieldCells(wrap, task) {
   }
 }
 
-function completeFieldSave(taskId, field, updatedTask, context) {
-  applyUpdatedTask(updatedTask, context);
-  const key = fieldFeedbackKey(taskId, field);
+function completeFieldSave(task, field, updatedTask, context) {
+  applyUpdatedTask(updatedTask, context, task);
+  const key = fieldFeedbackKey(task, field);
   taskState.fieldFeedback.set(key, { kind: "success", text: `${TASK_FIELD_EDITORS[field].label} saved` });
   rerender(context);
   scheduleFeedbackExpiry(taskState.fieldFeedback, key, context, FIELD_SAVED_NOTICE_MS);
@@ -413,7 +413,7 @@ const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard", "xhard"];
 export function buildComplexityUpdateControl(task, context) {
   const cell = el("div", { class: "complexity-cell" });
   const mutable = canMutateTask(task);
-  const feedback = taskState.complexityFeedback.get(task.id);
+  const feedback = taskState.complexityFeedback.get(taskDispatchIdentity(task));
   const label = `Update complexity for ${task.id}`;
   const select = el("select", {
     class: "task-complexity-select mono",
@@ -463,13 +463,13 @@ async function applyTaskComplexityChange(task, nextValue, context) {
   // record is the only one carrying it.
   const previousValue = assessedComplexity(currentTask) || assessedComplexity(task);
   if (!nextValue || nextValue === previousValue || !canMutateTask(currentTask)) return;
-  taskState.complexityFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
+  taskState.complexityFeedback.set(taskDispatchIdentity(currentTask), { kind: "pending", text: "saving…" });
   rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { complexity: nextValue });
     if (!visit.isCurrent()) return;
-    applyUpdatedTask(updatedTask, context);
-    taskState.complexityFeedback.set(currentTask.id, {
+    applyUpdatedTask(updatedTask, context, currentTask);
+    taskState.complexityFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "success",
       text: "complexity saved",
       // Undo is offered only back to an assessed value; the endpoint refuses
@@ -480,12 +480,12 @@ async function applyTaskComplexityChange(task, nextValue, context) {
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.complexityFeedback.set(currentTask.id, {
+    taskState.complexityFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "error",
       text: `complexity update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   rerender(context);
-  scheduleFeedbackExpiry(taskState.complexityFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.complexityFeedback, taskDispatchIdentity(currentTask), context, MUTATION_UNDO_WINDOW_MS + 500);
 }

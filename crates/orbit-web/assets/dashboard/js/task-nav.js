@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
 import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, isAggregateView, copyText } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
@@ -138,7 +138,8 @@ export async function copyTaskIdWithNotice(taskId, context) {
 
 function findTaskRow(taskId) {
   return Array.from(document.querySelectorAll("#tasks-body .row"))
-    .find((row) => row.dataset.key === `task-${taskId}`) || null;
+    .find((row) => row.dataset.taskId === taskId &&
+      (!taskState.selectedTaskWorkspace || row.dataset.workspace === taskState.selectedTaskWorkspace)) || null;
 }
 
 export function openVisibleTask(taskId, context) {
@@ -172,10 +173,12 @@ export function revealTaskRow(taskId, block = "nearest") {
 // Select a list row: the pane moves to it. The clicked row stays where the
 // pointer left it, even when opening the pane narrows the list and its rows
 // rewrap, so selection never costs the operator their place.
-export function selectTask(taskId, context, { anchor = null } = {}) {
+export function selectTask(taskId, context, { anchor = null, workspace = null } = {}) {
   const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
-  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id !== taskId) taskState.pinnedExternalTask = null;
+  taskState.pinnedExternalTask = null;
   taskState.selectedTaskId = taskId;
+  const owner = taskList(context).find(task => task.id === taskId && (!workspace || task.workspace_id === workspace));
+  taskState.selectedTaskWorkspace = workspace || owner?.workspace_id || getWorkspace() || null;
   setOpenTask(taskId);
   rerender(context);
   keepRowInPlace(taskId, top);
@@ -198,6 +201,7 @@ export function closeTaskPane(context, { forget = false } = {}) {
   }
   const taskId = shownTaskId();
   if (!taskId) return;
+  const owner = taskState.pinnedExternalTask?.task || taskList(context).find(isSelectedTask);
   const pane = $("task-detail-pane");
   const active = document.activeElement;
   const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
@@ -208,7 +212,7 @@ export function closeTaskPane(context, { forget = false } = {}) {
   if (taskState.openTaskId === taskId) setOpenTask(null);
   // Reopening re-reads the detail, which is also the retry for a read that
   // failed.
-  if (forget) forgetTaskDetailLoad(taskId);
+  if (forget) forgetTaskDetailLoad(owner || { id: taskId, workspace_id: taskState.selectedTaskWorkspace });
   rerender(context);
   keepRowInPlace(taskId, top);
   if (focusWasInPane) focusTaskRow(taskId);
@@ -248,6 +252,7 @@ function openLinkedTaskPage(taskId, context) {
   taskState.taskActionNotice = null;
   taskState.focusPaneTitle = true;
   taskState.selectedTaskId = null;
+  taskState.selectedTaskWorkspace = null;
   taskState.pinnedExternalTask = null;
   taskState.pendingOpenTaskId = taskId;
   setOpenTask(taskId);
@@ -332,18 +337,21 @@ export function resolvePendingOpenTask(tasks, context) {
   // list drops its row. Promote its last full record to the existing pinned
   // path, which also re-reads filtered-out tasks on subsequent refreshes.
   const taskId = taskState.pendingOpenTaskId || (taskState.taskPageId && taskState.selectedTaskId === taskState.taskPageId &&
-    !filtered.some((task) => task.id === taskState.taskPageId) ? taskState.taskPageId : null);
+    !filtered.some(isSelectedTask) ? taskState.taskPageId : null);
   if (!taskId) return;
   taskState.pendingOpenTaskId = null;
-  if (filtered.some((task) => task.id === taskId)) {
+  const workspace = taskState.taskPageId === taskId || taskState.selectedTaskId === taskId ? taskState.selectedTaskWorkspace : null;
+  const listed = filtered.find(task => task.id === taskId && (!workspace || taskDispatchIdentity(task) === `${workspace}:${taskId}`));
+  if (listed) {
     // A route replay for the row already selected leaves the list where it
     // is, and coming back from the full page restores the list's own scroll.
     const settled = taskState.selectedTaskId === taskId || (taskState.listRestore && taskState.listRestore.id === taskId);
     taskState.selectedTaskId = taskId;
+    taskState.selectedTaskWorkspace = listed.workspace_id || getWorkspace() || null;
     taskState.pinnedExternalTask = null;
     if (!settled) revealTaskRow(taskId, "center");
   } else if (!(taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) {
-    const cached = taskState.taskPageId === taskId ? taskDetailSnapshot(taskId) : null;
+    const cached = taskState.taskPageId === taskId ? taskDetailSnapshot({ id: taskId, workspace_id: taskState.selectedTaskWorkspace }) : null;
     // Retire the list selection once it becomes a pin, including while its
     // first read is pending or failed; ordinary renders must not retry it.
     if (taskState.taskPageId === taskId) taskState.selectedTaskId = null;
@@ -360,13 +368,14 @@ async function pinOpenTask(taskId, context, tasks = []) {
     // Scope the read to the owner the list already names: an unscoped read in
     // the aggregate view falls back to the default workspace and can pin a
     // different task (or a false not-found) for this id.
-    const owner = (Array.isArray(tasks) ? tasks : []).find((task) => task && task.id === taskId);
-    const ownerTask = owner && owner.workspace_id ? { id: taskId, workspace_id: owner.workspace_id } : { id: taskId };
+    const workspace = taskState.taskPageId === taskId ? taskState.selectedTaskWorkspace : null;
+    const owner = (Array.isArray(tasks) ? tasks : []).find(task => task && task.id === taskId && (!workspace || task.workspace_id === workspace));
+    const ownerTask = { id: taskId, workspace_id: workspace || owner?.workspace_id };
     const task = await fetchJson(taskWorkspacePath(ownerTask, `/api/tasks/${encodeURIComponent(taskId)}`));
     if (superseded()) return;
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
     if (ownerTask.workspace_id && task.workspace_id && task.workspace_id !== ownerTask.workspace_id) throw new Error(`${taskId} not found`);
-    taskState.pinnedExternalTask = { task, id: taskId };
+    taskState.pinnedExternalTask = { task: mergeTaskRecord(ownerTask, task), id: taskId };
   } catch (error) {
     if (superseded()) return;
     taskState.taskActionNotice = error && error.status === 404
@@ -428,6 +437,7 @@ export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   cancelTaskSearchDebounce();
   if (taskState.selectedTaskId && taskState.selectedTaskId !== task.id) taskState.selectedTaskId = null;
+  taskState.selectedTaskWorkspace = task.workspace_id || getWorkspace() || null;
   taskState.pinnedExternalTask = { task, id: task.id };
   taskState.pendingOpenTaskId = null;
   setOpenTask(task.id);
@@ -573,6 +583,7 @@ export function applyTasksHashQuery(query, context, page = null) {
     : query.toString() === (current.split("?")[1] || "");
   if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
   if (taskState.openTaskId !== open) {
+    taskState.selectedTaskWorkspace = null;
     if (taskState.selectedTaskId && taskState.selectedTaskId !== open) taskState.selectedTaskId = null;
     taskState.pinnedExternalTask = null;
     taskState.taskActionNotice = null;

@@ -352,7 +352,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     renderAutoDrain(payload, generation);
   }, "auto-drain-phase-label").catch(error => {
     if (detailTaskId && visit.isCurrent()) {
-      setDrainReadinessFailure(detailTaskId, error.message || String(error));
+      setDrainReadinessFailure({ id: detailTaskId, workspace_id: workspace.id }, error.message || String(error));
     }
     throw error;
   });

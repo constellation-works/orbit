@@ -600,10 +600,11 @@ function composer(payload, mandate, action) {
   text.value = ui.pending?.text || "";
   const confirm = button(action === "relay" ? "Send" : spec.label, `${spec.label} ${mandate.task_id}`, spec.variant || "primary");
   const cancel = button("Cancel", `Cancel ${spec.label.toLowerCase()}`);
-  confirm.disabled = !text.value.trim();
+  const unavailable = Boolean(actionReason(payload, "resident_write"));
+  confirm.disabled = unavailable || !text.value.trim();
   text.addEventListener("input", () => {
     if (ui.pending) ui.pending.text = text.value;
-    confirm.disabled = !text.value.trim();
+    confirm.disabled = unavailable || !text.value.trim();
   });
   const form = node("form", { class: "resident-composer", "aria-label": `${spec.label} ${mandate.task_id}` }, [
     el("span", { class: "resident-field-label", text: spec.ask }),
@@ -611,7 +612,7 @@ function composer(payload, mandate, action) {
   ]);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (text.value.trim()) control(mandate, action, text.value.trim(), [confirm]);
+    if (!unavailable && text.value.trim()) control(mandate, action, text.value.trim(), [confirm]);
   });
   confirm.type = "submit";
   cancel.addEventListener("click", () => {

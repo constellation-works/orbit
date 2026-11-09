@@ -221,7 +221,7 @@ function buildBlockDetails(task, block, context, detail, summary) {
     read.addEventListener("click", () => {
       detail.activateTab("comments");
       const id = taskComments.commentAnchorId(task.id, block.comment_index);
-      taskState.expandedComments.add(taskComments.commentKey(task.id, block.comment_index));
+      taskState.expandedComments.add(taskComments.commentKey(task, block.comment_index));
       const panel = detail.querySelector(".comments-panel");
       if (panel) taskComments.renderCommentsPanel(panel, task, context);
       taskComments.scrollToComment(`#${id}`);
