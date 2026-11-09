@@ -984,6 +984,30 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         .as_str()
         .unwrap_or_default()
         .to_string();
+    // The rerun attempt visible to the planner. A delayed rerun still shows
+    // its original attempt on the first status read after the send and a
+    // later attempt from the second read on; a plain red rerun has already
+    // advanced when its send returns.
+    let rerun_attempt = |forge: &std::path::Path, mode: &str| -> u64 {
+        if let Some(attempt) = fs::read_to_string(forge.join("rerun-attempt"))
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+        {
+            return attempt;
+        }
+        if mode.starts_with("no_edit_delayed")
+            && let Some(sent) = fs::read_to_string(forge.join("rerun-sent-reads"))
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+        {
+            let reads = fs::read_to_string(forge.join("reads"))
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            return if reads >= sent + 2 { 2 } else { 1 };
+        }
+        1
+    };
     let contract = |commit: &str| git(&host.repo, &["show", &format!("{commit}:src/contract")]);
     match operation {
         "pr.required_checks" => {
@@ -1050,7 +1074,16 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                 contract(commit)
             };
             let run = u64::from_str_radix(&commit[..12], 16).unwrap();
-            let test = json!({"name":"test","workflow":"CI","status":"completed","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
+            let attempt = rerun_attempt(&forge, &repair_mode);
+            if repair_mode == "no_edit_delayed_green"
+                && attempt == 1
+                && forge.join("rerun-sent-reads").exists()
+            {
+                // The original attempt was observed after the send; the
+                // later rerun attempt passes on the next status read.
+                fs::write(forge.join("checks"), "success\n").unwrap();
+            }
+            let test = json!({"name":"test","workflow":"CI","status":"completed","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"run_attempt":attempt,"failed_step":"source contract"});
             let jobs = match aggregate.as_deref() {
                 Some(aggregate) => {
                     let mut jobs = vec![
@@ -1076,7 +1109,7 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             "pr_number":input["pr"], "head_sha":input["head_sha"],
             "head_branch":input["head_branch"], "base_branch":input["base_branch"],
             "accepted_base":input["accepted_base"], "run_id":input["run_id"],
-            "run_attempt":1, "workflow_id":900, "roots":input["roots"],
+            "run_attempt":rerun_attempt(&forge, &repair_mode), "workflow_id":900, "roots":input["roots"],
             "failed_jobs":[{"id":input["roots"][0]["job_id"]}],
             "authentication":{},
         }})),
@@ -1085,6 +1118,15 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         "ci.rerun_failed" if repair_mode.starts_with("no_edit") => {
             if repair_mode == "no_edit_green" {
                 fs::write(forge.join("checks"), "success\n").unwrap();
+            } else if repair_mode == "no_edit_red" {
+                fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
+            } else if repair_mode.starts_with("no_edit_delayed") {
+                let reads = fs::read_to_string(forge.join("reads")).unwrap_or_else(|_| "0".into());
+                fs::write(
+                    forge.join("rerun-sent-reads"),
+                    format!("{}\n", reads.trim()),
+                )
+                .unwrap();
             }
             Some(json!({"stdout":"", "stderr":""}))
         }
@@ -1351,13 +1393,16 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
 
 /// A check repair that makes no edit and writes no scope record reruns the
 /// failed checks once on the unchanged head instead of blocking. A green
-/// rerun clears the head; a red rerun stops in words. The spent repair
-/// attempt and the one recorded rerun bound both rows.
+/// rerun clears the head; a red rerun stops in words. The delayed rows keep
+/// showing the original failed attempt on the first read after the send:
+/// that observation alone must not stop, resend or admit another repair,
+/// and only the later attempt's result decides. The spent repair attempt
+/// and the one recorded rerun bound every row.
 #[test]
 fn no_edit_check_repair_reruns_failed_checks_once() {
     auto_fix_table(
         "auto_fix::no_edit_check_repair_reruns_failed_checks_once",
-        "no_edit_green no_edit_red",
+        "no_edit_green no_edit_red no_edit_delayed_green no_edit_delayed_red",
         |mode, row| {
             let (fx, host) = docs_only_pr(row);
             host.script("test_ci_repair", json!({"mode":mode}));
@@ -1382,7 +1427,7 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
             assert_eq!(reruns, 1, "{mode}: exactly one rerun is sent");
             assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
             assert_candidate_head_unchanged(&fx, mode);
-            if mode == "no_edit_green" {
+            if mode.contains("green") {
                 let result = outcome.expect(mode);
                 assert!(result.success, "{result:?}");
                 assert_eq!(
