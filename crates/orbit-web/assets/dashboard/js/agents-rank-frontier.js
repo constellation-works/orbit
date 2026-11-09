@@ -19,7 +19,7 @@ let frontierTier = null;
 // `rules.min_cost_coverage` of its tasks (`cost_unknown`) is drawn hollow and
 // never joins the frontier; one without a score or cost is listed as not plotted.
 function tierCharts(payload, rows) {
-  const candidates = payload.qualified ? rows.filter((row) => row.eligible) : rows;
+  const candidates = rows.filter((row) => row.eligible);
   const tiers = new Set();
   for (const row of rows) for (const point of Array.isArray(row.tiers) ? row.tiers : []) if (point && point.tier) tiers.add(point.tier);
   const charts = [];
