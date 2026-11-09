@@ -155,7 +155,7 @@ fn query_task_store(
         )?;
         let mut ids = BTreeSet::new();
         for task in candidates.items {
-            let comments = runtime.get_task_comments(&task.id)?;
+            let comments = runtime.get_task_pilot_comments(&task.id)?;
             let task_id = task.id.clone();
             let status = task.status;
             let dependencies = metadata_task(task).dependencies();

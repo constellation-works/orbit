@@ -267,10 +267,10 @@ impl OrbitRuntime {
         // owner-side condition it recorded.
         let material = validation_material(task);
         let mut legacy_override = false;
-        // Atomic pilot application persists the full assessment in a
+        // Atomic pilot application seals an assessment artifact in a
         // task-pilot-authored comment carrying its replay receipt. Read that
-        // durable record, not the human-readable history summary or an
-        // uncommitted agent result. `pilot_receipts` is the only
+        // durable evidence (or a legacy inline audit), not a history summary
+        // or an uncommitted agent result. `pilot_receipts` is the only
         // actor-and-receipt filter. This loop still visits every comment,
         // newest first, so a legacy override on a non-pilot comment newer
         // than the receipt still counts. The newest receipt settles the
@@ -291,9 +291,7 @@ impl OrbitRuntime {
             let Some((_, receipt)) = receipts.next() else {
                 continue;
             };
-            let audit: Value = serde_json::from_str(receipt.body).map_err(|error| {
-                OrbitError::Execution(format!("decode pilot assessment: {error}"))
-            })?;
+            let audit = self.task_pilot_audit(&task.id, receipt)?;
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;

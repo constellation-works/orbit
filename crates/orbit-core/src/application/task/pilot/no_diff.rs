@@ -293,7 +293,7 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        let comments = self.get_task_comments(task_id)?;
+        let comments = self.get_task_pilot_comments(task_id)?;
         // Newest receipt for this operation. An unreadable audit is not
         // evidence; the task keeps its other hold reasons. A bad operation
         // id is not rejected here: the history receipt already named it.

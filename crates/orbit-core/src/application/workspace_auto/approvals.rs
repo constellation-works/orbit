@@ -202,7 +202,7 @@ pub(super) fn approval_snapshot(
             let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
                 task_pilot_warnings(
                     task.status,
-                    &runtime.get_task_comments(&task.id)?,
+                    &runtime.get_task_pilot_comments(&task.id)?,
                     &task.dependencies(),
                     &|id: &str| runtime.warning_prerequisite_is_done(id),
                 )
@@ -271,7 +271,7 @@ pub(super) fn approval_snapshot(
                     let findings = if matches!(reason, "warnings" | FOOTPRINT_UNRESOLVED) {
                         task_pilot_warnings(
                             task.status,
-                            &runtime.get_task_comments(&task.id)?,
+                            &runtime.get_task_pilot_comments(&task.id)?,
                             &task.dependencies(),
                             &|id: &str| runtime.warning_prerequisite_is_done(id),
                         )

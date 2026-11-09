@@ -3,7 +3,7 @@ summary: "User Interface — Design"
 type: design
 title: "User Interface — Design"
 owner: gemini
-last_updated: 2026-11-06
+last_updated: 2026-11-09
 last_validated: 2026-11-03
 status: Draft
 feature: user-interface
@@ -303,7 +303,7 @@ A body taller than about 300px is capped behind a bottom fade, with its word cou
 
 The composer says what it accepts: the field is labeled **Add a comment**, its placeholder and hint line name the marks that carry, and a `preview` toggle renders the draft through `renderMarkdown()` before it is posted. The write itself is unchanged — still `POST /api/tasks/:id/comments` with the message alone. Counts, section lists and the outline are computed in the browser from the rendered body, so no API carries them. The history panel is untouched, including its filtering of legacy bare `commented` stubs.
 
-Task-pilot comments with a valid 64-hex operation receipt (the comment's `operation_id` field, or an `operation_id=<64 hex>` first line on comments written before that field) and assessment JSON render labelled disposition, confidence, recommended crew and complexity, and rationale fields. Recommendations show their prior value when the receipt provides a changed value. Evidence gaps, reassessment triggers and blockers appear as lists; duplicate and already-landed findings appear when present. The raw control and copy action retain the original receipt text. Malformed or unrecognized assessments retain the normal comment rendering. `orbit task show` and its text comments projection use a one-line assessment summary, bounded to 150 characters before the timestamp and author; their JSON projections retain the full original message. These are presentation changes only; they read receipts and never change them.
+Legacy inline task-pilot comments with a valid 64-hex operation receipt (the comment's `operation_id` field, or an `operation_id=<64 hex>` first line on comments written before that field) and assessment JSON render labelled disposition, confidence, recommended crew and complexity, and rationale fields. Recommendations show their prior value when the receipt provides a changed value. Evidence gaps, reassessment triggers and blockers appear as lists; duplicate and already-landed findings appear when present. The raw control and copy action retain the original receipt text. Malformed or unrecognized assessments retain the normal comment rendering. `orbit task show` and its text comments projection use a one-line assessment summary, bounded to 150 characters before the timestamp and author; their JSON projections retain the full original message. These are presentation changes only; they read receipts and never change them. New artifact-backed pilot receipts remain compact ordinary comments: their summary, `assessment_artifact` path and digest identify the full audit available through the task artifact API.
 
 ## 8. Task Count, Filters, and the Tasks/Log Layout
 

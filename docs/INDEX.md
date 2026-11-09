@@ -165,7 +165,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (36)
+### Shipped (37)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -200,6 +200,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [State Compatibility](./design/state-compatibility/1_overview.md) | — | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | — | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | — | claude |
+| [Task Pilot](./design/task-pilot/1_scope.md) | — | orbit |
 | [Task Publication](./design/task-publication/1_overview.md) | — | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
@@ -271,6 +272,7 @@ a conservative title/status fallback.
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Scope: a routine-built per-symbol index of body size, test coverage and regression-site history, read by admission riskiness and a test-priority view, each shipped only if its backtest beats today's model | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
+| [Task Pilot](./design/task-pilot/1_scope.md) | Pilot assessment artifacts, compact receipt comments, and compatibility with inline audits. | Draft | orbit |
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Implemented | codex |
 | [Task Risk](./design/task-risk/1_scope.md) | Advisory task-risk estimates separating model-relative complexity, repair burden and escaped regressions. | Draft | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Implemented | claude |

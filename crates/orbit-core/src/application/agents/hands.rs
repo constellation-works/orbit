@@ -138,8 +138,14 @@ impl OrbitRuntime {
     }
 
     fn piloted_hands(&self, row: &TaskRow) -> Vec<Hand> {
-        let assessments =
-            pilot_warnings::settle(&row.task, &row.history, &row.comments).assessments;
+        let comments = match self.resolve_task_pilot_comments(&row.task.id, &row.comments) {
+            Ok(comments) => comments,
+            Err(error) => {
+                tracing::warn!(task_id = %row.task.id, %error, "pilot hands: assessment unreadable");
+                return Vec::new();
+            }
+        };
+        let assessments = pilot_warnings::settle(&row.task, &row.history, &comments).assessments;
         if assessments.is_empty() {
             return Vec::new();
         }

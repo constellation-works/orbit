@@ -56,6 +56,27 @@ mod settlement;
 mod source_moves;
 mod standalone_repilot;
 
+/// Read either generation of a pilot receipt through the public artifact API.
+pub(super) fn pilot_audit(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    comment: &orbit_types::task::TaskComment,
+) -> Value {
+    let receipt = comment.receipt().expect("pilot receipt");
+    let body: Value = serde_json::from_str(receipt.body).expect("pilot comment JSON");
+    match body["assessment_artifact"].as_str() {
+        Some(path) => {
+            let artifact = runtime.get_task_artifact(task_id, path).unwrap().unwrap();
+            assert_eq!(
+                body["assessment_sha256"],
+                orbit_common::security::release::sha256_hex(&artifact.content)
+            );
+            serde_json::from_slice(&artifact.content).expect("pilot assessment artifact JSON")
+        }
+        None => body,
+    }
+}
+
 struct Workspace {
     root: TempDir,
     runtime: OrbitRuntime,

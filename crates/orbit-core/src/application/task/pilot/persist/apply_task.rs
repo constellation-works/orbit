@@ -419,6 +419,45 @@ pub(in super::super) fn apply_task(
                     task.post_deploy.clone(),
                 )
             });
+            let audit = serde_json::to_value(NoTargetPilotReceipt {
+                    no_target_assessment,
+                    audit: json!({
+                    "assessment": task.assessment,
+                    "assessed_requirements": super::super::freshness::pilot_requirements_material(&assessed),
+                    "operator_validation_hold": operator_hold,
+                    "host_operational_hold": host_operational_hold,
+                    "native_os_hold": native_os_hold,
+                    "post_deploy": post_deploy,
+                    "context_files_before": snapshot.context_files,
+                    "complexity_before": snapshot.complexity,
+                    "complexity_after": task.complexity,
+                    "applied_material": written,
+                    "pilot_run_id": task.pilot_run_id,
+                    // What a later re-check diffs the task against.
+                    super::super::recheck::RECHECK_BASIS: super::super::recheck::recheck_basis(
+                        &assessed,
+                        &assessed.context_files,
+                        &assessed.tags,
+                        prepared["source"]["source_revision"].as_str(),
+                    ),
+                    }),
+                })
+                .map_err(|error| {
+                    OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
+                })?;
+            let summary = format!(
+                "selectors {} → {}; crew {}; complexity {} → {}; {}",
+                snapshot.context_files.len(),
+                task.after.len(),
+                assessed.crew.as_deref().unwrap_or("unassigned"),
+                snapshot
+                    .complexity
+                    .map_or_else(|| "unassigned".into(), |value| value.to_string()),
+                task.complexity,
+                history_summary,
+            );
+            let audit_note =
+                runtime.persist_pilot_audit(&task.task_id, &task.operation_id, &summary, audit)?;
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -450,33 +489,7 @@ pub(in super::super) fn apply_task(
                     )
                     .chain(crew_redraw_history)
                     .collect(),
-                audit_note: serde_json::to_value(NoTargetPilotReceipt {
-                    no_target_assessment,
-                    audit: json!({
-                    "assessment": task.assessment,
-                    "assessed_requirements": super::super::freshness::pilot_requirements_material(&assessed),
-                    "operator_validation_hold": operator_hold,
-                    "host_operational_hold": host_operational_hold,
-                    "native_os_hold": native_os_hold,
-                    "post_deploy": post_deploy,
-                    "context_files_before": snapshot.context_files,
-                    "complexity_before": snapshot.complexity,
-                    "complexity_after": task.complexity,
-                    "applied_material": written,
-                    "pilot_run_id": task.pilot_run_id,
-                    // What a later re-check diffs the task against.
-                    super::super::recheck::RECHECK_BASIS: super::super::recheck::recheck_basis(
-                        &assessed,
-                        &assessed.context_files,
-                        &assessed.tags,
-                        prepared["source"]["source_revision"].as_str(),
-                    ),
-                    }),
-                })
-                .and_then(|audit| serde_json::to_string(&audit))
-                .map_err(|error| {
-                    OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
-                })?,
+                audit_note,
             };
             let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
             match mutation {

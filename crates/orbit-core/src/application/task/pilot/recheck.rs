@@ -146,7 +146,7 @@ pub(super) fn plan(
     source_revision: Option<&str>,
     request: &RecheckRequest,
 ) -> Result<RecheckPlan, OrbitError> {
-    let comments = runtime.get_task_comments(&task.id)?;
+    let comments = runtime.get_task_pilot_comments(&task.id)?;
     let Some((comment, receipt)) = super::pilot_receipts(&comments).next() else {
         return Ok(RecheckPlan::full("no_prior_assessment", None));
     };

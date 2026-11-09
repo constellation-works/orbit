@@ -126,7 +126,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<PilotWarningCandidacy, OrbitError> {
-        let comments = self.get_task_comments(&task.id)?;
+        let comments = self.get_task_pilot_comments(&task.id)?;
         let history = self.get_task_history(&task.id)?;
         Ok(pilot_warning_candidacy(
             task,

@@ -775,7 +775,7 @@ fn stale_repilot_candidate(
     }) {
         return Ok(false);
     }
-    let comments = runtime.get_task_comments(task_id).map_err(|error| {
+    let comments = runtime.get_task_pilot_comments(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
     })?;
     let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
@@ -817,7 +817,7 @@ fn already_piloted(
     else {
         return Ok(false);
     };
-    let comments = runtime.get_task_comments(task_id).map_err(|error| {
+    let comments = runtime.get_task_pilot_comments(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
     })?;
     let no_target_assessment = persist::no_target_pilot_assessment(applied, &comments);
