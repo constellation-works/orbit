@@ -500,7 +500,7 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
         required(both(
             "status",
             ParamType::Enum(RECOVER_STATUS_VALUES),
-            "Target status the task lifecycle allows from the task's current status: blocked for diagnosis, backlog for retry, or review, done, archived, rejected or someday",
+            "Lifecycle-allowed target; done needs completion evidence",
             flag_named("status", "STATUS"),
             "Lifecycle-valid status to move the task to",
         )),

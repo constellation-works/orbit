@@ -3001,7 +3001,7 @@
       },
       {
         "name": "status",
-        "description": "For recover_claim: Target status the task lifecycle allows from the task's current status: blocked for diagnosis, backlog for retry, or review, done, archived, rejected or someday.",
+        "description": "For recover_claim: Lifecycle-allowed target; done needs completion evidence.",
         "param_type": "string",
         "required": false
       },
