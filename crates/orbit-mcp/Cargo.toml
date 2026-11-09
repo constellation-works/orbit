@@ -25,7 +25,7 @@ orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-registry = { path = "../orbit-registry" }
 orbit-tools = { path = "../orbit-tools" }
-rmcp = { version = "3.8", default-features = false, features = ["client", "server", "transport-io"] }
+rmcp = { version = "3.9", default-features = false, features = ["client", "server", "transport-io"] }
 # Public JSON-RPC line codec. The stdio pump uses it to classify records rmcp
 # would reject, instead of copying rmcp's method list.
 bytes = "1"
