@@ -734,14 +734,14 @@ function render() {
 
 const EXECUTION_LABELS = { managed: "managed", all: "managed and interactive", interactive: "interactive" };
 
-// Interactive work per crew and model, whatever the execution scope, so the
+// Interactive work per model and recorded effort, whatever the execution scope, so the
 // tasks the default leaves out stay visible: each row's managed, interactive
 // and unclassified tasks with the interactive ones' outcomes.
 function executionSplitNode() {
   const split = Array.isArray(scorecard.execution_split) ? scorecard.execution_split : [];
   const shown = split.filter((row) => row.interactive_tasks || row.unclassified_tasks);
   const content = shown.length
-    ? el("div", { class: "agents-table-wrap", role: "region", "aria-label": "Interactive work by crew" }, [
+    ? el("div", { class: "agents-table-wrap", role: "region", "aria-label": "Interactive work by model and recorded effort" }, [
       el("table", { class: "agents-table" }, [
         el("thead", {}, [el("tr", {}, [
           el("th", { text: "Model · effort" }),
@@ -763,8 +763,8 @@ function executionSplitNode() {
     ])
     : el("p", { class: "agents-execution-none", text: `No interactive work in ${windowLabel()}: every counted task was worked by a job.` });
   if (shown.length) content.tabIndex = 0;
-  const node = el("section", { class: "agents-execution", "aria-label": "Interactive work by crew" }, [
-    el("h3", {}, ["Interactive work by crew", common.pinnedInfoHint("Tasks worked in an interactive session have no job run, so no cost, tokens or run time. They are left out of the counts above unless the execution control includes them; cost and run time always count managed tasks only.")]),
+  const node = el("section", { class: "agents-execution", "aria-label": "Interactive work by model and recorded effort" }, [
+    el("h3", {}, ["Interactive work by model and recorded effort", common.pinnedInfoHint("Tasks worked in an interactive session have no job run, so no cost, tokens or run time. They are left out of the counts above unless the execution control includes them; cost and run time always count managed tasks only.")]),
     content,
   ]);
   node.dataset.key = "execution";

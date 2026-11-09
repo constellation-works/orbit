@@ -116,7 +116,7 @@ Observe:
   doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
 Analytics:
-  agents       Score agents by crew and model
+  agents       Score agents by model and recorded effort
   codebase     Rank the repository paths that are risky for agents to change
 
 Scheduler:
