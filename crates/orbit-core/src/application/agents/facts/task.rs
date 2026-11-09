@@ -21,7 +21,7 @@ use crate::application::task::{is_review_finding, latest_verification};
 
 /// The facts of one task. `classify` gives the cause a block or run exit
 /// records.
-pub(super) fn task_facts(
+pub(in crate::application::agents) fn task_facts(
     task: &Task,
     history: &[TaskHistoryEntry],
     comments: &[TaskComment],

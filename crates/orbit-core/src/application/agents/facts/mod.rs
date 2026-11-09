@@ -24,3 +24,5 @@ pub(crate) use review::review_gate_verdicts;
 pub(in crate::application::agents) use review::settlement;
 
 pub(in crate::application::agents) use scan::scan;
+#[cfg(test)]
+pub(in crate::application::agents) use task::task_facts;

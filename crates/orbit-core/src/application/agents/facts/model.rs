@@ -401,7 +401,7 @@ impl AgentFacts {
 }
 
 /// A job run that implemented a task.
-pub(super) struct RunRecord {
+pub(in crate::application::agents) struct RunRecord {
     pub(super) started_at: DateTime<Utc>,
     pub(super) finished_at: Option<DateTime<Utc>>,
     pub(super) runner: Runner,

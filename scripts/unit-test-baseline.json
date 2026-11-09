@@ -208,6 +208,7 @@
         "adapter/engine_host/actions/sandbox/tests/runtime_grants.rs::sqlite_grants_reject_an_escaping_alias_without_touching_its_target",
         "application/agents/tests/api.rs::attempt_without_a_run_cannot_borrow_a_later_runs_effort",
         "application/agents/tests/api.rs::implementer_rows_group_by_model_and_recorded_effort",
+        "application/agents/tests/api.rs::memory_evidence_charges_implementers_only_for_judged_implementation_faults",
         "application/agents/tests/api.rs::pilot_rows_keep_each_rounds_own_effort",
         "application/agents/tests/api.rs::reviewer_ranks_are_dense_over_ranked_rows",
         "application/agents/tests/api.rs::reviewer_rows_keep_each_settlements_own_effort",

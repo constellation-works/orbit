@@ -83,7 +83,7 @@ pub(in crate::application::agents) fn scan(
             Vec::new()
         });
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
-        let classify = |entry: &TaskHistoryEntry| block_cause(entry, task_settlements);
+        let classify = |entry: &TaskHistoryEntry| block_cause(entry, &history, task_settlements);
         let task_runs = runs.remove(&id).unwrap_or_default();
         let mut task_facts = task_facts(
             &task,
