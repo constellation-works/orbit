@@ -202,6 +202,12 @@ kind, `notice_open`, derived from effective-open notices on the owner:
 Expired notices are not attention items: expiry is their resolution. The kind obeys attention's
 authority-per-host rule: only the owner of the home workspace derives it.
 
+A workspace-scoped notice is listed for its home workspace only. A home is the store partition
+the notice was posted from, which can differ from the registry id that selects the workspace, so
+attention matches homes by the partition, never by the selector. A global notice is listed by
+every workspace read on its owner, and an `--all` or federated read keeps one item for it, whose
+id does not depend on the reading workspace.
+
 ## Agent Signature
 
 claude (claude-opus-5-5), 2026-11-02, [ORB-21207].

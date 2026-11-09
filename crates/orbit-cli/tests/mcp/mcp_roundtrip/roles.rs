@@ -276,6 +276,56 @@ fn unbound_attention_notice_actions_target_each_home_workspace() {
 }
 
 #[test]
+fn all_workspace_attention_lists_a_global_notice_once() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::roles::all_workspace_attention_lists_a_global_notice_once",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let second = workspace.home.join("second-checkout");
+    super::init_checkout(&workspace.home, &second, "second-checkout");
+    let scratch = workspace.scratch("global-notice-session");
+    let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
+        .args(["mcp", "serve", "--operator", "--toolset", "notice"])
+        .spawn_piped();
+    let (mut client, _) = super::McpClient::initialized(
+        child,
+        super::McpClient::initialize_params("global-notices", None),
+    );
+    let listing = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let workspaces = listing["workspaces"].as_array().unwrap();
+    assert_eq!(workspaces.len(), 2, "{listing}");
+    let home = workspaces[0]["id"].as_str().unwrap();
+    let global = client.call_tool_ok(
+        "orbit_notice_post",
+        json!({"workspace": home, "kind": "maintenance", "scope": "global",
+               "title": "Binary update on all hosts"}),
+    );
+    let global_id = global["notice"]["id"].clone();
+    for workspace in workspaces {
+        let id = workspace["id"].as_str().unwrap();
+        client.call_tool_ok(
+            "orbit_notice_post",
+            json!({"workspace": id, "kind": "info", "title": format!("Notice for {id}")}),
+        );
+    }
+    let attention = client.call_tool_ok(
+        "orbit_attention",
+        json!({"all": true, "kind": "notice_open", "severity": "low"}),
+    );
+    assert_eq!(attention["degraded"], json!([]), "{attention}");
+    let items = attention["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3, "{attention}");
+    let global_items = items
+        .iter()
+        .filter(|item| item["refs"]["notice_id"] == global_id)
+        .collect::<Vec<_>>();
+    assert_eq!(global_items.len(), 1, "{attention}");
+    assert_eq!(global_items[0]["severity"], "medium", "{attention}");
+}
+
+#[test]
 fn default_and_operator_profiles_advertise_their_expected_surfaces() {
     let workspace = McpWorkspace::init();
     let mut core = workspace.serve();
