@@ -174,7 +174,7 @@ authenticated role.
 | Pick up work without collisions | `orbit_task_eligible` (read only; `explain: true` names each blocking selector and holder) | `orbit task eligible`: backlog/proposed tasks whose lock surface overlaps no in-progress or review task. Lock overlap is the only test; check dependencies yourself |
 | Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
-| Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`; optional `until`); `orbit_agents_ci_failures` (optional `window`, `until`, `task`, `class`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`, both with optional `--until`; `orbit agents ci-failures` lists required-check failures by cause (see [CI failures by cause](#ci-failures-by-cause)). `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
+| Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`; optional `until`); `orbit_agents_ci_failures` (optional `window`, `until`, `task`, `class`); `orbit_agents_rank_snapshot` (optional `cutoff`; `freeze` with optional `window`, `until`, `settle_lag`, `execution` writes a new frozen snapshot) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`, both with optional `--until`; `orbit agents ci-failures` lists required-check failures by cause (see [CI failures by cause](#ci-failures-by-cause)); `orbit agents rank --freeze` and `orbit agents rank-snapshot` freeze and read model-ranking snapshots (see [Frozen ranking snapshots](#frozen-ranking-snapshots)). `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
 | Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Evolution costs | `orbit.evolution.add` records an interactive cost event; `orbit.evolution.list` ranks capability-gap signatures by recorded cost; `orbit.evolution.show` inspects one record and its occurrences | `orbit evolution add --event <JSON>`, `list [--state <state>] [--since <time>]`, and `show <id>`; operator-only `decline <id>` suppresses proposals for a signature. Use this for repeated costs caused by a missing capability; use [Friction](friction.md) for defects and contradicted assumptions |
@@ -666,6 +666,26 @@ the task's history. Filters: `window` (`all` or a duration such as `14d`; defaul
 `30d`, by when the failure was first recorded), `until`, `task` and `class` (the
 current class). The response lists the records newest first, with per-class `counts`
 over the window and task whatever `class` selects.
+
+### Frozen ranking snapshots
+
+`orbit agents rank` ranks implementer models in tie bands over the settled window
+(the 30 days ending 14 days before `until`; `--live` is provisional). A frozen
+snapshot fixes one weekly settled cutoff forever: `orbit agents rank --freeze`
+(or `orbit.agents.rank_snapshot` with `freeze: true`) writes the ranking with its
+inputs — cutoff, season scales, weights, per-row measures, per-task records and
+the bootstrap seed — under the workspace's ranking-snapshot state, once. Without
+an explicit `--until` the cutoff is aligned to Monday 00:00 UTC. A live or
+unqualified board (fewer than 3 eligible models) is never frozen, and freezing a
+cutoff that already has a snapshot returns the stored one unchanged.
+`orbit agents rank-snapshot [--cutoff <instant-or-date>]`, the same tool without
+`freeze`, and `GET /api/agents/rank/snapshot` read a stored snapshot and report
+whether its content hash is valid and it still recomputes from its inputs. A
+claimed worker can read snapshots but cannot freeze. The shipped weekly
+`model-ranking-snapshot` auto-task (disabled by default) freezes, attaches the
+snapshot and comments its bands beside the implementer scorecard board and that
+week's MVP.
+
 ## Common MCP arguments
 
 These are JSON arguments to the named tool, not shell commands:

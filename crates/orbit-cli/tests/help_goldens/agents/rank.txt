@@ -4,7 +4,7 @@ One row per model, its crews and effort levels pooled. Each measure (escaped reg
 
 The ranked window (--window, 30 days) ends --settle-lag (14 days) before --until, so late escaped regressions have arrived; --live ends it at --until instead and is provisional. A model needs at least 30 implemented tasks spanning at least two assessed tiers with at least 5 tasks each to be ranked, and the board needs three such models. Models whose scores are not distinguishable share a band, cheapest first.
 
-Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the workspace's state; until then the scales are estimated from the ranked window.
+Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the workspace's state; until then the scales are estimated from the ranked window. Use --freeze to freeze the settled ranking itself as an immutable snapshot with its inputs (read it back with 'orbit agents rank-snapshot').
 
 Usage: orbit agents rank [OPTIONS]
        orbit agents rank <COMMAND>
@@ -27,6 +27,9 @@ Options:
 
       --live
           Rank the window ending at --until, unsettled and provisional
+
+      --freeze
+          Freeze the settled ranking as an immutable snapshot and show it
 
   -h, --help
           Print help (see a summary with '-h')

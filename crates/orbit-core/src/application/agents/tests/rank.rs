@@ -16,7 +16,9 @@ use serde_json::Value;
 use super::super::facts::{Attempt, RegressionLink, RejectOutcome, Review, TaskFacts};
 use super::super::{
     AgentFacts, AgentQuery, AgentRole, ExecutionMode, RankQuery, RankSeasons, agent_rank,
-    agent_rank_calibration, agent_scorecard, attribution,
+    agent_rank_calibration, agent_rank_freeze_snapshot, agent_scorecard, attribution,
+    rank_snapshot_hash_valid, rank_snapshot_recompute, read_rank_snapshot,
+    write_rank_snapshot_immutable,
 };
 
 /// One model's fixture work: crews it runs under, tasks per tier (low and
@@ -487,4 +489,166 @@ fn calibrated_season_stores_window_and_reference_size_and_drives_the_board() {
     assert_eq!(payload["season"]["season"], 1);
     let live = RankQuery::parse(None, None, None, None, true).unwrap();
     assert!(agent_rank_calibration(&facts, &live, &seasons).is_err());
+}
+
+fn frozen_at() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-11-09T08:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+#[test]
+fn frozen_snapshot_carries_its_inputs_and_recomputes_to_the_same_result() {
+    let facts = fleet();
+    let snapshot =
+        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
+            .unwrap();
+    let again =
+        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
+            .unwrap();
+    assert_eq!(snapshot, again, "the same facts freeze identically");
+    assert_eq!(snapshot["schema_version"], 1);
+    assert_eq!(snapshot["cutoff"], snapshot["ranking"]["until"]);
+    assert_eq!(snapshot["inputs"]["cutoff"], snapshot["cutoff"]);
+    assert!(snapshot["inputs"]["rules"]["bootstrap_seed"].is_number());
+    assert!(snapshot["inputs"]["rules"]["calibration_seed"].is_number());
+    let weights: f64 = snapshot["inputs"]["measures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|measure| f(&measure["weight"]))
+        .sum();
+    assert_eq!(weights, f(&snapshot["inputs"]["weights_total"]));
+    let strong = snapshot["inputs"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|input| input["model"] == "strong")
+        .unwrap();
+    assert_eq!(strong["records"].as_array().unwrap().len(), 40);
+    assert_eq!(
+        strong["measures"],
+        row(&snapshot["ranking"], "strong")["measures"]
+    );
+    assert!(
+        strong["measures"]["review_outcome"]["actual"].is_number(),
+        "per-row measures are frozen with the snapshot"
+    );
+    assert!(rank_snapshot_hash_valid(&snapshot));
+    let report = rank_snapshot_recompute(&snapshot).unwrap();
+    assert_eq!(report["recomputes"], true, "{}", report["mismatches"]);
+
+    // A tampered score is caught by both the hash and the recompute.
+    let mut tampered = snapshot.clone();
+    tampered["ranking"]["rows"][0]["score"] = serde_json::json!(999.0);
+    assert!(!rank_snapshot_hash_valid(&tampered));
+    assert_eq!(
+        rank_snapshot_recompute(&tampered).unwrap()["recomputes"],
+        false
+    );
+}
+
+#[test]
+fn freeze_refuses_a_live_board_and_an_unqualified_board() {
+    let fleet_facts = fleet();
+    let live = RankQuery::parse(None, None, None, None, true).unwrap();
+    let error =
+        agent_rank_freeze_snapshot(&fleet_facts, &live, &RankSeasons::default(), frozen_at())
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("never frozen"), "{error}");
+
+    let two_models = facts(&[
+        Work {
+            model: Some("strong"),
+            crews: &["strong"],
+            tasks: 40,
+            verdict: accept,
+            regressed: 0,
+            cost: 1.0,
+            days_ago: 20,
+        },
+        Work {
+            model: Some("weak"),
+            crews: &["weak"],
+            tasks: 40,
+            verdict: poor,
+            regressed: 8,
+            cost: 1.0,
+            days_ago: 20,
+        },
+    ]);
+    let error = agent_rank_freeze_snapshot(
+        &two_models,
+        &settled(),
+        &RankSeasons::default(),
+        frozen_at(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not qualified"), "{error}");
+}
+
+#[test]
+fn frozen_snapshot_hash_survives_a_json_roundtrip() {
+    // serde_json's fast float parser can land one ulp from the written
+    // value; the content hash is canonicalized so it still verifies.
+    let facts = fleet();
+    let snapshot =
+        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
+            .unwrap();
+    let text = serde_json::to_string_pretty(&snapshot).unwrap();
+    let reparsed: Value = serde_json::from_str(&text).unwrap();
+    assert!(rank_snapshot_hash_valid(&reparsed));
+    assert_eq!(
+        rank_snapshot_recompute(&reparsed).unwrap()["recomputes"],
+        true
+    );
+}
+
+#[test]
+fn a_frozen_snapshot_is_never_overwritten() {
+    let facts = fleet();
+    let dir = std::env::temp_dir().join(format!(
+        "orbit-rank-snapshot-immutable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let first =
+        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
+            .unwrap();
+    let (stored, already) = write_rank_snapshot_immutable(&dir, &first).unwrap();
+    assert!(!already);
+    assert_eq!(stored, first);
+    let file = dir.join(format!(
+        "{}.json",
+        first["cutoff"].as_str().unwrap().replace(':', "-")
+    ));
+    let bytes_before = std::fs::read(&file).unwrap();
+
+    // Refreezing the same cutoff later (a different frozen_at, so a
+    // different document) returns the stored snapshot byte for byte.
+    let later = DateTime::parse_from_rfc3339("2026-11-10T08:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let second =
+        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), later).unwrap();
+    assert_eq!(second["content_hash"], first["content_hash"]);
+    let (stored, already) = write_rank_snapshot_immutable(&dir, &second).unwrap();
+    assert!(already);
+    assert_eq!(stored["frozen_at"], first["frozen_at"]);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes_before);
+
+    // Read back by latest and by date; parsed floats can land one ulp
+    // from the in-memory values, so identity is the content hash.
+    let read_back = read_rank_snapshot(&dir, None).unwrap();
+    assert_eq!(read_back["content_hash"], first["content_hash"]);
+    assert!(rank_snapshot_hash_valid(&read_back));
+    let date = &first["cutoff"].as_str().unwrap()[..10];
+    assert_eq!(
+        read_rank_snapshot(&dir, Some(date)).unwrap()["content_hash"],
+        first["content_hash"]
+    );
+    assert!(read_rank_snapshot(&dir, Some("1999-01-01")).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

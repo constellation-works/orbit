@@ -70,6 +70,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "pilot-block-patterns",
     "qa-full-sweep",
     "qa-sweep",
+    "model-ranking-snapshot",
     "recovery-fault-audit",
     "run-failure-patterns",
     "security-review",

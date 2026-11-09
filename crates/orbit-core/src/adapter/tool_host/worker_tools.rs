@@ -49,7 +49,10 @@ pub(crate) fn execute(
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => false,
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
-            AgentsVerb::Scorecard | AgentsVerb::Show | AgentsVerb::CiFailures => false,
+            AgentsVerb::Scorecard
+            | AgentsVerb::Show
+            | AgentsVerb::CiFailures
+            | AgentsVerb::RankSnapshot => false,
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
@@ -383,6 +386,21 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show | AgentsVerb::CiFailures => return Ok(None),
+            // Reading a stored snapshot is an ordinary read; freezing writes
+            // the owning workspace's state, which a claimed worker must not
+            // do from its own checkout.
+            AgentsVerb::RankSnapshot => {
+                if input
+                    .get("freeze")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return Err(OrbitError::PolicyDenied(
+                        "freezing a ranking snapshot writes the owning workspace's state; a claimed worker can only read stored snapshots".into(),
+                    ));
+                }
+                return Ok(None);
+            }
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain => return Ok(None),

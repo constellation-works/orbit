@@ -1,0 +1,131 @@
+schemaVersion: 1
+name: model-ranking-snapshot
+description: Weekly frozen snapshot of the implementer model ranking at the latest settled weekly cutoff, attached with its inputs and compared beside the implementer scorecard board and that week's MVP; disagreements are named with their cause and nothing is republished or rerouted
+enabled: false
+schedule:
+  cron: 0 8 * * 1
+template:
+  title: Freeze the weekly model ranking snapshot
+  description: |-
+    Freeze the settled implementer model ranking for the latest weekly
+    cutoff, attach the snapshot to this task, and comment how its bands
+    compare with the implementer scorecard board and that week's MVP.
+    The ranking pools each model's crews, compares six measures with the
+    fleet's expectation for the same task tiers in frozen noise units,
+    shrinks toward the other eligible models, and bands models whose
+    scores are not distinguishable (cheapest first in a band). The frozen
+    snapshot is the durable output; the scorecard, the MVP note, crews
+    and routing stay exactly as they are.
+
+    ## Freeze
+
+    Call `orbit.agents.rank_snapshot` with `freeze: true` (defaults:
+    window 30d, settle_lag 14d, execution managed; with no `until`, the
+    settled cutoff is aligned to Monday 00:00 UTC, so one snapshot names
+    each week). The answer carries the ranking and its inputs: cutoff,
+    season scales and weights, per-row measures, per-task records and
+    the bootstrap seed, plus a `content_hash`, `hash_valid` and
+    `recomputes`. A freeze can only run on the owning workspace: a
+    claimed worker can read stored snapshots but never freeze, and that
+    refusal is a blocker for the owner, never a reason to compute the
+    ranking by hand.
+
+    Two refusals are regular outcomes, not errors to work around:
+
+    - Already frozen: `already_frozen: true` returns the stored
+      snapshot for this cutoff unchanged. Attach it as below, say so in
+      the comment, and point at the earlier snapshot task for this
+      cutoff when one exists (search tasks tagged
+      `auto-task:model-ranking-snapshot`).
+    - Unqualified: fewer than 3 eligible models (30 implemented tasks
+      spanning two assessed tiers each) at the cutoff. Nothing is
+      frozen as a result. Comment the eligible count and the cutoff,
+      attach no snapshot, and finish; never relax the window or the
+      rules to force a snapshot.
+
+    Check `hash_valid` and `recomputes` are both true before going on.
+    If either is false, file nothing and stop with a blocker quoting
+    the snapshot id and the `recompute_mismatches`: a snapshot that
+    does not recompute from its own inputs must not be published
+    beside anything.
+
+    ## Attach
+
+    Write the snapshot document exactly as returned (`schema_version`,
+    `cutoff`, `frozen_at`, `inputs`, `ranking` and `content_hash`;
+    the answer's check fields may ride along) to
+    `.orbit/tmp/model-ranking-snapshot.json` and attach it with
+    `orbit.task.artifact.put` (id this task, path
+    `model-ranking-snapshot.json`). The workspace copy under its state
+    directory stays the immutable original; the artifact is the
+    published copy readers follow.
+
+    ## Compare
+
+    Read the implementer scorecard for the same settled window:
+    `orbit.agents.scorecard` with role implementers, window 30d,
+    `until` the snapshot's cutoff and the snapshot's execution scope.
+    Per model, take its best ranked crew row: that is the board the
+    weekly MVP method reads, and it is what the ranking's pooled row
+    is compared against.
+
+    Find that week's MVP with `orbit.search` (kind task, one
+    distinctive token such as MVP) and read the newest completed
+    weekly MVP task or note that names a winning model for a week
+    ending at or before this run. Record its task id, its week and
+    its winner. If no such record is reachable from this workspace,
+    record the searches you ran and that the MVP is unavailable here;
+    never reconstruct an MVP from the scorecard and present it as
+    that week's result.
+
+    ## Comment
+
+    Comment on this task with `orbit.task.update`. The comment is the
+    weekly comparison a shadow run accumulates, so it must stand on
+    its own:
+
+    - the cutoff, snapshot id and content hash, the season (or
+      window-estimated scales) and which measures were unmeasured;
+    - the ranking's bands in order, each model with its score,
+      interval and cost ratio;
+    - beside them, the scorecard board's order by each model's best
+      crew, and that week's MVP (or its evidenced absence);
+    - every disagreement between the three — a different order, a
+      model banded with another the board separates, the MVP outside
+      the top band — with its most likely cause, taken only from how
+      the methods differ: pooling crews against taking the best crew,
+      two-sided shrinkage and eligibility support, the 14-day settle
+      lag removing the newest work, tie bands against a strict order,
+      cost ordering within a band only, and unmeasured measures
+      leaving the weights. Quote the numbers that support the cause
+      (units, per-measure contributions, paired probabilities) rather
+      than asserting it.
+
+    The execution summary repeats the cutoff, snapshot id, band order,
+    the scorecard order, the MVP or its absence, and the disagreement
+    count. Change no scorecard, MVP, crew, pool weight, season or
+    configuration: this task publishes evidence only.
+  acceptance_criteria:
+  - The freeze ran through `orbit.agents.rank_snapshot` and model-ranking-snapshot.json is attached with the snapshot's cutoff, season scales, weights, per-row measures, per-task records and bootstrap seed, its content hash valid and recomputes true — or the board was unqualified at the cutoff and the eligible count is evidenced instead, with no snapshot invented
+  - An `already_frozen` result attaches the stored snapshot unchanged and names the earlier snapshot task for the same cutoff when one exists
+  - A comment on this task places the ranking's bands beside the implementer scorecard board's best-crew-per-model order for the same window ending at the cutoff and that week's MVP (or its evidenced absence from named searches), and names each disagreement with a cause quoted from the numbers
+  - No scorecard, MVP record, crew, pool weight, ranking season or configuration was changed
+  task_type: chore
+  tags:
+  - model-ranking
+  - no-diff-expected
+  required_tools:
+  - orbit.agents.rank_snapshot
+  - orbit.agents.scorecard
+  - orbit.search
+  - orbit.task.artifact.put
+  - orbit.task.show
+  - orbit.task.update
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-11-08T00:00:00Z
+updated_by: system
+updated_at: 2026-11-08T00:00:00Z

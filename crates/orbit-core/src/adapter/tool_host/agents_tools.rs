@@ -1,7 +1,9 @@
 //! The `orbit.agents.*` tools: one scan per call, sliced by role and selection,
 //! and the recorded CI failures by cause.
 use crate::OrbitRuntime;
-use crate::application::agents::{AgentDetailSurface, AgentQuery, AgentRole, CiFailureQuery};
+use crate::application::agents::{
+    AgentDetailSurface, AgentQuery, AgentRole, CiFailureQuery, RankQuery,
+};
 use orbit_common::{
     OrbitError,
     governance::{agents::AgentsVerb, operation::OperationVerb},
@@ -23,6 +25,18 @@ pub(super) fn dispatch(
                 input.optional_string("task")?.as_deref(),
                 input.optional_string("class")?.as_deref(),
             )?);
+        }
+        AgentsVerb::RankSnapshot => {
+            if input.optional_bool("freeze")?.unwrap_or(false) {
+                return runtime.agent_rank_freeze(&RankQuery::parse(
+                    input.optional_string("window")?.as_deref(),
+                    input.optional_string("until")?.as_deref(),
+                    input.optional_string("settle_lag")?.as_deref(),
+                    input.optional_string("execution")?.as_deref(),
+                    false,
+                )?);
+            }
+            return runtime.agent_rank_snapshot(input.optional_string("cutoff")?.as_deref());
         }
         AgentsVerb::Scorecard | AgentsVerb::Show => {}
     }
@@ -60,6 +74,9 @@ pub(super) fn dispatch(
         AgentsVerb::Scorecard => runtime.agent_role_scorecard(role, &query),
         AgentsVerb::CiFailures => Err(OrbitError::Execution(
             "orbit.agents.ci_failures is answered before the role selection".to_string(),
+        )),
+        AgentsVerb::RankSnapshot => Err(OrbitError::Execution(
+            "orbit.agents.rank_snapshot is answered before the role selection".to_string(),
         )),
         AgentsVerb::Show => runtime.agent_role_detail_with_effort(
             role,

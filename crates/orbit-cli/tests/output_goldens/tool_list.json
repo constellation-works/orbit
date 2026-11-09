@@ -221,6 +221,53 @@
     "mcp_toolset": "analytics"
   },
   {
+    "name": "orbit.agents.rank_snapshot",
+    "description": "A frozen snapshot of the implementer model ranking: the settled ranking for one weekly cutoff with every input it was computed from (cutoff, season scales, weights, per-row measures, per-task records and the bootstrap seed), so it recomputes to the same result. Without freeze, reads the snapshot at cutoff or the newest, checking its content hash and recompute. With freeze, computes the settled ranking (never a live or unqualified board) and writes it immutably; a cutoff that already has a snapshot returns the stored one. The live ranking itself is `orbit agents rank`.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "freeze",
+        "description": "Freeze the settled ranking for the latest weekly cutoff as an immutable snapshot and return it, instead of reading a stored one. A cutoff that already has a snapshot returns the stored one unchanged. Without an explicit until, the settled cutoff is aligned to Monday 00:00 UTC.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "cutoff",
+        "description": "Read the snapshot frozen at this settled cutoff: an RFC 3339 instant or a YYYY-MM-DD date. Omitted, the newest snapshot is read. Only used without freeze.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "window",
+        "description": "Freeze only: the ranked time window ending at the settled cutoff, such as 30d. Default: 30d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "until",
+        "description": "Freeze only: end before the settle lag at this RFC 3339 instant, or this long ago (for example 7d). Omitted, now, with the settled cutoff aligned to Monday 00:00 UTC.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "settle_lag",
+        "description": "Freeze only: how long before until the ranked window ends, such as 14d. Default: 14d.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "execution",
+        "description": "Freeze only: which implementer tasks count by derived execution: managed (default), all or interactive.",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "analytics"
+  },
+  {
     "name": "orbit.agents.scorecard",
     "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work, to compare model-and-effort rows for that role; each row lists the crews that contributed its units, units with no recorded effort form a separate effort-unknown row, and a null effort is the provider default. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     "enabled": true,

@@ -12,7 +12,7 @@ use super::measures::{MEASURE_COUNT, MEASURES, Observations, totals};
 pub(super) const DRAWS: usize = 1000;
 /// The percentile of weekly estimates a scale is floored at.
 const FLOOR_PERCENTILE: f64 = 10.0;
-const CALIBRATION_SEED: u64 = 0x6f72_6269_745f_7261;
+pub(super) const CALIBRATION_SEED: u64 = 0x6f72_6269_745f_7261;
 pub(super) const BOOTSTRAP_SEED: u64 = 0x6e6b_5f62_6f6f_7473;
 
 /// SplitMix64: small, seedable and good enough for resampling indices.

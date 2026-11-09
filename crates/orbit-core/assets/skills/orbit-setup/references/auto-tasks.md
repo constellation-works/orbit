@@ -400,7 +400,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The 19 seeded definitions
+## The 21 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -723,6 +723,19 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   files at most one `proposed` rubric-revision task. It never changes a
   recorded decision. Seasons read `season-0` until model ranking records
   them.
+- **`model-ranking-snapshot`** (`medium`) — weekly, shipped disabled so the
+  ranking's shadow run starts only when an operator enables it. Freezes the
+  settled implementer model ranking for the latest weekly cutoff through
+  `orbit.agents.rank_snapshot` (the tool behind `orbit agents rank --freeze`):
+  an immutable snapshot with its cutoff, season scales, weights, per-row
+  measures, per-task records and bootstrap seed, whose content hash verifies
+  and which recomputes from its inputs; a live or unqualified board is never
+  frozen, and a cutoff that already has a snapshot returns it unchanged. Each
+  run attaches `model-ranking-snapshot.json` and comments the ranking's bands
+  beside the implementer scorecard board (each model's best crew, same window
+  ending at the cutoff) and that week's MVP, naming every disagreement with a
+  cause quoted from the numbers. It changes no scorecard, MVP record, crew,
+  pool weight or season.
 
 - **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,

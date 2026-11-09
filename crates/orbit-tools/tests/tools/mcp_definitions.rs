@@ -59,6 +59,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .collect::<Vec<_>>(),
         [
             "orbit.agents.ci_failures",
+            "orbit.agents.rank_snapshot",
             "orbit.agents.scorecard",
             "orbit.agents.show",
             "orbit.attention",

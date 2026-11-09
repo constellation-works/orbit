@@ -21,6 +21,8 @@ operation_registry! {
         Show => SHOW,
         /// Required-check failures on candidate heads, recorded by cause.
         CiFailures => CI_FAILURES,
+        /// A frozen model-ranking snapshot; `freeze` writes a new one.
+        RankSnapshot => RANK_SNAPSHOT,
     }
 }
 
@@ -266,6 +268,80 @@ const CI_FAILURES: OperationSpec<AgentsVerb> = OperationSpec {
     },
     effect: Effect::Read,
     params: &[CI_FAILURE_SELECTION],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+/// The frozen-snapshot selection. Without `freeze` it only reads: the
+/// snapshot at `cutoff`, or the newest. With `freeze`, the window fields
+/// select the settled ranking to freeze.
+const RANK_SNAPSHOT_SELECTION: &[ParamSpec] = &[
+    both(
+        "freeze",
+        ParamType::Switch,
+        "Freeze the settled ranking for the latest weekly cutoff as an immutable snapshot and return it, instead of reading a stored one. A cutoff that already has a snapshot returns the stored one unchanged. Without an explicit until, the settled cutoff is aligned to Monday 00:00 UTC.",
+        CliArgKind::flag("freeze"),
+        "Freeze the settled ranking as a new immutable snapshot",
+    ),
+    both(
+        "cutoff",
+        ParamType::String,
+        "Read the snapshot frozen at this settled cutoff: an RFC 3339 instant or a YYYY-MM-DD date. Omitted, the newest snapshot is read. Only used without freeze.",
+        CliArgKind::flag("cutoff"),
+        "Read the snapshot at this cutoff (an instant or YYYY-MM-DD)",
+    ),
+    both(
+        "window",
+        ParamType::String,
+        "Freeze only: the ranked time window ending at the settled cutoff, such as 30d. Default: 30d.",
+        CliArgKind::flag("window"),
+        "Freeze only: the ranked time window such as 30d",
+    ),
+    both(
+        "until",
+        ParamType::String,
+        "Freeze only: end before the settle lag at this RFC 3339 instant, or this long ago (for example 7d). Omitted, now, with the settled cutoff aligned to Monday 00:00 UTC.",
+        CliArgKind::flag("until"),
+        "Freeze only: end before the settle lag at this instant or duration ago",
+    ),
+    both(
+        "settle_lag",
+        ParamType::String,
+        "Freeze only: how long before until the ranked window ends, such as 14d. Default: 14d.",
+        CliArgKind::flag("settle-lag"),
+        "Freeze only: how long before until the ranked window ends",
+    ),
+    defaulted(
+        both(
+            "execution",
+            ParamType::Enum(EXECUTIONS),
+            "Freeze only: which implementer tasks count by derived execution: managed (default), all or interactive.",
+            CliArgKind::flag("execution"),
+            "Freeze only: which implementer tasks count: managed, all or interactive",
+        ),
+        "managed",
+    ),
+];
+
+const RANK_SNAPSHOT: OperationSpec<AgentsVerb> = OperationSpec {
+    verb: AgentsVerb::RankSnapshot,
+    cli_path: &["rank-snapshot"],
+    tool_name: "orbit.agents.rank_snapshot",
+    tool_description: "A frozen snapshot of the implementer model ranking: the settled ranking for one weekly cutoff with every input it was computed from (cutoff, season scales, weights, per-row measures, per-task records and the bootstrap seed), so it recomputes to the same result. Without freeze, reads the snapshot at cutoff or the newest, checking its content hash and recompute. With freeze, computes the settled ranking (never a live or unqualified board) and writes it immutably; a cutoff that already has a snapshot returns the stored one. The live ranking itself is `orbit agents rank`.",
+    cli_about: "Read a frozen model-ranking snapshot, or freeze a new one",
+    cli_help: CliHelp {
+        long_about: None,
+        after_help: Some(
+            "Without --freeze this reads the snapshot at --cutoff or the newest and checks that\nit still recomputes from its recorded inputs. With --freeze it writes the settled\nranking for the latest weekly cutoff once; snapshots are immutable, so freezing a\ncutoff that already has one returns the stored snapshot. `orbit agents rank --freeze`\nis the same freeze from the ranking command.",
+        ),
+        flag_order: &[],
+        constraints: &[],
+    },
+    effect: Effect::Write,
+    params: &[RANK_SNAPSHOT_SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

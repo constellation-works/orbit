@@ -328,6 +328,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/agents/attribution", get(agents::agent_attribution))
         // The implementer model ranking with tie bands [model-ranking §6].
         .route("/agents/rank", get(agents::agent_rank))
+        .route("/agents/rank/snapshot", get(agents::agent_rank_snapshot))
         // Required-check failures on candidate heads by cause, read live
         // (model ranking §5.1).
         .route("/agents/ci-failures", get(agents::agent_ci_failures))

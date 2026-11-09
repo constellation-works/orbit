@@ -280,7 +280,8 @@ change starts a new season (§4.2).
 ## 6. Surfaces
 
 - **CLI:** `orbit agents rank [--window 30d] [--until <ts>] [--settle-lag 14d]
-  [--execution managed|all] [--live] [--json]`.
+  [--execution managed|all] [--live] [--freeze] [--json]`, and
+  `orbit agents rank-snapshot [--cutoff <ts-or-date>]` to read a frozen snapshot.
 - **API:** `GET /api/agents/rank`, with the same parameters. The payload carries the
   following, so every number on the page can be recomputed:
   - per row: score, interval, band, cost ratio, per-measure actual, expected, residual and
@@ -288,9 +289,13 @@ change starts a new season (§4.2).
   - per board: the season's scales and weights, and whether the board is qualified.
 - **Dashboard:** Analytics › Agents gains a **Rank** tab. It shows the band table, an
   expandable per-measure breakdown for each row, and the per-tier value chart.
-- **Snapshots:** a weekly routine freezes the settled ranking, with its inputs, as a task
-  artifact. The weekly MVP note and the public analytics site read the frozen snapshot,
-  never a live query.
+- **Snapshots:** `orbit agents rank --freeze` (tool `orbit.agents.rank_snapshot`)
+  freezes the settled ranking for the latest weekly cutoff, with its inputs, as an
+  immutable snapshot in the workspace's state; the shipped weekly
+  `model-ranking-snapshot` auto-task (disabled by default) mints the task that
+  freezes, attaches the snapshot as a task artifact and comments the comparison
+  beside the scorecard board and that week's MVP. The weekly MVP note and the
+  public analytics site read the frozen snapshot, never a live query.
 
 ### 6.1 As built (R2)
 
@@ -331,8 +336,42 @@ change starts a new season (§4.2).
   `scales_source`, `rules`, `qualified`, `unattributed`, `execution_split`,
   `not_scored` and `paired_probabilities`. A tier score is `100 + 10 × z`
   on that tier's tasks only, before the board's shrinkage; the page computes
-  the frontier from those points. The weekly snapshot is later work.
+  the frontier from those points. The weekly snapshot is §6.2.
 - **Band threshold.** R2 uses 80%; the R3 shadow recommendation in §4.4 is 95%.
+
+### 6.2 As built (R4 snapshot)
+
+- **Freeze.** `orbit agents rank --freeze` and `orbit agents rank-snapshot`
+  (tool `orbit.agents.rank_snapshot`, read at `GET /api/agents/rank/snapshot`)
+  settle the ranking for one weekly cutoff. Without an explicit `--until`, the
+  settled cutoff (`until − settle_lag`) is aligned down to Monday 00:00 UTC.
+  A live board is refused, and so is an unqualified one, matching §4.3.
+- **Snapshot document.** One JSON file per cutoff under
+  `.orbit/state/agents/rank-snapshots/`, written create-only and never
+  overwritten: refreezing a cutoff returns the stored snapshot (later facts,
+  such as a late regression, never rewrite history). It carries the ranking
+  payload (minus scan-volatile fields) and its inputs: window, since, cutoff,
+  requested until, settle lag, execution, definition version, the season and
+  its scales (or `window_estimate`), each measure's weight, status and scale,
+  the rules with the bootstrap and calibration seeds, and per row its crews,
+  per-measure actual/expected/residual/contribution and its per-task records
+  (tier, start, cost and the six observations). A `content_hash` (sha256 over
+  canonicalized content: sorted keys, floats at fixed precision so a JSON
+  round-trip's last-ulp wobble cannot invalidate it) seals inputs plus ranking.
+- **Recompute.** A snapshot is verified before it is written and again on every
+  read: the board is recomputed from the recorded per-task records, scales and
+  seed and compared with the frozen scores, ranks, intervals, cost ratios and
+  paired probabilities. The read surfaces report `hash_valid`, `recomputes` and
+  any mismatches rather than serving a snapshot that no longer checks out as if
+  it did. A stored snapshot whose hash fails is an error and is left in place.
+- **Weekly task.** The shipped `model-ranking-snapshot` auto-task (weekly,
+  disabled) mints a `no-diff-expected` chore that freezes through the tool,
+  attaches `model-ranking-snapshot.json`, reads the implementer scorecard for
+  the same window ending at the cutoff (each model's best crew — the board the
+  MVP method reads) and that week's MVP record, and comments the bands beside
+  both with every disagreement's cause. Freezing is owner-local: a claimed
+  worker may read snapshots but not freeze. Enabling the auto-task and running
+  the four shadow weeks stay operator work after R3.
 
 ## 7. Validation and rollout
 
@@ -364,5 +403,6 @@ change starts a new season (§4.2).
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
 - [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`
 - [ORB-23304] — R3: season-0 candidate scales, component replay, coverage and weight sensitivity
+- [ORB-23305] — R4 code: `orbit agents rank --freeze` snapshots and the shipped weekly `model-ranking-snapshot` auto-task (disabled)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -62,7 +62,9 @@ ranked, and the board needs three such models. Models \
 whose scores are not distinguishable share a band, cheapest first.
 
 Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the \
-workspace's state; until then the scales are estimated from the ranked window.";
+workspace's state; until then the scales are estimated from the ranked window. \
+Use --freeze to freeze the settled ranking itself as an immutable snapshot \
+with its inputs (read it back with 'orbit agents rank-snapshot').";
 
 #[derive(Args)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -74,6 +76,9 @@ pub struct AgentsRankArgs {
     /// Rank the window ending at --until, unsettled and provisional
     #[arg(long)]
     pub live: bool,
+    /// Freeze the settled ranking as an immutable snapshot and show it
+    #[arg(long, conflicts_with = "live")]
+    pub freeze: bool,
 }
 
 #[derive(Subcommand)]
@@ -139,6 +144,11 @@ impl Execute for AgentsCommand {
             AgentsSubcommand::Operation(invocation) => invocation,
             AgentsSubcommand::Rank(args) => {
                 let (value, blocks) = match &args.action {
+                    None if args.freeze => {
+                        let value = runtime.agent_rank_freeze(&args.selection.query(false)?)?;
+                        let blocks = rank_snapshot_blocks(&value);
+                        (value, blocks)
+                    }
                     None => {
                         let value = runtime.agent_rank(&args.selection.query(args.live)?)?;
                         let blocks = rank_blocks(&value);
@@ -168,6 +178,7 @@ impl Execute for AgentsCommand {
             AgentsVerb::Scorecard => scorecard_blocks(&value),
             AgentsVerb::Show => show_blocks(&value),
             AgentsVerb::CiFailures => ci_failure_blocks(&value),
+            AgentsVerb::RankSnapshot => rank_snapshot_blocks(&value),
         };
         Ok(Payload::blocks(value, blocks).into())
     }
@@ -575,6 +586,37 @@ fn rank_blocks(value: &Value) -> Vec<Block> {
         ));
     }
     vec![Block::table(table)]
+}
+
+/// A frozen snapshot: its cutoff, hash and recompute check, then the
+/// frozen ranking's board.
+fn rank_snapshot_blocks(value: &Value) -> Vec<Block> {
+    let frozen = if value["already_frozen"] == true {
+        "already frozen at this cutoff; the stored snapshot is unchanged"
+    } else if value["already_frozen"] == false {
+        "frozen now"
+    } else {
+        "stored snapshot"
+    };
+    let recomputes = if value["recomputes"] == true {
+        "recomputes from its inputs"
+    } else {
+        "DOES NOT recompute from its inputs"
+    };
+    let hash = if value["hash_valid"] == true {
+        "content hash valid"
+    } else {
+        "content hash INVALID"
+    };
+    let mut blocks = vec![Block::text(format!(
+        "model ranking snapshot {} · cutoff {} · frozen {} ({frozen}) · {hash} · {recomputes}\ncontent hash {}",
+        text(&value["snapshot_id"]),
+        text(&value["cutoff"]),
+        text(&value["frozen_at"]),
+        text(&value["content_hash"]),
+    ))];
+    blocks.extend(rank_blocks(&value["ranking"]));
+    blocks
 }
 
 /// The calibrated season: its window, reference size and scales.

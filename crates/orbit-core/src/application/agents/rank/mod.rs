@@ -19,11 +19,12 @@ mod board;
 mod measures;
 mod sample;
 mod season;
+mod snapshot;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, TimeZone, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Map, Value, json};
 
@@ -32,6 +33,10 @@ use self::measures::{COUNTING_ORDER, MEASURE_COUNT, MEASURES, measures_json, wei
 use self::sample::{DRAWS, Record};
 pub use self::season::RankSeasons;
 use self::season::{DEFINITION_VERSION, Season, SeasonScale};
+pub use self::snapshot::{
+    agent_rank_freeze_snapshot, rank_snapshot_content_hash, rank_snapshot_hash_valid,
+    rank_snapshot_recompute, read_rank_snapshot, write_rank_snapshot_immutable,
+};
 use super::query::{SpanError, parse_span};
 use super::{
     AgentFacts, AgentQuery, ExecutionMode, MODEL_UNKNOWN, Owner, WindowBounds, WindowSpan, roles,
@@ -47,6 +52,7 @@ pub struct RankQuery {
     /// live).
     query: AgentQuery,
     until: DateTime<Utc>,
+    until_explicit: bool,
     settle_lag: String,
     live: bool,
 }
@@ -84,6 +90,7 @@ impl RankQuery {
                 SpanError::OutOfRange => format!("settle_lag is out of range: {settle_lag}"),
             })
         })?;
+        let until_explicit = until.is_some();
         let until = query.until.unwrap_or_else(Utc::now);
         let cutoff = if live {
             until
@@ -95,9 +102,38 @@ impl RankQuery {
         Ok(Self {
             query: query.with_until_at(cutoff),
             until,
+            until_explicit,
             settle_lag,
             live,
         })
+    }
+
+    /// This query with its settled cutoff aligned to the latest Monday
+    /// 00:00 UTC at or before the unaligned cutoff, for a weekly freeze.
+    /// A live query or one with an explicit `until` is returned as is.
+    pub(crate) fn weekly_aligned(&self) -> Self {
+        if self.live || self.until_explicit {
+            return self.clone();
+        }
+        let Ok(lag) = parse_span(&self.settle_lag) else {
+            return self.clone();
+        };
+        let Some(cutoff) = self.until.checked_sub_signed(lag) else {
+            return self.clone();
+        };
+        let monday = cutoff.date_naive()
+            - chrono::Duration::days(i64::from(cutoff.weekday().num_days_from_monday()));
+        let aligned = Utc.from_utc_datetime(&monday.and_hms_opt(0, 0, 0).unwrap_or_default());
+        let Some(until) = aligned.checked_add_signed(lag) else {
+            return self.clone();
+        };
+        Self {
+            query: self.query.with_until_at(aligned),
+            until,
+            until_explicit: true,
+            settle_lag: self.settle_lag.clone(),
+            live: false,
+        }
     }
 
     fn header(&self, facts: &AgentFacts, window: WindowBounds, cache_ttl: Duration) -> Value {
@@ -175,20 +211,16 @@ fn calibrate_rows(rows: &[ModelRow], window: WindowBounds, season: u32, executio
     }
 }
 
-/// The ranking for `query`, with the newest current season's scales, or
-/// scales estimated from the ranked window when no season is calibrated.
-/// `cache_ttl` is how long the caller keeps `facts`.
-pub fn agent_rank(
+/// The window, pooled model rows and scales a board for `query` is
+/// computed from: the newest current season's scales, or scales estimated
+/// from the ranked window when no season is calibrated.
+fn board_inputs(
     facts: &AgentFacts,
     query: &RankQuery,
     seasons: &RankSeasons,
-    cache_ttl: Duration,
-) -> Value {
+) -> (WindowBounds, Vec<ModelRow>, Scales) {
     let window = query.query.bounds(facts);
     let execution = query.query.execution;
-    // Shown beside the ranking, not filtered by the execution selector, so
-    // interactive work stays visible while the default counts leave it out.
-    let (execution_board, execution_by_model) = execution_census(facts, window);
     let rows = board::pool(roles::implementer_ledger(facts, window, execution));
     let scales = match seasons.current() {
         Some(season) => Scales {
@@ -207,6 +239,22 @@ pub fn agent_rank(
             }
         }
     };
+    (window, rows, scales)
+}
+
+/// The ranking for `query`, with the newest current season's scales, or
+/// scales estimated from the ranked window when no season is calibrated.
+/// `cache_ttl` is how long the caller keeps `facts`.
+pub fn agent_rank(
+    facts: &AgentFacts,
+    query: &RankQuery,
+    seasons: &RankSeasons,
+    cache_ttl: Duration,
+) -> Value {
+    let (window, rows, scales) = board_inputs(facts, query, seasons);
+    // Shown beside the ranking, not filtered by the execution selector, so
+    // interactive work stays visible while the default counts leave it out.
+    let (execution_board, execution_by_model) = execution_census(facts, window);
     let board = board::compute(&rows, &scales.scales);
 
     let mut payload = query.header(facts, window, cache_ttl);

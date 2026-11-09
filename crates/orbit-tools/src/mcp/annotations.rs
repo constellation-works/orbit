@@ -63,6 +63,10 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // Edits that set the fields given and touch nothing else.
         "orbit.auto_task.update" => A::additive(true),
 
+        // Reads a stored snapshot, or with `freeze` writes a new immutable
+        // one; refreezing a cutoff returns the stored snapshot unchanged.
+        "orbit.agents.rank_snapshot" => A::additive(true),
+
         // A repeated close returns the notice unchanged.
         "orbit.notice.close" => A::additive(true),
 

@@ -193,4 +193,8 @@ pub use api::{
     agent_per_task_export, agent_scorecard, agent_size_curves,
 };
 pub(crate) use query::WindowBounds;
-pub use rank::{RankQuery, RankSeasons, agent_rank, agent_rank_calibration};
+pub use rank::{
+    RankQuery, RankSeasons, agent_rank, agent_rank_calibration, agent_rank_freeze_snapshot,
+    rank_snapshot_content_hash, rank_snapshot_hash_valid, rank_snapshot_recompute,
+    read_rank_snapshot, write_rank_snapshot_immutable,
+};

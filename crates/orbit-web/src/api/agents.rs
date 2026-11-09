@@ -251,6 +251,33 @@ pub(super) async fn agent_rank(
     }
 }
 
+/// Query string for the frozen ranking snapshot.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct AgentRankSnapshotQuery {
+    /// The snapshot's settled cutoff: an RFC 3339 instant or a
+    /// `YYYY-MM-DD` date. Omitted, the newest snapshot.
+    #[serde(default)]
+    cutoff: Option<String>,
+}
+
+/// A frozen model-ranking snapshot from the workspace's state, with its
+/// content hash and recompute checked at read time: the payload
+/// `orbit agents rank-snapshot --json` prints. Freezing stays on the CLI
+/// and the `orbit.agents.rank_snapshot` tool.
+pub(super) async fn agent_rank_snapshot(
+    Ws(runtime): Ws,
+    Query(query): Query<AgentRankSnapshotQuery>,
+) -> Response {
+    match blocking("ranking snapshot", move || {
+        runtime.agent_rank_snapshot(query.cutoff.as_deref())
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
+    }
+}
+
 /// Query string for `/api/agents/ci-failures`.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct CiFailureSelection {
