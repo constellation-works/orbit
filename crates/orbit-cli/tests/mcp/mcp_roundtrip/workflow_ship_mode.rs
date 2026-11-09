@@ -46,3 +46,51 @@ fn ship_mode_without_a_workspace_selector_matches_the_omitted_mode_gate() {
         "{auto}"
     );
 }
+
+/// The selector refusal for an `auto` call that carries `mode` must not
+/// mention `view`, which the caller never set. An explicit selector clears
+/// the gate, and `auto` without `mode` keeps using the bound workspace.
+#[test]
+fn auto_mode_selector_refusal_does_not_advise_omitting_view() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
+
+    let refused = client.call_tool_err(
+        "orbit_workflow",
+        json!({"action": "auto", "mode": "status", "model": "codex"}),
+    );
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    assert!(
+        message_contains(&refused, "requires an explicit workspace selector"),
+        "{refused}"
+    );
+    assert!(
+        !message_contains(&refused, "`view`"),
+        "the caller never set `view`, so the refusal must not name it: {refused}"
+    );
+
+    let selected = client.call_tool_err(
+        "orbit_workflow",
+        json!({
+            "action": "auto",
+            "mode": "status",
+            "workspace": "ws_mcp-roundtrip",
+            "model": "codex"
+        }),
+    );
+    assert_eq!(selected["code"], "capability_denied", "{selected}");
+    assert!(
+        !message_contains(&selected, "requires an explicit workspace selector"),
+        "an explicit selector must pass the selector gate: {selected}"
+    );
+
+    let bound = client.call_tool_err(
+        "orbit_workflow",
+        json!({"action": "auto", "model": "codex"}),
+    );
+    assert_eq!(bound["code"], "capability_denied", "{bound}");
+    assert!(
+        !message_contains(&bound, "requires an explicit workspace selector"),
+        "auto without mode must use the bound workspace: {bound}"
+    );
+}
