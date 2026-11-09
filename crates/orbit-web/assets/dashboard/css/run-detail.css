@@ -5,9 +5,12 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px 16px;
+  margin: 12px 16px;
   padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-elev);
   font-size: 13.5px;
-  border-bottom: 1px solid var(--hair);
 }
 .run-meta-grid .label {
   color: var(--fg-dim);
