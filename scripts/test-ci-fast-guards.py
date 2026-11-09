@@ -185,9 +185,11 @@ else:
 
     def prepare_ci(self):
         source = (SCRIPTS / "ci-guardrails.sh").read_text()
-        for name in re.findall(r'\$repo_root/scripts/([\w.-]+)', source):
-            self.write_executable(self.scripts / name,
-                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{name}"\n')
+        for relative in re.findall(r'\$repo_root/((?:scripts|docs/standards)/[\w.-]+)', source):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.write_executable(path,
+                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{path.name}"\n')
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The lint wrapper is the environment under test, not a guard.
@@ -778,6 +780,29 @@ log("end {name}")
                 if not succeeds:
                     self.assertIn("FAILED check-public-artifact-ids.py", result.stderr)
                     self.assertIn("concrete artifact ID", result.stderr)
+
+    def test_ci_gates_reject_modified_vendored_standards(self):
+        """The public CI gates must enforce the vendored standards checksums."""
+        self.prepare_ci()
+        standards = self.root / "docs/standards"
+        shutil.copytree(SCRIPTS.parent / "docs/standards", standards, dirs_exist_ok=True)
+        shutil.copy2(SCRIPTS.parent / "AGENTS.md", self.root / "AGENTS.md")
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root)
+        standard = standards / "STD-01-cli-surface/STD-01.md"
+        original = standard.read_bytes()
+        commands = (("make", "ci-guards"),
+                    ("/bin/bash", str(self.scripts / "ci-guardrails.sh"), "--guards"))
+        for command in commands:
+            for modified in (False, True, False):
+                with self.subTest(command=command, modified=modified):
+                    standard.write_bytes(original + b"\nhand edit\n" if modified else original)
+                    result = subprocess.run(command, cwd=self.root, env=self.env,
+                                            text=True, capture_output=True, timeout=60)
+                    self.assertEqual(result.returncode == 0, not modified,
+                                     result.stdout + result.stderr)
+                    if modified:
+                        self.assertIn("vendored files do not match", result.stderr)
+                        self.assertIn("FAILED check.sh", result.stderr)
 
     def test_static_qa_inventory_uses_offline_metadata_and_no_self_tests(self):
         """QA's isolated child must retain the static lane's no-network contract."""

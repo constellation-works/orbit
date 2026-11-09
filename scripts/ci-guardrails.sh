@@ -615,6 +615,7 @@ if [[ "$checks" == false ]]; then
   fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
+  run_guard "$repo_root/docs/standards/check.sh"
   run_guard "$repo_root/scripts/check-doc-links.py"
   run_guard "$repo_root/scripts/check-cli-imports.sh"
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
