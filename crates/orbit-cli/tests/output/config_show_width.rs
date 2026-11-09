@@ -34,7 +34,30 @@ fn sample_text() -> crate::output::payload::ConfigShow {
     text
 }
 
+/// A key row whose first trailing word is wider than the first line's remainder
+/// at a narrow width but fits whole on a continuation line.
+fn continuation_word_text() -> crate::output::payload::ConfigShow {
+    let mut text = crate::output::payload::ConfigShow::default();
+    text.push_str(&format!("  {:<10}  {:<8}  ", "label", "value"));
+    text.mark_trailing_column();
+    text.push_str("alpha-beta-gamma-delta\n");
+    text
+}
+
+/// The text the child renders, chosen by `ORBIT_CONFIG_SHOW_RENDER_TEXT`.
+fn child_text() -> crate::output::payload::ConfigShow {
+    match std::env::var("ORBIT_CONFIG_SHOW_RENDER_TEXT").as_deref() {
+        Ok("continuation") => continuation_word_text(),
+        _ => sample_text(),
+    }
+}
+
 pub(super) fn render_fixture(case: &str) -> String {
+    render_fixture_text(case, "sample")
+}
+
+/// Render the child fixture `text` (`sample` or `continuation`) at terminal width `case`.
+fn render_fixture_text(case: &str, text: &str) -> String {
     let logs =
         tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("child logs");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
@@ -44,7 +67,8 @@ pub(super) fn render_fixture(case: &str) -> String {
             "config_show_width::render_fixture_child",
             "--nocapture",
         ])
-        .env("ORBIT_CONFIG_SHOW_RENDER_CASE", case);
+        .env("ORBIT_CONFIG_SHOW_RENDER_CASE", case)
+        .env("ORBIT_CONFIG_SHOW_RENDER_TEXT", text);
     let output = orbit_common::test_env::run_child_test(
         &mut command,
         "config_show_width::render_fixture_child",
@@ -95,7 +119,7 @@ fn render_fixture_child() {
     crate::output::render::emit(
         Payload::blocks(
             serde_json::json!({}),
-            vec![Block::config_show(sample_text())],
+            vec![Block::config_show(child_text())],
         )
         .into(),
         &sink,
@@ -135,6 +159,29 @@ fn config_show_text_fits_terminal_widths() {
 fn config_show_text_plain_keeps_every_line_whole() {
     let body = render_fixture("plain");
     assert_eq!(body, sample_text().text);
+}
+
+/// A trailing word too wide for the first line's remainder but shorter than a
+/// continuation line moves whole to the next line instead of splitting mid-word.
+#[test]
+fn config_show_moves_word_that_fits_continuation_whole() {
+    let body = render_fixture_text("40", "continuation");
+    let lines = body.lines().collect::<Vec<_>>();
+    for line in &lines {
+        assert!(
+            line.chars().count() <= 40,
+            "line exceeds terminal: {line:?}"
+        );
+    }
+    let row = lines
+        .iter()
+        .position(|line| line.starts_with("  label"))
+        .expect("key row keeps its label");
+    assert_eq!(
+        lines.get(row + 1).map(|line| line.trim()),
+        Some("alpha-beta-gamma-delta"),
+        "word split across lines:\n{body}"
+    );
 }
 
 /// Multi-word cells must not be mistaken for extra columns in terminal output.

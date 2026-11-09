@@ -445,8 +445,9 @@ fn find_blurb_start(line: &str) -> Option<usize> {
 }
 
 /// Wrap `trailing` at word boundaries into lines of at most `width` chars:
-/// the first follows `prefix`, continuations sit at `indent`. A word longer
-/// than the available width is split so it still fits.
+/// the first follows `prefix`, continuations sit at `indent`. A word moves to
+/// the next line whole when it fits there, even if it is too wide for the
+/// first line's remainder; only a word wider than a continuation line is split.
 fn wrap_trailing(prefix: &str, trailing: &str, indent: usize, width: usize) -> String {
     let available_first = width.saturating_sub(prefix.chars().count()).max(1);
     let available_rest = width.saturating_sub(indent).max(1);
@@ -462,6 +463,14 @@ fn wrap_trailing(prefix: &str, trailing: &str, indent: usize, width: usize) -> S
                     if rest.chars().count() <= *available {
                         current.push_str(rest);
                         return;
+                    }
+                    // A first word too wide for the first line's remainder moves
+                    // whole to a continuation when it fits there; the first line
+                    // then keeps only its prefix (see the assembly below).
+                    if wrapped.is_empty() && rest.chars().count() <= available_rest {
+                        wrapped.push(String::new());
+                        *available = available_rest;
+                        continue;
                     }
                     // Split a word wider than a whole line.
                     let take = *available;
@@ -489,6 +498,9 @@ fn wrap_trailing(prefix: &str, trailing: &str, indent: usize, width: usize) -> S
         if index > 0 {
             out.push('\n');
             out.push_str(&" ".repeat(indent));
+        } else if chunk.is_empty() && wrapped.len() > 1 {
+            // The first word moved to a continuation: no trailing gutter is left behind.
+            out.push_str(prefix.trim_end());
         } else {
             out.push_str(prefix);
         }
