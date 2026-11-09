@@ -382,6 +382,105 @@ fn open_task_selection_reads_only_open_envelopes() {
     );
 }
 
+/// One index row that disagrees with an envelope no writer holds must not
+/// send an observational selection to a scan of every bundle: observational
+/// reads never repair the index, so on a large workspace each dashboard
+/// lock or backlog read paid a whole-workspace scan until an operational
+/// read ran (ORB-23727). The stale task is still selected by its envelope.
+#[test]
+fn observation_reads_a_stale_row_from_its_bundle_without_scanning_the_workspace() {
+    const CLOSED: usize = 200;
+    const OPEN: usize = 5;
+    if !allocation_admission_isolated(
+        "task_index::observation_reads_a_stale_row_from_its_bundle_without_scanning_the_workspace",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let open = (0..OPEN)
+        .map(|index| {
+            owner.create_task_with_status(
+                &format!("Open {index}"),
+                &["src/lib.rs"],
+                TaskStatus::Backlog,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    for index in 0..CLOSED {
+        owner.create_task_with_status(
+            &format!("Closed {index}"),
+            &["src/lib.rs"],
+            TaskStatus::Done,
+            None,
+        );
+    }
+    assert_eq!(
+        owner.backends.task.task.list_tasks().unwrap().len(),
+        OPEN + CLOSED
+    );
+    drop(owner);
+    // The index now claims an open task is done; its envelope says backlog.
+    let stale = &open[OPEN / 2].id;
+    let sql = rusqlite::Connection::open(task_registry_path(root.path())).unwrap();
+    sql.execute(
+        "UPDATE task_bundle_index SET status = 'done' WHERE task_id = ?1",
+        [stale],
+    )
+    .unwrap();
+
+    let open_filter = TaskListFilter {
+        statuses: Some(vec![TaskStatus::Backlog]),
+        ..TaskListFilter::default()
+    };
+    let read_only = observer(root.path());
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let subscriber = Registry::default().with(EnvelopeReads(std::sync::Arc::clone(&reads)));
+    let selected = tracing::subscriber::with_default(subscriber, || {
+        read_only
+            .task
+            .observe_task_candidates(&open_filter, usize::MAX)
+            .unwrap()
+    });
+    let mut expected = open.iter().collect::<Vec<_>>();
+    expected.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let expected = expected
+        .into_iter()
+        .map(|task| task.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected
+            .items
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>(),
+        expected,
+        "the stale task is selected by its envelope, in listing order"
+    );
+    assert_eq!(selected.total, OPEN);
+    let reads = reads.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        reads <= 4 * OPEN,
+        "a stale row must cost its own bundle, not a scan of all {} tasks: read {reads}",
+        OPEN + CLOSED
+    );
+    assert_eq!(
+        sql.query_row(
+            "SELECT status FROM task_bundle_index WHERE task_id = ?1",
+            [stale],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "done",
+        "observation must leave the generated index untouched"
+    );
+}
+
 /// A restored envelope can move a child without changing scalar metadata.
 /// Both observation and repair must find it before narrowing by parent.
 #[test]
