@@ -13,6 +13,7 @@ mod light_delivery;
 mod model;
 mod mutation_proposal;
 mod os_requirement;
+mod pilot_summary;
 mod plan;
 mod readiness;
 mod receipt;

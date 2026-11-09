@@ -452,49 +452,86 @@ fn envelope_context_files(task: &Task, input: &Value, fallback_repo_root: &Path)
 /// The comment projection for one envelope: the retained comments plus what
 /// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
 struct BoundedTaskComments {
-    /// Retained comments, still in chronological order. The last body may have
-    /// been cut down; every other body is verbatim.
+    /// Retained comments, in chronological order. The newest non-pilot body may
+    /// have been cut down; a retained pilot comment is its summary line once
+    /// the budget forced a choice; every other body is verbatim.
     comments: Vec<TaskComment>,
-    /// How many oldest entries were dropped entirely.
+    /// How many comments were dropped entirely, superseded pilot passes
+    /// included.
     omitted_count: usize,
-    /// Whether the last retained body was cut down to fit the budget.
+    /// Whether a retained body was cut down to fit the budget.
     body_truncated: bool,
 }
 
-/// Keep the newest comments within [`MAX_TASK_COMMENTS`] and
-/// [`MAX_TASK_COMMENTS_BYTES`], dropping the oldest entries first so a
-/// superseding refinement never falls off the envelope.
+/// Hold the comments to [`MAX_TASK_COMMENTS`] and [`MAX_TASK_COMMENTS_BYTES`].
 ///
-/// Dropping entries cannot get under the byte budget once a single comment is
-/// left, and that comment is the newest — the one that can supersede the
-/// description — so it is kept and its body is cut instead ([ORB-11338]).
+/// Comments that already fit are returned untouched. Otherwise the budget is
+/// filled by author priority so a re-piloted task's assessment JSON cannot
+/// push steering and scope decisions out of the agent's context
+/// ([ORB-23676]):
+///
+/// 1. Non-pilot comments, newest first, so a superseding refinement never
+///    falls off the envelope.
+/// 2. Only the latest `task-pilot` comment, projected to its summary line.
+/// 3. Superseded `task-pilot` comments are dropped, and counted as omitted.
+///
+/// The output stays chronological. Dropping entries cannot get under the byte
+/// budget once a single comment is left, and the newest non-pilot comment is
+/// the one that can supersede the description, so when it alone exceeds the
+/// budget it is kept and its body is cut instead ([ORB-11338]).
 fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
-    let count_start = comments.len().saturating_sub(MAX_TASK_COMMENTS);
-    let mut kept = &comments[count_start..];
-
-    while kept.len() > 1 {
-        let total_bytes: usize = kept.iter().map(|comment| comment.message.len()).sum();
-        if total_bytes <= MAX_TASK_COMMENTS_BYTES {
-            break;
-        }
-        kept = &kept[1..];
+    let total_bytes: usize = comments.iter().map(|comment| comment.message.len()).sum();
+    if comments.len() <= MAX_TASK_COMMENTS && total_bytes <= MAX_TASK_COMMENTS_BYTES {
+        return BoundedTaskComments {
+            comments: comments.to_vec(),
+            omitted_count: 0,
+            body_truncated: false,
+        };
     }
 
-    let omitted_count = comments.len() - kept.len();
-    let mut kept = kept.to_vec();
-    // Only reachable with one comment left: the loop above exits early once the
-    // retained window fits, so a longer window is already under budget.
-    let body_truncated = match kept.as_mut_slice() {
-        [only] if only.message.len() > MAX_TASK_COMMENTS_BYTES => {
-            only.message = truncate_comment_body(&only.message);
-            true
+    let mut kept: Vec<(usize, TaskComment)> = Vec::new();
+    let mut used_bytes = 0usize;
+    let mut body_truncated = false;
+    // Whether `comment` fits beside what is kept. The first kept comment is
+    // always admitted, cut down when it alone exceeds the byte budget.
+    let mut admit = |index: usize, mut comment: TaskComment, kept: &mut Vec<_>| -> bool {
+        if kept.len() == MAX_TASK_COMMENTS {
+            return false;
         }
-        _ => false,
+        if kept.is_empty() && comment.message.len() > MAX_TASK_COMMENTS_BYTES {
+            comment.message = truncate_comment_body(&comment.message);
+            body_truncated = true;
+        } else if used_bytes + comment.message.len() > MAX_TASK_COMMENTS_BYTES {
+            return false;
+        }
+        used_bytes += comment.message.len();
+        kept.push((index, comment));
+        true
     };
 
+    // Stop at the first non-pilot comment that does not fit, so the retained
+    // ones stay a contiguous newest window.
+    for (index, comment) in comments.iter().enumerate().rev() {
+        if !comment.is_task_pilot_comment() && !admit(index, comment.clone(), &mut kept) {
+            break;
+        }
+    }
+    // A short summary line may still fit after the non-pilot comments.
+    if let Some(index) = comments
+        .iter()
+        .rposition(TaskComment::is_task_pilot_comment)
+    {
+        let mut pilot = comments[index].clone();
+        if let Some(summary) = pilot.pilot_assessment_summary() {
+            pilot.message = summary;
+        }
+        admit(index, pilot, &mut kept);
+    }
+    kept.sort_by_key(|(index, _)| *index);
+
     BoundedTaskComments {
-        comments: kept,
-        omitted_count,
+        omitted_count: comments.len() - kept.len(),
+        comments: kept.into_iter().map(|(_, comment)| comment).collect(),
         body_truncated,
     }
 }
