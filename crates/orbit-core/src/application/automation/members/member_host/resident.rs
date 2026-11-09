@@ -38,10 +38,8 @@ impl Host<'_> {
             return Ok(MandateDue::NotMember(reason.unwrap_or_else(|| {
                 format!(
                     "mandate_{}",
-                    serde_json::to_value(state)
-                        .unwrap_or_default()
-                        .as_str()
-                        .unwrap_or("inactive")
+                    orbit_common::protocol::serde_string_label(&state)
+                        .unwrap_or_else(|| "inactive".to_string())
                 )
             })));
         }

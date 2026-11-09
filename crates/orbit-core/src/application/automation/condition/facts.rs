@@ -368,8 +368,5 @@ fn open_runs(runtime: &OrbitRuntime) -> Result<(i64, bool), OrbitError> {
 
 /// A value's persisted spelling, as the condition schema reads it.
 pub(crate) fn serde_name<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    orbit_common::protocol::serde_string_label(value).unwrap_or_default()
 }

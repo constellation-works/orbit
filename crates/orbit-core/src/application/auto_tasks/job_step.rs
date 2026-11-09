@@ -706,10 +706,7 @@ pub(super) fn parse_frozen_job(yaml: &str) -> Result<JobV2, OrbitError> {
 }
 
 pub(super) fn serde_name<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    orbit_common::protocol::serde_string_label(value).unwrap_or_default()
 }
 
 use super::step_observation::{ReuseVerdict, StepContext, observe_with, reuse_verdict};

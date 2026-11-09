@@ -131,10 +131,7 @@ impl Execute for RunHydrateSettlementsArgs {
 }
 
 fn outcome_label(outcome: LeafHydrationOutcome) -> String {
-    serde_json::to_value(outcome)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default()
+    orbit_common::protocol::serde_string_label(&outcome).unwrap_or_default()
 }
 
 /// The operator's own read of a follower's run records: the existing
