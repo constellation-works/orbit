@@ -1209,23 +1209,20 @@ on.
   the smoothing formula. It stays open while the page refreshes.
 
 The **Rank** tab, the first tab and the one Agents opens on, ranks implementer
-models into bands with its own window (**7d**, **30d**, **90d**, **All**), a
-**Settled** or **Live** board, and the execution selector. Cards at the top
-name the leader, the best value (the lowest cost against the fleet among ranked
-models), how many models are ranked, and how much of the score's weight is
-measured. Each band lists its models with the probability that one is ahead of
-another; a line between bands gives the lowest probability that the band above
-is ahead. A row shows its score with its 10th–90th percentile range on one axis
-shared by the board, what each measure adds to or takes from 100 (blue helps,
-amber hurts), its cost against the fleet on the same tier mix, its tier mix and
-its units. Select a model's name for its breakdown. Models still short of the
-evidence needed to rank are listed under **Not yet ranked** with their progress,
-and **Not scored** counts the problems charged to no model. **Score against
-cost, by tier** plots one tier at a time: pick Low, Medium or Hard. The dashed
-frontier joins the models no other model beats on both a higher score and a
-lower cost; a model with too little of its cost recorded is drawn hollow and
-never joins it. The Orchestrators tab is retired, and its links open Rank.
-Problems caused by a task's spec are not scored.
+models with its own window (**7d**, **30d**, **90d**, **All**), a **Settled** or
+**Live** board, and the execution selector. Its summary strip reports
+**Ranked**, **Tasks scored**, **Not scored**, and **Measures live**. The refined
+rank table groups eligible models by rank and shows a chevron, Rank, Model,
+Score, p10–p90 interval, Cost / task, Tasks, and Landed. Expand a row with its
+chevron to open that model's breakdown, including its per-measure contributions
+and supporting details. Ineligible models appear in a **Not ranked** disclosure
+with their progress toward eligibility. **Not scored** reports problems
+charged to no model. **Score against cost, by tier** plots one tier at a time:
+pick Low, Medium or Hard. The dashed frontier joins the models no other model
+beats on both a higher score and a lower cost; a model with too little of its
+cost recorded is drawn hollow and never joins it. The Orchestrators tab is
+retired, and its links open Rank. Problems caused by a task's spec are not
+scored.
 
 The **Implementers** tab ranks each model at each recorded effort separately (`model @ effort`). It credits
 weighted landed work and first-pass accepts, and counts review rejects,

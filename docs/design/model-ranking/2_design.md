@@ -288,9 +288,12 @@ change starts a new season (§4.2).
   - per row: score, interval, band, cost ratio, per-measure actual, expected, residual and
     contribution, units, eligibility and the effort split;
   - per board: the season's scales and weights, and whether the board is qualified.
-- **Dashboard:** Analytics › Agents opens on a **Rank** tab. It shows the band ladder, an
-  expandable per-measure breakdown for each row, the models still below the evidence gate,
-  and the value chart with a tier switch ([user interface §5c](../user-interface/2_design.md#5c-analytics--agents)).
+- **Dashboard:** Analytics › Agents opens on a **Rank** tab. Its summary strip reports
+  **Ranked**, **Tasks scored**, **Not scored**, and **Measures live**. The refined rank table
+  groups eligible models by rank and shows the score, p10–p90 interval, cost per task, task
+  count, and landed rate; a row's chevron opens its per-measure breakdown. Ineligible models
+  appear in a **Not ranked** disclosure. The value chart has a tier switch
+  ([user interface §5c](../user-interface/2_design.md#5c-analytics--agents)).
 - **Snapshots:** a weekly routine freezes the settled ranking, with its inputs, as a task
   artifact. The weekly MVP note and the public analytics site read the frozen snapshot,
   never a live query.
