@@ -787,6 +787,9 @@ Advisory findings do not count. Approval, leaving proposed, or a clean pilot
 verification clears them; an ordinary comment or edit alone does not.
 Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 `{kind, text}` entries, and CLI readiness uses that source for warning holds.
+A proposed task whose referenced pilot assessment artifact is missing, unreadable
+or does not match its receipt reports one `pilot_assessment_unavailable` entry in
+its own `pilot_warnings`; the other tasks in the same list or page are unaffected.
 The dashboard drain payload omits per-finding text.
 
 Task rows and details also show a blue **triaging** pill while a triage or

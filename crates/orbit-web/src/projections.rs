@@ -282,7 +282,7 @@ impl TaskListProjection {
             "pilot_warnings".into(),
             json!(
                 runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| runtime
-                    .warning_prerequisite_is_done(id),)?
+                    .warning_prerequisite_is_done(id),)
             ),
         );
         self.os_readout

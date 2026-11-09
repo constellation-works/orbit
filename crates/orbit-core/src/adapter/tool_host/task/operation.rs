@@ -526,7 +526,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                         &row.task,
                         &row.comments,
                         &|id: &str| runtime.warning_prerequisite_is_done(id),
-                    )?),
+                    )),
                 );
                 Ok(Value::Object(object))
             }

@@ -155,12 +155,16 @@ fn query_task_store(
         )?;
         let mut ids = BTreeSet::new();
         for task in candidates.items {
-            let comments = runtime.get_task_pilot_comments(&task.id)?;
+            let comments = runtime.get_task_comments(&task.id)?;
             let task_id = task.id.clone();
-            let status = task.status;
-            let dependencies = metadata_task(task).dependencies();
+            let task = metadata_task(task);
             let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
-            if !super::task_pilot_warnings(status, &comments, &dependencies, &is_done).is_empty() {
+            // Same readout the list shows: an unresolvable audit is a held
+            // readout for this task, not an error for the whole page.
+            if !runtime
+                .task_pilot_warning_findings(&task, &comments, &is_done)
+                .is_empty()
+            {
                 ids.insert(task_id);
             }
         }

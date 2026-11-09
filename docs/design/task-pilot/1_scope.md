@@ -36,7 +36,11 @@ digest is sealed. Readers verify that digest, and shared artifact admission rese
 attachments. Ordinary attachments cannot replace sealed evidence. Pipeline
 replays remain idempotent. Thus a later attachment cannot change the trusted
 assessment or make its receipt unreadable. Missing or altered referenced evidence
-fails resolution; it never selects an older ready verdict as a substitute.
+fails resolution; it never selects an older ready verdict as a substitute. Read
+projections (task list, task show and the dashboard list) degrade that one task's
+readout to a `pilot_assessment_unavailable` finding and keep serving every other
+task. Drain admission, re-pilot and attention still fail closed on the same
+resolution.
 
 All assessment consumers resolve the reference, including attention, warning
 holds and admission, preparation and drain reuse, requirement edit tracking,
