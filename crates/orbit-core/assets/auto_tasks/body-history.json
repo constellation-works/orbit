@@ -3502,6 +3502,33 @@
         "## Bounded completion, report and cursor",
         "## Dedupe and routing",
         "## Inputs and service configuration",
+        "## Orbit version and migrations",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "8b0d6c9b580e25354eb1aab902f75c1fa781d41e5f27c4bc15c5d98c90d82599",
+      "revision": "e1fc74fc4dd2db6e2995332e63683d733b60a982",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * 1"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
         "## Resolve contract for every filing",
         "## Safe evidence",
         "## Windows, signatures and recurrence"
