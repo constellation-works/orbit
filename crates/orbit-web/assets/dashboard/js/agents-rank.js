@@ -22,6 +22,7 @@ const MEASURE_SHORT = { escaped_regressions: "Regr.", review_outcome: "Review", 
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
   no_cause: "rework with no recorded cause",
+  spec: "problems caused by the task's spec",
   unattributed: "no attribution",
   no_run: "no implementation run to charge",
   no_review: "no settled review to charge",
