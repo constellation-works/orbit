@@ -2,7 +2,7 @@
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
 last_updated: 2026-11-06
-last_validated: 2026-11-06
+last_validated: 2026-11-09
 status: Implemented
 stage: shipped
 next: "—"
