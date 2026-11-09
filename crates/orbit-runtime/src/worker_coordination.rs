@@ -434,6 +434,12 @@ pub fn check_worker_search_scope(input: &Value) -> Result<(), OrbitError> {
 }
 
 pub fn is_coordination_tool(name: &str) -> bool {
+    orbit_types::tool::tool_policy_operations(name)
+        .into_iter()
+        .any(is_coordination_operation)
+}
+
+fn is_coordination_operation(name: &str) -> bool {
     name.starts_with("orbit.task.")
         || name.starts_with("orbit.friction.")
         || matches!(

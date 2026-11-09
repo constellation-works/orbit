@@ -35,6 +35,43 @@ function toolKey(name) {
   return rest.replaceAll(".", "_").replaceAll("-", "_");
 }
 
+// A tool family selects its operation with a required `action` whose
+// description lists each action's required fields, as
+// `list; add (name, schedule); update (name)`. Each action is compared as
+// its own tool: `orbit_auto_task` action `add` against `orbit auto-task add`,
+// and `orbit_task_recover` action `requeue` against `orbit task requeue`.
+function actionRequired(description, action) {
+  const escaped = action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(description ?? "").match(
+    new RegExp(`(?:^|[:;]\\s*)${escaped}(?: \\(([^)]*)\\))?(?=;|\\.?$)`),
+  );
+  if (!match?.[1]) {
+    return [];
+  }
+  return match[1].split(",").map((field) => field.trim()).filter(Boolean);
+}
+
+function expandToolFamilies(tools) {
+  return tools.flatMap((tool) => {
+    const schema = tool.inputSchema ?? {};
+    const action = schema.properties?.action;
+    if (!Array.isArray(action?.enum)) {
+      return [tool];
+    }
+    const family = toolKey(tool.name);
+    const shared = (schema.required ?? []).filter((name) => name !== "action");
+    const parent = family.includes("_") ? family.slice(0, family.lastIndexOf("_")) : "";
+    return action.enum.map((name) => ({
+      name: `${tool.name}:${name}`,
+      keys: [`${family}_${name}`, ...(parent ? [`${parent}_${name}`] : [])],
+      inputSchema: {
+        ...schema,
+        required: [...shared, ...actionRequired(action.description, name)],
+      },
+    }));
+  });
+}
+
 function definedLongOptions(helpText) {
   const names = new Set();
   let inOptions = false;
@@ -191,8 +228,10 @@ export async function check(ctx) {
   const commands = await ctx.discoverCommands();
   const byKey = new Map(commands.map((argv) => [cliKey(argv), argv]));
   const results = [];
-  for (const tool of [...tools].sort((left, right) => left.name.localeCompare(right.name))) {
-    const key = toolKey(tool.name);
+  const expanded = expandToolFamilies(tools);
+  for (const tool of expanded.sort((left, right) => left.name.localeCompare(right.name))) {
+    const keys = tool.keys ?? [toolKey(tool.name)];
+    const key = keys.find((candidate) => byKey.has(candidate)) ?? keys[0];
     const argv = byKey.get(key);
     const target = { id: tool.name, argv: argv ?? [tool.name] };
     if (!argv) {

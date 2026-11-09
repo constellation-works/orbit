@@ -117,5 +117,13 @@ pub(super) fn claimed_owner_tool(command: &command::Commands) -> bool {
     let command::tool::ToolSubcommand::Run(args) = &tool.command else {
         return false;
     };
-    orbit_types::tool::is_claimed_owner_tool(&args.name)
+    // A family call is an owner call when the action it names is one.
+    match orbit_types::tool::tool_family(&args.name) {
+        Some(_) => args.parsed_input().is_ok_and(|input| {
+            orbit_types::tool::is_claimed_owner_tool(orbit_types::tool::tool_operation_name(
+                &args.name, &input,
+            ))
+        }),
+        None => orbit_types::tool::is_claimed_owner_tool(&args.name),
+    }
 }

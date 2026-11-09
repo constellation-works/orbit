@@ -100,7 +100,7 @@ duration or RFC 3339 timestamp and compares creation time. All predicates run
 in the store before ordering and `--limit`, so unrelated newer runs cannot
 hide matching history. Existing `--job` and `--no-reconcile` options still apply.
 
-CLI run JSON and `orbit.workflow.run.list` expose `task_ids` using the same
+CLI run JSON and `orbit.run` action `list` expose `task_ids` using the same
 nullable array as the dashboard: sorted, unique, nonempty IDs extracted from
 submitted `task_ids`/`task_id`, or null for a task-free run. Listing identities
 never reads task records; title lookup is reserved for detail views.

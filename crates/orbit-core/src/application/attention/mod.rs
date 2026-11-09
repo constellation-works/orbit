@@ -303,7 +303,10 @@ pub fn attention_query(
             candidates.items.truncate(cap);
             capped = true;
         }
-        items.extend(candidates.items);
+        items.extend(candidates.items.into_iter().map(|mut item| {
+            item.next.name_tool_family();
+            item
+        }));
         degraded.extend(candidates.degraded);
     }
     for selector in &foreign_hosts {

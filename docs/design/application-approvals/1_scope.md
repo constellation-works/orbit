@@ -60,10 +60,10 @@ is still tracked by [ORB-20363].
    (`application_authority.rs:270-296`). `office.proposal-accept` reads the task and its
    `proposal.json` artifact, moves the task to `in-progress` with a `plan`, then to
    `review` and `done` with an `execution_summary`. Auto-task proposals also call
-   `orbit.auto_task.add` and `orbit.auto_task.update`. Every one of those callbacks is
+   `orbit.auto_task` action `add` and `orbit.auto_task` action `update`. Every one of those callbacks is
    refused before the plugin applies anything.
 3. **Routine control is refused at consent time.** `orbit.routine.control` and
-   `orbit.auto_task.mint` fall to the "does not support application consent" arm
+   `orbit.auto_task` action `mint` fall to the "does not support application consent" arm
    (`application_authority.rs:298-302`).
 
 The original app integration used `ORBIT_OPERATOR` to accept proposals. That standing
@@ -78,7 +78,7 @@ names, and only at the state the user saw. Every property application authority 
 stays: the one-workspace and checkout bound, expiry and revocation, the protected witness,
 digest binding of plugin manifests, per-call audit, and refusal of everything not listed.
 No capability is granted. Unattended-execution controls (`orbit.routine.control`,
-`orbit.auto_task.mint`) stay outside application authority.
+`orbit.auto_task` action `mint`) stay outside application authority.
 
 ## Shape
 
@@ -116,7 +116,7 @@ There are no regular expressions, wildcards or defaults.
 Inside an app-bound plugin call, a callback is admitted when it satisfies a listed
 callback's constraints. Its `id` must either be `bound` to the entry's admitted task or
 be pinned on first use. Two read callbacks become admissible: `orbit.task.show`, with
-listed non-secret fields, and `orbit.task.artifact.get` on a constant path. When the
+listed non-secret fields, and `orbit.task.artifact` action `get` on a constant path. When the
 entry bound an artifact digest, every later read and write in that invocation rechecks
 the digest against current state.
 
@@ -125,7 +125,7 @@ the digest against current state.
 A closed per-tool ceiling table replaces `APPLICATION_BUILTIN_OPERATIONS`. A consent may
 narrow a ceiling, never exceed it. Application authority never admits a transition that
 first approves work for dispatch: `proposed`, `someday` or `blocked` to `backlog`. It never admits
-`orbit.routine.control`, `orbit.auto_task.mint`, dispatch, force, tool grants or consent
+`orbit.routine.control`, `orbit.auto_task` action `mint`, dispatch, force, tool grants or consent
 administration.
 
 ### Configuration
@@ -195,7 +195,7 @@ record the delivery sequence; admission no longer waits for those slices. Slice 
    session schema 5.
 4. **Audit and documentation.** The new audit fields, their rendering, and the installed
    `applications.md` reference.
-5. **Auto-task callbacks.** `artifact_json` and the `orbit.auto_task.add` and `update`
+5. **Auto-task callbacks.** `artifact_json` and the `orbit.auto_task` action `add` and `update`
    ceilings.
 6. **Office profile** (orbit-office). Consent profile, installer step, close walks that
    avoid `proposed` to `backlog`, and ORB-20363 re-scoped.
@@ -233,7 +233,7 @@ None open. Daniel answered all three on 2026-11-01; his words are quoted verbati
 - Given the payload changed after review, the same accept is refused before any callback
   writes, and the audit row names the failing constraint without the payload.
 - Given the same credential, a call on a task outside the predicate, an unlisted
-  callback, `proposed` to `backlog`, `orbit.routine.control` or `orbit.auto_task.mint` is
+  callback, `proposed` to `backlog`, `orbit.routine.control` or `orbit.auto_task` action `mint` is
   refused. So is a call after expiry or revocation, or from another workspace.
 - Given an existing v1 exact consent, it keeps working unchanged across the upgrade.
 

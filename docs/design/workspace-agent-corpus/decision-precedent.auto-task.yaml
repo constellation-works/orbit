@@ -39,8 +39,8 @@ template:
   tags:
   - decision-precedent
   required_tools:
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   context_files:

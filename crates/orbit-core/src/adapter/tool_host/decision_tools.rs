@@ -39,7 +39,7 @@ pub(super) fn dispatch(
             let request = runtime.get_decision_request(&id)?.ok_or_else(|| {
                 OrbitError::decision_refused(
                     DecisionRefusalCode::RequestNotFound,
-                    format!("no decision request `{id}` in this workspace; see `orbit decision list --all` or `orbit.decision.list` with `include_closed: true` for valid request IDs"),
+                    format!("no decision request `{id}` in this workspace; see `orbit decision list --all` or `orbit.decision` with action `list` and `include_closed: true` for valid request IDs"),
                 )
             })?;
             Ok(decision_request_json(&request))

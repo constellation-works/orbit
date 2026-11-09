@@ -194,7 +194,7 @@ pub(in crate::application::auto_tasks) fn evidence_binding_note(
     Ok(Some(format!(
         "\n\n## Required evidence\n\nThis task completes a job step that requires `{contract}`. \
          Done alone does not satisfy it. Before finishing, attach every evidence file with \
-         `orbit.task.artifact.put`, then attach `{artifact}` as JSON with exactly these fields, \
+         `orbit.task.artifact` action `put`, then attach `{artifact}` as JSON with exactly these fields, \
          adding no time or status:\n\n```json\n{{\n  \"schema_version\": {version},\n  \
          \"contract\": \"{contract}\",\n  \"binding\": {{\n    \"workspace_id\": \
          \"{workspace_id}\",\n    \"definition\": \"{name}\",\n    \"definition_digest\": \

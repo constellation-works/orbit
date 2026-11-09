@@ -285,7 +285,7 @@ An operator on the owning host can inspect a published candidate without
 resuming its failed attempt:
 
 ```bash
-orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+orbit tool run orbit.run --input '{"action":"resume","id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
 
 Supported order is: make sure a valid execution plan is present when the

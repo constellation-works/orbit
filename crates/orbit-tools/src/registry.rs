@@ -3,11 +3,16 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{
-    McpIdRoute, McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, ToolSchema,
-    mcp_advertised_tool_name, validate_mcp_tool_definitions,
+    McpIdRoute, McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, TOOL_FAMILIES,
+    ToolSchema, is_tool_family_operation, mcp_advertised_tool_name, tool_family,
+    tool_family_of_operation, validate_mcp_tool_definitions,
 };
 use serde_json::Value;
 
+use crate::family::{
+    FamilyMember, FamilyTool, check_family_action_fields, family_members, is_family,
+    is_preloaded_artifact_payload, operation_is_not_a_tool, resolve_family_input,
+};
 use crate::mcp::{builtin_mcp_toolset, mcp_annotations, mcp_rules};
 use crate::plugin::PluginToolBinding;
 use crate::{Tool, ToolContext, ToolExecutionKind};
@@ -44,14 +49,16 @@ struct ToolEntry {
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
     mcp_registration_error: Option<McpToolDefinitionError>,
+    /// The MCP scope each family operation declared; its family is
+    /// advertised at it instead of the operation.
+    family_operation_scopes: HashMap<String, McpToolScope>,
+    /// Each registered family's actions, by family name.
+    families: HashMap<String, Vec<FamilyMember>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self {
-            tools: HashMap::new(),
-            mcp_registration_error: None,
-        }
+        Self::default()
     }
 
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
@@ -60,9 +67,107 @@ impl ToolRegistry {
 
     /// Register one active builtin for MCP advertisement at the given scope,
     /// in the toolset the builtin toolset table places it.
+    ///
+    /// A family operation registers without MCP exposure: its family, built by
+    /// `register_tool_families`, is advertised at this scope instead.
     pub fn register_mcp<T: Tool + 'static>(&mut self, tool: T, scope: McpToolScope) {
-        let toolset = builtin_mcp_toolset(&tool.schema().name);
+        let name = tool.schema().name;
+        let toolset = builtin_mcp_toolset(&name);
+        if is_tool_family_operation(&name) {
+            self.family_operation_scopes.insert(name, scope);
+            self.register_entry(tool, ToolAvailability::Active, None, toolset, None);
+            return;
+        }
         self.register_entry(tool, ToolAvailability::Active, Some(scope), toolset, None);
+    }
+
+    /// Register every [`TOOL_FAMILIES`] entry whose operations are all
+    /// registered and MCP-scoped, as one MCP tool at their scope.
+    fn register_tool_families(&mut self) {
+        for family in TOOL_FAMILIES {
+            let scopes = family
+                .actions
+                .iter()
+                .map(|action| self.family_operation_scopes.get(action.operation).copied())
+                .collect::<Option<Vec<_>>>();
+            let members = family_members(family, |operation| {
+                self.tools
+                    .get(operation)
+                    .filter(|entry| entry.availability.is_active())
+                    .map(|entry| Arc::clone(&entry.tool))
+            });
+            let (Some(scopes), Some(members)) = (scopes, members) else {
+                self.record_mcp_error(McpToolDefinitionError::UnclassifiedToolset(
+                    family.name.to_string(),
+                ));
+                continue;
+            };
+            // A family any of whose actions needs a workspace needs one.
+            let scope = if scopes.iter().all(|scope| *scope == McpToolScope::Global) {
+                McpToolScope::Global
+            } else {
+                McpToolScope::WorkspaceRequired
+            };
+            let toolset = family
+                .actions
+                .first()
+                .and_then(|action| self.tools.get(action.operation))
+                .and_then(|entry| entry.toolset);
+            self.families
+                .insert(family.name.to_string(), members.clone());
+            self.register_entry(
+                FamilyTool::new(family, members),
+                ToolAvailability::Active,
+                Some(scope),
+                toolset,
+                None,
+            );
+        }
+    }
+
+    /// Resolve a caller-named tool to what the registry executes: a family
+    /// call becomes its action's operation and that operation's input, after
+    /// the action and the fields it requires are checked. A family
+    /// operation's own name is refused as an unknown tool naming the family
+    /// call. Any other name is returned unchanged.
+    pub fn resolve_tool_call(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<(String, Value), OrbitError> {
+        if let Some(members) = self.families.get(name)
+            && let Some(family) = tool_family(name)
+        {
+            let (operation, input) = resolve_family_input(family, members, input)?;
+            return Ok((operation.to_string(), input));
+        }
+        if let Some(error) = operation_is_not_a_tool(name) {
+            return Err(error);
+        }
+        Ok((name.to_string(), input))
+    }
+
+    /// Refuse a family operation's own name where a caller names a tool
+    /// (`orbit tool show`, `enable`, `disable`): it is reached only as an
+    /// action of its family.
+    pub fn refuse_family_operation_name(&self, name: &str) -> Result<(), OrbitError> {
+        operation_is_not_a_tool(name).map_or(Ok(()), Err)
+    }
+
+    /// The toolset of each action of a registered family, as `(action,
+    /// toolset)`; empty for any other tool.
+    fn action_toolsets(&self, name: &str) -> Vec<(String, McpToolset)> {
+        let Some(family) = tool_family(name).filter(|_| self.families.contains_key(name)) else {
+            return Vec::new();
+        };
+        family
+            .actions
+            .iter()
+            .filter_map(|action| {
+                let toolset = self.tools.get(action.operation)?.toolset?;
+                Some((action.action.to_string(), toolset))
+            })
+            .collect()
     }
 
     pub fn register_inactive<T: Tool + 'static>(&mut self, tool: T) {
@@ -190,6 +295,7 @@ impl ToolRegistry {
 
     pub fn register_builtins(&mut self) {
         crate::builtin::register_builtins(self);
+        self.register_tool_families();
     }
 
     pub fn execute(
@@ -198,6 +304,10 @@ impl ToolRegistry {
         ctx: &ToolContext,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        if is_family(name) && self.families.contains_key(name) {
+            let (operation, input) = self.resolve_tool_call(name, input)?;
+            return self.execute(&operation, ctx, input);
+        }
         let tool = self.tools.get(name).ok_or_else(|| {
             crate::tool_suggestions::unknown_tool_error(
                 name,
@@ -230,6 +340,17 @@ impl ToolRegistry {
                 &aliases,
                 &retired_fields,
             )?;
+        }
+        // A family action's required fields are checked after the
+        // caller's authorization and the field-shape checks above, so a denied call learns nothing of them.
+        if let Some((family, _)) = tool_family_of_operation(name)
+            && let Some(member) = self.families.get(family.name).and_then(|members| {
+                members
+                    .iter()
+                    .find(|member| member.action.operation == name)
+            })
+        {
+            check_family_action_fields(family, member, &input, &declared_aliases(name), ctx)?;
         }
         tool.tool.execute(ctx, input)
     }
@@ -314,19 +435,31 @@ impl ToolRegistry {
         self.tools.remove(name).is_some()
     }
 
+    /// Every active tool's schema. Family operations are not tools: their
+    /// families stand for them.
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.tools
-            .values()
-            .filter(|entry| entry.availability.is_active())
-            .map(|entry| entry.tool.schema())
+            .iter()
+            .filter(|(name, entry)| {
+                entry.availability.is_active() && !self.is_family_operation(name)
+            })
+            .map(|(_, entry)| entry.tool.schema())
             .collect()
     }
 
+    /// Every tool's schema, active or not, without family operations.
     pub fn all_schemas(&self) -> Vec<ToolSchema> {
         self.tools
-            .values()
-            .map(|entry| entry.tool.schema())
+            .iter()
+            .filter(|(name, _)| !self.is_family_operation(name))
+            .map(|(_, entry)| entry.tool.schema())
             .collect()
+    }
+
+    /// Whether `name` is the operation behind a registered family's action.
+    pub fn is_family_operation(&self, name: &str) -> bool {
+        tool_family_of_operation(name)
+            .is_some_and(|(family, _)| self.families.contains_key(family.name))
     }
 
     /// Enumerate validated, active builtin MCP definitions without runtime or workspace state.
@@ -341,9 +474,15 @@ impl ToolRegistry {
             .filter_map(|entry| {
                 entry.mcp_scope.map(|scope| {
                     let schema = entry.tool.schema();
-                    let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
+                    let annotations =
+                        mcp_annotations(&schema, entry.tool.execution_kind(), |operation| {
+                            self.tools
+                                .get(operation)
+                                .map(|operation| operation.tool.execution_kind())
+                        });
                     let mut rules = mcp_rules(&schema, entry.tool.declared_id_route());
                     rules.toolset = entry.toolset.unwrap_or_default();
+                    rules.action_toolsets = self.action_toolsets(&schema.name);
                     McpToolDefinition::new(schema, scope)
                         .with_rules(rules)
                         .with_input_schema(entry.tool.input_schema())
@@ -357,7 +496,28 @@ impl ToolRegistry {
         // a builtin MCP tool that addresses one id with an optional
         // workspace must declare its id route at its definition site, and a
         // declared route must match that parameter shape.
-        for definition in &definitions {
+        // A family is checked through each action's operation, at the
+        // family's scope: the family itself addresses an id only for some.
+        let family_operations = definitions
+            .iter()
+            .filter_map(|definition| {
+                let members = self.families.get(&definition.schema.name)?;
+                Some(members.iter().map(|member| {
+                    McpToolDefinition::new(member.schema.clone(), definition.scope).with_rules(
+                        orbit_types::tool::McpToolRules {
+                            id_route: member.id_route.resolve(),
+                            ..Default::default()
+                        },
+                    )
+                }))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        for definition in definitions
+            .iter()
+            .filter(|definition| !self.families.contains_key(&definition.schema.name))
+            .chain(&family_operations)
+        {
             if !definition.schema.builtin {
                 continue;
             }
@@ -387,14 +547,6 @@ impl ToolRegistry {
     }
 }
 
-/// A spoke broker sends `orbit.task.artifact.put` a path-free `artifacts`
-/// payload that is deliberately absent from the public schema. The handler
-/// admits that shape only from the authenticated ssh-mcp connector and checks
-/// its fields itself, so the public-schema check must not refuse it first.
-fn is_preloaded_artifact_payload(name: &str, input: &Value) -> bool {
-    name == "orbit.task.artifact.put" && input.get("artifacts").is_some()
-}
-
 /// Fields beyond the public schema a call may carry: the CLI options of a
 /// task write the operator command built. Only an MCP session carries an
 /// origin session, so an MCP caller is refused them as unknown fields.
@@ -408,17 +560,31 @@ fn cli_fields(name: &str, ctx: &ToolContext) -> &'static [&'static str] {
     }
 }
 
-/// The input spellings a task operation accepts besides its canonical names, as
-/// `(canonical, alias)`. The schema lists canonical names only; the handler's
-/// `OperationSpec::parse_input` renames an alias, so this check must let it
-/// through rather than refuse it as an unknown field.
+/// The input spellings a registry operation accepts besides its canonical
+/// names, as `(canonical, alias)`. The schema lists canonical names only; the
+/// handler's `OperationSpec::parse_input` renames an alias, so the field checks
+/// must let it through rather than refuse it or count it as missing.
 fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
-    orbit_common::governance::task::TASK_OPERATIONS
-        .iter()
-        .filter(|spec| spec.tool_name == name)
-        .flat_map(|spec| spec.wire_params())
-        .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias)))
-        .collect()
+    use orbit_common::governance as gov;
+    let mut aliases = Vec::new();
+    spec_aliases(gov::task::TASK_OPERATIONS, name, &mut aliases);
+    spec_aliases(gov::friction::FRICTION_OPERATIONS, name, &mut aliases);
+    spec_aliases(gov::auto_task::AUTO_TASK_OPERATIONS, name, &mut aliases);
+    aliases
+}
+
+fn spec_aliases<V>(
+    specs: &'static [orbit_common::governance::operation::OperationSpec<V>],
+    name: &str,
+    aliases: &mut Vec<(&'static str, &'static str)>,
+) {
+    aliases.extend(
+        specs
+            .iter()
+            .filter(|spec| spec.tool_name == name)
+            .flat_map(|spec| spec.wire_params())
+            .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias))),
+    );
 }
 
 /// Retired names that must reach `OperationSpec::parse_input`.

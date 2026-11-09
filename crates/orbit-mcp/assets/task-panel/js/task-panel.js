@@ -344,7 +344,7 @@
       const receipt=shipments.get(key);
       const run=receipt.run_id||data.task.job_run_id;
       if(run&&data.actions.view_run?.enabled){
-        await tool('orbit_workflow_run_show',{workspace:destination,id:run,view:'bounded'});
+        await tool('orbit_run',{action:'show',workspace:destination,id:run,view:'bounded'});
         state('Shipment found. Open Runs to inspect execution.');
       }else state('Shipment outcome remains uncertain. Inspect Runs on the execution host before any new shipment.');
       return;
@@ -353,7 +353,7 @@
     shipments.set(key,{});
     busy=true;controls();
     try{
-      const receipt=await tool('orbit_workflow_ship',{workspace:destination,task_ids:[id]});
+      const receipt=await tool('orbit_workflow',{action:'ship',workspace:destination,task_ids:[id]});
       if(!receipt.run_id)throw new Error('Shipment receipt unavailable');
       shipments.set(key,receipt);
       state('Shipment submitted. Open Runs to inspect execution.');
@@ -459,7 +459,8 @@
     if(appliedFilters.status)args.status=appliedFilters.status;
     if(appliedFilters.priority&&view!=='runs')args.priority=appliedFilters.priority;
     if(view!=='runs'&&appliedFilters.search)args.search=appliedFilters.search;
-    const data=await tool(view==='runs'?'orbit_workflow_run_list':'orbit_task_list',args);
+    if(view==='runs')args.action='list';
+    const data=await tool(view==='runs'?'orbit_run':'orbit_task_list',args);
     if(g!==generation)return;
     renderList(data);
   }
@@ -468,8 +469,8 @@
     const selection={
       ...selected
     };
-    const data=await tool(selection.kind==='task'?'orbit_task_show':'orbit_workflow_run_show',{
-      workspace,view:'bounded',id:selection.id,comments_offset:selection.kind==='task'?commentsOffset:undefined,history_offset:selection.kind==='task'?historyOffset:undefined,artifacts_offset:selection.kind==='task'?artifactsOffset:undefined,log_offset:selection.kind==='run'?logsOffset:undefined,limit:50
+    const data=await tool(selection.kind==='task'?'orbit_task_show':'orbit_run',{
+      action:selection.kind==='task'?undefined:'show',workspace,view:'bounded',id:selection.id,comments_offset:selection.kind==='task'?commentsOffset:undefined,history_offset:selection.kind==='task'?historyOffset:undefined,artifacts_offset:selection.kind==='task'?artifactsOffset:undefined,log_offset:selection.kind==='run'?logsOffset:undefined,limit:50
     });
     if(g!==generation)return;
     renderDetail(data);

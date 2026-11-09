@@ -51,21 +51,44 @@ Global options (see 'orbit --help' for descriptions):
 `;
 }
 
-function autoTaskAddTool({ templateDescription = TEMPLATE_DESCRIPTION, extraRequired = [] } = {}) {
+// A tool family as `tools/list` advertises it: `action` lists each action's
+// required fields, and `required` holds only what every action needs.
+function familyTool(name, actions, properties, required) {
   return {
-    name: "orbit_auto_task_add",
+    name,
     inputSchema: {
       type: "object",
       properties: {
+        action: {
+          type: "string",
+          enum: actions.map(([action]) => action),
+          description: `Operation to run, with its required fields: ${actions
+            .map(([action, fields]) => (fields.length ? `${action} (${fields.join(", ")})` : action))
+            .join("; ")}.`,
+        },
+        ...properties,
+      },
+      required: ["action", ...required],
+    },
+  };
+}
+
+function autoTaskAddTool({ templateDescription = TEMPLATE_DESCRIPTION, extraRequired = [] } = {}) {
+  return familyTool(
+    "orbit_auto_task",
+    [
+      ["list", []],
+      ["add", ["name", "schedule", "template", ...extraRequired]],
+    ],
+    {
         name: { type: "string", description: "Unique definition name. Required." },
         schedule: { type: "object", description: SCHEDULE_DESCRIPTION },
         template: { type: "object", description: templateDescription },
         description: { type: "string", description: "Human description of the recurring chore." },
         workspace: { type: "string", description: "Workspace selector." },
-      },
-      required: ["name", "schedule", "template", "workspace", ...extraRequired],
     },
-  };
+    ["workspace"],
+  );
 }
 
 function contextFor(tools, helpByCommand) {
@@ -98,7 +121,7 @@ test("auto-task add schedule and template count as the same required inputs", as
   const results = await check(
     contextFor([autoTaskAddTool()], { "auto-task add": autoTaskAddHelp() }),
   );
-  const result = resultFor(results, "orbit_auto_task_add");
+  const result = resultFor(results, "orbit_auto_task:add");
   assert.equal(result.status, "pass");
   assert.deepEqual(result.measurements.missing_on_cli, []);
   assert.deepEqual(result.measurements.missing_on_mcp, []);
@@ -116,7 +139,7 @@ test("auto-task add still fails when the schedule flags or template title are no
       "auto-task add": autoTaskAddHelp({ scheduleFlags: false }),
     }),
   );
-  assert.deepEqual(resultFor(missingSchedule, "orbit_auto_task_add").measurements.missing_on_cli, [
+  assert.deepEqual(resultFor(missingSchedule, "orbit_auto_task:add").measurements.missing_on_cli, [
     "schedule",
   ]);
 
@@ -126,7 +149,7 @@ test("auto-task add still fails when the schedule flags or template title are no
       { "auto-task add": autoTaskAddHelp() },
     ),
   );
-  const optional = resultFor(optionalTitle, "orbit_auto_task_add");
+  const optional = resultFor(optionalTitle, "orbit_auto_task:add");
   assert.equal(optional.status, "fail");
   assert.deepEqual(optional.measurements.missing_on_cli, ["template"]);
   assert.deepEqual(optional.measurements.missing_on_mcp, ["title"]);
@@ -138,7 +161,7 @@ test("auto-task add still reports a required input the other side does not have"
       "auto-task add": autoTaskAddHelp({ extraRequired: "--owner <OWNER>" }),
     }),
   );
-  assert.deepEqual(resultFor(cliOnly, "orbit_auto_task_add").measurements.missing_on_mcp, [
+  assert.deepEqual(resultFor(cliOnly, "orbit_auto_task:add").measurements.missing_on_mcp, [
     "owner",
   ]);
 
@@ -147,7 +170,7 @@ test("auto-task add still reports a required input the other side does not have"
       "auto-task add": autoTaskAddHelp(),
     }),
   );
-  assert.deepEqual(resultFor(mcpOnly, "orbit_auto_task_add").measurements.missing_on_cli, [
+  assert.deepEqual(resultFor(mcpOnly, "orbit_auto_task:add").measurements.missing_on_cli, [
     "owner",
   ]);
 });
@@ -216,23 +239,23 @@ Options:
 Global options:
   --workspace <SELECTOR>
 `;
-  const required = ["options", "question", "task_id", "workspace"];
-  const tool = {
-    name: "orbit_decision_raise",
-    inputSchema: {
-      type: "object",
-      properties: {
-        options: { type: "array" },
-        question: { type: "string" },
-        task_id: { type: "string" },
-        workspace: { type: "string" },
-      },
-      required,
+  const tool = familyTool(
+    "orbit_decision",
+    [
+      ["list", []],
+      ["raise", ["options", "question", "task_id"]],
+    ],
+    {
+      options: { type: "array" },
+      question: { type: "string" },
+      task_id: { type: "string" },
+      workspace: { type: "string" },
     },
-  };
+    ["workspace"],
+  );
   const result = resultFor(
     await check(contextFor([tool], { "decision raise": help })),
-    "orbit_decision_raise",
+    "orbit_decision:raise",
   );
   assert.equal(result.status, "pass");
   assert.deepEqual(result.measurements.cli_required, ["options", "question", "task_id"]);
@@ -244,12 +267,12 @@ Global options:
     inputSchema: {
       ...tool.inputSchema,
       properties: { ...tool.inputSchema.properties, owner: { type: "string" } },
-      required: [...required, "owner"],
+      required: [...tool.inputSchema.required, "owner"],
     },
   };
   const mismatch = resultFor(
     await check(contextFor([withMissingField], { "decision raise": help })),
-    "orbit_decision_raise",
+    "orbit_decision:raise",
   );
   assert.equal(mismatch.status, "fail");
   assert.deepEqual(mismatch.measurements.missing_on_cli, ["owner"]);
@@ -280,24 +303,22 @@ Global options:
   const results = await check(
     contextFor(
       [
-        {
-          name: "orbit_auto_task_update",
-          inputSchema: {
-            type: "object",
-            properties: {
-              name: { type: "string" },
-              schedule: { type: "object", description: SCHEDULE_DESCRIPTION },
-              template: { type: "object", description: TEMPLATE_DESCRIPTION },
-              workspace: { type: "string" },
-            },
-            required: ["name", "workspace"],
+        familyTool(
+          "orbit_auto_task",
+          [["update", ["name"]]],
+          {
+            name: { type: "string" },
+            schedule: { type: "object", description: SCHEDULE_DESCRIPTION },
+            template: { type: "object", description: TEMPLATE_DESCRIPTION },
+            workspace: { type: "string" },
           },
-        },
+          ["workspace"],
+        ),
       ],
       { "auto-task update": help },
     ),
   );
-  const result = resultFor(results, "orbit_auto_task_update");
+  const result = resultFor(results, "orbit_auto_task:update");
   assert.equal(result.status, "pass");
   assert.deepEqual(result.measurements.cli_required, ["name"]);
   assert.deepEqual(result.measurements.missing_on_cli, []);

@@ -38,9 +38,18 @@ fn domain_operator_modes_never_dispatch_from_a_managed_run() {
         ..Default::default()
     };
     let calls: Vec<(&str, Value)> = vec![
-        ("orbit.task.retry_handoff", json!({})),
-        ("orbit.task.recover_claim", json!({})),
-        ("orbit.task.revoke_handoff", json!({})),
+        (
+            "orbit.task.retry_handoff",
+            json!({"handoff_id":"hand-1","expected_candidate_commit":"c","expected_base_commit":"b","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"retry","request_key":"rk"}),
+        ),
+        (
+            "orbit.task.recover_claim",
+            json!({"claim_id":"claim-1","expected_phase":"running","status":"backlog","reason":"recover","request_key":"rk"}),
+        ),
+        (
+            "orbit.task.revoke_handoff",
+            json!({"handoff_id":"hand-1","expected_candidate_commit":"c","expected_base_commit":"b","reason":"revoke","request_key":"rk"}),
+        ),
         (
             "orbit.workflow.auto",
             json!({"workspace":"ws_fixture","action":"start","for_seconds":60}),

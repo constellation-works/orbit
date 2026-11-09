@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::presentation_definition::presentation_definition;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     self, CallerCapabilities, CallerEnvelope, OperationSurface,
@@ -8,7 +7,8 @@ use orbit_common::governance::authorization::{
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
 use orbit_types::tool::{
-    McpInputDecoration, McpPresentationRead, McpToolDefinition, ToolSessionContext,
+    McpInputDecoration, McpPresentationRead, McpToolDefinition, TOOL_ACTION_FIELD, TOOL_FAMILIES,
+    ToolSessionContext, tool_family,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
@@ -160,6 +160,18 @@ impl OrbitToolServer {
                 })
                 .map(|operation| operation.id.to_owned()),
         );
+        // A family is hidden only when every action it serves is.
+        let hidden_families = TOOL_FAMILIES
+            .iter()
+            .filter(|family| {
+                family
+                    .actions
+                    .iter()
+                    .all(|action| hidden.contains(action.operation))
+            })
+            .map(|family| family.name.to_string())
+            .collect::<Vec<_>>();
+        hidden.extend(hidden_families);
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {
@@ -249,13 +261,13 @@ impl OrbitToolServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(definition) = presentation_definition(request.name.as_ref()) {
+        if presentation::is_presentation(request.name.as_ref()) {
             if !self.host.presentation_enabled() {
                 return Ok(tool_error_result(&OrbitError::InvalidInput(
                     "UI tools are not enabled for this server".into(),
                 )));
             }
-            let result = self.dispatch_presentation(request, definition.kind).await;
+            let result = self.dispatch_presentation(request).await;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
                 Err(error) => tool_error_result(&error),
@@ -358,7 +370,6 @@ impl OrbitToolServer {
     async fn dispatch_presentation(
         &self,
         request: CallToolRequestParams,
-        kind: crate::presentation_definition::PresentationKind,
     ) -> Result<Value, OrbitError> {
         let definitions = self.load_tool_definitions()?;
         let hidden = self.host.hidden_tool_names(&self.session_context());
@@ -370,7 +381,7 @@ impl OrbitToolServer {
             ));
         };
         let input = Value::Object(request.arguments.unwrap_or_default());
-        let Some(selection) = presentation::selection(kind, &input)? else {
+        let Some(selection) = presentation::selection(&input)? else {
             return Ok(presentation::empty_panel());
         };
         let presentation::Selection {
@@ -408,9 +419,17 @@ impl OrbitToolServer {
         .schema
         .name
         .clone();
+        // A family reader is called with its show action.
+        let read_action = tool_family(&read_name)
+            .and_then(|family| family.action("show"))
+            .map(|action| action.action);
         let task = tokio::task::spawn_blocking(move || {
             if run_selection {
-                return host.call_tool(&read_name, serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25}), context);
+                let mut read = serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25});
+                if let Some(action) = read_action {
+                    read[TOOL_ACTION_FIELD] = Value::String(action.to_string());
+                }
+                return host.call_tool(&read_name, read, context);
             }
             host.call_tool(
                 &read_name,

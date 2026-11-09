@@ -293,10 +293,13 @@ impl DestinationSession {
         // probe ceiling when the (possibly large) result starts arriving.
         self.line_cap
             .store(self.tool_result_line_cap, Ordering::Release);
+        // A worker's owner route carries the operation it resolved; the
+        // destination's server takes the family call a client makes.
+        let (family_name, arguments) = orbit_types::tool::tool_family_call(name, arguments);
         let response = self.request(
             "tools/call",
             json!({
-                "name": mcp_advertised_tool_name(name),
+                "name": mcp_advertised_tool_name(&family_name),
                 "arguments": arguments,
             }),
             LostAnswer::OutcomeUnknown { tool: name },

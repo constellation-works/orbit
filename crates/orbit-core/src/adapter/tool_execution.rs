@@ -32,9 +32,12 @@ impl OrbitRuntime {
         session
             .effective_capabilities
             .remove(&orbit_types::tool::McpCapability::Operator);
+        // The worker routes the operation it resolved; the owner's dispatch
+        // takes the family call a caller makes.
+        let (name, input) = orbit_types::tool::tool_family_call(name, input);
         owner
             .execute_tool_command_dispatch_with_session_context(
-                name,
+                &name,
                 input,
                 None,
                 None,

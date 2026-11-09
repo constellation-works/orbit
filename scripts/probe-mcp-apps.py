@@ -104,8 +104,10 @@ def main():
                 or (data.get("mutation_applied") is False and data.get("refusal")),
                 f"expected refusal for {name}: {response}")
     def read(scope, **fields):
-        name = {"tasks": "orbit_task_list", "task": "orbit_task_show", "runs": "orbit_workflow_run_list", "run": "orbit_workflow_run_show"}[scope]
-        return call(name, {"workspace": str(work), "view": "bounded", **fields})
+        name, action = {"tasks": ("orbit_task_list", None), "task": ("orbit_task_show", None),
+                        "runs": ("orbit_run", "list"), "run": ("orbit_run", "show")}[scope]
+        selector = {"action": action} if action else {}
+        return call(name, {**selector, "workspace": str(work), "view": "bounded", **fields})
     def write_arguments(request_id, operation):
         operation = dict(operation)
         kind = operation.pop("kind")
@@ -125,12 +127,12 @@ def main():
         process.stdin.flush()
         tools = rpc("tools/list", {})["result"]["tools"]
         by_name = {tool["name"]: tool for tool in tools}
-        for name, entrypoint in (("orbit_ui_open", "global"), ("orbit_ui_inspect", "thread")):
-            tool = by_name[name]
-            require(tool["_meta"]["ui"]["resourceUri"] == URI, f"wrong UI URI for {name}")
-            require(tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": entrypoint}], "entrypoint metadata mismatch")
-            require(tool["annotations"]["readOnlyHint"] is True, "opening a panel must be read-only")
-        for name in ("orbit_task_show", "orbit_task_list", "orbit_task_add", "orbit_task_update", "orbit_workflow_auto", "orbit_routine_control", "orbit_pipeline_invoke"):
+        tool = by_name["orbit_ui"]
+        require(tool["_meta"]["ui"]["resourceUri"] == URI, "wrong UI URI for orbit_ui")
+        require(tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": "global"}, {"type": "thread"}], "entrypoint metadata mismatch")
+        require(tool["inputSchema"]["properties"]["action"]["enum"] == ["open", "inspect"], "orbit_ui actions mismatch")
+        require(tool["annotations"]["readOnlyHint"] is True, "opening a panel must be read-only")
+        for name in ("orbit_task_show", "orbit_task_list", "orbit_task_add", "orbit_task_update", "orbit_workflow", "orbit_routine_control", "orbit_pipeline_invoke"):
             require(name in by_name, f"missing daily control-center tool {name}")
             require("ui" not in by_name[name].get("_meta", {}), "ordinary data tools acquired automatic widgets")
         require(not any(name.startswith("orbit_desktop_") for name in by_name), "retired desktop wrappers are still advertised")
@@ -145,7 +147,7 @@ def main():
         require(legacy["text"] == contents["text"], "old open panels cannot load compatible resource")
         for uri in ("file:///etc/passwd", URI + "?workspace=other", URI + "/../index.html"):
             require("error" in rpc("resources/read", {"uri": uri}), "arbitrary resource URI accepted")
-        require(call("orbit_ui_open", {})["workspace"] is None, "empty open inferred a workspace")
+        require(call("orbit_ui", {"action": "open"})["workspace"] is None, "empty open inferred a workspace")
         create = {"kind": "create", "title": "MCP Apps disposable task <script>not executable</script>",
                   "description": "Disposable daily control-center protocol fixture.",
                   "acceptance_criteria": ["The disposable protocol checks preserve task identity"], "priority": "medium"}
@@ -160,7 +162,7 @@ def main():
         require(listed["search_scope"] == "task key and title", "search scope missing")
         empty = read("tasks", search="MCP Apps disposable task", offset=1, limit=1)
         require(empty["total"] == 1 and empty["items"] == [], "pagination total changed with offset")
-        panel = call("orbit_ui_inspect", {"workspace": str(work), "id": task_key})
+        panel = call("orbit_ui", {"action": "inspect", "workspace": str(work), "id": task_key})
         require(panel["task"]["id"] == task_key and panel["workspace"] == str(work), "panel destination mismatch")
         require(call("orbit_task_show", {"workspace": str(work), "id": task_key})["title"] == panel["task"]["title"], "ordinary reader disagrees")
         snapshot = call("orbit_task_show", {"workspace": str(work), "id": task_key, "snapshot": True})
@@ -200,10 +202,10 @@ def main():
         after = read("task", id=task_key)
         require(after["revision"] == accepted["revision"], "refused completion left a partial mutation")
         require(read("tasks", status="review")["total"] == 1, "review queue does not show fixture")
-        refused("orbit_workflow_run_list", {"workspace": str(work), "view": "bounded"})
-        refused("orbit_workflow_run_show", {"workspace": str(work), "view": "bounded", "id": "jrun-probe-unprivileged"})
-        refused("orbit_ui_inspect", {"id": task_key})
-        refused("orbit_ui_inspect", {"workspace": "missing-disposable-workspace", "id": task_key})
+        refused("orbit_run", {"action": "list", "workspace": str(work), "view": "bounded"})
+        refused("orbit_run", {"action": "show", "workspace": str(work), "view": "bounded", "id": "jrun-probe-unprivileged"})
+        refused("orbit_ui", {"action": "inspect", "id": task_key})
+        refused("orbit_ui", {"action": "inspect", "workspace": "missing-disposable-workspace", "id": task_key})
         forged_name, forged_args = write_arguments("probe-forged-authority", {**accept, "expected_revision": after["revision"], "complete": True})
         refused(forged_name, {**forged_args, "actor": "operator"})
         # This reference is data only. Actual updateModelContext transport is tested by

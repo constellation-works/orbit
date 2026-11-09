@@ -332,8 +332,8 @@ schema first. For example, a grant for a reviewed auto-task update can be set
 before dispatch:
 
 ```bash
-orbit tool show orbit.auto_task.update
-orbit task update "$TASK_ID" --granted-tools orbit.auto_task.update
+orbit tool show orbit.auto_task
+orbit task update "$TASK_ID" --granted-tools orbit.auto_task:update
 orbit task show "$TASK_ID"
 ```
 
@@ -361,11 +361,12 @@ the owner host; if its required labels or OS exclude that host, it waits
 even if a follower has the right labels.
 
 For a grantable mutation, the implementer attaches a JSON task artifact at
-`mutation-proposals/<name>.json` using `orbit.task.artifact.put`. Its content
-names the granted tool, exact input and a nonempty rationale:
+`mutation-proposals/<name>.json` using `orbit.task.artifact` action `put`. Its content
+names the tool, its exact input (with the family `action`) and a nonempty
+rationale:
 
 ```json
-{"tool": "orbit.auto_task.update", "input": {"name": "<auto-task>", "description": "<updated description>"}, "rationale": "Explain why this change is needed."}
+{"tool": "orbit.auto_task", "input": {"action": "update", "name": "<auto-task>", "description": "<updated description>"}, "rationale": "Explain why this change is needed."}
 ```
 
 Use the tool schema to choose valid input for the intended change. Orbit
@@ -503,7 +504,7 @@ The media type comes from the file name. An unknown extension is stored as
 `application/octet-stream`.
 
 Attaching a file, and reading it back with `get` or
-`orbit.task.artifact.get`, both refuse more than 1 MiB (1,048,576 bytes). A
+`orbit.task.artifact` action `get`, both refuse more than 1 MiB (1,048,576 bytes). A
 file already stored on the task can still be downloaded from the dashboard
 when it is larger than that.
 
@@ -540,14 +541,14 @@ orbit task artifact get "$TASK_ID" screenshots/diagram.png --out .orbit/tmp/diag
 
 ### From an agent
 
-The MCP tools are `orbit.task.artifact.put` and `orbit.task.artifact.get`.
+The MCP tools are `orbit.task.artifact` action `put` and `orbit.task.artifact` action `get`.
 Both run in the connected workspace.
 
-- `orbit.task.artifact.put` takes `id` and `source_path`, and an optional
+- `orbit.task.artifact` action `put` takes `id` and `source_path`, and an optional
   `path` for the logical name. The same confinement, size, and reserved-name
   rules apply. Pass `model` when you want that agent family recorded on the
   write.
-- `orbit.task.artifact.get` takes `id` and `path` (the logical path). List
+- `orbit.task.artifact` action `get` takes `id` and `path` (the logical path). List
   names first with `orbit.task.show` and `field` set to `artifacts`. An
   optional `workspace` argument is a fail-closed filter: a workspace that does
   not own the task is not found. There is no `out` argument.

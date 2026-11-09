@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 
-/// Everything `orbit.friction.add` needs to allocate and persist a record.
+/// Everything `orbit.friction` action `add` needs to allocate and persist a record.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FrictionAddParams {
     pub model: String,

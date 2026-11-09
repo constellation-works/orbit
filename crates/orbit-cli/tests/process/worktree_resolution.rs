@@ -734,7 +734,13 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert_definition_source(&shown, &mo, &primary_path);
     for args in [
         vec!["auto-task", "list", "--format", "json"],
-        vec!["tool", "run", "orbit.auto_task.list", "--input", "{}"],
+        vec![
+            "tool",
+            "run",
+            "orbit.auto_task",
+            "--input",
+            r#"{"action":"list"}"#,
+        ],
     ] {
         let listed = f.json(&linked, &args);
         assert!(

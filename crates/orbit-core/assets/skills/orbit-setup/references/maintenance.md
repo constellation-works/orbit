@@ -49,7 +49,7 @@ must also be running — [automation.md](automation.md).
 
 The same `worktree_gc_pipeline` run also prunes the checkout's own
 `.orbit/tmp` (`ORBIT_SCRATCH_DIR`), where operators and
-`orbit.task.artifact.put` callers stage evidence, build output and CodeQL
+`orbit.task.artifact` action `put` callers stage evidence, build output and CodeQL
 databases. Artifacts are copied into the task store, so staged files are
 disposable once attached. A top-level entry is removed when its **newest mtime
 anywhere inside it** is older than `scratch_older_than_hours` (default `24`);

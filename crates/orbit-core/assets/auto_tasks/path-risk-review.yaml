@@ -23,7 +23,7 @@ template:
 
     ## Pick the paths
 
-    Prefer paths that appear in two or more rankings, then single-ranking paths with the highest rate that is at or above minimum support in both windows. Investigate at most five paths per run. Find the newest completed prior instance with `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["path-risk-review","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`, and read its `path-risk.json` artifact with `orbit tool run orbit.task.artifact.get --input '{"id":"<prior task ID>","path":"path-risk.json","model":"<agent-family>"}'`. Skip a path that instance already handled unless its rates rose since. For every path it handled whose filed task is now done, report whether the rates moved. This closes the loop on whether fixes work.
+    Prefer paths that appear in two or more rankings, then single-ranking paths with the highest rate that is at or above minimum support in both windows. Investigate at most five paths per run. Find the newest completed prior instance with `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["path-risk-review","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`, and read its `path-risk.json` artifact with `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<prior task ID>","path":"path-risk.json","model":"<agent-family>"}'`. Skip a path that instance already handled unless its rates rose since. For every path it handled whose filed task is now done, report whether the rates moved. This closes the loop on whether fixes work.
 
     ## Find the cause
 
@@ -54,7 +54,7 @@ template:
 
     ## Record
 
-    Write `{"schema_version":1,"head":"<sha>","paths":[{"path":"...","rates":{...},"cause":"...","filed":["<id>"],"tracked_by":["<id>"]}]}` to `.orbit/tmp/path-risk.json` (`$ORBIT_SCRATCH_DIR`) and attach it with `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/path-risk.json","path":"path-risk.json","model":"<agent-family>"}'`. The execution summary lists the paths examined, their causes, the filed and already-tracked IDs, the paths skipped and why, the below_support counts and any population reported when nothing cleared minimum support, and the before and after rates for the prior instance's fixes. A run with nothing to file attaches the record and succeeds.
+    Write `{"schema_version":1,"head":"<sha>","paths":[{"path":"...","rates":{...},"cause":"...","filed":["<id>"],"tracked_by":["<id>"]}]}` to `.orbit/tmp/path-risk.json` (`$ORBIT_SCRATCH_DIR`) and attach it with `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/path-risk.json","path":"path-risk.json","model":"<agent-family>"}'`. The execution summary lists the paths examined, their causes, the filed and already-tracked IDs, the paths skipped and why, the below_support counts and any population reported when nothing cleared minimum support, and the before and after rates for the prior instance's fixes. A run with nothing to file attaches the record and succeeds.
   acceptance_criteria:
   - At most five paths were investigated, chosen from the 30d and 90d rankings with multi-ranking paths first, and each was followed to the tasks behind its rates
   - Each investigated path names a dominant cause backed by task IDs and code evidence, or is reported as unestablished without filing
@@ -69,13 +69,13 @@ template:
   - path-risk-review
   - no-diff-expected
   required_tools:
-  - orbit.codebase.analytics
-  - orbit.codebase.related
-  - orbit.codebase.show
+  - orbit.codebase:analytics
+  - orbit.codebase:related
+  - orbit.codebase:show
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

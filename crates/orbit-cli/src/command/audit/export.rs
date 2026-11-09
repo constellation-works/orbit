@@ -29,7 +29,7 @@ pub struct AuditExportArgs {
     /// Filter events since duration or timestamp
     #[arg(long)]
     pub since: Option<String>,
-    /// Filter by tool name
+    /// Filter by tool name; name a family action as `family:action`
     #[arg(long)]
     pub tool: Option<String>,
 }
@@ -37,7 +37,8 @@ pub struct AuditExportArgs {
 impl Execute for AuditExportArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
-        let events = runtime.export_audit_events(since, self.tool)?;
+        let events =
+            runtime.export_audit_events(since, super::support::audit_tool_filter(self.tool))?;
 
         let format = match self.format {
             ExportFormat::Json => {

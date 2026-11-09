@@ -155,20 +155,20 @@ credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was reje
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
 
-**A resident cycle's ship.** A resident cycle's `orbit.workflow.ship` is brokered for a similar
+**A resident cycle's ship.** A resident cycle's `orbit.workflow` action `ship` is brokered for a similar
 reason: started inside the cycle's read-only sandbox, the leaf's worker could neither write its
 worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the managed-run envelope
 naming a resident cycle's run, the nested `orbit` forwards the call. The broker refuses it unless the
 job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
 decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
 
-**A resident cycle's decision raise.** A cycle escalates with `orbit.decision.raise`, whose
+**A resident cycle's decision raise.** A cycle escalates with `orbit.decision` action `raise`, whose
 workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested
 `orbit` forwards the raise on the same terms as the ship, and the broker runs it through the tool host
 for the run it serves. The sandbox gains no write grant. The handler still refuses a task no human crew
 holds, and the request's filer is the run's identity, never one the input names.
 
-**A resident cycle's landing and move to `done`.** `orbit.workflow.land`, and an `orbit.task.update`
+**A resident cycle's landing and move to `done`.** `orbit.workflow` action `land`, and an `orbit.task.update`
 whose `status` is `done`, reach the forge with the host's `gh` credentials, which the cycle's sandbox
 does not hold. The nested `orbit` forwards them on the same terms as the ship, and the broker runs them
 through the tool host for the run it serves, so the cycle guard decides the live grant, the `merge`
@@ -176,7 +176,7 @@ right and the open pull request. The broker carries no other `orbit.task.update`
 
 **Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
-`orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,
+`orbit.task.add`, `orbit.friction` action `add`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
 `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks
 `~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
@@ -340,7 +340,7 @@ existing host seam (`RuntimeHost`) and not through a new crate dependency.
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
 registration is a plugin backend, plus the five host-credentialed reads, the claimed
 worker's owner calls above and the guarded
-resident actions (`orbit.workflow.ship`, `orbit.decision.raise`, `orbit.workflow.land` and
+resident actions (`orbit.workflow` action `ship`, `orbit.decision` action `raise`, `orbit.workflow` action `land` and
 the move to `done` via `orbit.task.update`) below. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,

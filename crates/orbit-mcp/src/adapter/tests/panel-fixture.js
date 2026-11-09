@@ -34,19 +34,19 @@ function automate(args){
   return {...receipt,run_id:'jrun-fixture-2',state:'submitted'};
 }
 function drain(args){
-  if(args.action==='start'){live='jrun-fixture-live';stopped=false;complete=args.complete;return {schema_version:1,workspace,action:'start',run_id:live,state:'submitted',completion:complete?'done':'review'};}
+  if(args.mode==='start'){live='jrun-fixture-live';stopped=false;complete=args.complete;return {schema_version:1,workspace,action:'start',run_id:live,state:'submitted',completion:complete?'done':'review'};}
   stopped=true;return {schema_version:1,workspace,action:'stop',outcome:'stopped',coordinators:[{run_id:live,remaining_children:[{run_id:'child-1'},{run_id:'child-2'}]}]};
 }
 function tools(name,args){
  workspace=args.workspace||workspace;
  if(name==='orbit_task_list')return read({...args,scope:'tasks'});
  if(name==='orbit_task_show')return read({...args,scope:'task'});
- if(name==='orbit_workflow_run_show')return read({...args,scope:'run'});
- if(name==='orbit_workflow_run_list')return args.include_catalog?{catalog:read({...args,scope:'jobs'}),runs:read({...args,scope:'runs'})}:read({...args,scope:'runs'});
- if(name==='orbit_workflow_auto')return (args.action==='status'?read:drain)({...args,scope:'drain'});
+ if(name==='orbit_run'&&args.action==='show')return read({...args,scope:'run'});
+ if(name==='orbit_run'&&args.action==='list')return args.include_catalog?{catalog:read({...args,scope:'jobs'}),runs:read({...args,scope:'runs'})}:read({...args,scope:'runs'});
+ if(name==='orbit_workflow'&&args.action==='auto')return (args.mode==='status'?read:drain)({...args,scope:'drain'});
  if(name==='orbit_routine_control')return (args.action==='list'?read:automate)({...args,scope:'routines',kind:'routine'});
- if(name==='orbit_auto_task_list')return read({...args,scope:'auto_tasks'});
- if(name==='orbit_auto_task_update'||name==='orbit_auto_task_mint')return automate({...args,kind:'auto_task',action:name==='orbit_auto_task_update'?'toggle':'mint'});
+ if(name==='orbit_auto_task'&&args.action==='list')return read({...args,scope:'auto_tasks'});
+ if(name==='orbit_auto_task'&&['update','mint'].includes(args.action))return automate({...args,kind:'auto_task',action:args.action==='update'?'toggle':'mint'});
  if(name==='orbit_pipeline_invoke')return automate({...args,name:args.job_name,kind:'job',action:'run'});
  if(name==='orbit_task_add'||name==='orbit_task_update')return {mutation_applied:false,refusal:{message:'This preview does not persist task writes.'}};
 

@@ -214,7 +214,7 @@ fn unliftable_required_tool_is_a_blocking_pilot_finding() {
         "dependencies": [],
         "relations": [],
         "tags": [],
-        "required_tools": ["orbit.auto_task.update"],
+        "required_tools": ["orbit.auto_task:update"],
         "plan": "Report the requirement.",
         "execution_summary": "",
         "context_files": [],
@@ -258,7 +258,7 @@ fn unliftable_required_tool_is_a_blocking_pilot_finding() {
         .iter()
         .find_map(|warning| warning.as_str())
         .unwrap_or_else(|| panic!("no finding: {prepared}"));
-    assert!(finding.contains("orbit.auto_task.update"), "{finding}");
+    assert!(finding.contains("orbit.auto_task:update"), "{finding}");
     assert!(finding.contains("agent_implement"), "{finding}");
     assert!(finding.contains("disallow list"), "{finding}");
     assert!(finding.contains("mutating"), "{finding}");

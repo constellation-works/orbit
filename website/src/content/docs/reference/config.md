@@ -1083,7 +1083,7 @@ orbit run show "$RUN_ID" --json
 ```
 
 The text view prints a `Tag instructions:` line per dispatch that received
-instructions. JSON, including the `orbit.workflow.run.show` tool, exposes
+instructions. JSON, including the `orbit.run` action `show` tool, exposes
 `tag_instructions` with state `observed`, `none` (audit evidence exists but
 no dispatch received instructions), or `unavailable` (no audit evidence).
 The projection lists up to 32 dispatches and reports `truncated` when more

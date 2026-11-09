@@ -116,8 +116,8 @@ fn application_consent_preserves_agent_boundaries_and_audits_refusals() {
     app_command(
         &fixture,
         &credential,
-        "orbit.auto_task.mint",
-        &json!({"acknowledge_unconditional":true}),
+        "orbit.auto_task",
+        &json!({"action": "mint", "acknowledge_unconditional":true}),
     )
     .assert()
     .failure();

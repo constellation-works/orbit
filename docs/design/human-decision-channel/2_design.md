@@ -103,7 +103,7 @@ per request:
   request stays open) until that pilot settles. The first routine assessment is automatic. A certified
   description or acceptance-criteria edit later queues a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds the task; edits to other material or policy never queue one through the routine, but an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it; delivery waits for a new
   assessment of edited description/criteria (drain repilot, `orbit task repilot <id>`,
-  `orbit.task.repilot`, or task update `repilot: true`). A held warning retains
+  `orbit.task.recover` action `repilot`, or task update `repilot: true`). A held warning retains
   one decision across routine windows until answered or explicitly reassessed.
 - **Block triage `report` / final-recovery escalation:** answers are `done` (the
   `human_action:` the readout carries,
@@ -119,7 +119,7 @@ per request:
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`) accepts it
   unchanged.
-- **Agent request** ([ORB-20736], `orbit.decision.raise`): an agent puts a multiple-choice question
+- **Agent request** ([ORB-20736], `orbit.decision` action `raise`): an agent puts a multiple-choice question
   on a task assigned to a human crew. It carries two to four plain answers `1`..`4` (one-line
   label and consequence), the one the agent recommends first as `1`, and no rewrite or action.
   It is task-scoped: no store, table or precedent lookup; the record is the task's history.
@@ -178,8 +178,8 @@ token fingerprint.
 
 ### 2.4 Listing and surfaces
 
-- `orbit.decision.list` (CLI `orbit decision list`): open requests, filterable by
-  gate and task; `orbit.decision.show` renders one request with its answers and
+- `orbit.decision` action `list` (CLI `orbit decision list`): open requests, filterable by
+  gate and task; `orbit.decision` action `show` renders one request with its answers and
   binding. Both read-only, agent-callable — an agent may *see* that a human is
   being asked; it may not answer.
 - `orbit.task.show` gains `open_decisions[]` (id, gate, answer ids, expiry) so any
@@ -618,7 +618,7 @@ Ordered; each slice is independently deliverable and leaves the tree shippable.
    hold each raise exactly one open request with the right answers and binding;
    disabled, nothing is written.
 2. **Listing and local answering surfaces — done** ([ORB-18176]). Owner: `orbit-tools`
-   (`orbit.decision.list/show`), `orbit-core` (`orbit.task.show` open decisions,
+   (`orbit.decision action list/show`), `orbit-core` (`orbit.task.show` open decisions,
    the core apply step reused by §3), `orbit-web` (dashboard request list and
    answer buttons), CLI (`orbit decision …`). Depends on: 1. Acceptance sketch:
    an operator answers a raised request from CLI and dashboard; the answer lands
@@ -679,14 +679,14 @@ The digest no longer returns `model_answered` or `assist_demoted`.
   `review_approval` is `irreversible`; `proposed_approval` and `pilot_admission`
   are `authority`; final-recovery options take their tier from their action
   (`reject` is `irreversible`, `dismiss` is `routine`, the others `reversible`).
-  `orbit.decision.raise` accepts an optional per-answer `risk_tier`; when it is
+  `orbit.decision` action `raise` accepts an optional per-answer `risk_tier`; when it is
   omitted the answer is `unknown`. Only `routine` and `reversible` requests can
   ever be answered by the model. `irreversible`, `authority`, `spend` and
   `unknown` always go to the human.
 - **Category.** Derived and stored at raise: `<workspace_id>/<gate>`, or
   `<workspace_id>/agent_request/<topic file>` (`untopiced` without a topic).
   Measurement, enablement and demotion are per category.
-- `orbit.decision.list`/`show` and `open_decisions` show tier and category.
+- `orbit.decision` action `list`/`show` and `open_decisions` show tier and category.
 
 ### 11.2 `answered_by: model` provenance
 
@@ -874,7 +874,7 @@ The handler checks, in order, and writes nothing on any refusal:
    directly and bypass the decision. It is also on the host's apply-tool allowlist
    (§12.5). The manifest digest is recorded on the request.
 3. **Answers.** Two to four, ids matching `[a-z][a-z0-9_]{0,31}`, one-line label and
-   consequence, the same bounds as `orbit.decision.raise`. `recommended` names one of
+   consequence, the same bounds as `orbit.decision` action `raise`. `recommended` names one of
    them or is absent. A `risk_tier` the plugin supplies is ignored (§12.6).
 4. **Input, subject and revision.** `apply.input` is a JSON object of at most 8 KiB
    with no top-level `decision` key, which core reserves (§12.4). `subject` and
@@ -978,7 +978,7 @@ reads: human answered through the channel, then plugin applied under that answer
 `applied`, `failed`, and `unknown` when the `pending` entry is older than the backend's
 `timeout_ms` plus one minute, or the process that wrote it is gone. Nothing retries a
 `failed` or `unknown` apply automatically. The operator inspects it, and the plugin may
-raise a fresh request. `orbit.decision.show`, `open_decisions` and the dashboard show
+raise a fresh request. `orbit.decision` action `show`, `open_decisions` and the dashboard show
 the apply state beside the answer. The submit response returns it, so the transport's
 confirmation or refusal mail states what actually happened, not only that the answer
 was recorded.

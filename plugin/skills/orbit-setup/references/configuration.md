@@ -284,7 +284,7 @@ Delete them.
 
 `[machine]` settings are global-only. An authorized local drain can select its
 own forecast mode with `orbit run auto --auto-concurrency <MODE>` (`off`,
-`shadow` or `enforce`); MCP `orbit_workflow_auto` `action: "start"` accepts the
+`shadow` or `enforce`); MCP `orbit_workflow` action `auto` `mode: "start"` accepts the
 same `auto_concurrency` input. When omitted, each admission pass follows the
 configured `machine.auto_concurrency.mode`. Explicit overrides survive
 restart/resume without a configuration write. Host thresholds and effective
@@ -869,7 +869,7 @@ distinct pool member and scorecard row, shares the crew's account, and an effort
 provider rejects is refused at load (never ignored). Crew names may not contain `@`.
 Each launch records the effective value after crew/inline precedence and
 admission, alongside its resolved crew and model. Run inspection with
-`orbit run show --json` or the operator-only `orbit.workflow.run.show` MCP tool
+`orbit run show --json` or the operator-only `orbit.run` action `show` MCP tool
 exposes `agent_executions` on the run and displayed steps:
 `reasoning_effort: null` means provider default; `"unknown"` means historical
 execution without a record. Editing a crew never rewrites history.

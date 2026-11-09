@@ -150,7 +150,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
         "orbit.task.add",
         "orbit.task.list",
         "orbit.task.update",
-        "orbit.task.artifact.put",
+        "orbit.task.artifact:put",
     ] {
         assert!(
             has_required_tool(&definition, tool),
@@ -158,7 +158,10 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
         );
     }
     let description = &definition.template.description;
-    let attachments = tool_payloads(description, "orbit.task.artifact.put");
+    let attachments = tool_payloads(description, "orbit.task.artifact")
+        .into_iter()
+        .filter(|payload| payload["action"] == "put")
+        .collect::<Vec<_>>();
     assert!(
         !attachments.is_empty(),
         "the coordinator provides an artifact payload"
@@ -191,8 +194,8 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
                 "orbit.search",
                 "orbit.task.add",
                 "orbit.task.show",
-                "orbit.task.artifact.get",
-                "orbit.task.artifact.put",
+                "orbit.task.artifact:get",
+                "orbit.task.artifact:put",
             ]
         ),
         "area chores declare the tools their progress and findings use: {area}"
@@ -207,8 +210,8 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
             rollup,
             &[
                 "orbit.task.show",
-                "orbit.task.artifact.get",
-                "orbit.task.artifact.put"
+                "orbit.task.artifact:get",
+                "orbit.task.artifact:put"
             ]
         ),
         "the roll-up declares the tools it reads areas and records its decision with: {rollup}"
@@ -677,8 +680,8 @@ fn escalation_triage_holds_no_operator_only_tool() {
         .collect();
     for forbidden in [
         "orbit.task.update",
-        "orbit.task.requeue",
-        "orbit.workflow.run.resume",
+        "orbit.task.recover:requeue",
+        "orbit.run:resume",
     ] {
         assert!(
             disallowed.contains(&forbidden),
@@ -687,7 +690,8 @@ fn escalation_triage_holds_no_operator_only_tool() {
     }
     assert!(
         !disallowed.contains(&"orbit.task.block_triage")
-            && !disallowed.contains(&"orbit.friction.add"),
+            && !disallowed.contains(&"orbit.friction:add")
+            && !disallowed.contains(&"orbit.friction"),
         "the triager records pilot-warning dispositions and Orbit-defect frictions: {disallowed:?}"
     );
 }

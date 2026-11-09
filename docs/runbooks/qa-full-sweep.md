@@ -79,11 +79,11 @@ reports in ignored scratch storage and attach them as task artifacts:
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate \
   --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json --run-commands
-orbit tool run orbit.task.artifact.put --input \
-  '{"id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json","path":"qa-full-sweep-report.json","model":"codex"}'
+orbit tool run orbit.task.artifact --input \
+  '{"action":"put","id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json","path":"qa-full-sweep-report.json","model":"codex"}'
 ```
 
-`orbit.task.artifact.put` is intentionally fail-closed: its `source_path`
+`orbit.task.artifact` action `put` is intentionally fail-closed: its `source_path`
 must resolve beneath `workspace_root`, so ORB-11694 makes it refuse files
 that are still in `/tmp` (and symlinks inside the workspace that resolve
 outside it). Stage retained evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`;
@@ -94,8 +94,8 @@ stage_dir=.orbit/tmp/qa-full-sweep
 mkdir -p "$stage_dir/browser"
 
 # Attach each staged evidence file; this example attaches the browser result.
-orbit tool run orbit.task.artifact.put --input \
-  '{"id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/browser/result.json","path":"browser/result.json","model":"codex"}'
+orbit tool run orbit.task.artifact --input \
+  '{"action":"put","id":"<TASK_ID>","source_path":".orbit/tmp/qa-full-sweep/browser/result.json","path":"browser/result.json","model":"codex"}'
 ```
 
 Retained evidence must be inside the checkout (under `.orbit/tmp/`) before

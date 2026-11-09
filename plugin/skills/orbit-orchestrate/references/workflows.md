@@ -68,7 +68,7 @@ operator-only). It returns a run ID immediately. Public submissions require
 an operator; a managed run may invoke only a host-authorized child pipeline
 admission. There is no MCP wait. `orbit.pipeline.wait` is registered and
 CLI-only (`orbit tool run orbit.pipeline.wait` with `run_ids`); an operator
-session polls `orbit_workflow_run_show` from MCP (operator authority; denied
+session polls `orbit_run` action `show` from MCP (operator authority; denied
 for agent sessions), while a session with a shell on the owning host polls
 `orbit run show <run_id> --json`.
 
@@ -186,8 +186,8 @@ assessment still must use its actual granted authority; it does not inherit
 operator authority merely from its host.
 
 Claimed workers reach the owner's `orbit.task.show`, `orbit.search`,
-`orbit.task.list`, `orbit.task.add`, `orbit.friction.add`,
-`orbit.task.artifact.get` / `orbit.task.artifact.put`, and `orbit.notice.post` /
+`orbit.task.list`, `orbit.task.add`, `orbit.friction` action `add`,
+`orbit.task.artifact` action `get` / `orbit.task.artifact` action `put`, and `orbit.notice.post` /
 `orbit.notice.show` / `orbit.notice.close` through their run's coordinator.
 Notices are stored only on the owner, and the claim binding supplies the
 posting task and run. Search and task listing read only the claimed workspace's owner
@@ -495,10 +495,10 @@ Otherwise choose the narrow faithful command from repository instructions and
 code, reproduce at the immutable pre-fix revision and validate at the exact landed
 revision in isolated extracts or fixtures with independent build outputs, and
 capture both outputs as explicitly retrospective records. Attach those records and the structured assessment through
-`orbit.task.artifact.put`, staging each file under `.orbit/tmp/`:
+`orbit.task.artifact` action `put`, staging each file under `.orbit/tmp/`:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
 ```
 
 `source_path` is the local file; `path` is the stored artifact name.

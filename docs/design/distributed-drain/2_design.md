@@ -381,8 +381,8 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   fences stale work when the claim settles (`stale_claim`). A read through `orbit.task.show` is
   scoped by the run broker to the claimed task's workspace ([ORB-19270]).
 - The closed claimed-owner bridge carries `orbit.task.show`, `orbit.search`,
-  `orbit.task.list`, `orbit.task.add`, `orbit.friction.add`,
-  `orbit.task.artifact.get` / `orbit.task.artifact.put`, and
+  `orbit.task.list`, `orbit.task.add`, `orbit.friction` action `add`,
+  `orbit.task.artifact` action `get` / `orbit.task.artifact` action `put`, and
   `orbit.notice.post` / `orbit.notice.show` / `orbit.notice.close` through the run coordinator.
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
@@ -957,7 +957,7 @@ namespace, with an unverifiable identity, or in this process's own group is refu
 stays, and the leaf is reported in `unstopped_leaves`, which fails the CLI (exit 1) and the MCP
 stop. The leaf's cancel accepts only a confirmed stop: an unconfirmed one fails before the run is
 finalized, so its recorded release stays held, as above. The MCP stop control
-(`orbit.workflow.auto`, `action: stop`) takes `force` and applies the same cancel to each live
+(`orbit.workflow` action `auto`, `action: stop`) takes `force` and applies the same cancel to each live
 drain after stopping its admissions. A queued drain, or one whose worker is gone, has
 no pass to wait for and is cancelled immediately. The owner's local drain keeps detach-on-cancel;
 its `--force` cancels the detached children too, accepting only confirmed worker stops.
@@ -1347,8 +1347,8 @@ claim for it, and a replica says the owner holds that state.
 - **Act:** `approve_task_handoff`, `revoke_task_handoff` and `ClaimMutation::Recover` remain
   available through the operator-only dashboard governed rows `handoff.approve`,
   `handoff.revoke`, `claim.recover`. Recovery and revocation also have operator-only CLI commands
-  and MCP tools: `orbit task recover-claim` / `orbit.task.recover_claim` and
-  `orbit task revoke-handoff` / `orbit.task.revoke_handoff`. Each dashboard action carries the
+  and MCP tools: `orbit task recover-claim` / `orbit.task.recover` action `recover_claim` and
+  `orbit task revoke-handoff` / `orbit.task.recover` action `revoke_handoff`. Each dashboard action carries the
   identity shown plus a replay identity; approval rebuilds its observation from the owner's record.
   Stale identity, replica checkout and unresolved merge intent are distinct typed refusals.
 - **Attention:** the task detail's Delivery tab reads the claim once, and the same read drives a
@@ -1481,7 +1481,7 @@ binding apart from tool arguments, and bound sessions and their proxies lose ope
   artifacts are materialized on the executor and routed path-free.
 - Clean-tree verification reads only its named checkpoint, structured no-diff or
   already-landed report, and declared validation logs through the existing artifact
-  read mechanism. Internal host reads use `orbit.task.artifact.get` under the active
+  read mechanism. Internal host reads use `orbit.task.artifact` action `get` under the active
   claim and bound task, sharing path ownership and the 1 MiB inline limit with the
   public tool. Missing or oversized required evidence is refused; bytes are never
   truncated or replaced by manifest metadata. Checkpoint digests, task/run/base

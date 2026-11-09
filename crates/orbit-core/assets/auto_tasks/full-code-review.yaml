@@ -18,7 +18,7 @@ template:
     - Use the registered Orbit tool surface. List area reviews already in flight with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["full-code-review","no-diff-expected"],"model":"<agent-family>"}'`.
       File an area review with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact:get","orbit.task.artifact:put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `full-code-review` and `no-diff-expected`.
       Never tag one `code-review`: completed `code-review` chores are the
@@ -99,7 +99,7 @@ template:
     reason for any area under 5,000 lines, and `deferred` with reason `cap` for
     an area the cap below leaves unfiled), and exclusions (path pattern,
     reason and file count). Attach it to this coordinator task with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/full-review-areas.json","path":"full-review-areas.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/full-review-areas.json","path":"full-review-areas.json","model":"<agent-family>"}'`.
 
     ## Cap and rank the filings
 
@@ -140,7 +140,7 @@ template:
     > Before reading, list this area's task artifacts with
     > `orbit tool run orbit.task.show --input '{"id":"<this area task ID>","field":"artifacts","model":"<agent-family>"}'`.
     > If `read-progress.json` exists, retrieve it with
-    > `orbit tool run orbit.task.artifact.get --input '{"id":"<this area task ID>","path":"read-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<this area task ID>","path":"read-progress.json","model":"<agent-family>"}'`.
     > A resumed or re-crewed run must continue from that artifact, preserving
     > completed partitions and findings already filed, instead of starting
     > over. Verify its pinned SHA, area selectors and complete file/range
@@ -168,7 +168,7 @@ template:
     > partition boundaries. Attach the initial inventory before reading and
     > update it after each read chunk, completed partition and filed finding
     > with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/read-progress.json","path":"read-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this area task ID>","source_path":".orbit/tmp/read-progress.json","path":"read-progress.json","model":"<agent-family>"}'`.
     > Parallel readers return progress to one owner who merges and attaches it;
     > they must not overwrite the shared artifact independently. On resume,
     > keep completed partitions, finish only unread ranges and unresolved
@@ -308,7 +308,7 @@ template:
   required_tools:
   - orbit.task.add
   - orbit.task.list
-  - orbit.task.artifact.put
+  - orbit.task.artifact:put
   priority: medium
   complexity: medium
   status: backlog

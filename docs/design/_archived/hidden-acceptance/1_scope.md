@@ -85,7 +85,7 @@ A scenario record:
 id: acc-task-requeue-after-block       # stable, never reused
 story: "An operator requeues a blocked task and it runs again on the next drain."
 spec_refs: [ORB-NNNNN#ac-2, docs/guides/task-lifecycle.md]   # what it was derived from
-surfaces: ["cli:task", "mcp:orbit_task_requeue"]
+surfaces: ["cli:task", "mcp:orbit_task_recover action requeue"]
 capability: local                       # local | browser | macos | linux | provider
 setup: [...]                            # public commands that build the starting state
 steps: [...]                            # public commands or tool calls

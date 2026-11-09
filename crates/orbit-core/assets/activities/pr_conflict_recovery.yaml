@@ -265,16 +265,16 @@ spec:
       independent upstream behavior is not ambiguous: resolve it.
     - `result` is advisory: `summary`, `validations`, and the `gates` above.
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.show
-    - orbit.workflow.run.list
-    - orbit.workflow.run.resume
-    - orbit.workflow.land
-    - orbit.workflow.ship
+    - orbit.run:show
+    - orbit.run:list
+    - orbit.run:resume
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

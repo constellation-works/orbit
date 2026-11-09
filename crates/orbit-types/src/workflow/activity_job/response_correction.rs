@@ -15,17 +15,19 @@ use super::tool_allowlist::tool_allowed;
 const READ_ONLY_FS_PROFILE: &str = "reviewer";
 
 /// Registered built-in Orbit tools classified as mutating, including writes
-/// to coordination state outside the worktree. Keep this table and the shipped
-/// correction activities' disallow lists in sync with the tool registry.
+/// to coordination state outside the worktree, as policy names: a family's
+/// mutating actions appear as `family:action`. Keep this table and the
+/// shipped correction activities' disallow lists in sync with the tool
+/// registry.
 /// File and process access is separately confined by the filesystem profile.
 pub const MUTATING_TOOLS: &[&str] = &[
-    "orbit.auto_task.add",
-    "orbit.auto_task.mint",
-    "orbit.auto_task.update",
+    "orbit.auto_task:add",
+    "orbit.auto_task:mint",
+    "orbit.auto_task:update",
     "orbit.command.exec",
     "orbit.decision.digest",
-    "orbit.decision.raise",
     "orbit.decision.submit",
+    "orbit.decision:raise",
     "orbit.drain.claim.bind",
     "orbit.drain.claim.settle",
     "orbit.evolution.add",
@@ -39,8 +41,8 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.experiment.reweight",
     "orbit.experiment.start",
     "orbit.experiment.update",
-    "orbit.friction.add",
-    "orbit.friction.update",
+    "orbit.friction:add",
+    "orbit.friction:update",
     "orbit.memory.propose",
     "orbit.memory.write",
     "orbit.notice.close",
@@ -52,28 +54,32 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.resident.grant",
     "orbit.resident.relay",
     "orbit.routine.control",
+    "orbit.run:resume",
     "orbit.task.add",
-    "orbit.task.artifact.put",
+    "orbit.task.artifact:put",
     "orbit.task.block_triage",
     "orbit.task.pull",
-    "orbit.task.reconcile_review",
-    "orbit.task.recover_claim",
-    "orbit.task.repilot",
-    "orbit.task.requeue",
-    "orbit.task.retry_handoff",
-    "orbit.task.review_reset",
-    "orbit.task.revoke_handoff",
+    "orbit.task.recover:reconcile_review",
+    "orbit.task.recover:recover_claim",
+    "orbit.task.recover:repilot",
+    "orbit.task.recover:requeue",
+    "orbit.task.recover:retry_handoff",
+    "orbit.task.recover:review_reset",
+    "orbit.task.recover:revoke_handoff",
     "orbit.task.update",
-    "orbit.workflow.auto",
-    "orbit.workflow.land",
-    "orbit.workflow.run.resume",
-    "orbit.workflow.ship",
+    "orbit.workflow:auto",
+    "orbit.workflow:land",
+    "orbit.workflow:ship",
 ];
 
-/// Whether `tool` is a built-in Orbit mutation a `response_correction`
-/// activity must never be granted, however the grant was composed.
+/// Whether `tool` covers a built-in Orbit mutation a `response_correction`
+/// activity must never be granted, however the grant was composed. A family
+/// covers each of its mutating actions.
 pub fn is_response_correction_mutating_tool(tool: &str) -> bool {
-    MUTATING_TOOLS.contains(&tool)
+    let tool = [tool.to_string()];
+    MUTATING_TOOLS
+        .iter()
+        .any(|mutating| tool_allowed(mutating, &tool))
 }
 
 /// Why an activity may not declare `response_correction`.

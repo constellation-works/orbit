@@ -476,7 +476,7 @@ config change only.
   no material edit, the same brief is still classified `fresh`/`drifted` by code drift and
   delivered. A regression test at the `agent_implement` brief-delivery (admission/task-context)
   boundary covers both cases.
-- Given an agent or operator `orbit.task.artifact.put` to `explore-brief.json`, Orbit refuses
+- Given an agent or operator `orbit.task.artifact` action `put` to `explore-brief.json`, Orbit refuses
   it.
 - Given a claimed run on a follower, the implementer receives the same brief, subject to the
   same staleness rules against the claim base.

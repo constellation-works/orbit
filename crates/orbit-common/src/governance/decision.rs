@@ -136,7 +136,7 @@ const LIST: OperationSpec<DecisionVerb> = OperationSpec {
 const REQUEST_ID: &[ParamSpec] = &[required(both(
     "id",
     ParamType::String,
-    "The decision request id, as `orbit.decision.list` prints it.",
+    "The decision request id, as action `list` prints it.",
     CliArgKind::Positional,
     "The decision request id",
 ))];

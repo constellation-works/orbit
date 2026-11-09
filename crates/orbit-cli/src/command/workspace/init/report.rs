@@ -340,7 +340,7 @@ pub(super) fn format_workspace_init(report: &WorkspaceInitReport) -> String {
             lines.push("  mcp:       no providers auto-detected".to_string());
         }
         McpOutcome::Configured(providers) => lines.push(format!(
-            "  mcp:       {} (operator-authorized: orbit.workflow.ship, run observe/resume, orbit.command.exec)",
+            "  mcp:       {} (operator-authorized: orbit.workflow ship, orbit.run observe/resume, orbit.command.exec)",
             providers.join(", ")
         )),
     }

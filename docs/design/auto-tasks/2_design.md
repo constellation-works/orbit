@@ -103,8 +103,8 @@ the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
 ID issued from a cwd that is **not** a Git-linked worktree of that workspace
 still opens the registered primary checkout. Direct CLI calls from a Git-linked
 worktree still use that worktree's `local_root` for candidate inspection and
-local definition edits. A managed job run's `orbit.auto_task.add` and
-`orbit.auto_task.update` (including an `enabled` change) tool calls are instead
+local definition edits. A managed job run's `orbit.auto_task` action `add` and
+`orbit.auto_task` action `update` (including an `enabled` change) tool calls are instead
 brokered to the owning host process. The host checks the worker's workspace
 binding and runs CRUD with its registered checkout as `local_root`. Before
 writing, CRUD rejects loader errors, including a file stem/name mismatch. The
@@ -194,7 +194,7 @@ definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
 
-`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`
+`orbit.auto_task` action `list` projects the same cursor into a bounded `last_fire`
 [ORB-19112]:
 `{ kind: "fired", at, task_id, task_status }` for a fire,
 `{ kind: "skipped", at, skip_reason }` for the latest precondition skip, or
@@ -466,7 +466,7 @@ under the cursor sidecar lock shared with the other writers. A settings failure
 leaves no definition behind, so the same add can be retried after repair.
 Update patches present fields (on a managed shipped
 default, settings fields go to the settings table, §5c); toggle (the CLI command,
-or `orbit.auto_task.update` with `enabled`) flips `enabled`
+or `orbit.auto_task` action `update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
 toggle re-read the definition and write it while holding the cursor sidecar
 lock (without loading the cursor, so a malformed cursor cannot block the
@@ -708,7 +708,7 @@ cursor does not advance, so the deferred occurrence fires once when the queue
 drains. This is the behavior the hand-copy workaround could not provide.
 
 Advertisement follows who does the work [ORB-10798]. Reading the definitions
-(`list`), minting one on demand (`orbit.auto_task.mint`), and host-brokered
+(`list`), minting one on demand (`orbit.auto_task` action `mint`), and host-brokered
 edits (`add`, and `update`, which also enables or disables a definition) are
 registered at `McpToolScope::WorkspaceRequired`. `show` is `register_inactive`,
 reachable through `orbit auto-task show` but absent from MCP `tools/list`;
@@ -894,7 +894,7 @@ accurate.
   `code-review` auto-task name.
 - ORB-15663 — retired the system lane: system work routes through the
   complexity pools instead.
-- ORB-19112 — `orbit.auto_task.list` reports each definition's last fire.
+- ORB-19112 — `orbit.auto_task` action `list` reports each definition's last fire.
 - ORB-19122 — delivery auto-tasks report their actual last fire.
 - ORB-19131 — keeps the delivery `last_fire` visible while a retry backs off.
 - [ORB-11730] — made auto-task slot minting concurrency-safe and preserved

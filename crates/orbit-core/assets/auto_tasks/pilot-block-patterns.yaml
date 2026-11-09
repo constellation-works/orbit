@@ -42,9 +42,9 @@ template:
     - **Writes are limited to these calls.** `orbit.task.add` files a fix;
       `orbit.task.update` adds a comment to an open fix task that covers a group and nothing
       else (only `id`, `comment` and `model`; your own task's `execution_summary` excepted);
-      `orbit.friction.add` records a host or Orbit defect with no supported fix. Never change
+      `orbit.friction` action `add` records a host or Orbit defect with no supported fix. Never change
       another task's status, fields, crew or tags, never call `orbit.task.block_triage`,
-      `orbit.task.requeue`, a run resume, `--force` or any other operator-only tool, and never
+      `orbit.task.recover` action `requeue`, a run resume, `--force` or any other operator-only tool, and never
       complete, reject, archive or approve a task.
     - Search with `orbit tool run orbit.search --input '{"query":"<one distinctive token>","all":true,"model":"<agent-family>"}'`:
       one error code, guard name, finding kind or file name per query. A 0-hit multi-word
@@ -58,7 +58,7 @@ template:
     - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
       `{"status":["done"],"tag":["pilot-block-patterns"],"limit":1}` and
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
-      `orbit.task.artifact.get` only after `artifacts` from `orbit.task.show` lists those
+      `orbit.task.artifact` action `get` only after `artifacts` from `orbit.task.show` lists those
       paths. Record the new scan start, the moment this scan starts, before reading any
       task. That instant is this pass's report `scan_start`. It becomes the cursor's
       `cursor` only when section 6 says so. A resume pass does not write it as
@@ -171,7 +171,7 @@ template:
       `run-failure-patterns`, linked with `regression_from` to the landed task whose change
       caused it when the evidence names one. Never file a failure-rate measurement task.
     - **Host or setup:** missing tools, credentials, browser kit, sandbox or OS. Record it with
-      `orbit tool run orbit.friction.add` (search first), or file a setup chore for the
+      `orbit tool run orbit.friction` action `add` (search first), or file a setup chore for the
       operator when it needs a configuration change.
 
     Groups below the recurrence threshold are listed in the report as `counted`.
@@ -252,7 +252,7 @@ template:
     changes on your own managed branch. It does not authorize commits or merges.
 
     Write `.orbit/tmp/pilot-block-report.json` (`$ORBIT_SCRATCH_DIR`) and attach it as
-    `pilot-block-report.json` with `orbit.task.artifact.put`:
+    `pilot-block-report.json` with `orbit.task.artifact` action `put`:
 
     ```json
     {"schema_version": 1, "partial": false, "scan_start": "<RFC 3339>", "head": "<sha>",
@@ -307,11 +307,11 @@ template:
   tags:
   - pilot-block-patterns
   required_tools:
-  - orbit.friction.add
+  - orbit.friction:add
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

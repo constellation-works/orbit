@@ -21,7 +21,7 @@ authorization, omit `--complete`. If the user will start the drain themselves,
 prepare work without launching a second coordinator.
 
 Prefer the connected MCP submission tool when it supports the requested
-options. `orbit_workflow_ship` intentionally has no completion input and always
+options. `orbit_workflow` action `ship` intentionally has no completion input and always
 submits review-only work. If completion is authorized, use `orbit run ship
 <task-id> --complete` through an available authorized operator command surface
 on the owning host; do not invent a `completion` argument, silently submit a

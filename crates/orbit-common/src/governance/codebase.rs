@@ -160,7 +160,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank repository paths across codebase risk measures. Use `orbit_codebase_show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,

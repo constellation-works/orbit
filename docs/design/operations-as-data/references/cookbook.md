@@ -38,7 +38,7 @@ relationships. Phase 3d (task review and lifecycle, [ORB-15940]) built
 `CliArgKind::Actions`, which spells a multiplexed tool's actions as CLI
 subcommands with their own arguments. Phase 4 (workflow run, [ORB-15941]) migrated a tool-only
 noun whose overlapping CLI stays hand-wired, and the multiplexed
-`orbit.workflow.auto`. Phase 5 migrated search at the CLI command root and
+`orbit.workflow` action `auto`. Phase 5 migrated search at the CLI command root and
 recorded explicit exceptions for the remaining tools. A noun needing another kind the kernel lacks extends the kernel
 first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
@@ -210,7 +210,7 @@ implements it; friction's returns `None` throughout. A mode whose input the
 flat spec does not describe (task's guarded creation and update) goes in
 `preempt`, which runs before `parse_input`.
 
-If one tool multiplexes actions behind an `action` field (`orbit.workflow.auto`),
+If one tool multiplexes actions behind an `action` field (`orbit.workflow` action `auto`),
 declare the selector as an `Enum` and the union of the actions' fields. An
 action served by another host action is a guarded mode that checks its own
 field allowlist; the others leave their field rules to the verb's handler

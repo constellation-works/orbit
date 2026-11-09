@@ -32,7 +32,7 @@ calls under both dotted and underscore names, including in operator sessions. Th
 probe and receipt diagnostics remain available through `orbit tool run`; operators also use
 `orbit tool run orbit.drain.claims` for the separate claim inspection, which is off MCP. Handoff
 approval is dashboard-only. Recovery and revocation remain operator-only CLI commands and
-matching MCP tools — `orbit.task.revoke_handoff` and `orbit.task.recover_claim` — which managed
+matching MCP tools — `orbit.task.recover` action `revoke_handoff` and `orbit.task.recover` action `recover_claim` — which managed
 runs cannot call.
 
 ## Why This Exists
@@ -357,7 +357,7 @@ idempotent owner-side binding check and execution mutations require the current 
 ## Owner retry of an authorized handoff
 
 A stopped owner landing does not invalidate a healthy native leaf binding. A trusted
-operator can retry that exact accepted handoff with `orbit.task.retry_handoff`,
+operator can retry that exact accepted handoff with `orbit.task.recover` action `retry_handoff`,
 `orbit task retry-handoff`, or the dashboard's **Retry landing** action. The operation
 requires an explicit owner workspace (logical ID or absolute checkout path), handoff
 identity, expected accepted candidate/base commits, expected latest attempt number and

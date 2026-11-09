@@ -609,7 +609,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
         let denied = spec.tool_disallow_list.unwrap();
         for observer in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
             assert!(
-                denied.iter().any(|tool| tool == observer),
+                orbit_types::workflow::tool_allowed(observer, &denied),
                 "ORB-14267: {activity} must withhold {observer}; recovery receives run evidence without operator authority"
             );
         }
@@ -634,10 +634,16 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
         // deny list is applied. Advertising or requiring a tool grants no capability.
         {
             let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
-            for tool in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
+            for action in ["show", "list"] {
+                let tool = format!("orbit.run:{action}");
                 let error = fixture
                     .runtime
-                    .execute_tool_command(tool, json!({"id": "jrun-missing"}), None, None)
+                    .execute_tool_command(
+                        "orbit.run",
+                        json!({"action": action, "id": "jrun-missing"}),
+                        None,
+                        None,
+                    )
                     .unwrap_err();
                 assert!(
                     matches!(error, OrbitError::CapabilityDenied(_)),
@@ -655,9 +661,14 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
             (ACTIVITY_TOOLS_DENY_ENV, Some(deny_env.as_str())),
         ]);
         for tool in &denied {
+            // A denied family action is called through its family.
+            let (name, input) = match tool.split_once(':') {
+                Some((family, action)) => (family, json!({"action": action})),
+                None => (tool.as_str(), json!({})),
+            };
             let error = fixture
                 .runtime
-                .execute_tool_command(tool, json!({}), None, None)
+                .execute_tool_command(name, input, None, None)
                 .unwrap_err();
             assert!(
                 matches!(
@@ -695,7 +706,7 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
         };
         let denied = spec.tool_disallow_list.unwrap();
         assert!(
-            denied.iter().any(|tool| tool == "orbit.workflow.run.show"),
+            orbit_types::workflow::tool_allowed("orbit.workflow.run.show", &denied),
             "{activity} must withhold the operator-only run observer from its agent"
         );
         let resolved = fixture
@@ -703,10 +714,10 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
             .resolve_activity_tool_denials(&[], activity, &denied)
             .unwrap();
         assert!(
-            !resolved
-                .effective_tools
-                .iter()
-                .any(|tool| tool == "orbit.workflow.run.show"),
+            !orbit_types::workflow::tool_allowed(
+                "orbit.workflow.run.show",
+                &resolved.effective_tools
+            ),
             "{activity} must not advertise the operator-only run observer"
         );
     }
@@ -715,8 +726,8 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
     let error = fixture
         .runtime
         .execute_tool_command(
-            "orbit.workflow.run.show",
-            json!({"id": "jrun-missing"}),
+            "orbit.run",
+            json!({"action": "show", "id": "jrun-missing"}),
             None,
             None,
         )

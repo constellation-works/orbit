@@ -3,8 +3,8 @@
 The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin.
 It serves `ui://orbit/control-center/v1/index.html` as
 `text/html;profile=mcp-app`; the old `ui://orbit/task-panel/v1/index.html` remains
-readable so an already-open panel can reload. `orbit_ui_open` advertises a
-global entrypoint and `orbit_ui_inspect` a thread entrypoint. Opening either
+readable so an already-open panel can reload. `orbit_ui` action `open` advertises a
+global entrypoint and `orbit_ui` action `inspect` a thread entrypoint. Opening either
 only reads. Existing data tools have no automatic widget metadata.
 
 **Actual desktop validation is NOT RUN and is deferred.**
@@ -34,7 +34,7 @@ paths, query strings or arbitrary artifact contents.
 The panel discovers workspaces and requires an explicit returned selector.
 The selected host/workspace/entity stays visible. Existing domain readers expose
 `view: "bounded"` on `orbit_task_list`, `orbit_task_show`,
-`orbit_workflow_run_list`, `orbit_workflow_run_show` and `orbit_auto_task_list`.
+`orbit_run` action `list`, `orbit_run` action `show` and `orbit_auto_task` action `list`.
 `orbit_task_show` retains its full-record default, while `orbit_task_list`
 defaults to compact task rows. A `snapshot: true` `orbit_task_show` call
 returns an opaque revision plus server-computed actions.
@@ -146,10 +146,10 @@ actual model-context delivery still requires the desktop host.
 
 ## Auto-drain and Automation
 
-`orbit_workflow_auto` observes readiness with `action: "status"`, starts a
-bounded window with `action: "start"` (1–604800 seconds and optional positive
-u32 concurrency), stops admissions with `action: "stop"`, or changes a live
-drain's worker ceiling with `action: "resize"` (`concurrency`, optional `id`,
+`orbit_workflow` action `auto` observes readiness with `mode: "status"`, starts a
+bounded window with `mode: "start"` (1–604800 seconds and optional positive
+u32 concurrency), stops admissions with `mode: "stop"`, or changes a live
+drain's worker ceiling with `mode: "resize"` (`concurrency`, optional `id`,
 `if_revision` and `reason`) without cancelling anything. It uses the same
 runtime as CLI/dashboard. Completion defaults to review. Selecting **Complete
 automatically** explicitly authorizes completion of every task admitted during the
@@ -157,15 +157,15 @@ window. Stopping preserves admitted workers. Readiness samples up to 50 tasks;
 eligibility may change immediately.
 
 `orbit_routine_control` lists workspace routine status or toggles a definition
-using its observed enabled state and target. `orbit_auto_task_update` with
+using its observed enabled state and target. `orbit_auto_task` action `update` with
 `enabled` accepts an optional `expected_enabled` for an atomic checked toggle, and
-`orbit_auto_task_mint` accepts `acknowledge_unconditional: true` for an operator
+`orbit_auto_task` action `mint` accepts `acknowledge_unconditional: true` for an operator
 acknowledgement that schedule, enabled and dedupe are ignored. Mint creates a task
 without dispatch. The guarded modes require explicit workspace and trusted
 operator authority and refuse managed-run callers; their ordinary modes retain
 existing behavior.
 
-`orbit_workflow_run_list` with `view: "bounded", include_catalog: true` returns
+`orbit_run` action `list` with `view: "bounded", include_catalog: true` returns
 bounded `runs` and `catalog` observations. Existing `orbit_pipeline_invoke` is
 now advertised; ordinary calls require explicit job name and input. Its optional
 `default_input: true` submits an enabled no-input catalog job with defaults,

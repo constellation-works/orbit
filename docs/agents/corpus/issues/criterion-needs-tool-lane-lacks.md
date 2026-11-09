@@ -9,7 +9,7 @@ links: [ORB-18545, ORB-19033, ORB-18656, ORB-18848]
 
 ## Signature
 
-Pilot `validation_tool_warnings`: `acceptance criterion requires <tool>, a governed operation reserved for the operator capability; required_tools grants allowlist membership` for `orbit.routine.control`, `orbit.workflow.run.show`, `orbit.workflow.run.resume`, `orbit.experiment.assign`, `orbit.task.retry_handoff`, `orbit.auto_task.mint`, or `github.run.list` / `github.run.logs` that depend on GitHub auth in the lane.
+Pilot `validation_tool_warnings`: `acceptance criterion requires <tool>, a governed operation reserved for the operator capability; required_tools grants allowlist membership` for `orbit.routine.control`, `orbit.run` action `show`, `orbit.run` action `resume`, `orbit.experiment.assign`, `orbit.task.recover` action `retry_handoff`, `orbit.auto_task` action `mint`, or `github.run.list` / `github.run.logs` that depend on GitHub auth in the lane.
 
 ## Mechanism
 

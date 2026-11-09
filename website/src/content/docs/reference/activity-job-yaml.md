@@ -762,8 +762,8 @@ hold:
   With `tools`, a mutating tool is granted when it is listed there, including
   through a wildcard entry. With `tool_disallow_list`, a mutating tool is
   granted unless it is listed.
-  Mutating tools include `orbit.task.update`, `orbit.task.artifact.put`,
-  `orbit.friction.add` and `orbit.command.exec`. See
+  Mutating tools include `orbit.task.update`, `orbit.task.artifact` action `put`,
+  `orbit.friction` action `add` and `orbit.command.exec`. See
   [agent tool lists](#agent-tool-lists).
 - The activity does not also declare `incomplete_continuation`. Declare at
   most one of the two policies.

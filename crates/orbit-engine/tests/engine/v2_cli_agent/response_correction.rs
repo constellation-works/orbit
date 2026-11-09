@@ -776,7 +776,7 @@ fn only_a_read_only_activity_may_declare_response_correction() {
             format!("{READ_ONLY}  tools:\n    - orbit.task.*\n"),
         ),
         (
-            "orbit.auto_task.add",
+            "orbit.auto_task:add",
             format!(
                 "{READ_ONLY}  tool_disallow_list:\n    - orbit.search\n  proc_disallowed_programs: []\n"
             ),
@@ -867,15 +867,23 @@ fn assert_coordination_mutations_refused(deny_mode: bool) {
         orbit_engine::load_activity_asset(yaml).expect("the shipped activity remains admissible");
         let mut registry = orbit_tools::ToolRegistry::new();
         registry.register_builtins();
+        // A family stands for its actions, which a policy list names as
+        // `family:action`.
         let mut tools: Vec<_> = registry
             .schemas()
             .into_iter()
-            .filter(|schema| {
-                schema.name.starts_with("orbit.")
-                    && registry.execution_kind(&schema.name)
+            .flat_map(|schema| {
+                orbit_types::tool::tool_policy_operations(&schema.name)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|operation| {
+                operation.starts_with("orbit.")
+                    && registry.execution_kind(operation)
                         == Some(orbit_tools::ToolExecutionKind::Mutating)
             })
-            .map(|schema| schema.name)
+            .map(|operation| orbit_types::tool::tool_call_name(&operation).into_owned())
             .collect();
         tools.sort();
         assert!(

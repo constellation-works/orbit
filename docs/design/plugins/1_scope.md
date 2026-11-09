@@ -763,7 +763,7 @@ a read a refused command offered requests the serving tool instead:
 | read | tool | entry point | also needs |
 | --- | --- | --- | --- |
 | `orbit workspace list` | `orbit.workspace.list` | MCP `tools/call` only — workspace discovery is owned by the MCP server ([federated-mcp](../federated-mcp/1_overview.md)) | — |
-| `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability |
+| `orbit run show <id>` | `orbit.run` action `show` | `orbit tool run` or MCP | the `operator` capability |
 | a run's commit and landing for one task | `orbit.task.show` with `field: "delivery"` | `orbit tool run` or MCP | — (bounded host evidence; no `operator`) |
 
 Cross-host callbacks through `orbit tool run` are unsupported [ORB-21384]. A
@@ -1038,7 +1038,7 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   reconciliation path with a warning naming the plugin, not load errors. A plugin switched
   off by a workspace toggle is skipped only in that workspace, and the warning says so.
 - Listings hide them. `orbit auto-task list`, `orbit routine list`, MCP
-  `orbit.auto_task.list` and the dashboard's auto-task and routine views omit a definition
+  `orbit.auto_task` action `list` and the dashboard's auto-task and routine views omit a definition
   whose provenance names a plugin that is not active where it lives, and leave it out of
   every count and next-fire summary. `--all` / `--include-inactive-plugins` (MCP
   `include_inactive_plugins`, the dashboard's "Show hidden") lists it marked

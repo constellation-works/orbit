@@ -46,10 +46,15 @@ pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
     let result = (|| {
         reject_unknown_tool_fields(input, &allowed)?;
         orbit_common::protocol::tool_input::required_string(input, &["id"], "id")?;
-        Err::<(), _>(OrbitError::InvalidInput("missing `source_path`; `path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)".to_string()))
+        Err::<(), _>(OrbitError::InvalidInput(format!(
+            "missing `source_path`; {SOURCE_PATH_REMEDY}"
+        )))
     })();
     result.err()
 }
+
+/// How to supply an artifact's bytes, for a put that omits `source_path`.
+pub(crate) const SOURCE_PATH_REMEDY: &str = "`path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)";
 
 /// Read a caller-local task artifact into the bounded, path-free payload used
 /// by the spoke connector. The source path is consumed locally and never
@@ -251,7 +256,7 @@ fn confine_source_path(ctx: &ToolContext, source_path: &Path) -> Result<PathBuf,
                 matched_rule = evaluation.matched_rule.as_str(),
             );
             return Err(OrbitError::PolicyDenied(format!(
-                "orbit.task.artifact.put path '{}' is denied by fsProfile '{}' (matched rule: {})",
+                "orbit.task.artifact put path '{}' is denied by fsProfile '{}' (matched rule: {})",
                 evaluation.path, evaluation.profile, evaluation.matched_rule
             )));
         }

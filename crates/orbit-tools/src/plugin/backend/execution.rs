@@ -415,8 +415,9 @@ impl PluginBackendSpec {
             .orbit_tools
             .iter()
             .filter(|tool| {
+                // Entries are tools, families or `family:action` names.
                 ctx.allowed_tools.is_empty()
-                    || ctx.allowed_tools.iter().any(|allowed| allowed == *tool)
+                    || orbit_types::workflow::tool_allowed(tool, &ctx.allowed_tools)
             })
             .filter(|tool| {
                 !ctx.tool_deny_policy

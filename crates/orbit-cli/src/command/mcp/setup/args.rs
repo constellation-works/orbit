@@ -330,7 +330,7 @@ pub(crate) fn init_auto_for_workspace(
     // This is the operator-facing orchestrator connection (ORB-10960): the
     // explicit `--mcp` request from `orbit workspace init` is treated as
     // deliberate operator setup, so the registered server is authorized for
-    // governed operations such as `orbit.workflow.ship` and `orbit.command.exec`.
+    // governed operations such as `orbit.workflow` ship and `orbit.command.exec`.
     //
     // The workspace being registered is known here, so the generated server is
     // bound to it directly rather than re-derived from the checkout.

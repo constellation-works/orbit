@@ -1,4 +1,4 @@
-//! Definitions for adapter-owned read-only presentation entrypoints.
+//! The adapter-owned read-only presentation tool and its actions.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PresentationKind {
@@ -6,33 +6,37 @@ pub(crate) enum PresentationKind {
     Inspect,
 }
 
-pub(crate) struct PresentationDefinition {
-    pub name: &'static str,
-    pub alias: &'static str,
-    pub title: &'static str,
+/// One action of the presentation tool and the host entrypoint it serves.
+pub(crate) struct PresentationAction {
+    pub action: &'static str,
     pub entrypoint: &'static str,
     pub kind: PresentationKind,
 }
 
-pub(crate) const PRESENTATION_DEFINITIONS: &[PresentationDefinition] = &[
-    PresentationDefinition {
-        name: "orbit_ui_open",
-        alias: "orbit.ui.open",
-        title: "Open Orbit control center",
+/// The presentation tool's advertised and canonical names.
+pub(crate) const PRESENTATION_TOOL_NAME: &str = "orbit_ui";
+pub(crate) const PRESENTATION_TOOL_ALIAS: &str = "orbit.ui";
+pub(crate) const PRESENTATION_TOOL_TITLE: &str = "Orbit control center";
+
+pub(crate) const PRESENTATION_ACTIONS: &[PresentationAction] = &[
+    PresentationAction {
+        action: "open",
         entrypoint: "global",
         kind: PresentationKind::Open,
     },
-    PresentationDefinition {
-        name: "orbit_ui_inspect",
-        alias: "orbit.ui.inspect",
-        title: "Inspect Orbit task or run",
+    PresentationAction {
+        action: "inspect",
         entrypoint: "thread",
         kind: PresentationKind::Inspect,
     },
 ];
 
-pub(crate) fn presentation_definition(name: &str) -> Option<&'static PresentationDefinition> {
-    PRESENTATION_DEFINITIONS
+pub(crate) fn is_presentation_tool(name: &str) -> bool {
+    name == PRESENTATION_TOOL_NAME || name == PRESENTATION_TOOL_ALIAS
+}
+
+pub(crate) fn presentation_action(action: &str) -> Option<&'static PresentationAction> {
+    PRESENTATION_ACTIONS
         .iter()
-        .find(|definition| name == definition.name || name == definition.alias)
+        .find(|definition| definition.action == action)
 }

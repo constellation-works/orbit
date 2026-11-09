@@ -269,7 +269,7 @@ A constraint is a JSON object with exactly one key.
 - At least one of `tags_all` or `tags_any` is required, and `status` (1-16 values) is
   required. A predicate that would match every task is refused at consent time.
 - `artifact_sha256` requires the sha256 of the task's stored artifact bytes at `path`
-  (the bytes `orbit.task.artifact.get` returns) to equal the call's field `field`. That
+  (the bytes `orbit.task.artifact` action `get` returns) to equal the call's field `field`. That
   field must itself be constrained `sha256`. It is allowed only on an entry.
 - `pin: true` is allowed only on a callback `id`. The first admitted callback that names
   a task binds that task for the rest of the invocation. Every later callback with a
@@ -300,9 +300,9 @@ against it, and admission checks again. Each row also keeps the v1 exact-form ke
 | `orbit.task.update` | yes | yes | `id`, `status`, `comment`, `note`, `plan`, `execution_summary`, `workspace` | `in-progress`, `review`, `done`, `rejected`, `archived`, and `backlog` only through `transition` with `from` within {`review`, `in-progress`} |
 | `orbit.decision.answer` | yes (exact only) | yes (exact only) | `id`, `answer`, `note`, `workspace` | — |
 | `orbit.task.show` | no | yes | `id`, `fields` (subset of `id`, `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at`, `execution_summary`), `workspace` | — |
-| `orbit.task.artifact.get` | no | yes | `id`, `path` (`const` only), `workspace` | — |
-| `orbit.auto_task.add` | no | yes | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
-| `orbit.auto_task.update` | no | yes | `name` (`artifact_json`), `enabled`, `workspace` | — |
+| `orbit.task.artifact` action `get` | no | yes | `id`, `path` (`const` only), `workspace` | — |
+| `orbit.auto_task` action `add` | no | yes | `name`, `description`, `schedule`, `template`, `dedupe`, `workspace`; every field except `workspace` must be `artifact_json` | — |
+| `orbit.auto_task` action `update` | no | yes | `name` (`artifact_json`), `enabled`, `workspace` | — |
 | plugin tool | yes | no (plugins cannot call plugins) | declared input schema | — |
 
 `orbit.task.update` targets `in-progress`, `review` and `backlog` only through a
@@ -316,8 +316,8 @@ in `authorize_registered_tool` (`crates/orbit-runtime/src/tool_exec.rs:163-227`)
 Consent-time validation derives this from the catalogue, not from a list
 (`application_operator_floored`): a built-in whose governed row admits `Operator`, or an
 input field listed in `INPUT_DEPENDENT_OPERATION_FLOORS` whose operation does. Today that
-covers `orbit.routine.control`, `orbit.auto_task.mint` with `acknowledge_unconditional`,
-`orbit.auto_task.update` with `expected_enabled`, `orbit.auto_task.delete` and `reset`,
+covers `orbit.routine.control`, `orbit.auto_task` action `mint` with `acknowledge_unconditional`,
+`orbit.auto_task` action `update` with `expected_enabled`, `orbit.auto_task.delete` and `reset`,
 `orbit.workflow.*` and pipeline dispatch, `granted_tools`, and every `application`
 command. Outside the ceiling table, `orbit.task.add` and lifecycle `force` are refused
 too. Also refused: `backlog` from `proposed`, `someday` or `blocked`, which is the
@@ -442,17 +442,17 @@ Execution (**new**, `crates/orbit-core/src/application/application_authority.rs`
   write rechecks under the task lock the status admission saw (the invocation's
   `predicate.status_seen`).
 - `orbit.task.show` runs the ordinary read, limited to the admitted `fields`.
-- `orbit.task.artifact.get` runs the ordinary read. When the invocation bound that
+- `orbit.task.artifact` action `get` runs the ordinary read. When the invocation bound that
   artifact, Orbit rechecks the returned bytes' digest before returning them, which
   closes the gap between step 6 and the read.
-- `orbit.auto_task.add` and `update` (slice 5) run the ordinary handlers as
+- `orbit.auto_task` action `add` and `update` (slice 5) run the ordinary handlers as
   `application:<id>`. Their own catalogue rows and floors still apply.
 
 Host route (**new**): an app-bound session sends every consented callback tool to the
 host, not only the two completion tools. The routed set is the ceiling table's callback
 column (`application_callback_tool` in
 `crates/orbit-common/src/governance/authorization/catalog/application.rs`), so `orbit.task.show` and
-`orbit.task.artifact.get` are routed too. The read executors run in the adapter
+`orbit.task.artifact` action `get` are routed too. The read executors run in the adapter
 (`execute_application_read`, `crates/orbit-core/src/adapter/tool_host/task/read.rs`),
 because the projection and artifact serialization they reuse live there.
 
@@ -496,17 +496,17 @@ it does not establish that the office profile has been installed or exercised.
 
 | Action (app code) | Orbit calls | Original refusal | Under (a) | Code it changes |
 |---|---|---|---|---|
-| **Accept** (`accept`, `orbit-office/app/packages/server/src/features/approvals/service.ts`) | `office.proposal-accept {id, sha256, choice?}`. Callbacks (`orbit-office/crates/office-tools/src/tools/proposals/accept.rs`): `orbit.task.show {id, fields}`, `orbit.task.artifact.get {id, path}`, `orbit.task.update` to `in-progress` with `plan` and `comment`, to `review` and to `done` with `execution_summary`. Auto-task kinds: `orbit.auto_task.add` and `orbit.auto_task.update {name, enabled}` | Entry: exact input (`application_authority.rs:395-404`). Callbacks: reads not consentable (`ApplicationOperationCeiling` docs in `catalog/application.rs`, `application_authority.rs:120-126`). `plan` and `execution_summary` keys (:270-286). `in-progress` and `review` statuses (:287-296). Host route lists only the two completion tools (`host_route.rs:53-76`) | **Allowed** after slices 1-3 for knowledge, runbook, retire-page and shared-conflict kinds. `auto_task` and retire-auto-task kinds are **allowed after slice 5**, with the office payload carrying the exact `orbit.auto_task.add` input (slice 6). Until then they are **refused** with the not-permitted message | Constraint evaluator and bindings (admission steps 5-6), ceiling table replacing `APPLICATION_BUILTIN_OPERATIONS`, executor fields, host-route callback list |
+| **Accept** (`accept`, `orbit-office/app/packages/server/src/features/approvals/service.ts`) | `office.proposal-accept {id, sha256, choice?}`. Callbacks (`orbit-office/crates/office-tools/src/tools/proposals/accept.rs`): `orbit.task.show {id, fields}`, `orbit.task.artifact action get {id, path}`, `orbit.task.update` to `in-progress` with `plan` and `comment`, to `review` and to `done` with `execution_summary`. Auto-task kinds: `orbit.auto_task` action `add` and `orbit.auto_task action update {name, enabled}` | Entry: exact input (`application_authority.rs:395-404`). Callbacks: reads not consentable (`ApplicationOperationCeiling` docs in `catalog/application.rs`, `application_authority.rs:120-126`). `plan` and `execution_summary` keys (:270-286). `in-progress` and `review` statuses (:287-296). Host route lists only the two completion tools (`host_route.rs:53-76`) | **Allowed** after slices 1-3 for knowledge, runbook, retire-page and shared-conflict kinds. `auto_task` and retire-auto-task kinds are **allowed after slice 5**, with the office payload carrying the exact `orbit.auto_task` action `add` input (slice 6). Until then they are **refused** with the not-permitted message | Constraint evaluator and bindings (admission steps 5-6), ceiling table replacing `APPLICATION_BUILTIN_OPERATIONS`, executor fields, host-route callback list |
 | **Accept-all** (`acceptAll`) | One `office.proposal-accept` per proposal, in turn | Same as accept | **Allowed**, admitted per item. A refused item is reported and the rest continue, as today | Same |
 | **Dismiss** (`dismiss`) | `orbit.task.update {id, status: rejected, comment}` | Exact input (`application_authority.rs:399`). The status is already in the v1 list (:291) | **Allowed**: `id` is a `task` predicate whose `tags_any` names the tags of the three dismissable kinds (proposal, script output, gateway draft; slice 6 fixes the exact tag names) and the open statuses, `status` is `const` `rejected`, `comment` is `text`. `office.proposal-reconcile`, which ORB-20363 names, is not in the orbit-office checkout read. If it lands, it gets an entry scope with accept's read callbacks and the `rejected` transition | Constraint evaluator (step 5) |
-| **Approve** (`approve`) | `office.artifact-promote {task}`. Callbacks (`orbit-office/crates/office-tools/src/tools/artifacts/promote.rs`): `orbit.task.show` with fields `id`, `status`, `tags`, `artifacts`, `crew`, `updated_at`, and `orbit.task.artifact.get`. Then direct `orbit.task.update` steps toward `done` with `comment` and `execution_summary` | Entry exact; read callbacks not consentable; `in-progress` and `review` statuses; `execution_summary` key | **Allowed** from `review`, `in-progress` and `backlog`. A step from `proposed` to `backlog` is **refused** (approval-for-dispatch). Slice 6 changes the app's `closeSteps` to go from `proposed` straight to `in-progress` (the start transition), as accept does | Ceiling table (no `backlog` from `proposed`), `transition` constraint |
+| **Approve** (`approve`) | `office.artifact-promote {task}`. Callbacks (`orbit-office/crates/office-tools/src/tools/artifacts/promote.rs`): `orbit.task.show` with fields `id`, `status`, `tags`, `artifacts`, `crew`, `updated_at`, and `orbit.task.artifact` action `get`. Then direct `orbit.task.update` steps toward `done` with `comment` and `execution_summary` | Entry exact; read callbacks not consentable; `in-progress` and `review` statuses; `execution_summary` key | **Allowed** from `review`, `in-progress` and `backlog`. A step from `proposed` to `backlog` is **refused** (approval-for-dispatch). Slice 6 changes the app's `closeSteps` to go from `proposed` straight to `in-progress` (the start transition), as accept does | Ceiling table (no `backlog` from `proposed`), `transition` constraint |
 | **Send back** (`sendBack`) | `orbit.task.update {id, status: backlog, comment}` | Exact input (`application_authority.rs:399`) | **Allowed**: `transition` from `review` to `backlog`, a `task` predicate on the approval tag (exact name fixed by slice 6), `comment` as `text` | `transition` constraint and the `backlog` ceiling rule |
 | **Gateway send** (`send`; `orbit-office/gateway/src/orbit_gateway/drafts.py`) | `gateway.http-send {draft, sha256}`. Callbacks: `orbit.task.show {id, fields}` and `orbit.task.update` with `comment`, `note`, a close walk and `execution_summary` | Entry exact; `orbit.task.show` not consentable; walk statuses; `note` and `execution_summary` keys | **Allowed**: `draft` is a `token`, `sha256` is a `sha256`, and the callback `id` is a `task` predicate with tag `gateway-draft` and `pin: true`. The walk from `proposed` must avoid `backlog`: slice 6 changes the gateway's `_CLOSE_FROM["proposed"]` to start at `in-progress`. Orbit does not bind the draft digest. The gateway plugin checks it, as today (resolved question 3: "No, plugin checks it") | `token` and `pin`, host-route callback list |
 | **Routine control** (`orbit-office/app/packages/server/src/features/routines/index.ts`) | `orbit.routine.control {action: toggle, ...}` | Consent time: not an application built-in (`application_authority.rs:298-302`). Operator-only catalogue row (`orbit.routine.control` in `catalog/operations.rs`) | **Refused (out).** Stays on the operator surfaces: dashboard `routine.toggle` (`DASHBOARD_ROUTINE_TOGGLE` in `catalog/types.rs`) and the CLI. The app keeps its not-permitted message | Named in the always-refused list (§4.4); no admission change |
-| **Auto-task mint** (`mintAutoTask`, `orbit-office/app/packages/server/src/orbit/client.ts`) | `orbit.auto_task.mint {..., acknowledge_unconditional}` | Consent time (`application_authority.rs:298-302`). The `acknowledge_unconditional` input takes the `orbit.routine.control` floor (`tool_exec.rs:195-205`) | **Refused (out).** Stays on the dashboard `auto_task.mint` row (`DASHBOARD_AUTO_TASK_MINT` in `catalog/types.rs`) | Named in the always-refused list (§4.4) |
+| **Auto-task mint** (`mintAutoTask`, `orbit-office/app/packages/server/src/orbit/client.ts`) | `orbit.auto_task action mint {..., acknowledge_unconditional}` | Consent time (`application_authority.rs:298-302`). The `acknowledge_unconditional` input takes the `orbit.routine.control` floor (`tool_exec.rs:195-205`) | **Refused (out).** Stays on the dashboard `auto_task.mint` row (`DASHBOARD_AUTO_TASK_MINT` in `catalog/types.rs`) | Named in the always-refused list (§4.4) |
 
-The app's plain reads (`orbit.task.show` and `orbit.task.artifact.get` before an action,
-`service.ts`) and its auto-task enable toggle (`orbit.auto_task.update {name, enabled}`,
+The app's plain reads (`orbit.task.show` and `orbit.task.artifact` action `get` before an action,
+`service.ts`) and its auto-task enable toggle (`orbit.auto_task action update {name, enabled}`,
 `routines/index.ts`) are not approvals. They stay on the ordinary path, made without the
 credential descriptor. The app passes the descriptor only to the calls above.
 
@@ -618,7 +618,7 @@ restriction.
    state and refused on changed state, wrong tag, `proposed` to `backlog`, and after
    revocation, through `orbit tool run` with a descriptor.
 3. **Bound callbacks and read callbacks.** Add `bound` and `pin`, host routing for every
-   consented callback tool, the `orbit.task.show` and `orbit.task.artifact.get` executors
+   consented callback tool, the `orbit.task.show` and `orbit.task.artifact` action `get` executors
    with digest recheck, callback session schema 5 with the schema 4 reader, and backend
    keys. Tests: a fixture plugin's bound accept succeeds end to end. A second task id, a
    changed artifact and an unlisted callback are refused.
@@ -628,12 +628,12 @@ restriction.
    the installed `orbit-setup` `applications.md` reference (then
    `scripts/sync-plugin-skills.sh`).
 5. **Payload-bound auto-task callbacks.** Add the `artifact_json` constraint, and the
-   `orbit.auto_task.add` and `orbit.auto_task.update` ceilings and executors. Tests: an
+   `orbit.auto_task` action `add` and `orbit.auto_task` action `update` ceilings and executors. Tests: an
    add whose input differs from the artifact pointer is refused.
 6. **orbit-office: approval profile** (`ws_orbit-office`; re-scopes ORB-20363). Add the
    full consent profile, installer consent step and credential descriptor wiring, the
    approve and gateway close walks without `proposed` to `backlog`, the auto-task
-   proposal payload carrying the exact `orbit.auto_task.add` input, and not-permitted
+   proposal payload carrying the exact `orbit.auto_task` action `add` input, and not-permitted
    messages for routine control and mint.
 7. **Retire v1-only writing** (after the 30-day window). The writer emits v2 for every
    consent. Remove the v1 record reader only after a scan of every host finds no live v1

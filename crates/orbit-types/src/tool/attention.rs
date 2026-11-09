@@ -205,6 +205,26 @@ pub struct AttentionNext {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<AttentionNext>,
 }
+impl AttentionNext {
+    /// Name a suggestion whose tool is a family operation by the family tool
+    /// a caller invokes, with the operation's `action` in its input, here and
+    /// in every alternative.
+    pub fn name_tool_family(&mut self) {
+        if let Some(tool) = self.tool.take() {
+            let input = self
+                .input
+                .take()
+                .unwrap_or_else(|| Value::Object(Default::default()));
+            let (tool, input) = super::family::tool_family_call(&tool, input);
+            self.tool = Some(tool);
+            self.input = Some(input)
+                .filter(|input| input.as_object().is_none_or(|object| !object.is_empty()));
+        }
+        for also in &mut self.also {
+            also.name_tool_family();
+        }
+    }
+}
 /// Subject task metadata used by task-scoped filters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttentionTask {

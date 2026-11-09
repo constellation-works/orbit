@@ -39,9 +39,9 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `pilot_warning` | task | `held_pilot_warnings` in `crates/orbit-core/src/application/task/pilot/promotion.rs`, the predicate behind `orbit task list --pilot-warnings` | a `proposed` task's latest pilot receipt holds promotion on at least one warning finding | the latest pilot receipt comment's time |
 | `pilot_hold` | task | `OrbitRuntime::pilot_admission_hold` (`task/pilot/admission/backlog.rs`) over `PilotAdmissionHold` (`task/pilot/admission/holds.rs`) | the task's latest applied assessment holds admission: stale assessment, duplicate, already landed, operator validation, host operational, native OS or unverified finding | the history entry that recorded the hold; the open decision request's `raised_at` when none |
 | `blocked` | task | `triage_candidacy` in `task/blocked_recovery/triage.rs`, over `current_block` and the final-recovery escalation | status is `blocked` and the block episode awaits a human: a claimed leaf needs an external prerequisite (`owner_route` or `environment`, surfaced immediately with its leaf error), final recovery escalated, or its backstop is silent. A block that final recovery is still resolving mechanically is not an item | the time the task moved to `blocked` (`blocked_at`) |
-| `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision.list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
+| `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision` action `list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, no review run is active, and the task waits on an approval or on an exhausted review budget (`detail.waiting_on`: `approval` or `review_budget`) | the time the review settled |
-| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.workflow.run.list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
+| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
@@ -67,7 +67,7 @@ Notes that bind implementations:
   proposed tasks; listing them would drown the rest. See [3_vision.md §1](../3_vision.md#1-open-questions).
 - **Runtime kinds respect the caller's read rights.** `run_*`, `claim_stale` and
   `host_unhealthy` read sources that require the Operator capability
-  (`orbit.workflow.run.list`, `orbit.drain.claims`). A session without it gets the task-level
+  (`orbit.run` action `list`, `orbit.drain.claims`). A session without it gets the task-level
   kinds, and each skipped kind appears in `degraded` with code `capability` rather than
   silently missing ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
@@ -140,16 +140,16 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 
 | Kind | Primary `next` |
 |---|---|
-| `pilot_warning` | `orbit.task.repilot` after the cited material is fixed; `also`: `orbit.task.show` |
-| `pilot_hold` | `orbit decision answer` on the folded request, the recommended answer first when it has one; with no request, `orbit.task.repilot` for a stale assessment, otherwise `orbit.task.show` (the hold text names the verdict comment) |
-| `blocked` | `orbit decision answer` on the folded request; else `orbit.task.requeue`; `also`: `orbit.task.show` |
-| `decision_open` | `orbit.decision.show` (read the options); `also`: one `orbit decision answer` per allowed answer |
-| `review_waiting` | `orbit task update <id> --approve` for `approval`; `orbit.task.review_reset` (needs `lineage`, `reason`) for `review_budget` |
-| `run_failed` | `orbit.workflow.run.resume` when the run is resumable, else `orbit.workflow.run.show`; `also`: run logs |
-| `run_stuck` | `orbit.workflow.run.show`; `also`: `orbit run cancel` |
-| `claim_stale` | `orbit.task.recover_claim` (needs exact tool keys `reason`, `request_key`, `expected_phase`, `status`; CLI flags `--reason`, `--request`, `--phase`, `--status`); `also`: the claim inspection |
+| `pilot_warning` | `orbit.task.recover` action `repilot` after the cited material is fixed; `also`: `orbit.task.show` |
+| `pilot_hold` | `orbit decision answer` on the folded request, the recommended answer first when it has one; with no request, `orbit.task.recover` action `repilot` for a stale assessment, otherwise `orbit.task.show` (the hold text names the verdict comment) |
+| `blocked` | `orbit decision answer` on the folded request; else `orbit.task.recover` action `requeue`; `also`: `orbit.task.show` |
+| `decision_open` | `orbit.decision` action `show` (read the options); `also`: one `orbit decision answer` per allowed answer |
+| `review_waiting` | `orbit task update <id> --approve` for `approval`; `orbit.task.recover` action `review_reset` (needs `lineage`, `reason`) for `review_budget` |
+| `run_failed` | `orbit.run` action `resume` when the run is resumable, else `orbit.run` action `show`; `also`: run logs |
+| `run_stuck` | `orbit.run` action `show`; `also`: `orbit run cancel` |
+| `claim_stale` | `orbit.task.recover` action `recover_claim` (needs exact tool keys `reason`, `request_key`, `expected_phase`, `status`; CLI flags `--reason`, `--request`, `--phase`, `--status`); `also`: the claim inspection |
 | `ci_red` | the repair task's `orbit.task.show` when one exists, else `github.run.view` on the failing run |
-| `friction_untriaged` | `orbit.friction.update` with `status: triaged` (the operator edits tags or body first when needed) |
+| `friction_untriaged` | `orbit.friction` action `update` with `status: triaged` (the operator edits tags or body first when needed) |
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
 | `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`) when the resident cycle routine is enabled; `orbit.routine.control` with `action: toggle`, `expected_enabled: false`, `enabled: true` and the observed routine `name` and `target` (no `needs`) when it is disabled — routine enablement requires trusted operator authority and an explicit workspace; `also`: `orbit.resident.show` |

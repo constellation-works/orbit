@@ -21,7 +21,7 @@ tool-surface change. The explicit `--role operator --operator` pins the operator
 profile so host `machine.mcp.role` config cannot narrow it, and supplies the
 operator authority the operator-gated cases require; the profile already
 includes the dispatch, runs, and plugins tools the cases use
-(`orbit_workflow_ship`, `orbit_workflow_run_show`, `orbit_agent_invoke`):
+(`orbit_workflow` action `ship`, `orbit_run` action `show`, `orbit_agent_invoke`):
 
 ```bash
 (printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"evals","version":"0"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'; sleep 3) \

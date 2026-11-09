@@ -392,7 +392,7 @@ function autoDrainStartButton(payload, form) {
   const button = el("button", {
     class: "operation-button drain-start primary",
     text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${startLabel} window`,
-    title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow.auto with this duration and concurrency",
+    title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow action auto with this duration and concurrency",
   });
   button.type = "button";
   button.dataset.drainFocus = "start";

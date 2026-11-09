@@ -330,7 +330,7 @@ for each fix, validation records with `passed` / `failed` / `denied` /
 Git writes, changes task lifecycle, approves, or merges.
 
 The instruction carries the report's exact JSON Schema, and
-`orbit.task.artifact.put` validates a `review-report.json` on attach,
+`orbit.task.artifact` action `put` validates a `review-report.json` on attach,
 refusing a mismatch with the offending field named so the reviewer can fix it
 while it still runs [ORB-13890]. Both the validator and settlement read
 through `ReviewReport::parse`, which accepts benign shape drift that leaves
@@ -1237,7 +1237,7 @@ the requirement's kind:
 An `operator` write is a human actor on the bare CLI or the dashboard with no
 agent identity, whose process declares no agent envelope or managed run. A
 `system` write is Orbit's own deterministic machinery. An agent's
-`orbit.task.artifact.put`, a claimed worker's evidence, and an artifact stored
+`orbit.task.artifact` action `put`, a claimed worker's evidence, and an artifact stored
 before writer classes have no class and never count. So the agent whose
 candidate is held cannot satisfy the check that holds it, including an
 implementer that attached a result for its own tree before review. The rule
@@ -1485,7 +1485,7 @@ manifest; final admission still atomically checks the candidate.
 An operator can renew a selected lineage with
 `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
 The refusal names this command. The equivalent MCP action is
-`orbit.task.review_reset` (served with `orbit mcp serve --operator`), with
+`orbit.task.recover` action `review_reset` (served with `orbit mcp serve --operator`), with
 `workspace`, `id`, `lineage_key`, and `reason`. Interactive CLI callers have operator authority; noninteractive operators
 use the audited `ORBIT_OPERATOR=1` override. Ordinary agents and managed
 runs cannot reset budgets. The lineage must contain the selected task.
@@ -1781,7 +1781,7 @@ with an error message. Gate execution errors record `failure` with an error
 message. Audit status measures the call, not review acceptance or coverage;
 certificates and landing records remain the authority for those outcomes.
 Reset decisions are retained atomically in the lineage ledger alongside the normal
-`orbit.task.review_reset` dispatch audit. Task artifacts
+`orbit.task.recover` action `review_reset` dispatch audit. Task artifacts
 `review-manifest.json`, `review-report.json`, and `review-gate.json` are the
 durable evidence.
 

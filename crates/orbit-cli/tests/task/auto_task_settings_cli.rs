@@ -129,9 +129,9 @@ fn template_flags_preserve_unnamed_fields_and_full_tool_templates_still_replace(
     let replaced = fixture.json(&[
         "tool",
         "run",
-        "orbit.auto_task.update",
+        "orbit.auto_task",
         "--input",
-        r#"{"name":"field-patch","template":{"title":"Replacement title"}}"#,
+        r#"{"action":"update","name":"field-patch","template":{"title":"Replacement title"}}"#,
         "--json",
     ]);
     let template = &replaced["template"];

@@ -49,7 +49,7 @@ use crate::application::task::{
 
 /// Owner-mode attachment tool. Claimed mode does not need it: the implement
 /// handoff attaches declared `task_artifacts` either way.
-const ARTIFACT_ATTACHMENT_TOOL: &str = "orbit.task.artifact.put";
+const ARTIFACT_ATTACHMENT_TOOL: &str = "orbit.task.artifact:put";
 
 /// Cap on findings reported for one task. A criterion set that contradicts the
 /// lane this many times needs rewriting, not a longer list.
@@ -142,7 +142,7 @@ impl ImplementationLane {
                 "tools": tools,
                 "artifact_attachment": {
                     "owner": ARTIFACT_ATTACHMENT_TOOL,
-                    "owner_granted": tools.iter().any(|tool| tool == ARTIFACT_ATTACHMENT_TOOL),
+                    "owner_granted": tool_allowed(ARTIFACT_ATTACHMENT_TOOL, tools),
                     "claimed": "task_artifacts handoff",
                 },
             }),
@@ -419,7 +419,9 @@ fn claims_artifact_attachment_unavailable(text: &str) -> bool {
 }
 
 fn mentions_artifact_attachment(lowered: &str) -> bool {
-    lowered.contains(ARTIFACT_ATTACHMENT_TOOL)
+    // The family name covers `orbit.task.artifact` action `put` however a
+    // warning spells it.
+    lowered.contains("orbit.task.artifact")
         || lowered.contains("task artifact")
         || (lowered.contains("screenshot") && lowered.contains("artifact"))
 }

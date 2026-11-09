@@ -63,7 +63,7 @@ becomes just the first definition.
   are shown on the Operations auto-task panel, not on the routines surface.
 - **Listing state** — whether a definition fires on this host is decided once,
   in `OrbitRuntime::auto_task_listing_state`, and `orbit auto-task list`, MCP
-  `orbit.auto_task.list` (plain and bounded) and `GET /api/auto-tasks` render
+  `orbit.auto_task` action `list` (plain and bounded) and `GET /api/auto-tasks` render
   that decision. It carries the effective enabled state (the toggle, or for
   one release the deprecated `after-landing` policy), the skip reason when it
   never fires here — its seeding plugin is off, or it is an enabled delivery

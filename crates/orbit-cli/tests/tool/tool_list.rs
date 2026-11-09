@@ -272,8 +272,8 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
 
     let mint = tools
         .iter()
-        .find(|tool| tool["name"] == "orbit.auto_task.mint")
-        .expect("mint tool");
+        .find(|tool| tool["name"] == "orbit.auto_task")
+        .expect("auto-task tool, whose actions include mint");
     assert_eq!(mint["status"], "active");
     let reserve = tools
         .iter()
@@ -316,7 +316,7 @@ fn structured_array_parameters_advertise_object_items() {
         .clone();
     let tools: Vec<Value> = serde_json::from_slice(&output).expect("tool list JSON");
     for (tool, param) in [
-        ("orbit.decision.raise", "options"),
+        ("orbit.decision", "options"),
         ("orbit.task.block_triage", "options"),
     ] {
         let tool_json = tools
@@ -466,9 +466,9 @@ fn tool_run_rejects_inactive_tools() {
         .args([
             "tool",
             "run",
-            "orbit.friction.add",
+            "orbit.friction",
             "--input",
-            "{\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
+            "{\"action\":\"add\",\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
         ])
         .assert()
         .success()

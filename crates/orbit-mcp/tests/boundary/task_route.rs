@@ -4,13 +4,25 @@
 //! match that parameter shape.
 
 use orbit_tools::{ToolRegistry, builtin_mcp_rules};
-use orbit_types::tool::{McpIdRoute, McpToolScope, ToolSchema};
+use orbit_types::tool::{McpIdRoute, McpToolScope, ToolSchema, tool_family};
 
-/// Every builtin, including the CLI-only tools `orbit tool run` reaches.
+/// Every builtin, including the CLI-only tools `orbit tool run` reaches. A
+/// family stands for its actions' operations, which a call routes by.
 fn builtins() -> (ToolRegistry, Vec<ToolSchema>) {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
-    let schemas = registry.all_schemas();
+    let schemas = registry
+        .all_schemas()
+        .into_iter()
+        .flat_map(|schema| match tool_family(&schema.name) {
+            Some(family) => family
+                .actions
+                .iter()
+                .filter_map(|action| registry.get_schema(action.operation))
+                .collect(),
+            None => vec![schema],
+        })
+        .collect();
     (registry, schemas)
 }
 

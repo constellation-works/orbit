@@ -211,7 +211,7 @@ operator change after review, separate from preparing or testing a repair:
 
 1. Snapshot the effective definition through `orbit auto-task show <name>
    --workspace <owner> --json`. Agents can read effective definitions through
-   the granted `orbit.auto_task.list` tool, selecting the named row; the CLI
+   the granted `orbit.auto_task` action `list` tool, selecting the named row; the CLI
    `show` also supplies layering and source diagnostics. Confirm `definition_source`
    points at the intended checkout. Save the complete response, including
    `layering.forked_fields`, not just the YAML or `layering.settings`: settings
@@ -235,11 +235,11 @@ operator change after review, separate from preparing or testing a repair:
    # bundled-body.txt contains the parsed template.description, reviewed above.
    orbit auto-task update <name> --workspace <owner> --body "$(cat bundled-body.txt)"
    # Or write a JSON file and use the registered tool:
-   orbit tool run orbit.auto_task.update --input-file reviewed-body-patch.json
+   orbit tool run orbit.auto_task --input-file reviewed-body-patch.json
    ```
 
    The JSON shape is
-   `{"name":"<name>","workspace":"<owner>","template_patch":{"description":"<reviewed bundled body>"}}`.
+   `{"action":"update","name":"<name>","workspace":"<owner>","template_patch":{"description":"<reviewed bundled body>"}}`.
    Include another body field such as `acceptance_criteria` in `template_patch`
    only when its replacement was separately reviewed. Omit operational fields.
    Do not send a whole `template` through MCP: omitted fields receive defaults.
@@ -293,13 +293,13 @@ by the MCP listing and the dashboard API, where its next evaluation reads
 `delivery-code-review` that the deprecated `after-landing` policy enables
 lists as enabled.
 
-Over MCP: `orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
-`orbit_auto_task_mint`; `orbit_auto_task_update` with `enabled` is the
+Over MCP: `orbit_auto_task` action `add`, `orbit_auto_task` action `list`, `orbit_auto_task` action `update`, and
+`orbit_auto_task` action `mint`; `orbit_auto_task` action `update` with `enabled` is the
 kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
 atomic toggle that is refused when the definition no longer matches; that form
 needs operator authority and an explicit `workspace` and accepts no other
 edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not
-on MCP; use `orbit auto-task` or `orbit tool run orbit.auto_task.<verb>`.
+on MCP; use `orbit auto-task`.
 `delete` and `reset` need operator authority on every surface: a
 non-interactive caller sets `ORBIT_OPERATOR=1`, which is audited.
 
@@ -360,12 +360,12 @@ subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
 The shipped `delivery-code-review` and `friction-curation` defaults require
-`orbit.task.update` to persist their report or maintain task relations; `friction-curation` also requires `orbit.friction.update`, never the
+`orbit.task.update` to persist their report or maintain task relations; `friction-curation` also requires `orbit.friction` action `update`, never the
 operator-only `orbit.friction.resolve`. These declarations can hold follower
 placement because task updates are denied in claimed mode and friction updates
 are outside the closed claimed-owner bridge. Required-tool metadata grants no
 authority over either restriction. `qa-sweep` keeps its claimed path: its shared
-requirements are `orbit.task.add`, `orbit.task.artifact.put`, and
+requirements are `orbit.task.add`, `orbit.task.artifact` action `put`, and
 `orbit.task.show`. It persists the execution summary with `orbit.task.update`
 only on the owner; a claimed worker returns that summary for owner import, so
 the template does not unconditionally require that tool.

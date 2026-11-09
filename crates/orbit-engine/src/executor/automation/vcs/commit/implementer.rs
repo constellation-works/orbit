@@ -90,7 +90,7 @@ pub(super) fn admit_implementer_already_resolved(
             "`{ALREADY_RESOLVED_FIELD}` is available only to claimed runs, whose claim host \
              replays the selectors; on an owner run, run validation and attach `no-diff.json` \
              or `already-landed.json` and every referenced validation log with \
-             `orbit.task.artifact.put` before returning a clean-tree outcome"
+             `orbit.task.artifact` action `put` before returning a clean-tree outcome"
         )));
     }
     declared.admit().map_err(OrbitError::InvalidInput)?;

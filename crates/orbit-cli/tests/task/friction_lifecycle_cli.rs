@@ -22,8 +22,8 @@ fn friction_update_empty_title_restores_derivation_like_the_tool() {
         "--json",
     ]);
     let id = created["id"].as_str().unwrap();
-    let input = json!({"id": id, "title": "", "model": "codex"}).to_string();
-    let tool_cleared = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+    let input = json!({"action": "update", "id": id, "title": "", "model": "codex"}).to_string();
+    let tool_cleared = fixture.json(&["tool", "run", "orbit.friction", "--input", &input]);
     assert_eq!(tool_cleared["title"], "Derived friction title");
 
     for value in ["", " \t "] {
@@ -290,18 +290,13 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
         );
     }
     let refused_move = json!({
+        "action": "update",
         "id": ids[0], "status": "resolved", "body": "Must remain unchanged",
         "rehome_to": "friction-owner", "model": "codex",
     })
     .to_string();
     fixture
-        .command(&[
-            "tool",
-            "run",
-            "orbit.friction.update",
-            "--input",
-            &refused_move,
-        ])
+        .command(&["tool", "run", "orbit.friction", "--input", &refused_move])
         .assert()
         .failure();
     fixture
@@ -323,11 +318,12 @@ fn replica_closes_legacy_local_frictions_with_audit_without_owner_mutations() {
 
     let evidence = "Legacy open report\n\nDisposition: the covering fix was verified on this host.";
     let update = json!({
+        "action": "update",
         "id": ids[0], "status": "resolved", "body": evidence, "model": "codex",
         "rehome_to": "hm_fixture_remote/ws_owner", "move": false,
     })
     .to_string();
-    let resolved = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &update]);
+    let resolved = fixture.json(&["tool", "run", "orbit.friction", "--input", &update]);
     assert_eq!(resolved["status"], "resolved");
     assert_eq!(resolved["body"], evidence);
     assert_eq!(resolved["rehome_to"], "hm_fixture_remote/ws_owner");
@@ -625,24 +621,19 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     assert_eq!(shown_after_update["title"], safe_update_title);
     assert!(!shown_after_update.to_string().contains(&update_token));
 
-    // 3. Tool run orbit.friction.add with secret-bearing title
+    // 3. Tool run orbit.friction action add with secret-bearing title
     let tool_add_token = format!("ghp_{}", "c".repeat(36));
     let tool_add_title = format!("Tool add GITHUB_TOKEN={tool_add_token}");
     let safe_tool_add_title = "Tool add GITHUB_TOKEN=[REDACTED_SECRET]";
     let tool_add_input = json!({
+        "action": "add",
         "title": tool_add_title,
         "body": "Reported via tool host",
         "model": "codex",
     })
     .to_string();
 
-    let tool_created = fixture.json(&[
-        "tool",
-        "run",
-        "orbit.friction.add",
-        "--input",
-        &tool_add_input,
-    ]);
+    let tool_created = fixture.json(&["tool", "run", "orbit.friction", "--input", &tool_add_input]);
     assert_eq!(tool_created["title"], safe_tool_add_title);
     assert_eq!(tool_created["redactions_applied"], true);
 
@@ -651,11 +642,12 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     assert_eq!(tool_shown["title"], safe_tool_add_title);
     assert!(!tool_shown.to_string().contains(&tool_add_token));
 
-    // 4. Tool run orbit.friction.update with secret-bearing title
+    // 4. Tool run orbit.friction action update with secret-bearing title
     let tool_update_token = format!("ghp_{}", "d".repeat(36));
     let tool_update_title = format!("Tool update GITHUB_TOKEN={tool_update_token}");
     let safe_tool_update_title = "Tool update GITHUB_TOKEN=[REDACTED_SECRET]";
     let tool_update_input = json!({
+        "action": "update",
         "id": tool_id,
         "title": tool_update_title,
         "model": "codex",
@@ -665,7 +657,7 @@ fn friction_title_is_redacted_on_add_and_update_before_persistence() {
     let tool_updated = fixture.json(&[
         "tool",
         "run",
-        "orbit.friction.update",
+        "orbit.friction",
         "--input",
         &tool_update_input,
     ]);
@@ -750,12 +742,13 @@ fn friction_add_description_alias_is_redacted_like_body() {
     let fixture = Fixture::new();
     let token = format!("ghp_{}", "f".repeat(36));
     let input = json!({
+        "action": "add",
         "description": format!("Build exported GITHUB_TOKEN={token} into the log"),
         "model": "codex",
     })
     .to_string();
 
-    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    let created = fixture.json(&["tool", "run", "orbit.friction", "--input", &input]);
     assert_eq!(
         created["body"], "Build exported GITHUB_TOKEN=[REDACTED_SECRET] into the log",
         "the `description` alias for `body` must be redacted before persistence"
@@ -788,35 +781,37 @@ fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
     let task_id = task["id"].as_str().unwrap();
 
     let input = json!({
+        "action": "add",
         "description": "Alias fixture body",
         "task_id": task_id,
         "tag": "tooling",
         "model": "codex",
     })
     .to_string();
-    let created = fixture.json(&["tool", "run", "orbit.friction.add", "--input", &input]);
+    let created = fixture.json(&["tool", "run", "orbit.friction", "--input", &input]);
     assert_eq!(created["body"], "Alias fixture body");
     assert_eq!(created["during_task"], task_id);
     assert_eq!(created["tags"], json!(["tooling"]));
     let id = created["id"].as_str().unwrap();
 
-    let input = json!({"id": id, "tag": ["docs"], "model": "codex"}).to_string();
-    let updated = fixture.json(&["tool", "run", "orbit.friction.update", "--input", &input]);
+    let input =
+        json!({"action": "update", "id": id, "tag": ["docs"], "model": "codex"}).to_string();
+    let updated = fixture.json(&["tool", "run", "orbit.friction", "--input", &input]);
     assert_eq!(updated["tags"], json!(["docs"]));
 
     for (input, alias, field) in [
         (
-            json!({"body": "b", "description": "d", "model": "codex"}),
+            json!({"action": "add", "body": "b", "description": "d", "model": "codex"}),
             "description",
             "body",
         ),
         (
-            json!({"body": "b", "tags": "docs", "tag": "build", "model": "codex"}),
+            json!({"action": "add", "body": "b", "tags": "docs", "tag": "build", "model": "codex"}),
             "tag",
             "tags",
         ),
         (
-            json!({"body": "b", "during_task": task_id, "task_id": task_id, "model": "codex"}),
+            json!({"action": "add", "body": "b", "during_task": task_id, "task_id": task_id, "model": "codex"}),
             "task_id",
             "during_task",
         ),
@@ -825,7 +820,7 @@ fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
             .command(&[
                 "tool",
                 "run",
-                "orbit.friction.add",
+                "orbit.friction",
                 "--input",
                 &input.to_string(),
             ])
@@ -838,9 +833,10 @@ fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
         );
     }
 
-    let input = json!({"body": "b", "model": "codex", "agent": "codex"}).to_string();
+    let input =
+        json!({"action": "add", "body": "b", "model": "codex", "agent": "codex"}).to_string();
     fixture
-        .command(&["tool", "run", "orbit.friction.add", "--input", &input])
+        .command(&["tool", "run", "orbit.friction", "--input", &input])
         .assert()
         .failure()
         .stderr(predicates::str::contains(
@@ -850,12 +846,12 @@ fn friction_aliases_behave_as_their_parameters_and_conflicts_are_refused() {
 
 fn friction_unknown_tool_fields_warn_and_audit_without_refusing() {
     let fixture = Fixture::new();
-    let input = json!({"body": "Unknown field fixture", "model": "codex", "severity": "high"});
+    let input = json!({"action": "add", "body": "Unknown field fixture", "model": "codex", "severity": "high"});
     let output = fixture
         .command(&[
             "tool",
             "run",
-            "orbit.friction.add",
+            "orbit.friction",
             "--input",
             &input.to_string(),
         ])
@@ -903,9 +899,9 @@ fn friction_update_without_edits_names_flags_on_the_cli_and_fields_over_the_tool
         .stderr(predicates::str::contains(
             "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`",
         ));
-    let input = json!({"id": id, "model": "codex"}).to_string();
+    let input = json!({"action": "update", "id": id, "model": "codex"}).to_string();
     fixture
-        .command(&["tool", "run", "orbit.friction.update", "--input", &input])
+        .command(&["tool", "run", "orbit.friction", "--input", &input])
         .assert()
         .failure()
         .stderr(predicates::str::contains(

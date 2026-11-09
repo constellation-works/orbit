@@ -719,13 +719,14 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
     // MCP adapter, reached through the same tool host: same behaviour.
     fail_active_batch("fixture-failed-batch-mcp");
     let input = serde_json::json!({
+        "action": "update",
         "name": name,
         "waive_batch": {"batch_id": "fixture-failed-batch-mcp", "reason": "Fixture waiver"},
     });
     let mcp = fixture.json(&[
         "tool",
         "run",
-        "orbit.auto_task.update",
+        "orbit.auto_task",
         "--input",
         &input.to_string(),
         "--format",

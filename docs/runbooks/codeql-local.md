@@ -527,7 +527,7 @@ check of the same hold failed for a different reason, the findings are still
 attached, but the hold stays for that decision.
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-evidence-findings.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-evidence-findings.json"}' \
   | jq '.content | fromjson | .results[] | {rule, file, line}'
 ```
 

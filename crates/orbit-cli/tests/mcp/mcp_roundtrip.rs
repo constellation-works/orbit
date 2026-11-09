@@ -905,21 +905,21 @@ fn diverge_registry_id(workspace: &McpWorkspace, from: &str) {
 /// Assert a governed session's run list is reachable and empty.
 fn assert_run_list_empty(client: &mut McpClient) {
     assert_eq!(
-        client.call_tool_ok("orbit_workflow_run_list", json!({}))["items"],
+        client.call_tool_ok("orbit_run", json!({"action": "list"}))["items"],
         json!([])
     );
 }
 
 /// Assert an unprivileged session is denied the governed run list.
 fn assert_run_list_denied(client: &mut McpClient) {
-    client.assert_tool_error("orbit_workflow_run_list", json!({}), "capability_denied");
+    client.assert_tool_error("orbit_run", json!({"action": "list"}), "capability_denied");
 }
 
 /// Poll a workflow run over MCP until it reaches a terminal state.
 fn wait_for_run(client: &mut McpClient, run_id: &str) -> Value {
     let deadline = Instant::now() + RESPONSE_TIMEOUT;
     loop {
-        let shown = client.call_tool_ok("orbit_workflow_run_show", json!({ "id": run_id }));
+        let shown = client.call_tool_ok("orbit_run", json!({"action": "show", "id": run_id }));
         if matches!(
             shown["state"].as_str(),
             Some("success" | "failed" | "timeout" | "cancelled" | "interrupted")
@@ -1039,11 +1039,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
         let mut client = workspace.serve_with_args(args);
         let listed = client.tools_list();
         let names = tool_names(&listed);
-        for kept in [
-            "orbit_decision_list",
-            "orbit_decision_show",
-            "orbit_task_show",
-        ] {
+        for kept in ["orbit_decision", "orbit_task_show"] {
             assert!(
                 names.contains(&kept),
                 "{case}: {kept} left the default surface"
@@ -1240,7 +1236,7 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted, "tools/list must be name-sorted");
-    for expected in ["orbit_friction_update", "orbit_task_show"] {
+    for expected in ["orbit_friction", "orbit_task_show"] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
 
@@ -1335,7 +1331,7 @@ fn mcp_repeated_field_metadata_stays_within_context_budget() {
         workspace_bytes += workspace_description_bytes;
         if matches!(
             tool["name"].as_str(),
-            Some("orbit_attention" | "orbit_decision_raise")
+            Some("orbit_attention" | "orbit_decision")
         ) {
             let description_bytes = tool["description"]
                 .as_str()
@@ -1708,7 +1704,7 @@ fn mcp_task_list_fields_cli_example_runs_with_canonical_tool_name() {
 
 fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials() {
     use orbit_common::governance::authorization::governed_tool;
-    use orbit_types::tool::{McpCapability, mcp_advertised_tool_name};
+    use orbit_types::tool::{McpCapability, mcp_advertised_tool_name, tool_family};
 
     let workspace = McpWorkspace::init();
     // Every canonical definition, opt-in toolsets included, for each session.
@@ -1727,19 +1723,32 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
         );
-        let uncallable = governed_tool(canonical)
-            .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
+        let agent_denied = |operation: &str| {
+            governed_tool(operation)
+                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent))
+        };
+        // A family is hidden only when an agent can call none of its actions.
+        let family = tool_family(canonical);
+        let uncallable = family.map_or_else(
+            || agent_denied(canonical),
+            |family| {
+                family
+                    .actions
+                    .iter()
+                    .all(|entry| agent_denied(entry.operation))
+            },
+        );
         assert_eq!(
             names.contains(&name.as_str()),
             !uncallable,
             "agent advertisement for {name} must reflect its capability"
         );
         if uncallable {
-            client.assert_tool_error(
-                &name,
-                json!({"workspace": "ws_mcp-roundtrip"}),
-                "capability_denied",
-            );
+            let mut input = json!({"workspace": "ws_mcp-roundtrip"});
+            if let Some(family) = family {
+                input["action"] = json!(family.actions[0].action);
+            }
+            client.assert_tool_error(&name, input, "capability_denied");
         }
     }
     // Filtering must also hold when the adapter serves its cached list, and
@@ -1935,8 +1944,8 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
 
     // The full run view is still the operator's.
     client.assert_tool_error(
-        "orbit_workflow_run_show",
-        json!({ "id": RUN_ID }),
+        "orbit_run",
+        json!({"action": "show", "id": RUN_ID }),
         "capability_denied",
     );
     drop(client);
@@ -2103,17 +2112,17 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
 
     for (name, arguments) in [
         (
-            "orbit_friction_add",
-            json!({ "body": "must not fork a replica friction", "model": "codex", }),
+            "orbit_friction",
+            json!({"action": "add", "body": "must not fork a replica friction", "model": "codex", }),
         ),
         (
             "orbit_search",
             json!({ "query": "must not search replica coordination", "model": "codex", }),
         ),
-        ("orbit_auto_task_list", json!({})),
+        ("orbit_auto_task", json!({"action": "list"})),
         (
-            "orbit_friction_update",
-            json!({ "id": "F2099-01-001", "status": "triaged" }),
+            "orbit_friction",
+            json!({"action": "update", "id": "F2099-01-001", "status": "triaged" }),
         ),
     ] {
         let refused = client.assert_tool_error(name, arguments, "capability_refused");
@@ -2145,7 +2154,7 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
 
     let marker = workspace.work.join("replica-command-exec-must-not-run");
     for (name, arguments) in [
-        ("orbit_workflow_run_list", json!({})),
+        ("orbit_run", json!({"action": "list"})),
         (
             "orbit_command_exec",
             json!({ "argv": ["touch", utf8(&marker)], "working_directory": workspace.work, }),
@@ -2170,7 +2179,8 @@ fn an_operator_served_mcp_session_reaches_a_governed_tool() {
     // CLI, but an ordinary session: still refused, and told the truth about it.
     let mut agent =
         workspace.serve_with_args_and_env(&["--toolset", "runs"], &[("ORBIT_OPERATOR", "1")]);
-    let denied = agent.assert_tool_error("orbit_workflow_run_list", json!({}), "capability_denied");
+    let denied =
+        agent.assert_tool_error("orbit_run", json!({"action": "list"}), "capability_denied");
     let message = denied["message"]
         .as_str()
         .expect("denial carries a message");
@@ -2255,8 +2265,8 @@ fn compact_agent_answers_have_a_serialized_budget() {
         let mut previous = None;
         for limit in [1, 50] {
             let bounded = client.call_tool_ok(
-                "orbit_workflow_run_show",
-                json!({"workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id, "limit": limit}),
+                "orbit_run",
+                json!({"action": "show", "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id, "limit": limit}),
             );
             let invocation = &bounded["run"]["agent_invocation"];
             let answer = &invocation["answer"];
@@ -2297,10 +2307,10 @@ fn compact_agent_answers_have_a_serialized_budget() {
             }
             previous = Some(answer.clone());
             let retrieval = &invocation["answer_retrieval"];
-            assert_eq!(retrieval["tool"], "orbit.workflow.run.show");
+            assert_eq!(retrieval["tool"], "orbit.run");
+            assert_eq!(retrieval["arguments"]["action"], "show");
             assert!(retrieval["arguments"].get("view").is_none());
-            let full =
-                client.call_tool_ok("orbit_workflow_run_show", retrieval["arguments"].clone());
+            let full = client.call_tool_ok("orbit_run", retrieval["arguments"].clone());
             let full_answer = &full["agent_invocation"]["answer"];
             assert_eq!(full_answer["summary"], result["summary"]);
             for field in ["findings", "next_steps"] {
@@ -2349,8 +2359,8 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
     assert_eq!(invocation["answer"], Value::Null, "{terminal}");
 
     let bounded = client.call_tool_ok(
-        "orbit_workflow_run_show",
-        json!({ "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id }),
+        "orbit_run",
+        json!({"action": "show", "workspace": "ws_mcp-roundtrip", "view": "bounded", "id": run_id }),
     );
     let bounded_invocation = &bounded["run"]["agent_invocation"];
     assert_eq!(bounded_invocation["outcome"], "failed", "{bounded}");
@@ -2673,8 +2683,8 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     tool_ok_at(
         &checkout_b,
         &workspace.home,
-        "orbit.task.artifact.put",
-        json!({
+        "orbit.task.artifact",
+        json!({"action": "put",
             "id": task_id,
             "source_path": "qa-note.md",
             "path": "qa/note.md",
@@ -2687,8 +2697,8 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     // must follow the id past cwd on every surface.
     let checkout_a_selector = utf8(&workspace.work);
     let via_tool_run: Value = stdout_json(&workspace.tool_ok(
-        "orbit.task.artifact.get",
-        json!({ "id": task_id, "path": "qa/note.md" }),
+        "orbit.task.artifact",
+        json!({"action": "get", "id": task_id, "path": "qa/note.md" }),
     ));
     assert_eq!(via_tool_run["content"], "globally addressable payload");
 
@@ -2703,8 +2713,8 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     // follow the task id, matching ORB-12254.
     let mut client = workspace.serve();
     let read = client.call_tool_ok(
-        "orbit_task_artifact_get",
-        json!({ "id": task_id, "path": "qa/note.md" }),
+        "orbit_task_artifact",
+        json!({"action": "get", "id": task_id, "path": "qa/note.md" }),
     );
     assert_eq!(read["content"], "globally addressable payload");
     drop(client);
@@ -2712,14 +2722,14 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     // An explicit foreign `workspace` selector stays a fail-closed filter on
     // every surface: checkout A does not own the task.
     let foreign_input =
-        json!({ "id": task_id, "path": "qa/note.md", "workspace": checkout_a_selector })
+        json!({"action": "get",  "id": task_id, "path": "qa/note.md", "workspace": checkout_a_selector })
             .to_string();
     for (args, why) in [
         (
             &[
                 "tool",
                 "run",
-                "orbit.task.artifact.get",
+                "orbit.task.artifact",
                 "--input",
                 &foreign_input,
             ] as &[&str],
@@ -2773,8 +2783,8 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
 
     let mut client = workspace.serve();
     let refused = client.call_tool_err(
-        "orbit_task_artifact_get",
-        json!({ "id": task_id, "path": "nope.txt" }),
+        "orbit_task_artifact",
+        json!({"action": "get", "id": task_id, "path": "nope.txt" }),
     );
     let message = refused["message"].as_str().unwrap_or_default();
     assert!(
@@ -2787,8 +2797,8 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     let prefix = task_id.split_once('-').map_or("ORB", |(prefix, _)| prefix);
     let unknown = format!("{prefix}-99999");
     let missing_task = client.call_tool_err(
-        "orbit_task_artifact_get",
-        json!({ "id": unknown, "path": "nope.txt" }),
+        "orbit_task_artifact",
+        json!({"action": "get", "id": unknown, "path": "nope.txt" }),
     );
     assert_eq!(
         missing_task,
@@ -2957,7 +2967,7 @@ fn ssh_marked_mcp_server_audits_caller_and_server_identity_separately() {
         names.contains(&"orbit_task_add"),
         "missing task surface: {names:?}"
     );
-    assert!(names.contains(&"orbit_friction_update"));
+    assert!(names.contains(&"orbit_friction"));
 
     let workspaces = client.call_tool_ok("orbit_workspace_list", json!({}));
     assert!(workspaces["machine_id"].as_str().is_some());
@@ -3251,13 +3261,13 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     // V1 exposes one complete surface. Domain validation and mutation still run
     // on the authoritative server-side runtime.
     let friction = client.call_tool_ok(
-        "orbit_friction_add",
-        json!({ "body": "MCP D2 exposure regression", "model": "codex" }),
+        "orbit_friction",
+        json!({"action": "add", "body": "MCP D2 exposure regression", "model": "codex" }),
     );
     let friction_id = id_of(&friction);
     let updated = client.call_tool_ok(
-        "orbit_friction_update",
-        json!({ "id": friction_id, "status": "triaged", "model": "codex" }),
+        "orbit_friction",
+        json!({"action": "update", "id": friction_id, "status": "triaged", "model": "codex" }),
     );
     assert_eq!(updated["status"], "triaged");
 }
@@ -3276,8 +3286,8 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
     assert_message_parts(&bad_params, &["title"]);
 
     client.assert_tool_error(
-        "orbit_decision_show",
-        json!({"id": "missing-request"}),
+        "orbit_decision",
+        json!({"action": "show", "id": "missing-request"}),
         "request_not_found",
     );
 
@@ -3573,8 +3583,8 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
         "tool_not_found",
     );
     client.assert_tool_error(
-        "orbit_workflow_ship",
-        json!({ "task_ids": ["ORB-00001"], "model": "codex" }),
+        "orbit_workflow",
+        json!({"action": "ship", "task_ids": ["ORB-00001"], "model": "codex" }),
         "capability_denied",
     );
     drop(client);
@@ -3752,7 +3762,7 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
     // Launch outside any checkout, without initialize metadata or payload
     // selectors: only the generated argv can supply workspace authority.
     let mut client = spawn_generated_server(&workspace, &workspace.home, &args);
-    let runs = client.call_tool_ok("orbit_workflow_run_list", json!({}));
+    let runs = client.call_tool_ok("orbit_run", json!({"action": "list"}));
     assert_eq!(
         runs["items"],
         json!([]),
@@ -4173,8 +4183,8 @@ fn managed_mcp_env_binding_updates_without_a_workspace_argument() {
     );
 
     let friction = client.call_tool_ok(
-        "orbit_friction_add",
-        json!({ "body": "Managed MCP envelope routed friction add.", "model": "codex", }),
+        "orbit_friction",
+        json!({"action": "add", "body": "Managed MCP envelope routed friction add.", "model": "codex", }),
     );
     assert!(
         friction.get("id").and_then(Value::as_str).is_some(),
@@ -5605,28 +5615,26 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
     let mut client = workspace.serve_with_args(&["--toolset", "ui,dispatch"]);
     let listed = client.tools_list();
     let tools = tools_array(&listed);
-    for (name, entrypoint) in [("orbit_ui_open", "global"), ("orbit_ui_inspect", "thread")] {
-        let tool = find_tool(tools, name);
-        assert_eq!(tool["annotations"]["readOnlyHint"], true);
-        assert_eq!(
-            tool["_meta"]["ui"]["resourceUri"],
-            "ui://orbit/control-center/v1/index.html"
-        );
-        assert_eq!(
-            tool["_meta"]["openai/ui"]["entrypoints"][0]["type"],
-            entrypoint
-        );
-    }
+    let tool = find_tool(tools, "orbit_ui");
+    assert_eq!(tool["annotations"]["readOnlyHint"], true);
+    assert_eq!(
+        tool["_meta"]["ui"]["resourceUri"],
+        "ui://orbit/control-center/v1/index.html"
+    );
+    assert_eq!(
+        tool["_meta"]["openai/ui"]["entrypoints"],
+        json!([{"type": "global"}, {"type": "thread"}])
+    );
     let ordinary = find_tool(tools, "orbit_task_show");
     assert!(
         ordinary.get("_meta").is_none(),
         "ordinary reads remain widget-free"
     );
-    let empty = client.call_tool_ok("orbit_ui_open", json!({}));
+    let empty = client.call_tool_ok("orbit_ui", json!({"action": "open"}));
     assert!(empty["task"].is_null());
     let panel = client.call_tool_ok(
-        "orbit_ui_inspect",
-        json!({ "workspace": selector, "id": task_id }),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace": selector, "id": task_id }),
     );
     assert_eq!(panel["schema_version"], 1);
     assert_eq!(panel["workspace"], selector);
@@ -5642,29 +5650,40 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
         json!({"workspace":selector,"id":task_id,"actor":"human"}),
         json!({"workspace":selector,"id":task_id,"status":"done"}),
     ] {
+        let mut arguments = arguments;
+        arguments["action"] = json!("inspect");
         assert_eq!(
-            client.call_tool_err("orbit_ui_inspect", arguments)["code"],
+            client.call_tool_err("orbit_ui", arguments)["code"],
             "invalid_input"
         );
     }
     let wrong = client.call_tool_err(
-        "orbit_ui_inspect",
-        json!({"workspace":"missing-workspace", "id":task_id}),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace":"missing-workspace", "id":task_id}),
     );
     assert!(wrong["code"].is_string());
     let elsewhere = workspace.home.join("another-workspace");
     init_checkout(&workspace.home, &elsewhere, "another-workspace");
     client.call_tool_err(
-        "orbit_ui_inspect",
-        json!({"workspace":elsewhere, "id":task_id}),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace":elsewhere, "id":task_id}),
     );
     client.call_tool_err(
-        "orbit_ui_inspect",
-        json!({"workspace":selector, "id":"TST-999999"}),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace":selector, "id":"TST-999999"}),
     );
-    let denied_before = client.call_tool_err("orbit_workflow_ship", json!({"task_ids":[task_id]}));
-    client.call_tool_ok("orbit_ui_open", json!({"workspace":selector,"id":task_id}));
-    let denied_after = client.call_tool_err("orbit_workflow_ship", json!({"task_ids":[task_id]}));
+    let denied_before = client.call_tool_err(
+        "orbit_workflow",
+        json!({"action": "ship", "task_ids":[task_id]}),
+    );
+    client.call_tool_ok(
+        "orbit_ui",
+        json!({"action": "open", "workspace":selector,"id":task_id}),
+    );
+    let denied_after = client.call_tool_err(
+        "orbit_workflow",
+        json!({"action": "ship", "task_ids":[task_id]}),
+    );
     assert_eq!(denied_before["code"], "capability_denied");
     assert_eq!(denied_after["code"], denied_before["code"]);
     let unchanged = client.show_task(&task_id);
@@ -5689,14 +5708,14 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
         "copy a returned selector: {discovered}"
     );
     let panel = federated.call_tool_ok(
-        "orbit_ui_inspect",
-        json!({"workspace":qualified,"id":task_id}),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace":qualified,"id":task_id}),
     );
     assert_eq!(panel["workspace"], qualified);
     assert_eq!(panel["task"]["id"], task_id);
     federated.assert_tool_error(
-        "orbit_ui_inspect",
-        json!({"workspace":selector,"id":task_id}),
+        "orbit_ui",
+        json!({"action": "inspect", "workspace":selector,"id":task_id}),
         "unknown_selector",
     );
     let static_resource = federated.request(

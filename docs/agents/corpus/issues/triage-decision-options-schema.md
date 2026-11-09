@@ -29,7 +29,7 @@ ORB-21414 (done, e6c0574ba012f57f44723922b90b0652b39fa1a7). The single observed 
 
 Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 1 source occurrence on 1 task; route `run_failure`, disposition `counted`. Covering repair: ORB-21414.
 
-Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact` action `get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |

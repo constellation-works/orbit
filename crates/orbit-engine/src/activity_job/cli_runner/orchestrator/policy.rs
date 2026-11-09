@@ -11,7 +11,10 @@ use orbit_types::tool::{AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS};
 use orbit_types::workflow::activity_job::{
     ActivityToolPolicyMode, AgentLoopSpec, MUTATING_TOOLS, is_response_correction_mutating_tool,
 };
-use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed};
+use orbit_types::workflow::{
+    ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed,
+    tools_allowed_by_disallow_list,
+};
 use serde_json::Value;
 
 use crate::context::{ResolvedActivityTools, RuntimeHost};
@@ -257,9 +260,7 @@ fn drop_mutating_tools_for_response_correction(
             activity_tools
                 .requested_tools
                 .retain(|tool| !is_response_correction_mutating_tool(tool));
-            activity_tools
-                .effective_tools
-                .retain(|tool| !is_response_correction_mutating_tool(tool));
+            narrow_callable_tools(&mut activity_tools.effective_tools, disallow_list);
         }
         None => {
             restrict_allowlist(
@@ -324,13 +325,16 @@ pub(super) fn apply_experiment_tool_overlays(
             .iter()
             .map(String::as_str)
             .filter(|tool| {
-                !AGENT_CONTRACT_TOOLS.contains(tool)
+                let removal = [(*tool).to_string()];
+                !AGENT_CONTRACT_TOOLS
+                    .iter()
+                    .any(|contract| tool_allowed(contract, &removal))
                     && !grant
                         .activity_tools
                         .requested_tools
                         .iter()
                         .chain(&grant.activity_tools.granted_tools)
-                        .any(|required| required == tool)
+                        .any(|required| tool_allowed(required, &removal))
             })
             .collect::<Vec<_>>();
         match grant.tool_disallow_list.as_mut() {
@@ -340,10 +344,7 @@ pub(super) fn apply_experiment_tool_overlays(
                         disallow_list.push((*tool).to_string());
                     }
                 }
-                grant
-                    .activity_tools
-                    .effective_tools
-                    .retain(|tool| !removals.contains(&tool.as_str()));
+                narrow_callable_tools(&mut grant.activity_tools.effective_tools, disallow_list);
             }
             None if !removals.is_empty() => restrict_allowlist(
                 host,
@@ -400,6 +401,14 @@ pub(super) fn apply_experiment_tool_overlays(
     Ok(records)
 }
 
+/// Re-derive a deny-mode run's callable set after `disallow_list` grew: a
+/// family it now covers only partly is replaced by its remaining
+/// `family:action` names, and a fully covered name is dropped.
+fn narrow_callable_tools(effective_tools: &mut Vec<String>, disallow_list: &[String]) {
+    *effective_tools =
+        tools_allowed_by_disallow_list(disallow_list, effective_tools.iter().map(String::as_str));
+}
+
 /// Removes `denied` from an allowlisted activity's grant.
 ///
 /// A wildcard entry that covers a denied tool is replaced by the registered
@@ -414,6 +423,10 @@ fn restrict_allowlist(
     denied: &[&str],
 ) -> Result<(), DispatchError> {
     let is_denied = |tool: &str| denied.contains(&tool);
+    let denied_list = denied
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect::<Vec<_>>();
     let covers_denied = |entry: &String| {
         denied
             .iter()
@@ -437,14 +450,15 @@ fn restrict_allowlist(
                             .effective_tools,
                     );
                 }
-                registered
-                    .iter()
-                    .flatten()
-                    .filter(|tool| {
-                        !is_denied(tool) && tool_allowed(tool, std::slice::from_ref(entry))
-                    })
-                    .cloned()
-                    .collect()
+                // A family the denial covers only partly stays as its
+                // remaining `family:action` names.
+                tools_allowed_by_disallow_list(
+                    &denied_list,
+                    registered.iter().flatten().map(String::as_str),
+                )
+                .into_iter()
+                .filter(|tool| tool_allowed(tool, std::slice::from_ref(entry)))
+                .collect()
             };
             for tool in expanded {
                 if !restricted.contains(&tool) {

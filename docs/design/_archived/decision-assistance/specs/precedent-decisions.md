@@ -270,7 +270,7 @@ nothing visible:
    Notification to the human is not delayed.
 2. The completed assessment is sealed in the assistance ledger with its
    completion time. It is not shown on the dashboard, in mail, in
-   `orbit.decision.show` or in the digest for that category.
+   `orbit.decision` action `show` or in the digest for that category.
 3. When a human answers, the readout joins the sealed prediction to the human's
    answer. A prediction completed at or after the human's `answered_at` is
    excluded as leaked. Superseded and expired requests are counted, not scored.
@@ -507,10 +507,10 @@ leaves the model answer standing but unconfirmed.
 
 ## Agent surface
 
-No change. Agents keep raising requests with `orbit.decision.raise`. The only
+No change. Agents keep raising requests with `orbit.decision` action `raise`. The only
 addition is an optional per-answer `risk_tier` field the raiser may declare; an
 undeclared tier is `unknown`. Agents cannot read sealed shadow predictions,
-enable categories, confirm or veto. `orbit.decision.show` shows a self-answered
+enable categories, confirm or veto. `orbit.decision` action `show` shows a self-answered
 request as answered by `model`, with its citation, like a precedent answer. The
 channel consults the consumer between raise and notification; nothing else in an
 agent's flow changes.

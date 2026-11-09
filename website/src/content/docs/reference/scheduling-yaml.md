@@ -292,7 +292,7 @@ adapter receives fields shaped like this:
 
 Before finishing the task, attach the evidence files and then the JSON file
 named by `evidence_artifact` (`completion-evidence.json` in this example) with
-`orbit.task.artifact.put`. The candidate manifest has this shape:
+`orbit.task.artifact` action `put`. The candidate manifest has this shape:
 
 ```json
 {

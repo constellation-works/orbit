@@ -456,7 +456,7 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     let listed = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let listed_consumer = listed
         .as_array()

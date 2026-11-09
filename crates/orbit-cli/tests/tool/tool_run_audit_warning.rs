@@ -140,7 +140,7 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
     std::fs::create_dir_all(source_path.parent().expect("artifact parent"))
         .expect("artifact source directory");
     std::fs::write(&source_path, "committed artifact").expect("artifact source");
-    let put_input = json!({
+    let put_input = json!({"action": "put",
         "id": task_id,
         "path": "audit-warning.txt",
         "source_path": source_path.to_string_lossy(),
@@ -151,7 +151,7 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
         .args([
             "tool",
             "run",
-            "orbit.task.artifact.put",
+            "orbit.task.artifact",
             "--input",
             &put_input,
             "--format",
@@ -188,7 +188,7 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
         "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
     });
     std::fs::write(&source_path, mandate.to_string()).expect("mandate source");
-    let mandate_input = json!({
+    let mandate_input = json!({"action": "put",
         "id": task_id,
         "path": "resident/mandate.json",
         "source_path": source_path,
@@ -200,7 +200,7 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
             .args([
                 "tool",
                 "run",
-                "orbit.task.artifact.put",
+                "orbit.task.artifact",
                 "--input",
                 &mandate_input,
                 "--format",
@@ -242,12 +242,13 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
         }
     }
 
-    let get_input = json!({"id": task_id, "path": "audit-warning.txt"}).to_string();
+    let get_input =
+        json!({"action": "get", "id": task_id, "path": "audit-warning.txt"}).to_string();
     let stored_output = fixture_orbit(&work, &home)
         .args([
             "tool",
             "run",
-            "orbit.task.artifact.get",
+            "orbit.task.artifact",
             "--input",
             &get_input,
             "--format",

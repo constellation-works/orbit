@@ -94,7 +94,7 @@ listed callbacks: `bound` admits only the entry's admitted value for that
 field, and a `task` predicate with `pin: true` binds the first task a callback
 names for the rest of that entry call, refusing any other. When the entry's
 `task` predicate bound an artifact digest, every callback rechecks it, and
-`orbit.task.artifact.get` rechecks the bytes it returns, so a payload changed
+`orbit.task.artifact` action `get` rechecks the bytes it returns, so a payload changed
 after the entry was admitted is refused (`bound artifact changed`).
 `orbit.task.show` returns only the fields the call names, within `id`,
 `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at` and
@@ -162,19 +162,22 @@ The supported built-in write operations include:
   optional `workspace`. The existing decision handler checks the current
   request, allowed answers, expiry and supersession. This includes an allowed
   `dismiss` answer, which retains its gate's existing consequences.
-* `orbit.auto_task.add`: callback-only, using a constrained `fields` scope.
+* `orbit.auto_task` action `add`: callback-only, using a constrained `fields` scope.
   `name`, `schedule` and `template` are required; `description` and `dedupe`
   are optional. Every listed definition field must be bound with
   `artifact_json` to the artifact whose digest the parent entry's `task`
   predicate checks. `workspace` is an optional ceiling field and is not part
   of the definition. Exact calls and caller-supplied definition values are
   refused.
-* `orbit.auto_task.update`: callback-only, using a constrained `fields`
+* `orbit.auto_task` action `update`: callback-only, using a constrained `fields`
   scope. `name` is required and must be bound with `artifact_json` to the
   approved artifact. Optional `enabled` must be constrained to a boolean with
   `const` or a non-empty `one_of` of booleans. `workspace` is optional;
   it does not select another workspace. `expected_enabled` and every other
   field are refused. Exact calls are refused.
+
+A callback entry's `tool` names the operation behind a family action, such as
+`orbit.auto_task.add` for `orbit.auto_task` action `add`.
 
 In a scope whose entry `task` predicate binds the digest of `proposal.json`,
 these callbacks bind the definition fields and update name to values in that

@@ -10,7 +10,7 @@ pub struct AuditStatsArgs {
     /// Stats since duration or timestamp
     #[arg(long)]
     pub since: Option<String>,
-    /// Filter by tool name
+    /// Filter by tool name; name a family action as `family:action`
     #[arg(long)]
     pub tool: Option<String>,
 }
@@ -18,12 +18,13 @@ pub struct AuditStatsArgs {
 impl Execute for AuditStatsArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
-        let stats = runtime.audit_event_stats(since, self.tool.clone())?;
+        let tool = super::support::audit_tool_filter(self.tool);
+        let stats = runtime.audit_event_stats(since, tool.clone())?;
         let denied_by_operation = scoped_to_tool(
             runtime
                 .audit_policy_denial_stats(since.as_ref())?
                 .by_operation,
-            self.tool.as_deref(),
+            tool.as_deref(),
         );
 
         let text = format!(

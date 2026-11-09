@@ -88,7 +88,7 @@ pub(super) fn add_params(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             OrbitError::InvalidInput(
-                "orbit.friction.add needs a session model (crew config, or --model on the CLI)"
+                "orbit.friction action add needs a session model (crew config, or --model on the CLI)"
                     .to_string(),
             )
         })?;

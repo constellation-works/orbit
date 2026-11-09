@@ -163,7 +163,7 @@ refusal on that task.
 ### 2.4 Who writes mocks, and when they change
 
 - **Writers.** Operators, orchestrator sessions and the pilot may write under `mocks/`. The
-  implementer and the reviewers may not: an `orbit.task.artifact.put` to `mocks/` from a run
+  implementer and the reviewers may not: an `orbit.task.artifact` action `put` to `mocks/` from a run
   with an implement or review purpose is refused with `mocks_reserved`. A build cannot
   replace its own specification.
 - **Frozen per delivery.** `visual_capture` reads the mocks' digests at delivery admission,
@@ -689,7 +689,7 @@ read.
 
 Images do not travel in the prompt text: base64 inside text is never vision input. They are
 staged as files in the review step's read-only scratch directory, and the executor gets them
-to the model in one of two declared ways. The MCP route (`orbit.task.artifact.get` returning
+to the model in one of two declared ways. The MCP route (`orbit.task.artifact` action `get` returning
 a protocol image block) remains for interactive agents, but visual review does not rely on
 it: the agent would choose whether to fetch, and whether a lane forwards an MCP image block
 to the model is the lane's behaviour, not Orbit's.

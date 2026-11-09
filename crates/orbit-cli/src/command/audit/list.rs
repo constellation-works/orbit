@@ -14,7 +14,7 @@ pub struct AuditListArgs {
     /// Filter events since duration or timestamp (e.g. "1h", "90d", RFC3339)
     #[arg(long)]
     pub since: Option<String>,
-    /// Filter by tool name
+    /// Filter by tool name; name a family action as `family:action`
     #[arg(long)]
     pub tool: Option<String>,
     /// Filter by event kind (alias for target_type)
@@ -72,7 +72,7 @@ impl Execute for AuditListArgs {
             .audit_listing_page(
                 AuditListingColumns {
                     since,
-                    tool_name: self.tool,
+                    tool_name: super::support::audit_tool_filter(self.tool),
                     status: self.status,
                     role: self.role,
                     // Only the explicit flag scopes this. The audit log is one

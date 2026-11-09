@@ -257,7 +257,7 @@ none of them resolves a resident key from the cycle's mutating tools today:
 
 Both `request_id` forms accept only 1 to 128 ASCII letters, digits, `.`, `_` or `-`, so the `:` in a
 resident key is refused. Dispatch, requeue and promote do not accept a resident key on any
-agent-callable tool (`orbit.task.requeue` takes `id`, `reason` and `discard_candidate` only), and an
+agent-callable tool (`orbit.task.recover` action `requeue` takes `id`, `reason` and `discard_candidate` only), and an
 ordinary `orbit.task.add` without `request_id` passes no action key. Slice 3 ([ORB-21244]) therefore takes
 the other route: core assigns the key. The cycle's tool guard numbers every write and records it in
 an action ledger, and a recovery cycle's identical retry gets the recorded result
@@ -533,7 +533,7 @@ with the recommended option, the residents are over-asking.
 
 It composes existing tools. The resident files a human-crew task in the assignment's workspace,
 `related_to` the assignment and `blocked_by`-linked from any work it must wait for, and raises a
-multiple-choice decision on it with `orbit.decision.raise`: two to four options, one recommended,
+multiple-choice decision on it with `orbit.decision` action `raise`: two to four options, one recommended,
 each with a `risk_tier`. The human's answer completes that task, which unblocks the dependents and
 changes the resident's wake digest. Agent-raised requests are already deduplicated and capped per
 filer and per workspace, which bounds escalation load. The checkpoint's `requests[]` lists the

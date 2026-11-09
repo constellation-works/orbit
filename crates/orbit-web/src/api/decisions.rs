@@ -1,7 +1,7 @@
 //! Human decision requests: the workspace's open-request list and the
 //! operator's answer action.
 //!
-//! Listing mirrors `orbit.decision.list`; answering goes through the same
+//! Listing mirrors `orbit.decision` action `list`; answering goes through the same
 //! core apply step as `orbit decision answer`
 //! (`answer_decision_request_as_human`), so a dashboard click and a CLI
 //! answer land identically — as the human writer, with the request then

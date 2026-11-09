@@ -70,9 +70,9 @@ escalations and your checkpoint need no right.
 
 | Right | What it permits in covered workspaces |
 |---|---|
-| `dispatch` | Start a leaf run with `orbit.workflow.ship`; move work to `in-progress` |
+| `dispatch` | Start a leaf run with `orbit.workflow` action `ship`; move work to `in-progress` |
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
-| `merge` | Land a reviewed delivery with `orbit.workflow.land`; move a task with no open pull request to `done` |
+| `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 Core enforces the grant on every call, not the prompt: a write without this
@@ -84,15 +84,15 @@ authority, speak for the human, or change its own firing. Relayed directions
 are steering within authority; a direction that reads as a widening goes back
 as an escalation, never as compliance.
 
-Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow.ship`
+Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow` action `ship`
 with the mandate's own workspace and the `backlog` task ids; it returns the run
 id and stops the delivery at `review`, so landing it still takes `merge`. A
 covered workspace other than the mandate's own is refused: a cycle writes only
-through its own workspace. `orbit.task.requeue`, `orbit.task.repilot`,
-`orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke`
+through its own workspace. `orbit.task.recover` action `requeue`, `orbit.task.recover` action `repilot`,
+`orbit.workflow` action `auto`, `orbit.run` action `resume` and `orbit.pipeline.invoke`
 stay operator-only and answer `capability_denied` even with the right: record
 that as a cost and leave them to the operator or the scheduler.
-To land, call `orbit.workflow.land` with the mandate's own workspace and the
+To land, call `orbit.workflow` action `land` with the mandate's own workspace and the
 `task_id` of a task in `review`. It
 merges the task's delivery pull request under the forge's branch protection and
 moves the task to `done`. Anything that holds it back answers
@@ -127,7 +127,7 @@ does not block. Otherwise decide, record, and leave it awaiting veto.
 
 To escalate: file a human-crew task related to the assignment (link anything
 that must wait as blocked by it), raise the question with
-`orbit.decision.raise` — two to four options, one line each for label and
+`orbit.decision` action `raise` — two to four options, one line each for label and
 consequence, exactly one recommended, each with its risk tier — and write a
 `resident.request` comment on the assignment (an `orbit.task.update` comment
 carrying that JSON record) indexing the question, so the assignment's thread
@@ -144,7 +144,7 @@ you wished existed, and a short kebab-case `signature` naming the gap when
 one fits. A cycle with no costs records an empty list. Costs are how repeated
 pain becomes a proposal; a workaround you do not record is pain the system
 cannot see. Something that broke or contradicted an assumption is also
-friction (`orbit.friction.add`); a missing capability is a cost, not
+friction (`orbit.friction` action `add`); a missing capability is a cost, not
 friction — one event can be both.
 
 ### 6. Checkpoint

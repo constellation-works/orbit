@@ -39,7 +39,7 @@ template:
       Available tools include `orbit.task.list`, `orbit.task.show`,
       `orbit.search` (one distinctive token per query: an error code, step or tool name; a
       0-hit multi-word query proves nothing), `orbit.task.add`, `orbit.task.update` (comments
-      only), `orbit.task.artifact.get/put`, `orbit.friction.add`. Read the installed `orbit`
+      only), `orbit.task.artifact action get/put`, `orbit.friction` action `add`. Read the installed `orbit`
       skill's `references/task-authoring.md` before filing.
     - A pass that finds nothing new still succeeds, with the report stored. Don't invent work.
 
@@ -125,7 +125,7 @@ template:
     that job's folded failures. Strip ids, SHAs, paths, PR numbers, timestamps, hosts and counts. Split review
     refusals by escalation category as before (`base_red`, `external_evidence`,
     `report_revision`, `scope_or_criteria`, `timeout`, `other`), reading `review-gate.json` and
-    `review-report.json` with `orbit.task.artifact.get` for the task's latest attempt:
+    `review-report.json` with `orbit.task.artifact` action `get` for the task's latest attempt:
 
     - `base_red`: a `[baseline_red]` refusal, or an escalation saying a required check fails on
       the base, is pre-existing, or needs a green base.
@@ -251,7 +251,7 @@ template:
       only those values.
     - Redact excerpts: at most a few lines, with tokens, credentials, authorization headers,
       cookies, email addresses and home paths replaced. Put excerpts only in text sent through
-      `orbit.task.add`, `orbit.task.update` or `orbit.friction.add`; when a response reports
+      `orbit.task.add`, `orbit.task.update` or `orbit.friction` action `add`; when a response reports
       `redactions_applied: true`, read the record back. Never attach raw logs.
 
     ## 6. Report and cursor
@@ -305,11 +305,11 @@ template:
   - run-failure-patterns
   - no-diff-expected
   required_tools:
-  - orbit.friction.add
+  - orbit.friction:add
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

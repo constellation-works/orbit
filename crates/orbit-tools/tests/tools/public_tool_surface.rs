@@ -5,12 +5,26 @@
 use std::collections::BTreeSet;
 
 use orbit_tools::{ToolContext, ToolRegistry};
+use orbit_types::tool::tool_family;
 
 #[test]
 fn registry_validated_task_tools_reject_unknown_and_mistyped_fields_at_dispatch() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
-    let mut schemas = registry.all_schemas();
+    // A family checks its action's required fields, then its operation's
+    // schema checks every field, so each operation is probed directly.
+    let mut schemas = registry
+        .all_schemas()
+        .into_iter()
+        .flat_map(|schema| match tool_family(&schema.name) {
+            Some(family) => family
+                .actions
+                .iter()
+                .filter_map(|action| registry.get_schema(action.operation))
+                .collect(),
+            None => vec![schema],
+        })
+        .collect::<Vec<_>>();
     schemas.sort_by(|left, right| left.name.cmp(&right.name));
     // Pull checks its type-derived fingerprint before its request shape in
     // Core; runtime/distributed_drain/admission.rs exercises that boundary.
@@ -355,19 +369,15 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.pipeline.invoke",
         "orbit.pipeline.wait",
         "orbit.search",
-        "orbit.workflow.ship",
-        "orbit.workflow.land",
-        "orbit.workflow.run.show",
-        "orbit.workflow.run.list",
-        "orbit.workflow.run.resume",
+        // Ship, land and the auto drain; run list, show, observe and resume.
+        "orbit.workflow",
+        "orbit.run",
         // Destructive administrative operations are inactive on the agent
         // surface; its inactive-classification is covered by
-        // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
-        "orbit.task.retry_handoff",
-        "orbit.task.recover_claim",
-        "orbit.task.revoke_handoff",
-        "orbit.task.artifact.get",
-        "orbit.task.artifact.put",
+        // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above. Claim and
+        // handoff recovery are actions of this family.
+        "orbit.task.recover",
+        "orbit.task.artifact",
         "proc.spawn",
     ] {
         assert!(
@@ -426,12 +436,10 @@ fn friction_surface_supports_artifact_triage() {
         .map(|schema| schema.name)
         .collect();
 
-    for retained in ["orbit.friction.add", "orbit.friction.update"] {
-        assert!(
-            active.contains(retained),
-            "agent-facing friction tool missing from active surface: {retained}"
-        );
-    }
+    assert!(
+        active.contains("orbit.friction"),
+        "agent-facing friction tool missing from active surface"
+    );
 
     for removed in ["orbit.friction.delete", "orbit.friction.reject"] {
         assert!(

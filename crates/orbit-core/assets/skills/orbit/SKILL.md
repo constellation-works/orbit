@@ -45,8 +45,8 @@ Start an orchestrator or on-call inspection with `orbit attention --json` or the
 
 ## Desktop navigation
 
-When the connected client advertises `orbit_ui_open` / `orbit_ui_inspect`, use
-those read-only entrypoints to open the control center or a selected task/run.
+When the connected client advertises `orbit_ui`, use its read-only `open` and
+`inspect` actions to open the control center or a selected task/run.
 Discover workspaces first and copy the exact returned selector; pass `workspace`
 and public `id` together, with `kind: run` for a run. Keep ordinary task tools
 available when the client cannot render the UI.
@@ -106,7 +106,7 @@ MCP stay on the normal lifecycle for that task, and leaving `done` or
 `archived` still needs `--force`.
 
 When you need a person to choose between known options, such as a sign-off, a
-price or a policy fork, raise `orbit.decision.raise` on a human-crew task you
+price or a policy fork, raise `orbit.decision` action `raise` on a human-crew task you
 filed instead of writing a free-text human task: a question, two to four options
 (one-line label and consequence, exactly one `recommended`), and a `topic` when
 a corpus rule should be able to match the request exactly. The operator answers,

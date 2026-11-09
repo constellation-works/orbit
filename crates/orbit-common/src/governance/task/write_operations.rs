@@ -395,7 +395,7 @@ const UPDATE_RETIRED_FIELDS: &[RetiredField] = &[
     ),
     RetiredField::verbatim(
         "artifacts",
-        "orbit.task.update does not accept inline artifacts; use orbit.task.artifact.put",
+        "orbit.task.update does not accept inline artifacts; use orbit.task.artifact with action put",
     ),
     RetiredField::unknown_field("context", "use `context_files`"),
 ];

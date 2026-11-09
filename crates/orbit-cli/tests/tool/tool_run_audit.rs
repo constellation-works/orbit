@@ -139,8 +139,8 @@ fn dry_run_uses_capability_floors_including_input_dependent_authority() {
     for (tool, input) in [
         ("orbit.routine.control", json!({"action": "status"})),
         (
-            "orbit.auto_task.update",
-            json!({"name": "missing", "expected_enabled": true, "enabled": false}),
+            "orbit.auto_task",
+            json!({"action": "update", "name": "missing", "expected_enabled": true, "enabled": false}),
         ),
     ] {
         for operator in [false, true] {
