@@ -391,13 +391,10 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
             trace: Default::default(),
         })
         .unwrap();
-    for (tool, input) in [
-        (
-            "orbit.agents.scorecard",
-            r#"{"role":"implementers","window":"30d"}"#,
-        ),
-        ("orbit.orchestrator.scorecard", r#"{"window":"30d"}"#),
-    ] {
+    for (tool, input) in [(
+        "orbit.agents.scorecard",
+        r#"{"role":"implementers","window":"30d"}"#,
+    )] {
         let card = operator_json(&fixture, &["tool", "run", tool, "--input", input]);
         let efforts: std::collections::BTreeSet<_> = card["effort_breakdown"]
             .as_array()

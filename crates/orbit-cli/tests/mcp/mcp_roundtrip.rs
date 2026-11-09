@@ -1026,7 +1026,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     const OPT_IN: [(&str, &str); 6] = [
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
-        ("orbit_orchestrator_show", "analytics"),
+        ("orbit_agents_show", "analytics"),
         ("orbit_decision_digest", "decision-channel"),
         ("orbit_notice_post", "notice"),
         ("orbit_notice_list", "notice"),

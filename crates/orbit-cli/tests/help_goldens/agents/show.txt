@@ -6,10 +6,10 @@ Options:
       --role <ROLE>
           The agent role to score
           
-          [possible values: orchestrators, implementers, reviewers, pilots]
+          [possible values: implementers, reviewers, pilots]
 
       --crew <CREW>
-          The row's crew, or the orchestrator name tasks record
+          The row's crew
 
       --effort <EFFORT>
           The row's recorded effort; optional when the crew and model name one row

@@ -9,11 +9,11 @@ next: "Restore ORB-15934 after 2026-11-12 to refuse unknown fields"
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution; deprecated orchestrator scorecard aliases share the registry.
+summary: One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-common/src/governance/orchestrator.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-tools/src/builtin/orbit/orchestrator.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-cli/src/command/orchestrator.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-17118, ORB-21243, ORB-21248]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-23582, ORB-21243, ORB-21248]
 ---
 
 # Operations as Data — Overview
@@ -125,7 +125,6 @@ and again in the tool handler.
 | The agent scorecard registry (`scorecard` and `show`, on the CLI and MCP) | [crates/orbit-common/src/governance/agents.rs](../../../crates/orbit-common/src/governance/agents.rs) | [ORB-16957] |
 | The governed resident checkpoint write | [crates/orbit-common/src/governance/resident.rs](../../../crates/orbit-common/src/governance/resident.rs), [resident_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/resident_tools.rs) | [ORB-21243] |
 | The evolution ledger operations | [crates/orbit-common/src/governance/evolution.rs](../../../crates/orbit-common/src/governance/evolution.rs), [evolution_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/evolution_tools.rs) | [ORB-21248] |
-| Deprecated orchestrator scorecard aliases of the agent tools | [crates/orbit-common/src/governance/orchestrator.rs](../../../crates/orbit-common/src/governance/orchestrator.rs) | [ORB-16957], [ORB-17118] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | Task guarded modes (bounded `show`/`list`, versioned `show` snapshot), keyed on `TaskVerb` | [crates/orbit-tools/src/builtin/orbit/task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs) | [ORB-15937] |
@@ -177,8 +176,7 @@ and again in the tool handler.
   registry, with its CLI and MCP surfaces derived from it.
 - [ORB-16957] — declared the agent scorecard registry behind the
   `orbit agents` CLI and MCP tools, with deprecated orchestrator aliases.
-- [ORB-17118] — reworked the orchestrator score the deprecated aliases
-  return so it measures spec quality.
+- [ORB-23582] — removed the orchestrator aliases and the orchestrators role.
 - [ORB-21243] — added the governed resident checkpoint write through the
   shared operation registry.
 - [ORB-21248] — added evolution ledger operations through the shared registry.

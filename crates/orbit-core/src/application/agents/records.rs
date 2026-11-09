@@ -59,15 +59,6 @@ pub(in crate::application) enum Cause {
     Other,
 }
 
-impl Cause {
-    pub(in crate::application) const ALL: [Cause; 4] = [
-        Cause::Spec,
-        Cause::Crew,
-        Cause::Infrastructure,
-        Cause::Other,
-    ];
-}
-
 /// One implementation run: from the entry that moved the task into
 /// `in-progress` to the next status change, open while none followed.
 #[derive(Debug, Clone, Copy)]

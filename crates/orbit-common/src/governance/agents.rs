@@ -37,7 +37,6 @@ pub const AGENTS: NounSpec<AgentsVerb> = NounSpec {
 };
 
 const ROLES: &[EnumValue] = &[
-    EnumValue::plain("orchestrators"),
     EnumValue::plain("implementers"),
     EnumValue::plain("reviewers"),
     EnumValue::plain("pilots"),
@@ -59,7 +58,7 @@ const WINDOWS: &[EnumValue] = &[
 const ROLE: &[ParamSpec] = &[required(both(
     "role",
     ParamType::Enum(ROLES),
-    "The agent role to score: orchestrators, implementers, reviewers or pilots.",
+    "The agent role to score: implementers, reviewers or pilots.",
     CliArgKind::flag("role"),
     "The agent role to score",
 ))];
@@ -158,9 +157,9 @@ const ROW: &[ParamSpec] = &[
     required(both(
         "crew",
         ParamType::String,
-        "The row's crew; for orchestrators, the orchestrator name tasks record.",
+        "The row's crew.",
         CliArgKind::flag("crew"),
-        "The row's crew, or the orchestrator name tasks record",
+        "The row's crew",
     )),
     both(
         "row_effort",

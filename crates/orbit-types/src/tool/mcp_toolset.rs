@@ -55,7 +55,7 @@ pub enum McpToolset {
     Leases,
     /// Experiment definitions, lifecycle and readouts.
     Experiments,
-    /// Agent and orchestrator scorecards.
+    /// Agent scorecards.
     Analytics,
     /// A decision channel's own callbacks (submit and digest).
     DecisionChannel,

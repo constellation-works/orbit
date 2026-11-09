@@ -8,7 +8,7 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
-use orbit_types::task::{TaskComplexity, TaskOrigin, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::bound_server::{Announcement, BoundServer};
@@ -27,20 +27,18 @@ fn scan_independent(mut payload: Value) -> Value {
 
 /// `orbit agents scorecard|show` and the `orbit.agents.*` tools answer the
 /// dashboard's `/api/agents/{role}/*` payload from one scan per call; an
-/// unknown role is refused; `orbit orchestrator` and `orbit.orchestrator.*`
-/// answer the orchestrators payload with a note naming the replacement.
+/// unknown role, including the removed orchestrators role, is refused.
 #[test]
-fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them() {
-    if crate::isolated_test::run_in_child(
-        "agents_cli::agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them",
-    ) {
+fn agents_cli_and_tools_serve_the_api_payload() {
+    if crate::isolated_test::run_in_child("agents_cli::agents_cli_and_tools_serve_the_api_payload")
+    {
         return;
     }
 
     let fixture = Fixture::new();
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    let (landed, dropped) = {
+    let landed = {
         // A managed run exports worker authority that would bind the fixture
         // runtime to the live store.
         let _authority = orbit_common::test_env::unset(
@@ -51,22 +49,65 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
             .unwrap()
             .with_actor(ActorIdentity::human("agents-fixture"));
-        let add = |title: &str, orchestrator: &str, origin: Option<TaskOrigin>, status| {
+        let workspace = runtime.workspace_id().unwrap();
+        // One implemented task per call: the agent's move into in-progress
+        // starts the attempt, and the implementation run on `crew` and
+        // `model` that began before it and finished during it worked it.
+        let implement = |run_id: &str, crew: &str, model: &str, status| {
             let id = runtime
                 .add_task(TaskAddParams {
-                    title: title.into(),
+                    title: format!("implemented by {run_id}"),
                     description: "agent scorecard fixture".into(),
-                    orchestrator: Some(orchestrator.into()),
-                    origin,
+                    plan: "implement the change".into(),
                     complexity: TaskComplexity::Hard,
                     ..Default::default()
                 })
                 .unwrap()
                 .id
                 .to_string();
-            // An orchestrator is attributed in the backlog; settle the task
-            // after, as the human override does.
-            if status != TaskStatus::Backlog {
+            runtime
+                .update_task_with_identity(
+                    &id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    Some("claude".into()),
+                    Some(model.into()),
+                )
+                .unwrap();
+            let finished = Utc::now();
+            let started = finished - chrono::Duration::hours(1);
+            runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &workspace,
+                    &JobRun {
+                        build: None,
+                        run_id: run_id.into(),
+                        job_id: "task_pr_pipeline".into(),
+                        attempt: 1,
+                        state: JobRunState::Success,
+                        scheduled_at: started,
+                        created_at: started,
+                        started_at: Some(started),
+                        finished_at: Some(finished),
+                        duration_ms: None,
+                        pid: None,
+                        pid_start_time: None,
+                        input: Some(json!({ "task_ids": [id] })),
+                        retry_source_run_id: None,
+                        knowledge_metrics: None,
+                        resolved_crew: Some(crew.into()),
+                        crew_model: Some(model.into()),
+                        steps: Vec::new(),
+                        executed_on: None,
+                    },
+                    None,
+                )
+                .unwrap();
+            if status != TaskStatus::InProgress {
                 runtime
                     .force_update_task_with_identity(
                         &id,
@@ -81,35 +122,35 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             }
             id
         };
-        let landed = add(
-            "landed",
+        let landed = implement("jrun-opus-1", "opus", "claude-opus-5-5", TaskStatus::Done);
+        implement(
+            "jrun-opus-2",
             "opus",
-            Some(TaskOrigin::OrchestratorInitiative),
-            TaskStatus::Done,
+            "claude-opus-5-5",
+            TaskStatus::InProgress,
         );
-        add("open", "opus", None, TaskStatus::Backlog);
-        let dropped = add(
-            "dropped",
+        implement(
+            "jrun-sonnet-1",
             "sonnet",
-            Some(TaskOrigin::OrchestratorInitiative),
-            TaskStatus::Rejected,
+            "claude-sonnet-5-5",
+            TaskStatus::InProgress,
         );
-        (landed, dropped)
+        landed
     };
 
     let selection = ["--window", "30d", "--min-support", "2"];
-    let input = json!({ "role": "orchestrators", "window": "30d", "min_support": 2 });
+    let input = json!({ "role": "implementers", "window": "30d", "min_support": 2 });
 
     // The command and the tool scan once per call and keep nothing.
     let scorecard = fixture.json(
         &[
-            &["agents", "scorecard", "--role", "orchestrators"][..],
+            &["agents", "scorecard", "--role", "implementers"][..],
             &selection,
             &["--json"],
         ]
         .concat(),
     );
-    assert_eq!(scorecard["role"], "orchestrators", "{scorecard}");
+    assert_eq!(scorecard["role"], "implementers", "{scorecard}");
     assert_eq!(scorecard["cache_ttl_seconds"], 0, "{scorecard}");
     let rows = scorecard["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{scorecard}");
@@ -139,7 +180,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         "agents",
         "scorecard",
         "--role",
-        "orchestrators",
+        "implementers",
         "--window",
         "last1000",
         "--min-support",
@@ -150,7 +191,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     assert_eq!(last1000["window_attempts"], 1000, "{last1000}");
 
     let detail_input = json!({
-        "role": "orchestrators", "crew": "sonnet", "window": "30d", "min_support": 2,
+        "role": "implementers", "crew": "sonnet", "window": "30d", "min_support": 2,
     });
     let detail = fixture.json(
         &[
@@ -158,7 +199,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
                 "agents",
                 "show",
                 "--role",
-                "orchestrators",
+                "implementers",
                 "--crew",
                 "sonnet",
             ][..],
@@ -217,14 +258,14 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             assert!(response.status().is_success(), "GET {path}: {response:?}");
             response.json().expect("JSON body")
         };
-        let api = get("/api/agents/orchestrators/scorecard?window=30d&min_support=2");
+        let api = get("/api/agents/implementers/scorecard?window=30d&min_support=2");
         assert_eq!(
             scan_independent(scorecard.clone()),
             scan_independent(api),
             "the command prints the API's scorecard"
         );
         let api_detail =
-            get("/api/agents/orchestrators/detail?window=30d&min_support=2&crew=sonnet");
+            get("/api/agents/implementers/detail?window=30d&min_support=2&crew=sonnet");
         assert_eq!(
             scan_independent(detail.clone()),
             scan_independent(api_detail),
@@ -232,43 +273,9 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         );
     }
 
-    let dropped_term = detail["terms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|term| term["tasks"].as_array().unwrap())
-        .any(|task| task["task_id"] == dropped.as_str());
-    let landed_term = fixture.json(
-        &[
-            &[
-                "agents",
-                "show",
-                "--role",
-                "orchestrators",
-                "--crew",
-                "opus",
-            ][..],
-            &selection,
-            &["--json"],
-        ]
-        .concat(),
-    )["terms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|term| term["key"] == "landed")
-        .unwrap()
-        .clone();
-    assert!(!dropped_term, "a dropped task earns no term: {detail}");
-    assert_eq!(
-        landed_term["count"], 1,
-        "a landing counts once, whatever its complexity: {landed_term}"
-    );
-    assert_eq!(landed_term["tasks"][0]["task_id"], landed.as_str());
-
     // An unknown role is refused by name on both surfaces.
     let refused = fixture
-        .command(&["agents", "scorecard", "--role", "operators"])
+        .command(&["agents", "scorecard", "--role", "orchestrators"])
         .assert()
         .failure()
         .get_output()
@@ -276,7 +283,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         .clone();
     let refused = String::from_utf8_lossy(&refused);
     assert!(
-        refused.contains("operators") && refused.contains("orchestrators"),
+        refused.contains("orchestrators") && refused.contains("implementers"),
         "the refusal names the role and the choices: {refused}"
     );
     let refused = fixture
@@ -285,7 +292,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             "run",
             "orbit.agents.scorecard",
             "--input",
-            &json!({ "role": "operators" }).to_string(),
+            &json!({ "role": "orchestrators" }).to_string(),
         ])
         .assert()
         .failure()
@@ -297,59 +304,8 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         String::from_utf8_lossy(&refused.stderr)
     );
     assert!(
-        refused.contains("operators") && refused.contains("orchestrators"),
+        refused.contains("orchestrators") && refused.contains("implementers"),
         "the tool refusal names the role and the choices: {refused}"
-    );
-
-    // The deprecated aliases answer the orchestrators payload and name the
-    // replacement: in the payload, and on stderr for the command.
-    let alias = fixture
-        .command(&[&["orchestrator", "scorecard"][..], &selection, &["--json"]].concat())
-        .assert()
-        .success()
-        .get_output()
-        .clone();
-    let warning = String::from_utf8_lossy(&alias.stderr);
-    assert!(
-        warning.contains("deprecated") && warning.contains("orbit agents scorecard"),
-        "the alias names `orbit agents`: {warning}"
-    );
-    let mut alias: Value = serde_json::from_slice(&alias.stdout).unwrap();
-    let note = alias
-        .as_object_mut()
-        .unwrap()
-        .remove("deprecation")
-        .unwrap();
-    assert!(
-        note.as_str().unwrap().contains("orbit.agents.scorecard"),
-        "{note}"
-    );
-    assert_eq!(
-        scan_independent(alias),
-        scan_independent(scorecard),
-        "the alias answers the orchestrators scorecard"
-    );
-    let mut alias_tool = fixture.json(&[
-        "tool",
-        "run",
-        "orbit.orchestrator.show",
-        "--full",
-        "--input",
-        &json!({ "orchestrator": "sonnet", "window": "30d", "min_support": 2 }).to_string(),
-    ]);
-    let note = alias_tool
-        .as_object_mut()
-        .unwrap()
-        .remove("deprecation")
-        .unwrap();
-    assert!(
-        note.as_str().unwrap().contains("orbit.agents.show"),
-        "{note}"
-    );
-    assert_eq!(
-        scan_independent(alias_tool),
-        scan_independent(detail),
-        "the show alias answers the orchestrators detail"
     );
 
     // The human views list each row and the tasks behind a count.
@@ -364,19 +320,12 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
             .clone();
         String::from_utf8(out).unwrap()
     };
-    let table = human(&["agents", "scorecard", "--role", "orchestrators"]);
+    let table = human(&["agents", "scorecard", "--role", "implementers"]);
     assert!(
         table.contains("opus") && table.contains("sonnet"),
-        "one row per orchestrator:\n{table}"
+        "one row per implementer crew and model:\n{table}"
     );
-    let shown = human(&[
-        "agents",
-        "show",
-        "--role",
-        "orchestrators",
-        "--crew",
-        "opus",
-    ]);
+    let shown = human(&["agents", "show", "--role", "implementers", "--crew", "opus"]);
     assert!(
         shown
             .lines()
@@ -391,7 +340,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         fixture
             .command(
                 &[
-                    &["agents", "scorecard", "--role", "orchestrators"][..],
+                    &["agents", "scorecard", "--role", "implementers"][..],
                     &selection,
                     extra,
                 ]
@@ -436,13 +385,7 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
 
     // An empty scorecard leaves stdout empty; its status is on stderr.
     let empty = fixture
-        .command(
-            &[
-                &["agents", "scorecard", "--role", "implementers"][..],
-                &selection,
-            ]
-            .concat(),
-        )
+        .command(&[&["agents", "scorecard", "--role", "pilots"][..], &selection].concat())
         .env("NO_COLOR", "1")
         .assert()
         .success()
@@ -716,158 +659,6 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
     assert_eq!(by_model["row"]["model"], MODELS[0], "{by_model}");
 }
 
-/// A crew whose tasks record two orchestrator models, one filed without a
-/// recorded model (`model unknown`), keeps the deprecated `orbit orchestrator
-/// show` and `orbit.orchestrator.show` aliases answering. Each model's row is
-/// selected by `--model` (CLI) or `row_model` (tool), as on `orbit agents
-/// show`, and the main Agents scorecard keeps one row per model.
-#[test]
-fn orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models() {
-    if crate::isolated_test::run_in_child(
-        "agents_cli::orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models",
-    ) {
-        return;
-    }
-
-    const CREW: &str = "opus";
-    const RECORDED: &str = "claude-opus-5-5";
-    const LEGACY: &str = "model unknown";
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    {
-        // A managed run exports worker authority that would bind the fixture
-        // runtime to the live store.
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        // Filed without an orchestrator and given one afterward, which records
-        // no model: the stored shape of a task filed before the field existed.
-        let legacy = runtime
-            .add_task(TaskAddParams {
-                title: "legacy".into(),
-                description: "orchestrator alias fixture".into(),
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &legacy,
-                TaskUpdateParams {
-                    orchestrator: Some(Some(CREW.into())),
-                    ..Default::default()
-                },
-                None,
-                None,
-            )
-            .unwrap();
-        runtime
-            .add_task(TaskAddParams {
-                title: "recorded".into(),
-                description: "orchestrator alias fixture".into(),
-                orchestrator: Some(CREW.into()),
-                orchestrator_model: Some(RECORDED.into()),
-                ..Default::default()
-            })
-            .unwrap();
-    }
-
-    // Main Agents keeps one row per recorded model.
-    let scorecard = fixture.json(&["agents", "scorecard", "--role", "orchestrators", "--json"]);
-    let models: Vec<&str> = scorecard["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["crew"] == CREW)
-        .map(|row| row["model"].as_str().unwrap())
-        .collect();
-    assert_eq!(models.len(), 2, "one row per model: {scorecard}");
-    assert!(
-        models.contains(&LEGACY) && models.contains(&RECORDED),
-        "{scorecard}"
-    );
-
-    // Without a selector the tool alias refuses rather than pick a row.
-    let refused = fixture
-        .command(&[
-            "tool",
-            "run",
-            "orbit.orchestrator.show",
-            "--input",
-            &json!({ "orchestrator": CREW }).to_string(),
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
-    let refused: Value = serde_json::from_slice(&refused).unwrap();
-    assert_eq!(refused["code"], "invalid_input", "{refused}");
-
-    for model in [LEGACY, RECORDED] {
-        // The CLI alias takes `--model`, as `orbit agents show` does.
-        let mut alias = fixture.json(&["orchestrator", "show", CREW, "--model", model, "--json"]);
-        alias
-            .as_object_mut()
-            .unwrap()
-            .remove("deprecation")
-            .unwrap();
-        let detail = fixture.json(&[
-            "agents",
-            "show",
-            "--role",
-            "orchestrators",
-            "--crew",
-            CREW,
-            "--model",
-            model,
-            "--json",
-        ]);
-        assert_eq!(alias["row"]["model"], model, "{alias}");
-        assert_eq!(
-            scan_independent(alias),
-            scan_independent(detail),
-            "the CLI alias answers the {model} row as main Agents does"
-        );
-
-        // The tool takes `row_model`, as `orbit.agents.show` does.
-        let mut alias_tool = fixture.json(&[
-            "tool",
-            "run",
-            "orbit.orchestrator.show",
-            "--full",
-            "--input",
-            &json!({ "orchestrator": CREW, "row_model": model }).to_string(),
-        ]);
-        alias_tool
-            .as_object_mut()
-            .unwrap()
-            .remove("deprecation")
-            .unwrap();
-        let agents_tool = fixture.json(&[
-            "tool",
-            "run",
-            "orbit.agents.show",
-            "--full",
-            "--input",
-            &json!({ "role": "orchestrators", "crew": CREW, "row_model": model }).to_string(),
-        ]);
-        assert_eq!(alias_tool["row"]["model"], model, "{alias_tool}");
-        assert_eq!(
-            scan_independent(alias_tool),
-            scan_independent(agents_tool),
-            "the tool alias answers the {model} row as orbit.agents.show does"
-        );
-    }
-}
-
 /// `--by-type` returns the cell matrix and the configured type list, is
 /// refused for other roles, and leaves the plain ranking's shape alone.
 #[test]
@@ -1007,7 +798,7 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
             "agents",
             "scorecard",
             "--role",
-            "orchestrators",
+            "reviewers",
             "--by-type",
             "--json",
         ])

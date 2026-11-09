@@ -4,7 +4,6 @@
 //! terms, so adding it later changes only its own file.
 
 mod implementers;
-mod orchestrators;
 pub(super) mod pilot_warnings;
 pub(super) mod pilots;
 mod reviewers;
@@ -76,7 +75,6 @@ pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;
 
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {
     match role {
-        AgentRole::Orchestrators => &orchestrators::ROLE,
         AgentRole::Implementers => &implementers::ROLE,
         AgentRole::Reviewers => &reviewers::ROLE,
         AgentRole::Pilots => &pilots::ROLE,

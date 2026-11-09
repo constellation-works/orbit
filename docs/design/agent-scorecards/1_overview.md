@@ -9,7 +9,7 @@ next: "—"
 feature: agent-scorecards
 doc_role: overview
 type: design
-summary: One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role.
+summary: One scorecard per agent role (implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role.
 tags: [agent-scorecards, dashboard, analytics]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/assets/dashboard/js/agents.js"]
 related_features: [user-interface, review-gate, finding-verification]
@@ -18,7 +18,7 @@ related_artifacts: []
 
 # Agent Scorecards — Overview
 
-Agent scorecards rank the agents that do each part of Orbit's delivery work: the orchestrators that file and supervise tasks, the implementers that write the change, the reviewers that gate it, and the task pilots that predict its footprint and complexity. Each role gets one scorecard of the same shape, ranked by crew and model, in the Analytics › **Agents** dashboard view (`#analytics/agents/<role>`). Each problem attributed to an agent (a spec edit, a rejected review, a missed regression, a wasted lock) counts against exactly one role, so a single defect never lowers two rankings; problems with no agent at fault are shown as **Not scored**.
+Agent scorecards rank the agents that do each part of Orbit's delivery work: the implementers that write the change, the reviewers that gate it, and the task pilots that predict its footprint and complexity. Each role gets one scorecard of the same shape, ranked by crew and model, in the Analytics › **Agents** dashboard view (`#analytics/agents/<role>`). Each problem attributed to an agent (a spec edit, a rejected review, a missed regression, a wasted lock) counts against exactly one role, so a single defect never lowers two rankings; problems with no agent at fault are shown as **Not scored**.
 
 ## 1. Motivation
 
@@ -26,22 +26,24 @@ Orbit ranked orchestrators (Analytics › Orchestrators, now in Analytics › Ag
 
 The orchestrator composite also charges the orchestrator for crew-caused rework. On the 7-day data that motivated this feature, 22 of opus's 28 rework items had cause `crew`, so its score mostly measured its implementers. Separate implementer and reviewer scorecards can only be fair if each attributable problem has one owner.
 
+The orchestrators role this feature first shipped with was removed on 2026-11-09 for lack of use (ORB-23582). Problems a task's specification caused are now Not scored, and task authorship is no longer ranked.
+
 ## 2. Core Concepts
 
-- **Role**: orchestrator, implementer, reviewer or pilot. A role is defined by the record that shows the work, not by the crew's name.
-- **Ranking unit**: the crew and model attributed to the role's work. Orchestrators use the task's `orchestrator` and `orchestrator_model`; the other roles resolve their implementation, review or pilot evidence as described in [the design](./2_design.md#2-ranking-unit). Missing model evidence is ranked as `model unknown`.
+- **Role**: implementer, reviewer or pilot. A role is defined by the record that shows the work, not by the crew's name.
+- **Ranking unit**: the crew and model attributed to the role's work. The roles resolve their implementation, review or pilot evidence as described in [the design](./2_design.md#2-ranking-unit). Missing model evidence is ranked as `model unknown`.
 - **Problem**: a recorded occurrence that counts against a role: a spec edit, review reject, repeat run, regression, false alarm, wasted lock wait.
 - **Term**: one counted component of a role's score, with a fixed weight.
 - **Raw score**: the weighted sum of a row's term rates, using each term's denominator. Implementers start at 100 and sum weighted actual-minus-expected rates for their task mix.
 - **Score**: the raw score, pulled down toward the fleet average when above it, in proportion to how little work backs it.
-- **Not scored**: problems with no agent at fault (infrastructure, nondeterminism, no recorded cause). They are shown so they can be fixed, never charged to anyone.
+- **Not scored**: problems with no agent at fault (infrastructure, nondeterminism, no recorded cause) or a cause no role is ranked for (a spec defect). They are shown so they can be fixed, never charged to anyone.
 
 ## 3. At a Glance
 
 | Concern | File | Task |
 |---------|------|------|
 | Problem attribution and the shared score | [2_design.md §3–§4](./2_design.md#3-attribution-each-problem-has-one-owner) | ORB-16952 (landed; strip clarified by ORB-19644) |
-| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | ORB-16952 (orchestrators), ORB-16954 (implementers), ORB-16955 (reviewers), ORB-16956 (pilots), ORB-17779 (tier expectations) |
+| Each role's terms and weights | [2_design.md §5](./2_design.md#5-roles) | ORB-16952 (orchestrators, removed by ORB-23582), ORB-16954 (implementers), ORB-16955 (reviewers), ORB-16956 (pilots), ORB-17779 (tier expectations) |
 | API, CLI and MCP contract | [2_design.md §6–§7](./2_design.md#6-api-contract) | ORB-16952 (API), ORB-16957 (CLI and MCP) |
 | Delivery tracks and their order | [2_design.md §10](./2_design.md#10-delivery-plan) | ORB-16952, ORB-16953, ORB-16954, ORB-16955, ORB-16956, ORB-16957 (tracks B–G, all landed) |
 | Standing rules | [4_decisions.md](./4_decisions.md) | — |
@@ -54,6 +56,7 @@ The orchestrator composite also charges the orchestrator for crew-caused rework.
 - ORB-16954 — the Implementers role whose terms this overview summarizes.
 - ORB-16955 — the Reviewers role whose terms this overview summarizes.
 - ORB-16956 — the Pilots role whose terms this overview summarizes.
+- ORB-23582 — removed the orchestrators role and its CLI, MCP and HTTP surfaces.
 - ORB-16957 — the CLI and MCP contract for the scorecards.
 - ORB-17779 — the same-tier fleet expectations behind each role's terms.
 - ORB-19644 — the strip-ownership clarification behind the attribution row.

@@ -7,7 +7,6 @@ use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::experiment::EXPERIMENT;
 use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::notice::NOTICE;
-use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::resident::RESIDENT;
 use orbit_common::governance::task::TASK;
 use orbit_common::governance::workflow::WORKFLOW;
@@ -78,8 +77,6 @@ pub fn register(registry: &mut ToolRegistry) {
     operation::register_noun(registry, &AGENTS);
     // The read-only condition-trigger explain.
     operation::register_noun(registry, &AUTOMATION);
-    // The deprecated orchestrator scorecard aliases of the agents tools.
-    operation::register_noun(registry, &ORCHESTRATOR);
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);

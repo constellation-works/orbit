@@ -948,11 +948,11 @@ fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_cre
 
 /// One fixture workspace, read through the runtime API and the routes: every
 /// problem has exactly one owner or a Not scored reason and the attribution
-/// totals are the problems behind the four roles; a task two crews worked
-/// charges each crew only for its own attempt and credits the final run; a
-/// pulled attempt with no local run charges the crew its history assigned;
-/// the orchestrator ranking keeps an incomplete, untested regression off the
-/// orchestrator and the implementer score while retaining its implementer
+/// totals are the problems behind the three roles; spec-caused problems
+/// are Not scored; a task two crews worked charges each crew only for its
+/// own attempt and credits the final run; a pulled attempt with no local run
+/// charges the crew its history assigned; an incomplete, untested regression
+/// stays off the implementer score while retaining its implementer
 /// ownership; and every selection after the first scan is served from the cached scan.
 #[test]
 fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_scan() {
@@ -1281,7 +1281,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             );
             assert_eq!(
                 owner_of(&edited, Problem::SpecEdit),
-                vec![(Owner::Role(AgentRole::Orchestrators), Some("opus".into()))]
+                vec![(Owner::NotScored("spec"), None)],
+                "no agent role scores task authorship"
             );
             assert_eq!(
                 owner_of(&interrupted, Problem::OperatorRequeue),
@@ -1310,18 +1311,14 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                     Owner::Role(AgentRole::Reviewers),
                     Some("astra".into()),
                 ),
-                (
-                    edited.clone(),
-                    Owner::Role(AgentRole::Orchestrators),
-                    Some("opus".into()),
-                ),
                 (edited.clone(), Owner::NotScored("nondeterministic"), None),
+                (edited.clone(), Owner::NotScored("spec"), None),
             ];
             expected.sort();
             assert_eq!(
                 regressions, expected,
-                "an incomplete, untested regression is the final implementer's; only \
-                 spec_ambiguous reaches the orchestrator"
+                "an incomplete, untested regression is the final implementer's; \
+                 spec_ambiguous is Not scored"
             );
 
             // Each crew is charged only inside its own attempt, and the
@@ -1456,8 +1453,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             // served from that scan.
             let server = fixture.counted_task_server();
             let before = server.task_query_trace().len();
-            let scorecard = json_ok(server.get(&format!(
-                "/api/agents/orchestrators/scorecard?{WS}&window=30d&min_support=3"
+            let implemented_http = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
             )));
             let cold = server.task_query_trace()[before..].to_vec();
             assert!(
@@ -1465,68 +1462,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "the first request scans: {cold:?}"
             );
             let warm_from = server.task_query_trace().len();
-
-            assert_eq!(scorecard["status"], "ok");
-            assert_eq!(scorecard["window"], "30d");
-            let terms: Vec<&str> = scorecard["terms"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|term| term["key"].as_str().unwrap())
-                .collect();
-            let rows = scorecard["rows"].as_array().unwrap();
-            assert_eq!(rows.len(), 2, "one row per orchestrator: {scorecard}");
-            let (opus, sonnet) = (&rows[0], &rows[1]);
-            assert_eq!(
-                (&opus["crew"], &opus["model"], &opus["units"], &opus["rank"]),
-                (&json!("opus"), &json!("opus"), &json!(4), &json!(1)),
-                "an orchestrator row carries the model its crew was configured with when the tasks were created: {opus}"
-            );
-            assert_eq!(
-                (&sonnet["crew"], &sonnet["below_support"], &sonnet["rank"]),
-                (&json!("sonnet"), &json!(true), &Value::Null),
-                "a row below the minimum support comes last, unranked: {sonnet}"
-            );
-            assert_eq!(opus["counts"]["spec_defects"], 2, "{opus}");
-            assert_eq!(opus["counts"]["spec_rework"], 0, "{opus}");
-            let fleet = as_f64(&scorecard["fleet_average"]);
-            for row in rows {
-                let units = as_f64(&row["units"]);
-                for term in &terms {
-                    let rate = as_f64(&row["counts"][term]) * 100.0 / units;
-                    assert!(
-                        (as_f64(&row["per_100"][term]) - rate).abs() < 0.01,
-                        "{term} is a rate per 100 owned tasks: {row}"
-                    );
-                }
-                let (raw, score) = (as_f64(&row["raw"]), as_f64(&row["score"]));
-                assert!(
-                    score <= raw && score >= raw.min(fleet),
-                    "the score is the raw score, pulled down toward the fleet average at most: {row}"
-                );
-            }
-
-            let detail = json_ok(server.get(&format!(
-                "/api/agents/orchestrators/detail?{WS}&window=30d&min_support=3&crew=opus"
-            )));
-            assert_eq!(detail["row"], *opus);
-            let spec_defects = detail["terms"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|term| term["key"] == "spec_defects")
-                .unwrap();
-            let tasks: Vec<&str> = spec_defects["tasks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|task| task["task_id"].as_str().unwrap())
-                .collect();
-            assert_eq!(
-                tasks,
-                vec![edited.as_str()],
-                "the mid-run edit and the spec_ambiguous regression; not the untested one"
-            );
+            assert_eq!(implemented_http["rows"], implemented["rows"]);
+            assert_eq!(implemented_http["terms"], implemented["terms"]);
 
             // Attribution retains unscored implementer context, independently of scores.
             let strip = json_ok(server.get(&format!("/api/agents/attribution?{WS}&window=30d")));
@@ -1534,13 +1471,12 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             assert_eq!(
                 owners,
                 &json!({
-                    "orchestrators": 2,
                     "implementers": 5,
                     "reviewers": 2,
                     "pilots": 0,
                     "not_scored": {
-                        "count": 2,
-                        "reasons": {"infrastructure": 1, "nondeterministic": 1},
+                        "count": 4,
+                        "reasons": {"infrastructure": 1, "nondeterministic": 1, "spec": 2},
                     },
                 }),
                 "{strip}"
@@ -1552,12 +1488,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 strip_before["owners"]["implementers"].as_u64().unwrap() + 1,
                 "the no_test escape adds one Implementers-owned problem, regardless of severity"
             );
-            let implemented_http = json_ok(server.get(&format!(
-                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
-            )));
-            assert_eq!(implemented_http["rows"], implemented["rows"]);
-            assert_eq!(implemented_http["terms"], implemented["terms"]);
-            for role in ["orchestrators", "implementers", "reviewers", "pilots"] {
+            for role in ["implementers", "reviewers", "pilots"] {
                 let charged: u64 = strip["charged"][role]
                     .as_array()
                     .unwrap()
@@ -1566,17 +1497,6 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                     .sum();
                 assert_eq!(owners[role], charged, "{role} rows sum to its total");
             }
-            let ranked: f64 = rows
-                .iter()
-                .map(|row| {
-                    as_f64(&row["counts"]["spec_defects"]) + as_f64(&row["counts"]["spec_rework"])
-                })
-                .sum();
-            assert_eq!(
-                ranked,
-                as_f64(&owners["orchestrators"]),
-                "the orchestrator ranking counts every orchestrator charge"
-            );
             assert!(
                 strip["charged"]["implementers"]
                     .as_array()
@@ -1599,7 +1519,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 (&json!("90d"), &json!("all"))
             );
             json_ok(server.get(&format!(
-                "/api/agents/orchestrators/scorecard?{WS}&window=7d&min_support=1"
+                "/api/agents/implementers/scorecard?{WS}&window=7d&min_support=1"
             )));
             // The model ranking slices the same scan. The fixture's work is
             // hours old, so only the live board sees it; a run without a
@@ -1636,10 +1556,10 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
 
             for refused in [
                 format!("/api/agents/coders/scorecard?{WS}"),
-                format!("/api/agents/orchestrators/scorecard?{WS}&window=1y"),
-                format!("/api/agents/orchestrators/scorecard?{WS}&min_support=0"),
-                format!("/api/agents/orchestrators/detail?{WS}"),
-                format!("/api/agents/orchestrators/detail?{WS}&crew=nobody"),
+                format!("/api/agents/orchestrators/scorecard?{WS}"),
+                format!("/api/agents/implementers/scorecard?{WS}&window=1y"),
+                format!("/api/agents/implementers/scorecard?{WS}&min_support=0"),
+                format!("/api/agents/implementers/detail?{WS}"),
                 format!("/api/agents/implementers/detail?{WS}&crew=nobody"),
                 format!("/api/agents/attribution?{WS}&window=1y"),
                 format!("/api/agents/rank?{WS}&settle_lag=soon"),
@@ -1650,17 +1570,12 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 if refused.contains("crew=nobody") {
                     let body: Value = response.json().unwrap();
                     let message = body["error"].as_str().unwrap();
-                    let role = if refused.contains("/implementers/") {
-                        "implementers"
-                    } else {
-                        "orchestrators"
-                    };
                     for part in [
-                        format!("/api/agents/{role}/scorecard"),
-                        "window query parameter".into(),
-                        "no work in the window has no row".into(),
+                        "/api/agents/implementers/scorecard",
+                        "window query parameter",
+                        "no work in the window has no row",
                     ] {
-                        assert!(message.contains(&part), "{body}");
+                        assert!(message.contains(part), "{body}");
                     }
                     for part in ["--window", "orbit agents", "orbit_agents_", "orbit.agents."] {
                         assert!(!message.contains(part), "{body}");
