@@ -169,7 +169,7 @@ fn embedded_defaults_digest() -> &'static str {
     DIGEST.get_or_init(|| {
         let mut hasher = Sha256::new();
         for (asset_kind, assets) in [
-            ("skill", &DEFAULT_SKILL_FILES[..]),
+            ("skill", DEFAULT_SKILL_FILES),
             ("activity", DEFAULT_ACTIVITY_FILES),
             ("job", DEFAULT_JOB_FILES),
             ("executor", DEFAULT_EXECUTOR_FILES),
