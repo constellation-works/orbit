@@ -411,6 +411,42 @@ exec {shlex.quote(sys.executable)} "$@"
                 self.assert_self_tests(True)
                 self.assertTrue((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
 
+    def test_vendored_standards_inputs_select_self_tests_and_ordinary_docs_do_not(self):
+        """A docs/standards, AGENTS.md or CLAUDE.md-only edit runs the self-tests."""
+        self.prepare_ci()
+        self.init_ci_git()
+        # The crate commit is the base, so the only candidate input is the file below.
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        ordinary = self.root / "docs/guide.md"
+        ordinary.parent.mkdir(parents=True, exist_ok=True)
+        ordinary.write_text("# guide\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/guide.md", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(False)
+        ordinary.unlink()
+        # The reported reproduction touches only docs/standards/check.sh.
+        check = self.root / "docs/standards/check.sh"
+        original = check.read_text()
+        check.write_text(original + "# changed input\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/standards/check.sh", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(True)
+        check.write_text(original)
+        for path in ("docs/standards/STD-99-test/STD-99.md", "AGENTS.md", "CLAUDE.md"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# changed input\n")
+            for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+                with self.subTest(path=path, flag=flag):
+                    result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_self_tests(True)
+            target.unlink()
+
     def test_unresolvable_base_runs_every_self_test(self):
         self.prepare_ci()
         self.init_ci_git()
