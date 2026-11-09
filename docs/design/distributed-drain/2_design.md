@@ -1179,8 +1179,17 @@ recorded revoked authority.
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
-within the inherited-recovery budget below; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
-once. A job that concluded `cancelled` or `timed_out` is transient from that conclusion even when its log cannot be read, and so is a failure job whose log is only a `ci-await` of those conclusions or only a `ci-await` timeout. A job that concluded `failure` keeps log classification; a mixed failure is not reduced to this set. When the one shared rerun is already spent and those jobs are still cancelled or timed out, landing records `required CI jobs keep cancelling or timing out` and the job names, and dispatches no repair agent. An untouched-path failure waits for same-check base evidence: a successful completed push
+within the inherited-recovery budget below. Logged infrastructure/transient failures use the
+configured per-PR-head `workflow.ci_infrastructure_retry.max_attempts` budget (default 3) and its
+exponential backoff, when the complete authenticated failed-job set is eligible; a candidate
+failure in the set vetoes that shared action. Flaky failures and sets transient solely because jobs
+concluded `cancelled` or `timed_out` retain one shared rerun. A job with either conclusion is in
+that single-rerun set even when its log cannot be read, as is a failure job whose log is only a
+`ci-await` of those conclusions or only a `ci-await` timeout. A job that concluded `failure` keeps
+log classification; a mixed failure is not reduced to this set. When that single rerun is already
+spent and those jobs are still cancelled or timed out, landing records `required CI jobs keep
+cancelling or timing out` and the job names, and dispatches no repair agent. An untouched-path
+failure waits for same-check base evidence: a successful completed push
 run of the same job on the accepted base or a descendant through the landing tip authorizes one
 rerun of the failed `pull_request` run on its unchanged head. The base run may predate the
 candidate failure; there is no run-time or job-start freshness test. Orbit requests
