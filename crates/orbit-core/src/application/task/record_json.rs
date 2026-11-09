@@ -81,6 +81,13 @@ pub fn task_record_json(
             })
             | Err(OrbitError::Io(_))
             | Err(OrbitError::InvalidInput(_)) => false,
+            // A dangling or tampered artifact blob fails the full bundle
+            // read that resolves pilot evidence, even though the task's
+            // structural metadata (envelope, sidecars, manifest) is
+            // readable through the lightweight reads that built this row.
+            // Degrade only that payload failure; any other bundle damage
+            // keeps propagating below.
+            Err(error) if pilot_artifact_payload_corruption(&error) => false,
             Err(error) => return Err(error),
         }
     };
@@ -262,6 +269,22 @@ pub fn task_show_field_json(
             .or_else(|| runtime.task_crew_field_json(task, other))
             .ok_or_else(|| OrbitError::InvalidInput(unknown_task_show_field_message(other))),
     }
+}
+
+/// Whether `error` is the store's artifact-payload verification failure:
+/// a manifest entry whose blob is absent, or whose stored bytes no longer
+/// match the manifest's size or sha256. Those are the failures
+/// `validate_artifact_manifest_files` reports; manifest, envelope and
+/// sidecar damage reports differently and stays explicit.
+fn pilot_artifact_payload_corruption(error: &OrbitError) -> bool {
+    let reason = match error {
+        OrbitError::Store(message) => message.as_str(),
+        OrbitError::TaskBundleCorrupt { reason, .. } => reason.as_str(),
+        _ => return false,
+    };
+    reason.contains("artifact manifest references missing file")
+        || reason.contains("artifact manifest size mismatch")
+        || reason.contains("artifact manifest sha256 mismatch")
 }
 
 fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {

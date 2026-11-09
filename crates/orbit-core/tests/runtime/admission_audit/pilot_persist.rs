@@ -771,6 +771,111 @@ fn unreadable_assessment_degrades_show_and_refuses_admission() {
     }
 }
 
+fn dangling_or_corrupt_pilot_blob_degrades_show() {
+    // 0: blob absent with manifest retained. 1: same-length bytes whose
+    // sha256 no longer matches the manifest. 2: appended bytes whose size
+    // (and sha256) no longer match the manifest.
+    for variant in 0..3 {
+        let workspace = workspace(None);
+        let task = add_task(&workspace.runtime, "dangling audit", TaskStatus::Proposed);
+        let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+        assert_eq!(output["status"], "succeeded", "{output}");
+        let comment = workspace
+            .runtime
+            .get_task_comments(&task.id)
+            .expect("comments")
+            .into_iter()
+            .rev()
+            .find(|comment| comment.by == "task-pilot")
+            .expect("pilot receipt");
+        let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+        let path = reference["assessment_artifact"]
+            .as_str()
+            .expect("artifact path");
+        let blob = crate::artifact_tools::find_artifact_blob(
+            &workspace.runtime.global_root(),
+            &task.id,
+            path,
+        );
+        match variant {
+            0 => std::fs::remove_file(&blob).expect("remove blob"),
+            1 => {
+                let mut bytes = std::fs::read(&blob).expect("read blob");
+                bytes[0] ^= 0xff;
+                std::fs::write(&blob, &bytes).expect("tamper blob");
+            }
+            _ => {
+                let mut bytes = std::fs::read(&blob).expect("read blob");
+                bytes.push(b'x');
+                std::fs::write(&blob, &bytes).expect("append blob");
+            }
+        }
+        // Store integrity and admission stay fail-closed.
+        assert!(
+            matches!(
+                workspace.runtime.get_task(&task.id),
+                Err(orbit_common::OrbitError::TaskBundleCorrupt { .. })
+            ),
+            "variant {variant}: full bundle read must refuse damaged evidence"
+        );
+        workspace
+            .runtime
+            .has_resolvable_pilot_admission_hold(&task.id)
+            .expect_err("variant: admission must refuse damaged evidence");
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .unwrap_or_else(|error| {
+                panic!("variant {variant}: show must degrade damaged pilot evidence: {error}")
+            });
+        let warnings = shown["pilot_warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "variant {variant}: {shown}");
+        assert_eq!(
+            warnings[0]["kind"], "pilot_assessment_unavailable",
+            "variant {variant}: {shown}"
+        );
+        assert_eq!(
+            shown["resolvable_pilot_admission_hold"], false,
+            "variant {variant}: {shown}"
+        );
+    }
+
+    // Unrelated structural corruption stays an explicit show error.
+    let workspace = workspace(None);
+    let task = add_task(
+        &workspace.runtime,
+        "structurally corrupt",
+        TaskStatus::Proposed,
+    );
+    let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    let comment = workspace
+        .runtime
+        .get_task_comments(&task.id)
+        .expect("comments")
+        .into_iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .expect("pilot receipt");
+    let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("artifact path");
+    let blob =
+        crate::artifact_tools::find_artifact_blob(&workspace.runtime.global_root(), &task.id, path);
+    let bundle_dir = blob
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("bundle dir");
+    std::fs::write(bundle_dir.join("task.yaml"), ": [invalid envelope\n")
+        .expect("corrupt envelope");
+    workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .expect_err("structural corruption must remain an explicit show error");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     meaning_edits_name_the_drifted_component_and_write_nothing_scenarios,
@@ -782,5 +887,6 @@ crate::scenario_table!(
     configured_crew_and_dependency_meaning_drift_are_named,
     dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit,
     missing_assessment_artifact_degrades_only_its_own_readout,
-    unreadable_assessment_degrades_show_and_refuses_admission
+    unreadable_assessment_degrades_show_and_refuses_admission,
+    dangling_or_corrupt_pilot_blob_degrades_show
 );
