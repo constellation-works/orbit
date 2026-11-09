@@ -2,7 +2,7 @@
 import { el, pinnedInfoHint } from './common.js';
 
 const STATE_WORDS = {
-  done: "done", active: "in progress", pending: "not yet",
+  done: "done", active: "in progress", current: "current", pending: "not yet",
   failed: "failed", cancelled: "cancelled", awaiting: "awaiting approval",
 };
 

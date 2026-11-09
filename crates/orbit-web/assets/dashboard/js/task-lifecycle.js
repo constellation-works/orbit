@@ -80,7 +80,10 @@ function buildLifecycleStrip(status) {
   if (at < 0) return null;
   return progressStrip.buildProgressStrip(TASK_LIFECYCLE.map(([, label], index) => ({
     label,
-    state: index < at || status === "done" ? "done" : index === at ? "active" : "pending",
+    // The current lifecycle step is where the task stands, not work in
+    // progress: only the In progress step itself is in progress, and its
+    // label already says so.
+    state: index < at || status === "done" ? "done" : index === at ? "current" : "pending",
     current: index === at,
   })), { className: "task-lifecycle", label: "Lifecycle" });
 }

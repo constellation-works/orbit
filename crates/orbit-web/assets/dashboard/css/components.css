@@ -741,7 +741,7 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
 .progress-strip-hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; }
 .progress-strip-step[data-state="done"] .progress-strip-bar { background: var(--state-success); }
-.progress-strip-step[data-state="active"] .progress-strip-bar { background: var(--state-running); }
+.progress-strip-step:is([data-state="active"], [data-state="current"]) .progress-strip-bar { background: var(--state-running); }
 .progress-strip-step:is([aria-current="step"], [data-state="failed"], [data-state="cancelled"]) .progress-strip-hint { color: var(--fg-strong); font-weight: 600; }
 .progress-strip-step[data-state="failed"] { --strip-tone: var(--state-failed); }
 .progress-strip-step[data-state="cancelled"] { --strip-tone: var(--state-cancelled); }
