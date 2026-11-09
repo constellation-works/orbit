@@ -273,12 +273,14 @@ export function buildTaskDetail(task, context, drain = null) {
   // Answered state (picked option, by whom, when) for any task.
   addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task, context), true, true);
 
+  // The rendered Markdown is the disclosure's whole body, so it sits in the
+  // disclosure card with no card of its own (the description keeps its card).
   if (task.plan && task.plan.trim()) {
-    addField(disclosures, "Plan", taskFields.taskMarkdownPanel(taskFields.markdownView(task.plan)), true, true);
+    addField(disclosures, "Plan", taskFields.markdownView(task.plan), true, true, { class: "task-markdown-disclosure" });
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(disclosures, "Execution summary", taskFields.taskMarkdownPanel(taskFields.markdownView(task.execution_summary)), true, true);
+    addField(disclosures, "Execution summary", taskFields.markdownView(task.execution_summary), true, true, { class: "task-markdown-disclosure" });
   }
 
   if (task.review && typeof task.review === "object") {
