@@ -180,7 +180,7 @@ branch_prefix = "claude/orbit-"
 max_in_flight = 4                        # the server burst-limits beyond ~3-4
 max_dispatches_per_day = 20
 poll_interval_seconds = 60
-ready_deadline_seconds = 10800           # matches agent_implement's 3 h budget
+ready_deadline_seconds = 21600           # matches agent_implement's 6 h budget
 nudge_grace_seconds = 1800
 merge = "on-request"                     # or "after-review" once Phase 2 lands (§5.1)
 
@@ -330,7 +330,7 @@ Cloud runs do not count against the drain's slots. Today they would:
   (`crates/orbit-core/assets/jobs/task_auto_pipeline.yaml:43`); the number of live runs is the drain's bound
   (`crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml:7-14`, `orbit run auto --concurrency`).
 
-A cloud task waiting three hours in `cloud_await_pr` would hold one of those slots while the
+A cloud task waiting six hours in `cloud_await_pr` would hold one of those slots while the
 host does nothing for it. Phase 1 therefore:
 
 - dispatches cloud leaves as their own job, `task_cloud_auto_pipeline`, so cloud leaves are

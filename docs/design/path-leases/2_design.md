@@ -28,7 +28,7 @@ are implemented; preemption remains later work. §1 is what exists today and wha
 ## 1. What exists today
 
 - **Task reservations.** `orbit.task.locks.reserve` reserves either a task's surface or a list of
-  file selectors, with `ttl_seconds` (default 1,800, at most 14,400), and
+  file selectors, with `ttl_seconds` (default 1,800, at most 86,400), and
   `orbit.task.locks.release` releases one by its `reservation-<id>`
   ([commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs)). A refused reserve is
   written to the denial log that `orbit codebase` and the pilot scorecard read; 832 such denials
@@ -253,7 +253,7 @@ Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
 [--priority low|normal|high] [--ttl 30m] [--branch <name>] [--base <name>]`.
 Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
 Every verb accepts `--json`; a hard request that is refused or queued, and an expansion refused
-to break a deadlock, exit 3. TTL is 1–14400 seconds,
+to break a deadlock, exit 3. TTL is 1–86400 seconds,
 default 1800. Branch bindings drive the release-on-landing checks described in §4
 ([ORB-18554]). The table also includes `notices`, delivered in phase 3, and `expand`,
 queueing and `--no-wait`, delivered in phase 4.

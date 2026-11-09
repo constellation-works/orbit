@@ -10,7 +10,7 @@ Options:
           Selector to reserve directly (`file:...`, `dir:...`). Repeat or comma-separate for several
 
       --ttl <DURATION>
-          How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 4h
+          How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 24h
           
           [default: 30m]
 
