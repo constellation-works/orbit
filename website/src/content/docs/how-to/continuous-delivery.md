@@ -325,10 +325,16 @@ orbit run auto --for 4h --auto-fix
 orbit run auto --for 4h --auto-fix --complete
 ```
 
-The drain keeps watching each PR. Pending checks wait. A check that failed for a
-network or runner reason is rerun once first, and one that cites only files the
-PR did not change waits for base evidence. A failed required check or a conflict
-then goes to the existing repair step, which runs as a crew from
+The drain keeps watching each PR. Pending checks wait. Logged
+infrastructure/transient failures are rerun within the configured
+`workflow.ci_infrastructure_retry.max_attempts` budget per PR head (default 3),
+with exponential backoff. This shared rerun requires a complete authenticated
+failed-job set of eligible root jobs and dependency-only waiters; any candidate
+failure in the set vetoes it. Flaky failures and sets transient only because
+jobs concluded `cancelled` or `timed_out` retain their single rerun. A check
+that cites only files the PR did not change waits for base evidence. A failed
+required check or a conflict then goes to the existing repair step, which runs
+as a crew from
 `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`
 (narrowed by `--allow-crew`). The repair then
 passes your required validation and is pushed, and the drain checks the new
