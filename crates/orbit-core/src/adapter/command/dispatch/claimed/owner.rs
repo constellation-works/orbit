@@ -63,6 +63,7 @@ use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{
     CLAIMED_OWNER_TOOLS, ToolSessionContext, WorkerInvocation, is_claimed_owner_tool,
+    tool_call_name, tool_family, tool_family_operation_call,
 };
 use orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE;
 use serde_json::{Map, Value, json};
@@ -123,13 +124,27 @@ pub fn bridge_claimed_owner_call(
     entry_point: ToolEntryPoint,
 ) -> Option<ClaimedOwnerRoute> {
     let socket = std::env::var_os("ORBIT_PLUGIN_BROKER").map(std::path::PathBuf::from);
+    // The bridge and the broker behind it key on the operation a family
+    // call reaches; the owner's dispatch receives the family call again.
+    let (name, input) = if tool_family(name).is_some() {
+        let (operation, input) = tool_family_operation_call(name, input.clone());
+        (
+            std::borrow::Cow::Owned(operation),
+            std::borrow::Cow::Owned(input),
+        )
+    } else {
+        (
+            std::borrow::Cow::Borrowed(name),
+            std::borrow::Cow::Borrowed(input),
+        )
+    };
     bridge_through(
         socket.as_deref(),
         global_root,
         binding,
         process_machine_id,
-        name,
-        input,
+        &name,
+        &input,
         cwd,
         workspace_root,
         entry_point,
@@ -210,6 +225,7 @@ pub(super) fn bridge_through(
 /// carry the call. The agent ends its step on it; the run skips recovery and
 /// releases the claim, since nothing inside this sandbox can open the route.
 pub fn owner_route_unavailable(name: &str, cause: &str) -> OrbitError {
+    let name = tool_call_name(name);
     let message = format!(
         "'{name}' for a claimed task reaches the owner only \
          through this run's coordinator, and {cause}. The agent sandbox masks ~/.ssh, so there \
@@ -252,11 +268,17 @@ fn coordinator_unavailable(name: &str, error: OrbitError) -> OrbitError {
 /// Refuse a coordination tool the broker does not carry, from inside a
 /// masked sandbox: the SSH route to the owner could only fail there.
 fn outside_allowlist(name: &str) -> OrbitError {
+    let name = tool_call_name(name);
+    let owner_calls = CLAIMED_OWNER_TOOLS
+        .iter()
+        .map(|tool| tool_call_name(tool))
+        .collect::<Vec<_>>()
+        .join(", ");
     OrbitError::CapabilityDenied(format!(
         "claimed_owner_bridge_refused: '{name}' is not among the owner calls a claimed worker's \
          sandbox can make ({}). The sandbox masks ~/.ssh, and this run's coordinator carries \
          only those; return the work through the step's output fields instead",
-        CLAIMED_OWNER_TOOLS.join(", ")
+        owner_calls
     ))
 }
 

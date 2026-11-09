@@ -46,7 +46,7 @@ Bearing: a diff that changes something a user sees already attaches screenshots 
 artifacts. The `ui` tag instructions
 (`crates/orbit-core/assets/tag_instructions/ui/implement.md` and `review.md`) ask the
 implementer to capture every theme, a 375px width when the layout is responsive and a before
-shot "when practical", and ask the reviewer to fetch them with `orbit.task.artifact.get`.
+shot "when practical", and ask the reviewer to fetch them with `orbit.task.artifact` action `get`.
 For a large UI change, Daniel attaches mocks to the task (images made with Claude), and the
 implementer builds from them. Image artifacts are byte-checked and reach a multimodal MCP
 client as protocol image blocks, bounded at 1 MiB each

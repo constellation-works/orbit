@@ -22,7 +22,7 @@ template:
       Never read or edit Orbit state files, the Orbit database, or task
       files by hand, and never change a task's status. Read regression
       evidence with
-      `orbit tool run orbit.codebase.analytics --input '{"window":"7d","min_support":1,"model":"<agent-family>"}'`,
+      `orbit tool run orbit.codebase --input '{"action":"analytics","window":"7d","min_support":1,"model":"<agent-family>"}'`,
       again with `"window":"30d"`, and once per escape value that needs
       isolation with `"escape":"unclassified"` and `"escape":"absent"`
       in the 30d call. Analytics ranks culprit tasks by their completion
@@ -38,7 +38,7 @@ template:
       Find the previous run with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["escape-to-guard","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       (tag filters use AND semantics) and read its artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
     - Before filing a task, read the installed `orbit` skill's
       task-authoring reference (`references/task-authoring.md`) and
       follow it for task shape. Tool-created tasks start `proposed`;
@@ -132,7 +132,7 @@ template:
     and files nothing. The gap task does not count toward the guard
     cap below.
 
-    After the classification loop, re-run `orbit.codebase.analytics` with
+    After the classification loop, re-run `orbit.codebase` action `analytics` with
     `{"window":"30d","min_support":1,"model":"<agent-family>"}`, then again
     with `"escape":"unclassified"` and `"escape":"absent"`, to take the
     analytics after counts for the artifact. Re-read the same ledger tasks'
@@ -151,7 +151,7 @@ template:
     analytics payload reports for the regression task (its landed
     paths, else its declared footprint, else `unknown`). To recover a
     dimension missing from the capped analytics rows, use
-    `orbit tool run orbit.codebase.show --input '{"path":"<verified culprit footprint path>","window":"all","min_support":1,"model":"<agent-family>"}'`
+    `orbit tool run orbit.codebase --input '{"action":"show","path":"<verified culprit footprint path>","window":"all","min_support":1,"model":"<agent-family>"}'`
     and match the culprit and regression IDs. If no row reports the layer,
     state a consistent repository module layer from the verified fix paths
     and label that inference; use `unknown` when no fix paths exist. Inside each
@@ -328,7 +328,7 @@ template:
     clusters that are new, clusters that persisted, clusters that
     dropped below the bar, and how the `unclassified` plus `absent`
     count moved. Attach the file with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/escape-to-guard.json","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/escape-to-guard.json","path":"escape-to-guard.json","model":"<agent-family>"}'`.
     Write and attach it on every completed run, including a no-op run.
     The execution summary reports the window bounds, the before and
     after classification counts, every cluster with its disposition,
@@ -337,7 +337,7 @@ template:
     evidence gaps, budget/operator choices, filed versus already-covered IDs,
     and the diff against the previous run.
   acceptance_criteria:
-  - The run read the 7d and 30d `orbit.codebase.analytics` windows, enumerated 1 complete task-link ledger for the pinned windows, and recorded per-escape counts before classification in `escape-to-guard.json`, with `unclassified` and `absent` shown separately and analytics populations labelled separately.
+  - The run read the 7d and 30d `orbit.codebase` action `analytics` windows, enumerated 1 complete task-link ledger for the pinned windows, and recorded per-escape counts before classification in `escape-to-guard.json`, with `unclassified` and `absent` shown separately and analytics populations labelled separately.
   - Each `unclassified` or `absent` link from the last 7 days was classified from its regression task and the culprit landed diff shown by `git show`, and the classification was recorded by an `orbit.task.update` relations write read back on the regression task, or held in `escape-to-guard.json` with evidence and 1 deduplicated gap task when the supported surface cannot change an existing link; link-specific failures are recorded as unsettled.
   - Regressions were clustered by nature x escape x layer plus a 1-line mechanism; new remedies require 3 or more distinct regressions in 30 days, and every task names at least 3 regression IDs and their culprit IDs, its durable rung tag, structured remedy_metadata cluster key and 30d count at filing.
   - Each remedy chooses the highest-reliability expressive rung in order (mechanical guard, in-line hazard comment, nested AGENTS.md/CLAUDE.md pair, tag instruction, global instruction), names why every higher rung cannot express the mechanism, and obeys the ban on new required status checks, merge gates, merge-blocking CI jobs and human-only steps. Mechanical guards name the check, existing gate and rejected violation; regression-test guards are only for no_test; skill or review-instruction remedies remain available only for review_missed.
@@ -353,12 +353,12 @@ template:
   - escape-to-guard
   - no-diff-expected
   required_tools:
-  - orbit.codebase.analytics
-  - orbit.codebase.show
+  - orbit.codebase:analytics
+  - orbit.codebase:show
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

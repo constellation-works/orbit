@@ -86,7 +86,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 - **Every dispatcher honours it:**
   - the workspace auto drain's backlog listing;
   - the owner's pull-drain claim admission, so followers inherit it;
-  - explicit `orbit run ship <ids>` / `orbit.workflow.ship`. This path is
+  - explicit `orbit run ship <ids>` / `orbit.workflow` action `ship`. This path is
     the one that matters most: explicit ids skip the backlog listing today,
     so the check must be added there. A scheduled id is refused with a
     typed `task_scheduled` error naming the time. An operator-only

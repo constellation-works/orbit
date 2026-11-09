@@ -493,7 +493,8 @@ fn friction_untriaged_lists_only_open() {
     assert_eq!(items.len(), 1, "{response}");
     assert_eq!(items[0]["refs"]["friction_id"], open.record.id);
     assert_eq!(items[0]["severity"], "low");
-    assert_eq!(items[0]["next"]["tool"], "orbit.friction.update");
+    assert_eq!(items[0]["next"]["tool"], "orbit.friction");
+    assert_eq!(items[0]["next"]["input"]["action"], "update");
     assert_eq!(items[0]["next"]["input"]["status"], "triaged");
 }
 

@@ -158,9 +158,9 @@ Consent can name only the built-in tools in this table. Any other built-in tool 
 | `orbit.task.update` | `id`, `status`, `comment`, `workspace` | `id`, `status`, `comment`, `note`, `plan`, `execution_summary`, `workspace` | Exact `status` may be `backlog`, `done`, `rejected` or `archived`. A constrained `status` is a `const`, a `one_of` of `done`, `rejected` or `archived`, or a `transition`. A `transition` may target `in-progress`, `review`, `done`, `rejected`, `archived` or `backlog`. A move to `backlog` is allowed only from `review` or `in-progress`. |
 | `orbit.decision.answer` | `id`, `answer`, `note`, `workspace` | None | Exact calls only. The existing decision handler checks the request, the allowed answers, expiry and supersession. |
 | `orbit.task.show` | None | `id`, `fields`, `workspace` | Callbacks only. `fields` must be a `subset_of` the readable fields: `id`, `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at` and `execution_summary`. |
-| `orbit.task.artifact.get` | None | `id`, `path`, `workspace` | Callbacks only. `path` must be a non-empty `const` string. |
-| `orbit.auto_task.add` | None | `name`, `schedule`, `template`, `description`, `dedupe`, `workspace` | Callbacks only. `name`, `schedule` and `template` are required. Every definition field must be an `artifact_json` bound to the approved artifact, so a callback cannot take a caller-supplied value. |
-| `orbit.auto_task.update` | None | `name`, `enabled`, `workspace` | Callbacks only. `name` is required and must be an `artifact_json`. `enabled`, if present, is a boolean `const` or a `one_of` of booleans. |
+| `orbit.task.artifact` action `get` | None | `id`, `path`, `workspace` | Callbacks only. `path` must be a non-empty `const` string. |
+| `orbit.auto_task` action `add` | None | `name`, `schedule`, `template`, `description`, `dedupe`, `workspace` | Callbacks only. `name`, `schedule` and `template` are required. Every definition field must be an `artifact_json` bound to the approved artifact, so a callback cannot take a caller-supplied value. |
+| `orbit.auto_task` action `update` | None | `name`, `enabled`, `workspace` | Callbacks only. `name` is required and must be an `artifact_json`. `enabled`, if present, is a boolean `const` or a `one_of` of booleans. |
 
 The source-status restriction applies only to constrained `transition` scopes: a transition to `backlog` is allowed only from `review` or `in-progress`. An exact scope may name `status: "backlog"` as listed in the table, without this transition-source restriction.
 

@@ -21,10 +21,10 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
             "delivery",
         ),
         (
-            "orbit_decision_show",
-            json!({"id": "missing-request"}),
+            "orbit_decision",
+            json!({"action": "show", "id": "missing-request"}),
             "request_not_found",
-            "orbit.decision.list",
+            "`orbit.decision` with action `list`",
         ),
     ] {
         let error = client.call_tool_err(tool, input);

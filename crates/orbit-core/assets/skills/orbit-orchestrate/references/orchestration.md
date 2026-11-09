@@ -5,10 +5,10 @@ when job/activity internals or a particular run command need explanation.
 
 ## Entry points
 
-Use `orbit_workflow_ship` with explicit `task_ids`, `workspace`, and attribution
+Use `orbit_workflow` action `ship` with explicit `task_ids`, `workspace`, and attribution
 when driving an authoritative MCP connection. Observe with
-`orbit_workflow_run_show/list`; resume eligible terminal work with
-`orbit_workflow_run_resume`, which returns a new linked run. These operations
+`orbit_run action show/list`; resume eligible terminal work with
+`orbit_run` action `resume`, which returns a new linked run. These operations
 require operator authority. Managed leaf runs cannot dispatch follow-up runs.
 See [tool-surface.md](../../orbit/references/tool-surface.md).
 
@@ -77,7 +77,7 @@ error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
 recorded pass. For one local drain, `orbit run auto --auto-concurrency <MODE>`
 selects an explicit mode (`off`, `shadow` or `enforce`); omitting the flag
 follows `machine.auto_concurrency.mode` each admission pass. MCP
-`orbit_workflow_auto` `action: "start"` accepts the same `auto_concurrency`
+`orbit_workflow` action `auto` `mode: "start"` accepts the same `auto_concurrency`
 values. Explicit overrides and inheritance source (`explicit` or `configured`)
 survive restart/resume without writing configuration. Host thresholds and
 provider-limit policy refresh next pass; unchanged config is cached by mtime,
@@ -234,7 +234,7 @@ The view is read-only. To change the mode or thresholds, use the
 [configuration.md](../../orbit-setup/references/configuration.md#common-settings).
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
---set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
+--set N` (MCP: `orbit_workflow` action `auto` with `mode: "resize"` and `concurrency`;
 omit `id` to target the workspace's one live drain) records a live ceiling on the run
 itself, so **do not cancel a drain to change how many workers it uses** — that
 mints a new run id, restarts the window, and re-states the completion
@@ -527,7 +527,7 @@ orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
 when the footprint, complexity, testable criteria and deduplication are already
 settled; readiness still applies and an explicit pilot remains available. The routine queues a later pilot automatically only when a certified description or acceptance-criteria edit makes the applied assessment stale on a proposed or backlog task, and no live execution claim or unresolved failed pilot holds the task. Edits to other material (title, plan, selectors) or policy never queue one through the routine; every other later routine assessment requires an explicit
-request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
+request: `orbit task repilot <id>`, `orbit.task.recover` action `repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
 with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
 refuse a second request while a pilot is pending or running, while delivery
@@ -650,7 +650,7 @@ before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 
 A local drain (`orbit run auto`, the dashboard start, MCP
-`orbit.workflow.auto`) warns when no task pilot will prepare its tasks on this
+`orbit.workflow` action `auto`) warns when no task pilot will prepare its tasks on this
 machine: the workspace declares no `preparation_eligible` routine, or its
 routine names another `owner_machine`, is disabled, or is paused here
 (`orbit routine resume <name>`). The warning names the workspace, the machine
@@ -744,7 +744,7 @@ Every blocked-to-backlog return, including a plain
 `orbit task update <task-id> --status backlog`, runs the same publication
 pre-flight as `orbit task requeue`. Once the task's run has stopped, an
 operator can use `orbit task requeue <task-id> --reason '<why>'` (MCP
-`orbit.task.requeue`) to resume that candidate; while the run is live the
+`orbit.task.recover` action `requeue`) to resume that candidate; while the run is live the
 requeue is refused, since its failure handoff may still be publishing. Add
 `--discard-candidate` to close the task's undelivered Orbit PRs and rerun fresh,
 which a changed task specification requires; `orbit task update <task-id>
@@ -773,7 +773,7 @@ action. Running checks grant no merge authority, and the wait never extends the
 configured deadline. A review or administrative refusal still stops the job.
 
 After a stop or an exhausted wait budget, inspect the owner's distributed claim
-panel, original stop, latest landing attempt and provider state. `orbit.workflow.land`
+panel, original stop, latest landing attempt and provider state. `orbit.workflow` action `land`
 reports the recorded stop cause and the retry path while completion authority remains
 active; it reports an operator revoke only when that authority was revoked. Do not
 resume or rebind the foreign leaf just to retry landing. Only a trusted operator may
@@ -786,7 +786,7 @@ orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \
   --reason '<why the same candidate can land now>' --request <saved-request-key>
 ```
 
-The MCP equivalent is `orbit.task.retry_handoff` with `workspace`, `handoff_id`,
+The MCP equivalent is `orbit.task.recover` action `retry_handoff` with `workspace`, `handoff_id`,
 `expected_candidate_commit`, `expected_base_commit`, `expected_latest_attempt`,
 `expected_latest_state`, `reason`, and `request_key`. The workspace must be the owner's
 logical workspace ID or absolute checkout path. This is operator-only and unavailable
@@ -874,7 +874,7 @@ workspace configuration, an environment variable, or a routine.
   `proposed` work into the backlog and is not an independent review verdict; the
   transition is recorded against the authorizing run and operator.
 
-`orbit run auto --approve-proposed` (MCP `orbit_workflow_auto` `start` with
+`orbit run auto --approve-proposed` (MCP `orbit_workflow` action `auto` `start` with
 `approve_proposed: true`) is the explicit authorization for one drain to approve
 `proposed` work, independent of `--complete`. Default-off and never enabled by
 configuration.
@@ -923,7 +923,7 @@ configuration.
 ### Per-run review
 
 `orbit run ship --review before-landing` and `orbit run auto --review
-before-landing` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start`
+before-landing` (MCP `orbit_workflow` action `ship` and `orbit_workflow` action `auto` `start`
 with `review: "before-landing"`) add a second-agent review before landing to
 one run. Use it when the user asks for review on specific work and the
 workspace applies none. It only adds review and never changes configuration.

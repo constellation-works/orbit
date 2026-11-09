@@ -36,12 +36,12 @@ fn proposal_task(fixture: &Fixture, payload: &str) -> String {
     }
     let source = fixture.work.join(format!("proposal-{id}.json"));
     std::fs::write(&source, payload).unwrap();
-    let input = json!({"id": id, "path": "proposal.json", "source_path": source});
+    let input = json!({"action": "put", "id": id, "path": "proposal.json", "source_path": source});
     fixture
         .operator_command([
             "tool",
             "run",
-            "orbit.task.artifact.put",
+            "orbit.task.artifact",
             "--input",
             &input.to_string(),
         ])
@@ -64,7 +64,7 @@ metadata:
   description: Accepts one reviewed auto-task proposal.
 spec:
   permissions:
-    orbit_tools: [orbit.auto_task.add, orbit.auto_task.update, orbit.task.update]
+    orbit_tools: ["orbit.auto_task:add", "orbit.auto_task:update", orbit.task.update]
   backend:
     type: exec
     command: bin/backend.sh
@@ -193,26 +193,32 @@ fn application_auto_task_callbacks_follow_the_artifact_and_refuse_the_rest() {
     });
     let payload = serde_json::to_string(&artifact).unwrap();
 
+    // The backend calls the `orbit.auto_task` family, naming each action.
+    let family_call = |input: &Value, action: &str| {
+        let mut call = input.clone();
+        call["action"] = json!(action);
+        call
+    };
     let fixture = Fixture::new();
     let accepted = proposal_task(&fixture, &payload);
     let script = format!(
         r#"#!/bin/sh
 cat >/dev/null
 run() {{ orbit tool run "$1" --input "$2" --format json; }}
-if run orbit.auto_task.add '{differing_add}' >/dev/null 2>&1; then exit 81; fi
-run orbit.auto_task.add '{add}' >/dev/null || exit 82
-if run orbit.auto_task.update '{described_update}' >/dev/null 2>&1; then exit 83; fi
-if run orbit.auto_task.update '{floored_update}' >/dev/null 2>&1; then exit 84; fi
-run orbit.auto_task.update '{good_update}' >/dev/null || exit 85
-if run orbit.auto_task.add '{differing_add}' >/dev/null 2>&1; then exit 87; fi
+if run orbit.auto_task '{differing_add}' >/dev/null 2>&1; then exit 81; fi
+run orbit.auto_task '{add}' >/dev/null || exit 82
+if run orbit.auto_task '{described_update}' >/dev/null 2>&1; then exit 83; fi
+if run orbit.auto_task '{floored_update}' >/dev/null 2>&1; then exit 84; fi
+run orbit.auto_task '{good_update}' >/dev/null || exit 85
+if run orbit.auto_task '{differing_add}' >/dev/null 2>&1; then exit 87; fi
 if run orbit.task.update '{unapproved}' >/dev/null 2>&1; then exit 86; fi
 printf '{{"ok":true,"output":{{"accepted":"auto-task-ok"}}}}\n'
 "#,
-        differing_add = differing_add,
-        add = add,
-        described_update = described_update,
-        floored_update = floored_update,
-        good_update = good_update,
+        differing_add = family_call(&differing_add, "add"),
+        add = family_call(&add, "add"),
+        described_update = family_call(&described_update, "update"),
+        floored_update = family_call(&floored_update, "update"),
+        good_update = family_call(&good_update, "update"),
         unapproved = unapproved,
     );
     let plugin = install_office_plugin(&fixture, &script);

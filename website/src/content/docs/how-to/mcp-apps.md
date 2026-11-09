@@ -31,7 +31,7 @@ tool works unchanged. See [When it does not render](#when-it-does-not-render).
 ## Prerequisites
 
 Connect your agent first with [Connect your agent](../mcp-integration/). The
-two tools appear in `tools/list` as `orbit_ui_open` and `orbit_ui_inspect`.
+two tools appear in `tools/list` as `orbit_ui` action `open` and `orbit_ui` action `inspect`.
 They are listed only when the server can serve a read-only task read, so a
 session that hides that tool does not list them either.
 
@@ -66,14 +66,14 @@ from your own list.
 
 ## Open the control center
 
-`orbit_ui_open` with no arguments opens the control center globally. The panel
+`orbit_ui` action `open` with no arguments opens the control center globally. The panel
 then discovers the available workspaces itself and shows a workspace picker
 (host and workspace together when federated):
 
 ```json
 {
-  "name": "orbit_ui_open",
-  "arguments": {}
+  "name": "orbit_ui",
+  "arguments": { "action": "open" }
 }
 ```
 
@@ -81,8 +81,8 @@ To open it on one workspace, pass `workspace`:
 
 ```json
 {
-  "name": "orbit_ui_open",
-  "arguments": { "workspace": "ws_example" }
+  "name": "orbit_ui",
+  "arguments": { "action": "open", "workspace": "ws_example" }
 }
 ```
 
@@ -95,8 +95,8 @@ To open a specific task, pass `workspace` and `id` together. `kind` defaults to
 
 ```json
 {
-  "name": "orbit_ui_open",
-  "arguments": { "workspace": "ws_example", "id": "EX-42" }
+  "name": "orbit_ui",
+  "arguments": { "action": "open", "workspace": "ws_example", "id": "EX-42" }
 }
 ```
 
@@ -104,29 +104,29 @@ To open a specific task, pass `workspace` and `id` together. `kind` defaults to
 
 ## Inspect one task or run
 
-`orbit_ui_inspect` is the explicit form: `workspace` and `id` are required,
+`orbit_ui` action `inspect` is the explicit form: `workspace` and `id` are required,
 and `kind` is `task` (the default) or `run`.
 
 ```json
 {
-  "name": "orbit_ui_inspect",
-  "arguments": { "workspace": "ws_example", "id": "EX-42", "kind": "task" }
+  "name": "orbit_ui",
+  "arguments": { "action": "inspect", "workspace": "ws_example", "id": "EX-42", "kind": "task" }
 }
 ```
 
 For a run, pass the run ID Orbit returned, for example from
-`orbit_workflow_run_list`:
+`orbit_run` action `list`:
 
 ```json
 {
-  "name": "orbit_ui_inspect",
-  "arguments": { "workspace": "ws_example", "id": "<run-id>", "kind": "run" }
+  "name": "orbit_ui",
+  "arguments": { "action": "inspect", "workspace": "ws_example", "id": "<run-id>", "kind": "run" }
 }
 ```
 
-Both tools reject any other argument, such as a `status` or `actor`, with
-`invalid_input`. `orbit_ui_open` with no arguments or with only `workspace` is
-accepted. `orbit_ui_inspect` requires `id`; `orbit_ui_open` requires `id` only
+`orbit_ui` rejects any other argument, such as a `status` or `actor`, with
+`invalid_input`. `orbit_ui` action `open` with no arguments or with only `workspace` is
+accepted. `orbit_ui` action `inspect` requires `id`; `orbit_ui` action `open` requires `id` only
 when `id` or `kind` is supplied. `kind` requires both `workspace` and `id`.
 Any supplied `workspace`, `id` or `kind` must be a string that is not empty or
 whitespace-only and is no longer than 2048 UTF-8 bytes, or the call returns
@@ -163,7 +163,7 @@ it as a pointer: reread before you act on it.
 
 ## What opening does not grant
 
-`orbit_ui_open` and `orbit_ui_inspect` only read. They are annotated read-only,
+`orbit_ui` action `open` and `orbit_ui` action `inspect` only read. They are annotated read-only,
 idempotent and non-destructive, and opening grants no authority: a session that
 could not ship a task before opening it cannot ship it after. Neither the
 widget, a click nor a model-context message upgrades the session.
@@ -207,7 +207,7 @@ dashboard instead:
 | You want | Use |
 |---|---|
 | A task | `orbit_task_show`, `orbit_task_list` |
-| Runs | `orbit_workflow_run_list`, `orbit_workflow_run_show` (operator) |
+| Runs | `orbit_run` action `list`, `orbit_run` action `show` (operator) |
 | Workspaces | `orbit_workspace_list` |
 | A browser view | The [dashboard](../dashboard/) |
 | A native window and tray | The [desktop app](../desktop/) |

@@ -92,7 +92,7 @@ additional activation opportunities.
 1. The ORB-11365 agent performed broad and repeated validation, including the
    `orbit-core` library test suite.
 2. [`unmanaged_environment_admits_operator_ship_and_resume`](../../../crates/orbit-core/src/adapter/tool_host/tests/workflow_tools.rs#L180)
-   exercised `orbit.workflow.ship` and `orbit.workflow.run.resume`. Both calls
+   exercised `orbit.workflow` action `ship` and `orbit.run` action `resume`. Both calls
    created real runs, but the test did not install the test-only pipeline-worker
    command override.
 3. `pipeline_worker_command` (commit `6703cafca651e58710506acf896f6d04f1279b5c`,

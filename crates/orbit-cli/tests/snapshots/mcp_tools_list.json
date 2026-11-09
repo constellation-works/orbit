@@ -139,109 +139,53 @@
     }
   },
   {
-    "name": "orbit_friction_add",
-    "description": "Append a friction report",
+    "name": "orbit_friction",
+    "description": "Record a friction, or update one.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "action": {
+          "type": "string",
+          "description": "Operation to run, with its required fields: add (body); update (id).",
+          "enum": [
+            "add",
+            "update"
+          ]
+        },
         "body": {
           "type": "string",
-          "description": "Markdown body describing what happened and why."
+          "description": "For add: Markdown body describing what happened and why it caused friction; For update: Optional replacement markdown body."
         },
         "title": {
           "type": "string",
-          "description": "One-line handle identifying the problem, at.",
-          "maxLength": 120
+          "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body."
         },
         "tags": {
           "type": "array",
           "items": {
-            "type": "string",
-            "enum": [
-              "automation",
-              "build",
-              "docs",
-              "history-diverged",
-              "lifecycle",
-              "naming",
-              "other",
-              "policy",
-              "skill-guidance",
-              "tooling"
-            ]
+            "type": "string"
           },
-          "description": "Friction taxonomy tags."
+          "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; For."
         },
         "during_task": {
           "type": "string",
-          "description": "Optional task ID being worked on when friction."
+          "description": "For add: Optional task ID being worked on when friction occurred; an ID that names no task is refused."
         },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
-        }
-      },
-      "required": [
-        "body"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": false,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "orbit_friction_update",
-    "description": "Update triage metadata for a friction record.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
         "id": {
           "type": "string",
-          "description": "Friction record ID, e.g."
+          "description": "For update: Friction record ID, e.g. FYYYY-MM-NNN."
         },
         "status": {
           "type": "string",
-          "description": "Optional status: open, triaged, or resolved"
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "automation",
-              "build",
-              "docs",
-              "history-diverged",
-              "lifecycle",
-              "naming",
-              "other",
-              "policy",
-              "skill-guidance",
-              "tooling"
-            ]
-          },
-          "description": "Friction taxonomy tags."
-        },
-        "body": {
-          "type": "string",
-          "description": "Optional replacement markdown body"
+          "description": "For update: Optional status: open, triaged, or resolved."
         },
         "rehome_to": {
           "type": "string",
-          "description": "Optional registered workspace that owns a."
+          "description": "For update: Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false."
         },
         "move": {
           "type": "boolean",
-          "description": "With `rehome_to`: false records the."
-        },
-        "title": {
-          "type": "string",
-          "description": "Optional replacement one-line title, at most.",
-          "maxLength": 120
+          "description": "For update: With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true."
         },
         "workspace": {
           "type": "string",
@@ -249,7 +193,7 @@
         }
       },
       "required": [
-        "id"
+        "action"
       ],
       "additionalProperties": true
     },
@@ -541,61 +485,39 @@
     }
   },
   {
-    "name": "orbit_task_artifact_get",
-    "description": "Read one stored task artifact by owning task ID and artifact path.",
+    "name": "orbit_task_artifact",
+    "description": "Read a task artifact, or attach a local file as one.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "action": {
+          "type": "string",
+          "description": "Operation to run, with its required fields: get (id, path); put (id, source_path).",
+          "enum": [
+            "get",
+            "put"
+          ]
+        },
         "id": {
           "type": "string",
-          "description": "Globally unique task ID that owns the artifact."
+          "description": "For get: Globally unique task ID that owns the artifact; For put: task ID."
         },
         "path": {
           "type": "string",
-          "description": "Artifact path relative to the task artifacts."
+          "description": "For get: Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`; For put: Artifact path relative to the task artifacts directory."
         },
         "workspace": {
           "type": "string",
           "description": "Workspace selector from orbit_workspace_list."
-        }
-      },
-      "required": [
-        "id",
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "orbit_task_artifact_put",
-    "description": "Store a file (any content, up to 1 MiB) as a task artifact.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "task ID"
         },
         "source_path": {
           "type": "string",
-          "description": "Source file to store as a task artifact."
-        },
-        "path": {
-          "type": "string",
-          "description": "Artifact path relative to the task artifacts."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "For put: Source file to store as a task artifact."
         }
       },
       "required": [
-        "id",
-        "source_path"
+        "action",
+        "id"
       ],
       "additionalProperties": false
     },

@@ -22,7 +22,7 @@ is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
 parameter kinds and its input validation are implemented, the validation in
 warn mode for unknown fields except on the task writes, the operator review,
-requeue and retry tools and `orbit.workflow.auto`, which refuse them. Both follow the rules in
+requeue and retry tools and `orbit.workflow` action `auto`, which refuse them. Both follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -309,10 +309,10 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 
 **Implemented (warn mode)** on friction, auto-task, drain, workspace claim,
 search, task artifacts and locks, the task read verbs, and the workflow-run
-tools other than `orbit.workflow.auto`: unknown fields are reported, not yet
+tools other than `orbit.workflow` action `auto`: unknown fields are reported, not yet
 refused. The task writes, the operator review, triage, requeue and retry tools
 (`reconcile_review`, `review_reset`, `requeue`, `block_triage`, `retry_handoff`) and
-`orbit.workflow.auto` declare `unknown_fields: Refuse`; the inactive `reject`
+`orbit.workflow` action `auto` declare `unknown_fields: Refuse`; the inactive `reject`
 and `delete` warn. The task writes refuse because `orbit.task.add` and
 `orbit.task.update` refused unknown fields before they migrated; the refusal
 names the field and suggests a declared one.
@@ -677,11 +677,11 @@ the generic tool and two noun variants. After phase 3a on the same date, they
 are 23 and 19: the four task read tool impls and action variants are replaced
 by the generic tool and `Task(TaskVerb)`. After phase 3b on the same date,
 they are 21 and 18: the `add` and `update` tool impls and action variants are
-gone, and `orbit.task.artifact.put`, which dispatched `TaskUpdate`, has its own
+gone, and `orbit.task.artifact` action `put`, which dispatched `TaskUpdate`, has its own
 `TaskArtifactPut` variant until its slice lands. After phase 3c, the counts
 are 16 and 13: five artifact/lock tool impls and five action variants are gone. After phase 4,
 they are 11 and 9: the five workflow tool impls are gone, and the four
-workflow action variants and `DesktopDrain`, which only `orbit.workflow.auto`
+workflow action variants and `DesktopDrain`, which only `orbit.workflow` action `auto`
 dispatched, are replaced by `Workflow(WorkflowVerb)`. After phase 3d, they
 are 7 and 5: the review, reject and delete tool impls and their four action
 variants are gone, so `Task(TaskVerb)` covers every task tool. After phase 5,
@@ -827,8 +827,8 @@ behavior neutrality.
 
 ### Phase 3d: task review and lifecycle (Implemented)
 
-`orbit.task.reconcile_review`, `orbit.task.review_reset`, `orbit.task.requeue`
-and `orbit.task.retry_handoff`, the operator tools, and the inactive
+`orbit.task.recover` action `reconcile_review`, `orbit.task.recover` action `review_reset`, `orbit.task.recover` action `requeue`
+and `orbit.task.recover` action `retry_handoff`, the operator tools, and the inactive
 `orbit.task.reject` and `orbit.task.delete` are declared in
 [lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
 and served by `OperationTool<TaskVerb>`. The handler table in
@@ -874,8 +874,8 @@ added tool would move the all-tools authorization golden.
 
 ### Phase 4: workflow run (Implemented)
 
-`orbit.workflow.ship`, `orbit.workflow.run.show`, `orbit.workflow.run.list`,
-`orbit.workflow.run.resume` and `orbit.workflow.auto` are declared in
+`orbit.workflow` action `ship`, `orbit.run` action `show`, `orbit.run` action `list`,
+`orbit.run` action `resume` and `orbit.workflow` action `auto` are declared in
 [governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs)
 and served by `OperationTool<WorkflowVerb>`. The handler table in
 [workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs)
@@ -896,7 +896,7 @@ holds what the specs cannot:
   read, after its own settings check. `start`, `stop` and `resize` reach the
   verb's handler.
 
-`orbit.workflow.auto` refuses unknown fields, as it did before migrating. Its
+`orbit.workflow` action `auto` refuses unknown fields, as it did before migrating. Its
 `agent` refusal keeps its shipped wording as a verbatim retired field. The other
 four tools warn about and audit unknown fields (§4). The action shape this
 tool sets for multiplexed tools is recorded in

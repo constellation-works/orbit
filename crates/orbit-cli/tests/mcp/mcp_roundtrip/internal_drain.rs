@@ -68,9 +68,9 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<BTreeSet<_>>();
         assert_eq!(
-            names.contains("orbit_task_retry_handoff"),
+            names.contains("orbit_task_recover"),
             index == 1,
-            "the public owner retry is advertised only to the operator session"
+            "the public owner recovery family (retry_handoff) is advertised only to the operator session"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);
@@ -107,7 +107,7 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             assert_eq!(refused["error"]["code"], -32602, "{refused}");
         }
         assert!(names.contains("orbit_task_add"));
-        assert_eq!(names.contains("orbit_workflow_ship"), index == 1);
+        assert_eq!(names.contains("orbit_workflow"), index == 1);
         let preflight = client.request("orbit/internal/drain/preflight", json!({}));
         assert_eq!(preflight["error"]["code"], -32601);
     }

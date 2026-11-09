@@ -285,11 +285,12 @@ pub(crate) fn ci_failure_blocks(value: &Value) -> Vec<Block> {
     vec![Block::table(table)]
 }
 
-/// The by-type matrix: one row per (crew, model, tier, type) cell.
+/// The by-type matrix: one row per (model, recorded effort, tier, type)
+/// cell, with the crews that contributed to it.
 pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
     let columns = vec![
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
+        Column::new("CREWS").fixed(),
+        Column::new("ROW"),
         Column::new("TIER"),
         Column::new("TYPE"),
         Column::new("N").number(),
@@ -317,8 +318,18 @@ pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
         ));
     for cell in value["cells"].as_array().into_iter().flatten() {
         table.add_row(vec![
-            text(&cell["crew"]),
-            text(&cell["model"]),
+            cell["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&cell["crew"])),
+            {
+                let label = text(&cell["label"]);
+                if label.is_empty() {
+                    text(&cell["model"])
+                } else {
+                    label
+                }
+            },
             text(&cell["tier"]),
             text(&cell["type"]),
             number(&cell["n"]),
@@ -335,8 +346,8 @@ pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
 fn per_task_blocks(value: &Value) -> Vec<Block> {
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let mut columns = vec![
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
+        Column::new("CREWS").fixed(),
+        Column::new("ROW"),
         Column::new("TIER"),
         Column::new("TYPE"),
         Column::new("TAGS"),
@@ -362,8 +373,18 @@ fn per_task_blocks(value: &Value) -> Vec<Block> {
                 .unwrap_or_default()
         };
         let mut cells = vec![
-            text(&task["crew"]),
-            text(&task["model"]),
+            task["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&task["crew"])),
+            {
+                let label = text(&task["label"]);
+                if label.is_empty() {
+                    text(&task["model"])
+                } else {
+                    label
+                }
+            },
             text(&task["tier"]),
             text(&task["type"]),
             join("tags"),

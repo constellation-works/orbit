@@ -90,7 +90,7 @@ fn granted_tasks_stay_on_the_owner_before_any_claim_or_leaf() {
     let owner = &pair.wire.owner;
     let grants = [
         vec![
-            "orbit.auto_task.update".to_string(),
+            "orbit.auto_task:update".to_string(),
             "proc.spawn".to_string(),
         ],
         vec!["proc.spawn".to_string()],
@@ -181,7 +181,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
         .update_task_as_human(
             &task,
             TaskUpdateParams {
-                granted_tools: Some(vec!["orbit.auto_task.update".to_string()]),
+                granted_tools: Some(vec!["orbit.auto_task:update".to_string()]),
                 ..Default::default()
             },
             "human:fixture".to_string(),
@@ -196,7 +196,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
         .expect("the owner cannot satisfy both constraints");
     for detail in [
         "owner host",
-        "orbit.auto_task.update",
+        "orbit.auto_task:update",
         "gpu",
         "requires_labels",
     ] {

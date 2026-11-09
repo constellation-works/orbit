@@ -18,7 +18,7 @@ required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
 Task tools take `id`, including `orbit.task.show`, `orbit.task.update`,
-`orbit.task.artifact.put`, and `orbit.task.artifact.get`. Copy the identifier
+`orbit.task.artifact` action `put`, and `orbit.task.artifact` action `get`. Copy the identifier
 from workflow input `task_id`, `ORBIT_TASK_ID`, or the task snapshot's `id`
 into that argument; workflow and evidence keys named `task_id` are not
 task-tool argument names. Unknown fields are rejected with suggestions,
@@ -30,7 +30,7 @@ Search statuses require the corpus prefix, such as `task:rejected` or
 To attach evidence, write a local file under `.orbit/tmp/` and use:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
 ```
 
 `source_path` is the local file; `path` is the stored artifact name.
@@ -114,7 +114,7 @@ the worktree clean; the pipeline hands off on the tag.
 For tasks without `no-diff-expected`, when a clean task checkout is already
 covered by this task's or a sibling task's landed commit, verify the current
 acceptance criteria and attach
-`already-landed.json` plus captured validation logs with `orbit.task.artifact.put`
+`already-landed.json` plus captured validation logs with `orbit.task.artifact` action `put`
 in the current run, including the first attempt. The artifact names the current
 task and the covering task separately. `git_commit` checks the pinned HEAD,
 covering commit marker and ancestry, unchanged task scope, clean tree, and
@@ -189,7 +189,7 @@ for a single-task delivery, `pr_open` reads the task artifact. In owner mode,
 attach the file before PR creation:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/pr-sections.json","path":"pr-sections.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<task-id>","source_path":".orbit/tmp/pr-sections.json","path":"pr-sections.json"}'
 ```
 
 In claimed mode, return it in `task_artifacts` so the owner durably attaches it:
@@ -269,7 +269,7 @@ lost evidence.
   stored path such as `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
   A file with no suffix is an After shot, and the Before shot stays optional.
   Owner mode
-  attaches screenshots with `orbit.task.artifact.put`. A claimed implementer
+  attaches screenshots with `orbit.task.artifact` action `put`. A claimed implementer
   returns each screenshot in `task_artifacts`, setting `path` to its stable
   stored path and `source_path` to its file under `.orbit/tmp/`, for
   deterministic attachment. Use this task-artifact channel for diff and
@@ -295,7 +295,7 @@ handoff instead of claiming visual verification.
 This section applies only to tasks without `no-diff-expected`. When the
 implementation correctly needs no file changes, and all required
 validation passes, attach `no-diff.json` and one captured validation log per
-check with `orbit.task.artifact.put`. This is only for a genuine validated
+check with `orbit.task.artifact` action `put`. This is only for a genuine validated
 no-op; never use it to bypass failed validation or pending worktree changes.
 The evidence must match the pinned task, current run (or its recorded retry
 lineage), and tested HEAD:
@@ -330,7 +330,7 @@ A review-filed bug (type `bug` tagged `code-review`, `delivery-code-review`,
 base before editing. When it does not exist there (the code does not do what
 the finding claims, or the claimed consequence cannot happen), change
 nothing, run no workspace gates, and attach `finding-invalid.json` with
-`orbit.task.artifact.put`. It is not for a defect already fixed (use
+`orbit.task.artifact` action `put`. It is not for a defect already fixed (use
 already-landed or no-diff) or one you judge not worth fixing (that is the
 operator's call):
 
@@ -537,7 +537,7 @@ it — see [friction.md](friction.md). Then:
   succeed.
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
-  granted `orbit.task.update`. `orbit.task.show` and `orbit.task.artifact.get`
+  granted `orbit.task.update`. `orbit.task.show` and `orbit.task.artifact` action `get`
   read any task in the claimed workspace through the run's coordinator, except
   that a `review-*` artifact of another task is refused on the remote route
   (the review gate keeps its stricter scope). Return the summary as the output's

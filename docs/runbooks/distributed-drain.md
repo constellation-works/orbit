@@ -29,7 +29,7 @@ operations are absent from public MCP discovery and refused by public
 and initialize metadata cannot enable internal access. Both endpoints must
 support the internal transport revision; preflight fails closed with no public
 fallback. CLI diagnostics below retain their authority requirements, and
-completion approval remains an owner-dashboard action; revocation and recovery are also available as the operator commands `orbit task revoke-handoff` and `orbit task recover-claim` (and the matching operator tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`).
+completion approval remains an owner-dashboard action; revocation and recovery are also available as the operator commands `orbit task revoke-handoff` and `orbit task recover-claim` (and the matching operator tools `orbit.task.recover` action `revoke_handoff` and `orbit.task.recover` action `recover_claim`).
 The follower never merges.
 
 Internal worker reads and typed claim updates use host-owned session
@@ -507,11 +507,11 @@ if contract not in template['description']:
     template['description'] += '\n\n## Owner evidence requirement\n\n' + contract + '\n'
 if contract not in template['acceptance_criteria']:
     template['acceptance_criteria'].append(contract)
-payload = {'workspace': sys.argv[1], 'name': before['name'], 'template': template}
+payload = {'action': 'update', 'workspace': sys.argv[1], 'name': before['name'], 'template': template}
 (scratch / 'scan-owner-evidence-update.json').write_text(json.dumps(payload, indent=2) + '\n')
 PY
 # Review the payload against scan-before.json before applying it.
-ORBIT_OPERATOR=1 orbit tool run orbit.auto_task.update --input-file .orbit/tmp/scan-owner-evidence-update.json
+ORBIT_OPERATOR=1 orbit tool run orbit.auto_task --input-file .orbit/tmp/scan-owner-evidence-update.json
 orbit --workspace "$OWNER_WORKSPACE" auto-task show tool-failure-patterns --json > .orbit/tmp/scan-after.json
 ```
 
@@ -606,7 +606,7 @@ task set. Route those operations to the owner. See
 
 The role change also keeps the host's local friction corpus. List it on the
 replica with `orbit friction list --status open`, then close each legacy report
-with `orbit friction resolve <ID>` or an audited `orbit.friction.update` with
+with `orbit friction resolve <ID>` or an audited `orbit.friction` action `update` with
 `status: resolved` and disposition evidence. These operations resolve only
 existing records in the replica's local workspace partition; the owner's
 records are untouched even when IDs collide. New reports, reopening, and actual
@@ -797,7 +797,7 @@ orbit run auto --pull <selector> --for 8h --concurrency 3
 ```
 
 Owner and pull drains accept windows up to 24 hours. CLI `--for`, HTTP
-`POST /api/workflows/auto` (`for_duration`), and MCP `orbit.workflow.auto`
+`POST /api/workflows/auto` (`for_duration`), and MCP `orbit.workflow` action `auto`
 (`for_seconds`) refuse a longer window before creating a run, with
 `for_seconds must be a whole number from 1 to 86400 (24 hours)`. The CLI
 keeps its one-pass shorthand when `--for` is omitted or zero; HTTP asks for one
@@ -857,7 +857,7 @@ approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
 qualifying** in the owner's Drain card) on the owner.
 
 Readiness uses one shared snapshot across `orbit run readiness`, MCP
-`orbit.workflow.auto` with `action: "status"`, and
+`orbit.workflow` action `auto` with `mode: "status"`, and
 `GET /api/workflows/auto/readiness`. MCP status accepts `task` (one id or a
 list), `concurrency`, `limit` (1–500, default 50), and `allow_crew` (configured
 crew names). HTTP accepts `task` and `allow_crew` as comma-separated query
@@ -942,7 +942,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   namespace (any ASCII case): only the review gate writes there, so a path in
   it is refused before attachment, naming the namespace and the path.
   `no_diff_artifacts` still admits only the report and its logs. Owner-mode
-  agents continue using `orbit.task.artifact.put`.
+  agents continue using `orbit.task.artifact` action `put`.
   The handoff pins that verifier report; the owner rechecks it against its live
   base and completes without a PR under the same completion authority. A moved
   base or changed report requires fresh validation; a skip flag alone is refused.
@@ -988,7 +988,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - An agent in a claimed leaf reaches the owner only through the run's
   coordinator (the step runner's broker, outside the sandbox), for a closed
   list of calls: `orbit.search`, `orbit.task.list`, `orbit.task.show` and
-  `orbit.task.artifact.get` against the owner workspace the claim is bound to
+  `orbit.task.artifact` action `get` against the owner workspace the claim is bound to
   (a federated scope, a task the owner does not hold in that workspace, or
   another task's `review-*` artifact on the remote route, is
   refused, and none is carried to any other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
@@ -997,8 +997,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `regression_from`; area tasks qualify through `no-diff-expected` together
   with `full-code-review` or `qa-full-sweep`. The owner checks that the culprit
   belongs to the claimed workspace and the claim is active),
-  `orbit.friction.add` (during the claimed task, if it names
-  one), `orbit.task.artifact.put` on the claimed task, and `orbit.notice.post`,
+  `orbit.friction` action `add` (during the claimed task, if it names
+  one), `orbit.task.artifact` action `put` on the claimed task, and `orbit.notice.post`,
   `orbit.notice.show` and `orbit.notice.close`. Notices are stored only on the
   owner, and the claim binding supplies the posting task and run. Its nested
   `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
@@ -1375,8 +1375,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `detail`; it does not establish that the owner is down.
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
-`orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow_auto` with
-`action: "resize"`), `orbit run extend <run-id> --for 4h [--concurrency N]`,
+`orbit run concurrency <run-id> --set N` (MCP: `orbit_workflow` action `auto` with
+`mode: "resize"`), `orbit run extend <run-id> --for 4h [--concurrency N]`,
 and `orbit run auto --stop` (closes the window; live leaves keep running and
 still settle).
 
@@ -1507,7 +1507,7 @@ This is operator-only (an agent, a managed scan or a worker bound to a claim is
 refused), bounded (default 25 claims, at most 100; `remaining` counts the rest)
 and runs from the owner. It reads each claim's leaf run, and once per drain the
 admitting drain, from the claim's follower through this machine's registered,
-authenticated route to that host (`orbit.workflow.run.observe`), and keeps the answer
+authenticated route to that host (`orbit.run` action `observe`), and keeps the answer
 as `hydrated` evidence only if the whole tuple matches: the run is the claim's
 bound run, executed on the claim's machine, is a terminal claimed-leaf job
 delivering exactly the claim's task, and its admitting drain ran on that machine
@@ -1526,14 +1526,14 @@ its last claim; repeat with `--after <that claim-id>` and the same filters to
 visit every selected claim, unsuccessful outcomes included, and likewise
 under `--recheck`. A continuation claim outside the selection is refused.
 The follower opens the required authenticated operator route
-`orbit.workflow.run.observe` and reads the stored records. That open,
+`orbit.run` action `observe` and reads the stored records. That open,
 including the workspace discovery that precedes the read, does not reconcile
 stale runs and does not change run, task, or reservation state. A nonterminal
 leaf is `mismatch`; run hydration after the leaf has ended so the stored
 record is terminal. A follower that predates this route cannot serve the read
 (unknown tool), so hydration reports `unreachable` and the question stays open
 for a later run, never `absent`. Ordinary `orbit run show` and
-`orbit.workflow.run.show` still reconcile when they open. Hydration still
+`orbit.run` action `show` still reconcile when they open. Hydration still
 accepts only a terminal matching tuple as hydrated evidence.
 
 The owner's dashboard shows the same state, plus the accepted handoff, inside
@@ -1637,7 +1637,7 @@ Deliberate recovery is operator-driven:
    On the owner's dashboard, use **Recover claim → blocked** to diagnose or
    **Recover claim → backlog** to retry, or run the equivalent operator command
    `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
-   (or `--status backlog` to retry; the operator tool is `orbit.task.recover_claim`).
+   (or `--status backlog` to retry; the operator tool is `orbit.task.recover` action `recover_claim`).
    Both require a reason and the phase you were shown, refuse if the claim moved
    on, and replay when the same request key is resubmitted with the same input.
    Do not admit a second attempt by shipping the task again while the old claim is unfenced.
@@ -2259,8 +2259,8 @@ three are safe; none strands a claim, and none fails a task that never ran.
   (`release_held` in `pull_settlements`): it reaches the owner only once the
   leaf is seen to stop, so a second executor never starts the task beside a
   first that is still running. Stop that leaf by hand on its host.
-- The MCP stop control takes the same option: `orbit.workflow.auto` with
-  `action: "stop"` and `force: true` stops admissions, then force-cancels each
+- The MCP stop control takes the same option: `orbit.workflow` action `auto` with
+  `mode: "stop"` and `force: true` stops admissions, then force-cancels each
   live drain as above (a local drain's task runs included). It fails, naming
   the leaves, when any leaf could not be confirmed stopped.
 - A drain that is still queued, or whose worker is gone, is cancelled at once;
@@ -2383,7 +2383,7 @@ capability cannot approve). Approval is reached from the owner's dashboard —
 `POST /api/distributed/handoffs/<handoff-id>/approve`, governed as
 `handoff.approve`. Revocation is reached the same way (`.../revoke`, governed
 as `handoff.revoke`) and also as `orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>`
-(the operator tool `orbit.task.revoke_handoff`). Never substitute `--complete` on a
+(the operator tool `orbit.task.recover` action `revoke_handoff`). Never substitute `--complete` on a
 follower or `orbit job resume`:
 
 - Approval records one immutable candidate-scoped authorization and one
@@ -2423,7 +2423,7 @@ Inspect its accepted handoffs before resolving that ambiguity. Refresh the
 task detail after repair to see its PR link and CI controls. No handoff
 revocation, claim recovery or landing retry is needed for this repair.
 
-A landing, `orbit.task.retry_handoff` and auto-fix base-update admission
+A landing, `orbit.task.recover` action `retry_handoff` and auto-fix base-update admission
 accept a pull request head that is the accepted candidate plus a
 first-parent chain of base merges, such as a second **Update branch** an
 operator ran on top of Orbit's own. Every extra commit must have exactly
@@ -2683,12 +2683,12 @@ on hosts that report it.
   prove sustained pressure. If history is unavailable, evaluation uses local
   observations. Drains sample every five seconds and also record the throttle
   on each pass; readiness and the dashboard Drain card can read that record.
-  MCP `orbit.workflow.auto` status carries
-  `capacity.resource_throttle`; `orbit.workflow.run.show` carries the drain's
+  MCP `orbit.workflow` action `auto` status carries
+  `capacity.resource_throttle`; `orbit.run` action `show` carries the drain's
   `drain_last_pass`.
-- `orbit run auto`, MCP `orbit.workflow.auto` start, the dashboard's drain
+- `orbit run auto`, MCP `orbit.workflow` action `auto` start, the dashboard's drain
   start, and a ship of named tasks (`orbit run ship`, MCP
-  `orbit.workflow.ship`, the dashboard's ship) proceed and report a warning.
+  `orbit.workflow` action `ship`, the dashboard's ship) proceed and report a warning.
   A resource-throttled drain admits nothing until the pressure clears, except
   that a local drain can still admit eligible CPU-light work while CPU alone is
   held and reserved slots remain; a named ship starts at once.
@@ -2823,8 +2823,8 @@ the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf and its 
 after handoff the owner task is in `review` with the PR attached and nothing
 merged. With before-PR review on, the owner task also carries
 `review-gate.json` and the reviewer's verdict comment, and the follower's
-audit holds one brokered `orbit.task.artifact.get` and one
-`orbit.task.artifact.put` for the leaf (the smoke procedure in the
+audit holds one brokered `orbit.task.artifact` action `get` and one
+`orbit.task.artifact` action `put` for the leaf (the smoke procedure in the
 [claimed-review artifacts runbook](./claimed-review-artifacts.md) reads
 them).
 

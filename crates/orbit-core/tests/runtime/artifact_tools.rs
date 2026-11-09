@@ -519,9 +519,11 @@ fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
 /// candidate, including its required manifest read and one optional listing.
 fn read_review_evidence(fixture: &Fixture) -> Vec<String> {
     let call = |tool: &str, input: Value| {
+        // A session names a family action through its family.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         fixture
             .runtime
-            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .execute_tool_command(&tool, input, None, Some("codex".into()))
             .unwrap()
     };
     call(
@@ -645,8 +647,9 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     // metadata-only artifacts projection, fetch only listed ledgers, and
     // stop at the first cumulative (schema_version 2) ledger.
     let call = |tool: &str, input: Value| {
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         runtime
-            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .execute_tool_command(&tool, input, None, Some("codex".into()))
             .unwrap()
     };
     let mut fetched: Vec<(String, Value)> = Vec::new();
@@ -715,8 +718,8 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     // The MCP surface keeps its own tool-call spelling for the same refusal.
     let mcp_error = runtime
         .execute_tool_command_dispatch_with_session_context(
-            "orbit.task.artifact.get",
-            json!({"id": middle, "path": "doc-duties-ledger.json"}),
+            "orbit.task.artifact",
+            json!({"action": "get", "id": middle, "path": "doc-duties-ledger.json"}),
             None,
             Some("codex".into()),
             orbit_core::adapter::command::ToolEntryPoint::Mcp,

@@ -18,7 +18,7 @@ pub fn is_id_routed_tool(name: &str) -> bool {
 /// destination to refuse rather than read as absent, so a malformed selector
 /// never turns into a prefix route.
 pub fn id_only_task_target<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
-    if !is_id_routed_tool(name) {
+    if !is_id_routed_tool(orbit_types::tool::tool_operation_name(name, input)) {
         return None;
     }
     match input.get("workspace") {

@@ -72,11 +72,11 @@ fn routine_command_results_survive_failure_and_resume_without_becoming_completed
     assert_eq!(row["last_fire"]["run_id"], run_id, "{row}");
 
     for view in ["full", "bounded"] {
-        let mut input = json!({"workspace":selector,"id":run_id});
+        let mut input = json!({"action": "show", "workspace":selector,"id":run_id});
         if view == "bounded" {
             input["view"] = json!(view);
         }
-        let shown = client.call_tool_ok("orbit_workflow_run_show", input);
+        let shown = client.call_tool_ok("orbit_run", input);
         let steps = if view == "bounded" {
             &shown["run"]["steps"]
         } else {
@@ -95,8 +95,8 @@ fn routine_command_results_survive_failure_and_resume_without_becoming_completed
     assert_eq!(resumed["state"], "success", "{resumed}");
     let resumed_id = resumed["run_id"].as_str().unwrap();
     let shown = client.call_tool_ok(
-        "orbit_workflow_run_show",
-        json!({"workspace":selector,"id":resumed_id,"view":"bounded"}),
+        "orbit_run",
+        json!({"action": "show", "workspace":selector,"id":resumed_id,"view":"bounded"}),
     );
     assert_command_result(&shown["run"]["steps"], 0, "success");
 
@@ -120,8 +120,8 @@ fn routine_command_results_survive_failure_and_resume_without_becoming_completed
     }
     runtime.write_run_state(resumed_id, &state).unwrap();
     let historical = client.call_tool_ok(
-        "orbit_workflow_run_show",
-        json!({"workspace":selector,"id":resumed_id,"view":"bounded"}),
+        "orbit_run",
+        json!({"action": "show", "workspace":selector,"id":resumed_id,"view":"bounded"}),
     );
     assert_command_result(&historical["run"]["steps"], 0, "success");
 }

@@ -2,7 +2,7 @@
   "permissions": {
     "allow": [
       "mcp__orbit__orbit_search",
-      "mcp__orbit__orbit_friction_add",
+      "mcp__orbit__orbit_friction",
       "mcp__orbit__orbit_learning_add",
       "mcp__orbit__orbit_learning_comment_add",
       "mcp__orbit__orbit_learning_comment_list",
@@ -10,7 +10,7 @@
       "mcp__orbit__orbit_learning_update",
       "mcp__orbit__orbit_learning_upvote",
       "mcp__orbit__orbit_task_add",
-      "mcp__orbit__orbit_task_artifact_put",
+      "mcp__orbit__orbit_task_artifact",
       "mcp__orbit__orbit_task_list",
       "mcp__orbit__orbit_task_show"
     ],

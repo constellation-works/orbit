@@ -10,16 +10,20 @@ pub(crate) struct HintCase {
 
 pub(crate) fn cases() -> Vec<HintCase> {
     let mut cases = Vec::new();
-    for tool in [
-        "orbit.task.show",
-        "orbit.task.update",
-        "orbit.task.artifact.put",
-        "orbit.task.artifact.get",
+    for (tool, action) in [
+        ("orbit.task.show", None),
+        ("orbit.task.update", None),
+        ("orbit.task.artifact", Some("put")),
+        ("orbit.task.artifact", Some("get")),
     ] {
         for field in ["task_id", "taskId"] {
+            let mut input = json!({field: "ORB-99999999", "model": "codex"});
+            if let Some(action) = action {
+                input["action"] = json!(action);
+            }
             cases.push(HintCase {
                 tool,
-                input: json!({field: "ORB-99999999", "model": "codex"}),
+                input,
                 suggestions: vec!["id"],
             });
         }
@@ -27,8 +31,8 @@ pub(crate) fn cases() -> Vec<HintCase> {
     // The audit also recorded artifact uploads with both task_id and name;
     // an earlier unhinted field must not hide the actionable id suggestion.
     cases.push(HintCase {
-        tool: "orbit.task.artifact.put",
-        input: json!({"name": "evidence.json", "task_id": "ORB-99999999", "model": "codex"}),
+        tool: "orbit.task.artifact",
+        input: json!({"action": "put", "name": "evidence.json", "task_id": "ORB-99999999", "model": "codex"}),
         suggestions: vec!["id"],
     });
     for tool in ["github.run.view", "github.run.logs"] {

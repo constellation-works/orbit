@@ -29,14 +29,14 @@ a `resident/mandate.json` artifact, plus a separate authority record. The
 mandate says what to achieve; the authority says what the resident may do.
 
 Filing steps 1–2 need the `tasks-write` toolset (`orbit.task.add` and
-`orbit.task.artifact.put` belong to it, so a plain `manager` MCP session is
+`orbit.task.artifact` action `put` belong to it, so a plain `manager` MCP session is
 refused with `toolset_not_enabled`); reuse an existing assignment when the
 session cannot write, or hand the filing to a session with that surface.
 
 1. File or reuse the assignment in the owning workspace with
    `orbit.task.add`, tagged `resident`. Give it the goal as its description
    and exit criteria the resident can check against task state.
-2. Write `resident/mandate.json` with `orbit.task.artifact.put`. Schema
+2. Write `resident/mandate.json` with `orbit.task.artifact` action `put`. Schema
    `resident.mandate/v1`: `goal` (one line), `exit_criteria` (1–8 lines),
    optional `deadline` (RFC 3339), `workspaces` the mandate is about,
    `watch` (`tasks` and `tags` whose changes wake the resident), `crew` (any

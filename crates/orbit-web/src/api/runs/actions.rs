@@ -55,7 +55,7 @@ pub(in crate::api) struct ShipBody {
 /// One-shot: responds as soon as the run is persisted, with the same
 /// `queued`/`submitted` states the CLI reports, and the same submission
 /// notices (`warning`, `validation_env_warning`) `orbit run ship` and
-/// `orbit.workflow.ship` report. Callers poll `GET /runs/:id` for progress.
+/// `orbit.workflow` action `ship` report. Callers poll `GET /runs/:id` for progress.
 ///
 /// An omitted `mode` resolves to the selected workspace's own ship mode
 /// (ORB-10444), so the dashboard's one-click Ship needs no PR/local toggle;
@@ -318,7 +318,7 @@ fn map_start_refusal(error: orbit_core::OrbitError) -> Response {
 /// existing owner drain, watcher and repair ledger. A non-boolean value fails
 /// body parsing like any other bad field. The receipt carries the drain's
 /// submission notices (`warning`, `note`, `resource_throttle`,
-/// `validation_env_warning`) as `orbit.workflow.auto` does, and never the
+/// `validation_env_warning`) as `orbit.workflow` action `auto` does, and never the
 /// claim token.
 pub(in crate::api) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,

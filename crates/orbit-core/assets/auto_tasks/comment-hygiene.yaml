@@ -79,9 +79,9 @@ template:
        any ledger: list the metadata-only artifacts projection with
        `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
        and fetch the ledger with
-       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`
+       `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`
        only when that listing names `comment-hygiene-ledger.json`. Skip a task whose
-       listing has no ledger without calling `orbit.task.artifact.get` for it,
+       listing has no ledger without calling `orbit.task.artifact` action `get` for it,
        and ignore its prose summary; never order by execution-summary text. A
        `schema_version` 2 ledger carries `state`, a cumulative map from each
        path to its two most recent attempt rows, newest first. It already
@@ -199,7 +199,7 @@ template:
     ## Attach the ledger
 
     Write `.orbit/tmp/comment-hygiene-ledger.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/comment-hygiene-ledger.json","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/comment-hygiene-ledger.json","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`.
     Its shape is `{"schema_version":2,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","files":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","checked_through":"<full commit SHA this check covers>","lines":123,"ranges_checked":[[1,800]],"ranges_total":[[1,1200]]}],"state":{"<repo-relative path>":[{"attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<as above>","checked_through":"<full commit SHA>","ranges_checked":[[1,800]],"ranges_total":[[1,1200]]}]}}`.
     `checked_through` is the HEAD commit the check was made against (the
     ledger `head`), recorded on every row so the next run can drop unchanged
@@ -249,8 +249,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   # No context_files and proposed on purpose: the batch is known only after

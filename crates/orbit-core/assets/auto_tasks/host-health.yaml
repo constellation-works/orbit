@@ -161,7 +161,7 @@ template:
 
     - Find the newest completed pass of the same role and machine using orbit.task.list,
       including artifact-complete review tasks if delivery has not closed them yet. Read its
-      report/cursor through orbit.task.artifact.get only after orbit.task.show lists them.
+      report/cursor through orbit.task.artifact action get only after orbit.task.show lists them.
       Record scan_start in UTC before collecting; first pass uses the preceding 7 days.
       Missing/corrupt prior artifacts mean a reported baseline reset, not invented history.
     - A fresh window ends at scan_start. A partial resume keeps its original window_start and
@@ -273,7 +273,7 @@ template:
       orbit doctor --json filtered to the actual check ID, or a bounded journal/file query
       for the signature over a fresh window. Give the expected output and exit status, plus
       a symptom-specific check when a clean doctor alone cannot prove the fix.
-    - For resolve.sh, attach the script to the NEW task with orbit.task.artifact.put and
+    - For resolve.sh, attach the script to the NEW task with orbit.task.artifact action put and
       confirm the attachment before marking it filed; otherwise provide full inline commands.
       A code bug may give exact reproduction/build commands and numbered source repair steps
       when the implementation is still to be written; never invent a patch or unsafe command.
@@ -308,7 +308,7 @@ template:
       Once pending groups and unread sources are drained, clear resume_after/partial and the
       next pass can start a fresh window. New arrivals wait for that next window.
     - Write under .orbit/tmp/ ($ORBIT_SCRATCH_DIR), then attach both files with
-      orbit.task.artifact.put on this pass (claimed collectors return task_artifacts):
+      orbit.task.artifact action put on this pass (claimed collectors return task_artifacts):
 
       host-health-report.json:
       {"schema_version":1,"role":"owner|collector","machine_id":"...","scan_start":"RFC3339",
@@ -361,7 +361,7 @@ template:
     - orbit.task.show
     - orbit.task.add
     - orbit.task.update
-    - orbit.task.artifact.get
-    - orbit.task.artifact.put
+    - orbit.task.artifact:get
+    - orbit.task.artifact:put
     - orbit.search
 dedupe: skip_if_open

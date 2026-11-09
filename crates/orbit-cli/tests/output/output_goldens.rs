@@ -722,6 +722,12 @@ fn authorization_matrix_matches_live_registry() {
         .into_iter()
         .map(|definition| definition.schema.name)
         .collect::<BTreeSet<_>>();
+    // A family action's operation is advertised through its family.
+    let advertised_operation = |id: &str| {
+        advertised.contains(id)
+            || orbit_types::tool::tool_family_of_operation(id)
+                .is_some_and(|(family, _)| advertised.contains(family.name))
+    };
 
     let mut observed_placement: Vec<(&str, Placement)> = GOVERNED_OPERATIONS
         .iter()
@@ -732,7 +738,7 @@ fn authorization_matrix_matches_live_registry() {
                 && op.id != PLUGIN_TOOL_AGENT_CALLABLE.id
         })
         .map(|op| {
-            let placement = if advertised.contains(op.id) {
+            let placement = if advertised_operation(op.id) {
                 Placement::Advertised
             } else {
                 Placement::Unadvertised
@@ -756,7 +762,7 @@ fn authorization_matrix_matches_live_registry() {
 
     for operation in GOVERNED_OPERATIONS
         .iter()
-        .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
+        .filter(|op| op.surface == OperationSurface::Tool && advertised_operation(op.id))
     {
         if operation.id.starts_with("orbit.notice.")
             || operation.id.starts_with("orbit.resident.")

@@ -95,8 +95,12 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
     let lane = &prepared["implementation_lane"];
     assert_eq!(lane["activity"], "agent_implement", "{lane}");
     let tools = lane["tools"].as_array().expect("lane tools");
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
     assert!(
-        tools.iter().any(|tool| tool == "orbit.task.artifact.put"),
+        orbit_types::workflow::tool_allowed("orbit.task.artifact:put", &names),
         "owner attachment must be callable: {lane}"
     );
     assert!(
@@ -105,7 +109,7 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
     );
     assert_eq!(
         lane["artifact_attachment"]["owner"],
-        "orbit.task.artifact.put"
+        "orbit.task.artifact:put"
     );
     assert_eq!(lane["artifact_attachment"]["owner_granted"], true);
     assert_eq!(

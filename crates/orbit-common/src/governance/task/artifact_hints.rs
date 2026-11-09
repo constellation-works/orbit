@@ -1,7 +1,7 @@
 //! Per-surface artifact-listing hints for artifact-get errors.
 //!
 //! `orbit.task.artifact.get` serves both the CLI (`orbit task artifact get`)
-//! and MCP (`orbit_task_artifact_get`) through one handler. A hint naming the
+//! and MCP (`orbit_task_artifact` action `get`) through one handler. A hint naming the
 //! listing action must use the caller's own surface syntax: the MCP adapter
 //! mints an origin session id for every session it serves, while
 //! `orbit tool run` and in-process callers carry none, so they stay CLI.

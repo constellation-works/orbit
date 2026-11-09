@@ -145,7 +145,7 @@ An upgrade re-seeds a file that still matches what the plugin wrote. A file
 edited since is preserved with a warning until `orbit plugin enable <ns>
 --force` takes the plugin's version. Disabling or removing the plugin (on the
 host, or `--scope workspace`) leaves the files where they are and skips them.
-`orbit routine list`, `orbit auto-task list`, MCP `orbit.auto_task.list` and
+`orbit routine list`, `orbit auto-task list`, MCP `orbit.auto_task` action `list` and
 the dashboard hide them; `--all` (MCP `include_inactive_plugins`, the
 dashboard's "Show hidden") lists them as inactive with a reason naming the
 plugin, and `show <name>` still resolves them. Re-enabling brings them back

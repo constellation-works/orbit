@@ -17,7 +17,7 @@ A transient provider or reader failure stops completion after publication. The u
 
 ## Resolution
 
-If GitHub reads recover and the PR is unchanged, requeue through candidate reuse (ORB-16209: final recovery requeued 1 of 2 per 24 h after `github.pr.list` and `github.run.list` succeeded again). Otherwise the operator runs `orbit.workflow.run.resume` inspect then submit on the stopped run, as triage named for ORB-19981. Never guess at the binding.
+If GitHub reads recover and the PR is unchanged, requeue through candidate reuse (ORB-16209: final recovery requeued 1 of 2 per 24 h after `github.pr.list` and `github.run.list` succeeded again). Otherwise the operator runs `orbit.run` action `resume` inspect then submit on the stopped run, as triage named for ORB-19981. Never guess at the binding.
 
 ## Fix task
 

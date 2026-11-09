@@ -9,9 +9,11 @@
 //! proves: a client applies the MCP defaults (destructive, open-world) for
 //! anything left unsaid, which is the safe reading.
 //!
+//! Rows name operations; a tool family advertises their combination.
+//!
 //! The hints are advisory UX for the client. They never authorize a call.
 
-use orbit_types::tool::{McpToolAnnotations, ToolSchema};
+use orbit_types::tool::{McpToolAnnotations, ToolFamily, ToolSchema, tool_family};
 
 use crate::ToolExecutionKind;
 
@@ -28,7 +30,10 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.automation.explain"
         | "orbit.attention"
         | "orbit.codebase.analytics"
+        | "orbit.codebase.related"
         | "orbit.codebase.show"
+        | "orbit.decision.list"
+        | "orbit.decision.show"
         | "orbit.drain.claims"
         | "orbit.friction.show"
         | "orbit.friction.stats"
@@ -49,12 +54,14 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.task.list"
         | "orbit.task.show"
         | "orbit.workflow.run.list"
+        | "orbit.workflow.run.observe"
         | "orbit.workflow.run.show" => A::READ_ONLY,
 
         // Creation: adds a record, never removes or overwrites one, and a
         // repeated call adds another.
         "orbit.auto_task.add"
         | "orbit.auto_task.mint"
+        | "orbit.decision.raise"
         | "orbit.friction.add"
         | "orbit.evolution.add"
         | "orbit.memory.propose"
@@ -117,18 +124,66 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
     })
 }
 
-/// The `annotations` a tool advertises over MCP.
+/// The `annotations` a tool advertises over MCP. A tool family combines its
+/// operations' hints so that no action is understated: it is read-only only
+/// when every action is, idempotent only when every action is, and
+/// destructive or open-world when any action is.
+/// `operation_kind` gives the execution kind of a family's operation, for an
+/// operation without its own row.
 pub(crate) fn mcp_annotations(
     schema: &ToolSchema,
     execution_kind: ToolExecutionKind,
+    operation_kind: impl Fn(&str) -> Option<ToolExecutionKind>,
 ) -> McpToolAnnotations {
     if schema.builtin
-        && let Some(annotations) = builtin_annotations(&schema.name)
+        && let Some(family) = tool_family(&schema.name)
     {
+        return family_annotations(family, operation_kind);
+    }
+    operation_annotations(schema.builtin, &schema.name, execution_kind)
+}
+
+fn operation_annotations(
+    builtin: bool,
+    name: &str,
+    execution_kind: ToolExecutionKind,
+) -> McpToolAnnotations {
+    if builtin && let Some(annotations) = builtin_annotations(name) {
         return annotations;
     }
     McpToolAnnotations {
         read_only: Some(execution_kind == ToolExecutionKind::ReadOnly),
         ..McpToolAnnotations::default()
+    }
+}
+
+fn family_annotations(
+    family: &ToolFamily,
+    operation_kind: impl Fn(&str) -> Option<ToolExecutionKind>,
+) -> McpToolAnnotations {
+    let hints = family
+        .actions
+        .iter()
+        .map(|action| {
+            operation_kind(action.operation).map_or_else(McpToolAnnotations::default, |kind| {
+                operation_annotations(true, action.operation, kind)
+            })
+        })
+        .collect::<Vec<_>>();
+    // An unstated hint takes the MCP default: not read-only, destructive,
+    // not idempotent, open-world.
+    let read_only = hints.iter().all(|hint| hint.read_only == Some(true));
+    if read_only {
+        return McpToolAnnotations {
+            open_world: Some(hints.iter().any(|hint| hint.open_world != Some(false))),
+            ..McpToolAnnotations::READ_ONLY
+        };
+    }
+    let writes = hints.iter().filter(|hint| hint.read_only != Some(true));
+    McpToolAnnotations {
+        read_only: Some(false),
+        destructive: Some(writes.clone().any(|hint| hint.destructive != Some(false))),
+        idempotent: Some(writes.clone().all(|hint| hint.idempotent == Some(true))),
+        open_world: Some(hints.iter().any(|hint| hint.open_world != Some(false))),
     }
 }

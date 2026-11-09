@@ -1014,3 +1014,219 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
         .assert()
         .failure();
 }
+
+/// Plain `--by-type` and `--per-task` output keeps the (model, recorded
+/// effort) row identity and contributing crews that `--json` carries: one
+/// crew and model at medium, high, provider-default and unknown effort must
+/// not collapse into indistinguishable rows.
+#[test]
+fn agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows",
+    ) {
+        return;
+    }
+    use orbit_types::identity::ReasoningEffort::{High, Medium};
+
+    // (crew, recorded effort); `None` effort with an identity is the
+    // provider default, and the last row records no invocation at all.
+    let specs: [(&str, Option<Option<orbit_types::identity::ReasoningEffort>>); 5] = [
+        ("sol", Some(Some(Medium))),
+        ("other", Some(Some(Medium))),
+        ("sol", Some(Some(High))),
+        ("sol", Some(None)),
+        ("sol", None),
+    ];
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        let workspace = runtime.workspace_id().unwrap();
+        for (index, (crew, effort)) in specs.iter().enumerate() {
+            let id = runtime
+                .add_task(TaskAddParams {
+                    title: format!("effort-row {index}"),
+                    description: "plain effort-row fixture".into(),
+                    plan: "implement the change".into(),
+                    complexity: TaskComplexity::Low,
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            runtime
+                .update_task_with_identity(
+                    &id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    Some("claude".into()),
+                    Some("model-fixture".into()),
+                )
+                .unwrap();
+            let run_id = format!("jrun-effort-{index}");
+            let finished = Utc::now();
+            let started = finished - chrono::Duration::hours(1);
+            runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &workspace,
+                    &JobRun {
+                        build: None,
+                        run_id: run_id.clone(),
+                        job_id: "task_pr_pipeline".into(),
+                        attempt: 1,
+                        state: JobRunState::Success,
+                        scheduled_at: started,
+                        created_at: started,
+                        started_at: Some(started),
+                        finished_at: Some(finished),
+                        duration_ms: None,
+                        pid: None,
+                        pid_start_time: None,
+                        input: Some(json!({ "task_ids": [id] })),
+                        retry_source_run_id: None,
+                        knowledge_metrics: None,
+                        resolved_crew: Some((*crew).into()),
+                        crew_model: Some("model-fixture".into()),
+                        steps: Vec::new(),
+                        executed_on: None,
+                    },
+                    None,
+                )
+                .unwrap();
+            if let Some(effort) = effort {
+                let execution_id = runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .begin_agent_execution(
+                        &workspace,
+                        &run_id,
+                        "implement_one",
+                        "fixture",
+                        Some("model-fixture"),
+                        &orbit_types::telemetry::AgentExecutionIdentity {
+                            crew: Some((*crew).into()),
+                            reasoning_effort: *effort,
+                        },
+                    )
+                    .unwrap();
+                runtime
+                    .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                        agent_execution_id: Some(execution_id),
+                        job_run_id: run_id,
+                        account: None,
+                        activity_id: "implement_one".into(),
+                        agent: "fixture".into(),
+                        provider: None,
+                        model: Some("model-fixture".into()),
+                        task_ids: vec![id],
+                        trace: orbit_types::telemetry::InvocationTrace {
+                            duration_ms: 60_000,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    let labels = [
+        "model-fixture @ medium",
+        "model-fixture @ high",
+        "model-fixture @ provider default",
+        "model-fixture @ effort unknown",
+    ];
+    // The JSON payload already distinguishes the rows; the plain tables
+    // must carry the same identity instead of hiding it.
+    let card = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--json",
+    ]);
+    let json_labels: Vec<&str> = card["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cell| cell["n"].as_u64().is_some_and(|n| n >= 1))
+        .map(|cell| cell["label"].as_str().unwrap())
+        .collect();
+    for label in labels {
+        assert!(json_labels.contains(&label), "JSON cell {label}: {card}");
+    }
+
+    let plain = |extra: &[&str]| {
+        let out = fixture
+            .command(
+                &[
+                    &["agents", "scorecard", "--role", "implementers"][..],
+                    extra,
+                    &["--header"],
+                ]
+                .concat(),
+            )
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        String::from_utf8(out.stdout).unwrap()
+    };
+    fn records(output: &str) -> Vec<Vec<&str>> {
+        output
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').collect())
+            .collect()
+    }
+
+    let by_type = plain(&["--by-type"]);
+    let header: Vec<&str> = by_type.lines().next().unwrap().split('\t').collect();
+    assert_eq!(header[0], "CREWS", "{by_type}");
+    assert_eq!(header[1], "ROW", "{by_type}");
+    let cells = records(&by_type);
+    for label in labels {
+        assert!(
+            cells.iter().any(|fields| fields[1] == label),
+            "plain by-type distinguishes {label}:\n{by_type}"
+        );
+    }
+    let medium = cells.iter().find(|fields| fields[1] == labels[0]).unwrap();
+    assert!(
+        medium[0].contains("other") && medium[0].contains("sol"),
+        "the medium by-type cell lists both contributing crews:\n{by_type}"
+    );
+
+    let per_task = plain(&["--per-task"]);
+    let header: Vec<&str> = per_task.lines().next().unwrap().split('\t').collect();
+    assert_eq!(header[0], "CREWS", "{per_task}");
+    assert_eq!(header[1], "ROW", "{per_task}");
+    let tasks = records(&per_task);
+    assert_eq!(tasks.len(), specs.len(), "one row per task:\n{per_task}");
+    for label in labels {
+        assert!(
+            tasks.iter().any(|fields| fields[1] == label),
+            "plain per-task retains {label}:\n{per_task}"
+        );
+    }
+    assert!(
+        tasks
+            .iter()
+            .filter(|fields| fields[1] == labels[0])
+            .any(|fields| fields[0].contains("other")),
+        "a medium per-task row lists its contributing crew:\n{per_task}"
+    );
+}

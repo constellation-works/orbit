@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::policy::Role;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{ToolSessionContext, is_tool_family_operation, tool_family};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -114,6 +114,38 @@ impl OrbitRuntime {
         {
             session_context.trace_id = Some(audit_execution_id("tool-call"));
         }
+        // A family call names its action; from here on the call is that
+        // action's operation, which authorization, routing and the audit row
+        // key on. A family operation's own name is not a tool. A refusal here
+        // is this caller's to audit, under the name it gave.
+        let operation;
+        let input = if tool_family(name).is_some() || is_tool_family_operation(name) {
+            match self.tool_registry().resolve_tool_call(name, input.clone()) {
+                Ok((resolved, resolved_input)) => {
+                    operation = resolved;
+                    resolved_input
+                }
+                Err(error) => {
+                    return self.execute_tool_dispatch_with(
+                        name,
+                        input,
+                        ToolDispatchAuditContext {
+                            agent_override,
+                            model_override,
+                            entry_point,
+                            session_context: Some(session_context),
+                            brokered: None,
+                            orchestrator_model: None,
+                        },
+                        |_| Err(error),
+                    );
+                }
+            }
+        } else {
+            operation = name.to_string();
+            input
+        };
+        let name = operation.as_str();
         // A plugin backend's decision-channel callbacks read a store its
         // sandbox denies, so its descendants hand them to the host that
         // spawned it, which audits what it dispatches. A route that did not

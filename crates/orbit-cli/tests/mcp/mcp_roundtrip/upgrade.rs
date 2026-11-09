@@ -1697,8 +1697,9 @@ fn a_pipelined_invalid_request_stays_outside_a_large_image_response() {
         &mut next_id,
         "tools/call",
         json!({
-            "name": "orbit_task_artifact_put",
+            "name": "orbit_task_artifact",
             "arguments": {
+                "action": "put",
                 "id": task_id,
                 "source_path": source.display().to_string(),
                 "path": "shots/wide.png",
@@ -1717,8 +1718,8 @@ fn a_pipelined_invalid_request_stays_outside_a_large_image_response() {
             "id": call_id,
             "method": "tools/call",
             "params": {
-                "name": "orbit_task_artifact_get",
-                "arguments": { "id": task_id, "path": "shots/wide.png" },
+                "name": "orbit_task_artifact",
+                "arguments": { "action": "get", "id": task_id, "path": "shots/wide.png" },
             },
         }),
     );

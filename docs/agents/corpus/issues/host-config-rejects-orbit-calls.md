@@ -9,7 +9,7 @@ links: [ORB-20352, ORB-20357, ORB-20359, ORB-17664, ORB-20650, ORB-20736, ORB-20
 
 ## Signature
 
-Orbit tool calls (`orbit.task.show`, `orbit.friction.add`, owner reads) fail with `invalid_input` naming config: `workflow.purpose_crews.explorer: crew 'haiku@high' is not defined in [crews.*]`, `review.timing='after_landing'` rejected by the owner runtime, or a rejected `[plugin_enablement]` table.
+Orbit tool calls (`orbit.task.show`, `orbit.friction` action `add`, owner reads) fail with `invalid_input` naming config: `workflow.purpose_crews.explorer: crew 'haiku@high' is not defined in [crews.*]`, `review.timing='after_landing'` rejected by the owner runtime, or a rejected `[plugin_enablement]` table.
 
 ## Mechanism
 
@@ -45,7 +45,7 @@ Implementers are affected too: the run cannot write its execution summary, so ap
 
 Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 1 source occurrence on 1 task; route `setup`, disposition `counted`. Covering repair: ORB-20766. Rows below confirm existing episodes where already backfilled; they are not additional incidents.
 
-Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact` action `get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |

@@ -8,7 +8,7 @@ use orbit_types::workflow::{
     JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate,
     ReviewEvidenceHold,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::review_continuation::{
     attach, attach_as_operator, interrupted_report, manifest, run_review_pipeline,
@@ -18,6 +18,12 @@ use super::review_gate_audit::Fixture;
 const COMMAND: &str = "scripts/codeql-rust-local.sh";
 const RESULT: &str = "evidence/codeql-rust-linux.json";
 const LOG: &str = "evidence/codeql-rust-linux.log.json";
+
+/// An `orbit.task.artifact` call input for its `put` action.
+fn family_put(mut input: Value) -> Value {
+    input["action"] = json!("put");
+    input
+}
 
 fn git(fixture: &Fixture, args: &[&str]) -> String {
     let mut command = crate::git_test_support::command();
@@ -218,8 +224,8 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
                 .unwrap();
             runtime
                 .execute_tool_command_with_session_context(
-                    "orbit.task.artifact.put",
-                    forged,
+                    "orbit.task.artifact",
+                    family_put(forged),
                     None,
                     None,
                     session.clone(),
@@ -233,8 +239,8 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
             );
             runtime
                 .execute_tool_command_with_session_context(
-                    "orbit.task.artifact.put",
-                    input,
+                    "orbit.task.artifact",
+                    family_put(input),
                     None,
                     None,
                     session,
@@ -255,8 +261,8 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
         orbit_core::ActorIdentity::agent("human:operator"),
     ] {
         runtime.clone().with_actor(actor).execute_tool_command_with_session_context(
-            "orbit.task.artifact.put",
-            json!({"id": fixture.task_id, "source_path": source, "path": "evidence/override.json"}),
+            "orbit.task.artifact",
+            json!({"action": "put", "id": fixture.task_id, "source_path": source, "path": "evidence/override.json"}),
             None, None,
             ToolSessionContext {
                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),

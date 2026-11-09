@@ -31,7 +31,7 @@ pub struct WorkspaceInitArgs {
     pub task_id_start: Option<u32>,
     /// Set up MCP client integrations for auto-detected providers. The
     /// registered server is granted OPERATOR authority: governed operations
-    /// such as `orbit.workflow.ship`, workflow run observation/resume, and
+    /// such as `orbit.workflow` ship, `orbit.run` observe/resume, and
     /// `orbit.command.exec` become reachable through it. Bare `orbit mcp
     /// serve` and worker/agent MCP startup remain agent-only.
     #[arg(long)]

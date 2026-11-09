@@ -9,7 +9,7 @@ links: [ORB-18313, ORB-18751, ORB-19593, ORB-19594, ORB-19595]
 
 ## Signature
 
-`owner_signoff_required` / `Acceptance criterion 2 requires owner sign-off recorded before implementation` for a stable-tier public API deletion or serde change (ARCHITECTURE.md stable tier); the task supplies none and `orbit.decision.list` returned 0.
+`owner_signoff_required` / `Acceptance criterion 2 requires owner sign-off recorded before implementation` for a stable-tier public API deletion or serde change (ARCHITECTURE.md stable tier); the task supplies none and `orbit.decision` action `list` returned 0.
 
 ## Mechanism
 

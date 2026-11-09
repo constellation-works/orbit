@@ -499,15 +499,15 @@ merge intent refuses admission.
 
 Run these public tool requests as the operator (a model session cannot confer
 this authority). Use a deployment whose `orbit tool show
-orbit.workflow.run.resume` schema advertises `source_repair`; the owner, worker
+orbit.run action resume` schema advertises `source_repair`; the owner, worker
 and any long-lived client must be on the compatible executable generation and
 store schema before use. Existing resume callers need no new argument. This
 feature adds a version-1 binding and append-only repair ledger, with no store
 schema migration. Installation and client restart remain operator actions.
 
 ```bash
-orbit tool run orbit.workflow.run.resume --input \
-  '{"id":"<cancelled-run-id>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+orbit tool run orbit.run --input \
+  '{"action":"resume","id":"<cancelled-run-id>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
 
 If the workspace has an exclusive claim, include its authorized `claim_token`
@@ -519,6 +519,7 @@ do not construct a head or digest yourself:
 
 ```json
 {
+  "action": "resume",
   "id": "<cancelled-run-id>",
   "source_repair": {
     "action": "submit",
@@ -531,7 +532,7 @@ do not construct a head or digest yourself:
 ```
 
 ```bash
-orbit tool run orbit.workflow.run.resume --input-file source-repair-request.json
+orbit tool run orbit.run --input-file source-repair-request.json
 ```
 
 The binding pins the workspace, owner machine, source run and checkpoints,

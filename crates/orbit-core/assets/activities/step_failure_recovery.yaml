@@ -202,7 +202,7 @@ spec:
       using the shell. Report a tool unavailable only after a trivial call to
       it (for the shell, `true`) is also denied, quoting that denial. A
       denial never excuses skipping required validation or the friction in
-      step 3, which you file with `orbit.friction.add`.
+      step 3, which you file with `orbit.friction` action `add`.
 
     Procedure:
 
@@ -272,7 +272,7 @@ spec:
       claimed leaf) means a `workflow.required_validation_commands` entry failed
       on the committed candidate. The error summarizes command, exit code,
       failing tests, base verdict and log artifact paths. Read those logs with
-      `orbit.task.artifact.get` (the owning task's `id` and the artifact `path`)
+      `orbit.task.artifact` action `get` (the owning task's `id` and the artifact `path`)
       before diagnosing; the output is in the artifacts, not the error.
     - A failure the base shares is held as `baseline_red` and never reaches you.
       Repair what does reach you, even when the cause is outside the paths the
@@ -428,16 +428,16 @@ spec:
     - A cancelled run, a claimed task that refuses writes, or an operator
       comment withdrawing the task still stops recovery as the procedure says.
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.show
-    - orbit.workflow.run.list
-    - orbit.workflow.run.resume
-    - orbit.workflow.land
-    - orbit.workflow.ship
+    - orbit.run:show
+    - orbit.run:list
+    - orbit.run:resume
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

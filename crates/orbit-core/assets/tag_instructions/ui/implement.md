@@ -8,7 +8,7 @@ draft or refuse the PR for that reason:
   responsive, and a before shot from the base revision when it is practical
   and shows the change;
 - each captured under `.orbit/tmp/` and attached with
-  `orbit.task.artifact.put` at a stable path such as
+  `orbit.task.artifact` action `put` at a stable path such as
   `screenshots/<view>-<theme>-<width>.png`, under the 1 MiB artifact limit;
 - the artifact paths listed in the execution summary.
 

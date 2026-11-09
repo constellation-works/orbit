@@ -210,7 +210,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-2 schema has these required fields:
@@ -254,7 +254,7 @@ settles as `review_closed_without_execution_summary`: coverage stays owed and
 the retry budget applies. `orbit auto-task show` reports the reason on the
 active attempt.
 
-`orbit.task.artifact.put` — and any task update attaching
+`orbit.task.artifact` action `put` — and any task update attaching
 `automation-coverage.json` — refuses a file that does not parse as this schema
 and stores nothing, returning the field/index and parse error (for example
 `checks[0].observation: invalid type: map, expected a string at line 137 column 4`).
@@ -397,7 +397,7 @@ retrying. Exhausted, failed and waived states are distinct from coverage; waiver
 
 ```sh
 orbit auto-task update delivery-code-review --waive-batch <batch-id> --waiver-reason "<reason>"
-orbit tool run orbit.auto_task.update --input '{"name":"delivery-code-review","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
+orbit tool run orbit.auto_task --input '{"action":"update","name":"delivery-code-review","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
 ```
 
 Only the current settled failed/exhausted batch may be waived. The archived
@@ -844,7 +844,7 @@ policy edits leave it settled. The routine, drain and scheduled discovery
 queue a fresh pilot when the description or criteria changed after the applied
 assessment and no live execution claim holds the task, and a failed repilot holds it until its meaning changes again or an
 operator acts. Request another pilot explicitly with
-`orbit task repilot <id>`, `orbit.task.repilot`, task update `repilot: true`, or a
+`orbit task repilot <id>`, `orbit.task.recover` action `repilot`, task update `repilot: true`, or a
 decision option action `re_pilot`. Description/criteria edits hold dispatch as
 `pilot_assessment_stale` until a new assessment completes, unless an operator skips pilot admission with `no-pilot`. Adding the tag after a receipt or while a pilot is pending requires operator authority; unverified review findings and other readiness and delivery holds still apply. When the latest assessment holds promotion, that request runs as a re-check [ORB-21124]: the pilot gets the prior assessment, its holding findings and a field-level task diff, returns `resolved`, `still_holds` or `changed` per holding finding, and apply keeps the untouched prior fields under the same revision proofs (`mode: recheck`, `prior_assessment_id`). It falls back to a full assessment, recording `mode_reason`, when selector-path objects changed since the prior source revision, the title or description changed beyond a 0.6 word-set similarity, the prior is older than the `task_pilot_pipeline` input `recheck_max_age_hours` (default 72, 0 disables), the prior was itself a re-check, or the operator asked for `--full` (`full_pilot: true`). Each key resolves routine block, then `config.toml`
 `[workflow.task_pilot_freshness]`, then the default: `material_fields`

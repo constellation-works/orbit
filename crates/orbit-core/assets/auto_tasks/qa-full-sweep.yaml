@@ -25,9 +25,9 @@ template:
     - Use the registered Orbit tool surface. List sweep tasks already in flight with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["qa-full-sweep","no-diff-expected"],"model":"<agent-family>"}'`.
       File an area task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["qa-full-sweep","no-diff-expected"],"context_files":["dir:<source or documentation directory implementing the area>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["qa-full-sweep","no-diff-expected"],"context_files":["dir:<source or documentation directory implementing the area>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact:get","orbit.task.artifact:put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       File the roll-up task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"low","type":"chore","tags":["qa-full-sweep","qa-full-sweep-rollup","no-diff-expected","auto-task:qa-full-sweep"],"required_tools":["orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"low","type":"chore","tags":["qa-full-sweep","qa-full-sweep-rollup","no-diff-expected","auto-task:qa-full-sweep"],"required_tools":["orbit.task.show","orbit.task.artifact:get","orbit.task.artifact:put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `qa-full-sweep` and `no-diff-expected`,
       complexity `hard` at most (never `xhard`), and no `crew`, so each is
@@ -97,7 +97,7 @@ template:
     scenario with `id`, `description`, `required` and `capabilities`) and
     `exclusions` (each with the excluded surface and its `reason`). Attach it
     to this coordinator task with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/qa-full-sweep-inventory.json","path":"qa-full-sweep-inventory.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/qa-full-sweep-inventory.json","path":"qa-full-sweep-inventory.json","model":"<agent-family>"}'`.
     After filing, add each area's `task_id` and the `rollup_task_id` to the
     file and attach it again under the same name.
 
@@ -122,7 +122,7 @@ template:
     > Before starting, list this area's task artifacts with
     > `orbit tool run orbit.task.show --input '{"id":"<this area task ID>","field":"artifacts","model":"<agent-family>"}'`.
     > If `qa-progress.json` exists, retrieve it with
-    > `orbit tool run orbit.task.artifact.get --input '{"id":"<this area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<this area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
     > A resumed or re-crewed run continues from that artifact, keeping every
     > recorded outcome and filed finding, instead of starting over. Verify its
     > pinned SHA, area and scenario list match this task. A present but
@@ -193,7 +193,7 @@ template:
     >
     > `.orbit/tmp/` is cleared with the worktree, so attach the screenshots
     > that evidence a UI scenario as task artifacts with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
     > each view in every theme it supports and, for a responsive layout, at
     > 375px. Keep each under the 1 MiB artifact limit (a viewport capture
     > rather than full-page, or JPEG or WebP when a PNG is too large), name
@@ -209,7 +209,7 @@ template:
     > log artifact name), any `missing_capability`, and the `finding_task_id`
     > for a filed failure. Attach it before the first scenario and again after
     > each scenario and each filed finding with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/qa-progress.json","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this area task ID>","source_path":".orbit/tmp/qa-progress.json","path":"qa-progress.json","model":"<agent-family>"}'`.
     > Attach referenced logs the same way.
     >
     > A scenario that needs a capability this run lacks (authentication, an
@@ -335,7 +335,7 @@ template:
     >
     > Execute on the owning machine. Each area's status is an
     > `orbit.task.show` of that area task, and each area's progress is an
-    > `orbit.task.artifact.get` of that area task's `qa-progress.json`. Both
+    > `orbit.task.artifact` action `get` of that area task's `qa-progress.json`. Both
     > reads must come from the owner task store under this roll-up's contract.
     > A claimed worker can read ordinary task records and non-review artifacts
     > for any task in its claimed workspace; `review-*` artifact reads remain
@@ -354,7 +354,7 @@ template:
     > `kind: qa_areas_open` naming the open areas.
     >
     > For each area, retrieve its `qa-progress.json` with
-    > `orbit tool run orbit.task.artifact.get --input '{"id":"<area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
     > An area whose artifact is missing, unreadable, names another SHA or
     > area, or leaves a listed scenario without an outcome counts as
     > incomplete.
@@ -366,7 +366,7 @@ template:
     > `pinned_sha`, `decision`, and per area its task ID, the count of
     > required scenarios by outcome, and every non-`PASS` required scenario
     > with its outcome and finding task ID. Attach it with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this roll-up task ID>","source_path":".orbit/tmp/qa-full-sweep-decision.json","path":"qa-full-sweep-decision.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this roll-up task ID>","source_path":".orbit/tmp/qa-full-sweep-decision.json","path":"qa-full-sweep-decision.json","model":"<agent-family>"}'`.
     > Then record the swept commit as this task's cursor:
     > write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full SHA>"}`
     > to `.orbit/tmp/sweep-cursor.json` and attach it as `sweep-cursor.json`
@@ -384,7 +384,7 @@ template:
     area-task statuses and per-area `qa-progress.json` artifacts, and
     preparation recorded `required_machine` for this owner-evidence contract
     before admission. A follower claim is not evidence: claimed
-    `orbit.task.show` and `orbit.task.artifact.get` of another task are
+    `orbit.task.show` and `orbit.task.artifact` action `get` of another task are
     refused, and supported tool names do not authorize them.
 
     ## Finish
@@ -412,7 +412,7 @@ template:
   - orbit.task.add
   - orbit.task.list
   - orbit.task.update
-  - orbit.task.artifact.put
+  - orbit.task.artifact:put
   priority: medium
   complexity: medium
   status: backlog

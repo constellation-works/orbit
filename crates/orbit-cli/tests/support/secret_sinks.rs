@@ -266,15 +266,15 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
     fs::write(&source, logs.to_string()).unwrap();
     tool(
         &fixture,
-        "orbit.task.artifact.put",
-        json!({
+        "orbit.task.artifact",
+        json!({"action": "put",
             "id": id, "source_path": source, "path": "seeded.json", "model": "codex"
         }),
     );
     let artifact = tool(
         &fixture,
-        "orbit.task.artifact.get",
-        json!({
+        "orbit.task.artifact",
+        json!({"action": "get",
             "id": id, "path": "seeded.json", "model": "codex"
         }),
     );

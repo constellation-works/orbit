@@ -228,11 +228,14 @@ fn refuse_unless_recorded(
         Some(installed) => recorded_orbit_tools(global_root, installed)?,
         None => Vec::new(),
     };
-    let allowed: Vec<&String> = recorded
+    let allowed: Vec<String> = recorded
         .iter()
         .filter(|tool| identity.ceiling_admits(tool))
+        .cloned()
         .collect();
-    if allowed.iter().any(|tool| *tool == name) {
+    // An entry is a tool, a whole family or one `family:action`; `name` is
+    // the tool or the operation serving a family action.
+    if orbit_types::workflow::tool_allowed(name, &allowed) {
         return Ok(());
     }
     let plugin = &identity.provenance.name;
@@ -248,7 +251,7 @@ fn refuse_unless_recorded(
     );
     // Separate the two refusals for the operator: a tool the plugin was never
     // granted reads differently from one it holds but this caller does not.
-    if recorded.iter().any(|tool| tool == name) {
+    if orbit_types::workflow::tool_allowed(name, &recorded) {
         message.push_str(&format!(
             "; the plugin does request it, but the caller that spawned this backend could reach \
              only [{}], and a live callback session's authority never widens",

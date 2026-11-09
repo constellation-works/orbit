@@ -490,7 +490,7 @@ impl OrbitRuntime {
                     "a published candidate predates the current binding; predecessor \
                      '{source_id}' has no publication evidence; stop any newer attempts, \
                      then select the older publishing run for explicit source \
-                     repair (orbit.workflow.run.resume with source_repair), or discard \
+                     repair (orbit.run action resume with source_repair), or discard \
                      the candidate (orbit task update {} --status backlog \
                      --discard-candidate) so the next run implements fresh",
                     task.id

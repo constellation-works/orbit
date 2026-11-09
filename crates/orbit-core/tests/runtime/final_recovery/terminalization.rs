@@ -527,7 +527,7 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
         .add_task(TaskAddParams {
             title: "Already done with an open proposal".into(),
             plan: "Propose the definition change.".into(),
-            granted_tools: vec!["orbit.auto_task.update".into()],
+            granted_tools: vec!["orbit.auto_task:update".into()],
             ..Default::default()
         })
         .unwrap();
@@ -549,8 +549,8 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
     std::fs::write(
         &source,
         json!({
-            "tool": "orbit.auto_task.update",
-            "input": {"name": "proposal-target", "description": "revised"},
+            "tool": "orbit.auto_task",
+            "input": {"action": "update", "name": "proposal-target", "description": "revised"},
             "rationale": "The definition's description is stale.",
         })
         .to_string(),

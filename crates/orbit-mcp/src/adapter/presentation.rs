@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use super::schema::WORKSPACE_SELECTOR_DESCRIPTION;
 use crate::presentation_definition::{
-    PRESENTATION_DEFINITIONS, PresentationKind, presentation_definition,
+    PRESENTATION_ACTIONS, PRESENTATION_TOOL_NAME, PRESENTATION_TOOL_TITLE, PresentationKind,
+    is_presentation_tool, presentation_action,
 };
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpPresentationRead, McpToolDefinition};
@@ -25,7 +26,7 @@ pub(super) const TASK_FIELDS: [&str; 6] = [
 ];
 
 pub(super) fn is_presentation(name: &str) -> bool {
-    presentation_definition(name).is_some()
+    is_presentation_tool(name)
 }
 
 pub(super) fn available(definitions: &[McpToolDefinition]) -> bool {
@@ -47,31 +48,52 @@ pub(super) fn reader(
 }
 
 pub(super) fn tools(_federated: bool) -> Vec<Tool> {
-    PRESENTATION_DEFINITIONS.iter()
-        .map(|definition| {
-            let mut schema = json!({
-                "type": "object", "additionalProperties": false,
-                "properties": {
-                    "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
-                    "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
-                    "kind": {"type":"string", "enum":["task","run"], "default":"task"}
-                }
-            });
-            if definition.kind == PresentationKind::Inspect {
-                schema["required"] = json!(["workspace", "id"]);
-            } else {
-                schema["dependentRequired"] = json!({ "id": ["workspace"], "kind": ["workspace", "id"] });
-            }
-            Tool::new(definition.name, "Open the Orbit control center or a selected task or run panel.",
-                Arc::new(schema.as_object().cloned().unwrap_or_default()))
-                .with_title(definition.title)
-                .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).idempotent(true).open_world(false))
-                .with_meta(MetaObject(json!({
-                    "ui": { "resourceUri": RESOURCE_URI },
-                    "openai/ui": { "entrypoints": [{ "type": definition.entrypoint }] }
-                }).as_object().cloned().unwrap_or_default()))
-        })
-        .collect()
+    let actions = PRESENTATION_ACTIONS
+        .iter()
+        .map(|action| action.action)
+        .collect::<Vec<_>>();
+    let entrypoints = PRESENTATION_ACTIONS
+        .iter()
+        .map(|action| json!({ "type": action.entrypoint }))
+        .collect::<Vec<_>>();
+    let schema = json!({
+        "type": "object", "additionalProperties": false,
+        "properties": {
+            "action": {
+                "type": "string", "enum": actions,
+                "description": "open: the control center, or a task or run panel given workspace and id. inspect: a task or run panel (workspace, id required)."
+            },
+            "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
+            "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
+            "kind": {"type":"string", "enum":["task","run"], "default":"task"}
+        },
+        "required": ["action"],
+        "dependentRequired": { "id": ["workspace"], "kind": ["workspace", "id"] }
+    });
+    vec![
+        Tool::new(
+            PRESENTATION_TOOL_NAME,
+            "Open the Orbit control center or a selected task or run panel.",
+            Arc::new(schema.as_object().cloned().unwrap_or_default()),
+        )
+        .with_title(PRESENTATION_TOOL_TITLE)
+        .with_annotations(
+            ToolAnnotations::new()
+                .read_only(true)
+                .destructive(false)
+                .idempotent(true)
+                .open_world(false),
+        )
+        .with_meta(MetaObject(
+            json!({
+                "ui": { "resourceUri": RESOURCE_URI },
+                "openai/ui": { "entrypoints": entrypoints }
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        )),
+    ]
 }
 
 pub(super) fn resource() -> Resource {
@@ -121,19 +143,42 @@ pub(super) struct Selection {
 }
 
 /// Core still validates selector ownership, task identity and authority.
-pub(super) fn selection(
-    kind: PresentationKind,
-    input: &Value,
-) -> Result<Option<Selection>, OrbitError> {
-    let arguments = input.as_object().ok_or_else(|| {
-        OrbitError::InvalidInput("presentation arguments must be an object".into())
-    })?;
+pub(super) fn selection(input: &Value) -> Result<Option<Selection>, OrbitError> {
+    let mut arguments = input
+        .as_object()
+        .ok_or_else(|| OrbitError::InvalidInput("presentation arguments must be an object".into()))?
+        .clone();
+    let names = || {
+        PRESENTATION_ACTIONS
+            .iter()
+            .map(|action| action.action)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let kind = match arguments.remove("action") {
+        Some(Value::String(action)) => {
+            presentation_action(action.trim())
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "unknown presentation action `{action}`; expected one of {}",
+                        names()
+                    ))
+                })?
+                .kind
+        }
+        _ => {
+            return Err(OrbitError::InvalidInput(format!(
+                "presentation requires `action`: one of {}",
+                names()
+            )));
+        }
+    };
     if arguments
         .keys()
         .any(|key| !matches!(key.as_str(), "workspace" | "id" | "kind"))
     {
         return Err(OrbitError::InvalidInput(
-            "presentation accepts only workspace, id and kind".into(),
+            "presentation accepts only action, workspace, id and kind".into(),
         ));
     }
     let opener = kind == PresentationKind::Open;

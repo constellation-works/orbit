@@ -366,7 +366,7 @@ fn a_cycle_cannot_call_a_task_done_while_its_pull_request_is_open() {
         .as_cycle_agent(&run, || mark_done(&fx, &task))
         .expect_err("its pull request is open");
     assert!(error.contains("resident_done_pr_open"), "{error}");
-    assert!(error.contains("orbit.workflow.land"), "{error}");
+    assert!(error.contains("`orbit.workflow` action `land`"), "{error}");
     assert_eq!(status(&fx, &task), TaskStatus::Review);
 
     // A forge that cannot answer does not vouch for the move.

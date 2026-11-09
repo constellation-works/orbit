@@ -43,7 +43,7 @@ template:
       subcommands (they skip agent provenance). Find the previous pass with
       `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["code-health-sweep","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       and fetch its artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"code-health.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"code-health.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
       (task search matches non-adjacent terms, full matches first: use a
@@ -399,7 +399,7 @@ template:
     every finding (lens, evidence, disposition: filed ID, commented-onto ID,
     deferred with reason, or rejected with reason), the overflow list and the
     per-area last reviewed SHAs. Attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/code-health.json","path":"code-health.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/code-health.json","path":"code-health.json","model":"<agent-family>"}'`.
     The execution summary gives the area and its score with the top five
     alternatives, counts per lens, the compatibility inventory total against
     the previous pass, whether a support window was documented, and every
@@ -422,8 +422,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

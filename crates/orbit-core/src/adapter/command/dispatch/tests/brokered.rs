@@ -31,6 +31,27 @@ use crate::runtime::plugin::broker::{
 };
 use crate::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 
+/// A sandboxed caller's MCP call: a family action is called through its
+/// family, whose operation the broker then carries.
+trait FamilyDispatch {
+    fn execute_family_dispatch(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<super::super::execute::ToolDispatchOutcome, OrbitError>;
+}
+
+impl FamilyDispatch for OrbitRuntime {
+    fn execute_family_dispatch(
+        &self,
+        operation: &str,
+        input: Value,
+    ) -> Result<super::super::execute::ToolDispatchOutcome, OrbitError> {
+        let (tool, input) = orbit_types::tool::tool_family_call(operation, input);
+        self.execute_tool_command_dispatch(&tool, input, None, None, ToolEntryPoint::Mcp)
+    }
+}
+
 const RUN_ID: &str = "jrun-broker-run";
 const RUN_TASK: &str = "ORB-RUN-1";
 /// Correlation the request and this process's environment claim. The run
@@ -199,7 +220,11 @@ impl Fixture {
             agent_name: Some("codex".to_string()),
             model_name: None,
             workspace: None,
-            allowed_tools: allowed.iter().map(|tool| tool.to_string()).collect(),
+            // An activity list names a family action as `family:action`.
+            allowed_tools: allowed
+                .iter()
+                .map(|tool| orbit_types::tool::tool_call_name(tool).into_owned())
+                .collect(),
             tool_deny_policy: None,
             caller: BrokeredCaller {
                 worktree: self.worktree.clone(),
@@ -577,13 +602,7 @@ fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
         std::env::set_var("ORBIT_RUN_ID", &cycle);
     }
     let error = runtime
-        .execute_tool_command_dispatch(
-            BROKERED_RESIDENT_SHIP_TOOL,
-            ship,
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-        )
+        .execute_family_dispatch(BROKERED_RESIDENT_SHIP_TOOL, ship)
         .expect_err("promote does not dispatch")
         .to_string();
     assert!(error.contains("resident_right_refused"), "{error}");
@@ -603,12 +622,9 @@ fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
         std::env::set_var("ORBIT_RUN_ID", &cycle);
     }
     let error = runtime
-        .execute_tool_command_dispatch(
+        .execute_family_dispatch(
             BROKERED_RESIDENT_SHIP_TOOL,
             json!({"task_ids": ["ORB-1"], "mode": "local", "model": "codex"}),
-            None,
-            None,
-            ToolEntryPoint::Mcp,
         )
         .expect_err("the named task does not exist")
         .to_string();
@@ -735,7 +751,7 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
         ),
     ] {
         let error = runtime
-            .execute_tool_command_dispatch(tool, input, None, None, ToolEntryPoint::Mcp)
+            .execute_family_dispatch(tool, input)
             .expect_err("the grant holds no merge right")
             .to_string();
         assert!(error.contains("resident_right_refused"), "{tool}: {error}");
@@ -769,12 +785,9 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
         std::env::set_var("ORBIT_RUN_ID", &merging_run);
     }
     let error = runtime
-        .execute_tool_command_dispatch(
+        .execute_family_dispatch(
             BROKERED_RESIDENT_LAND_TOOL,
             json!({"workspace": workspace, "task_id": delivered, "model": "codex"}),
-            None,
-            None,
-            ToolEntryPoint::Mcp,
         )
         .expect_err("no pull request to land")
         .to_string();
@@ -881,7 +894,7 @@ fn a_sandboxed_resident_raise_creates_the_request_through_its_broker() {
     HostWritableOrbit::set_mode(&fixture.workspace_root, 0o555);
 
     let raised = runtime
-        .execute_tool_command_dispatch(RAISE, raise(&human_task), None, None, ToolEntryPoint::Mcp)
+        .execute_family_dispatch(RAISE, raise(&human_task))
         .expect("the host raises the request")
         .value;
 
@@ -902,7 +915,7 @@ fn a_sandboxed_resident_raise_creates_the_request_through_its_broker() {
 
     // The host applies the same refusal to a task no human crew holds.
     let error = runtime
-        .execute_tool_command_dispatch(RAISE, raise(&agent_task), None, None, ToolEntryPoint::Mcp)
+        .execute_family_dispatch(RAISE, raise(&agent_task))
         .expect_err("not a human-crew task")
         .to_string();
     assert!(error.contains("not assigned to a human crew"), "{error}");

@@ -54,7 +54,7 @@ fn scan() -> (Pair, String) {
             "title": "Scan workspace failures",
             "description": format!("Read the authoritative workspace audit and completed predecessor {}'s cursor artifact, falling back to its summary only. Never substitute another audit or guess the window.", predecessor.id),
             "acceptance_criteria": [CRITERION],
-            "required_tools": ["orbit.task.artifact.get", "orbit.task.list", "orbit.task.show"],
+            "required_tools": ["orbit.task.artifact:get", "orbit.task.list", "orbit.task.show"],
         }),
     );
     pair.tasks.push(id);
@@ -114,7 +114,7 @@ fn assert_follower_held(pair: &Pair, drain: &str, pass: &Value) {
     assert_eq!(
         pair.owner_task(&pair.tasks[0])["required_tools"],
         json!([
-            "orbit.task.artifact.get",
+            "orbit.task.artifact:get",
             "orbit.task.list",
             "orbit.task.show"
         ])
@@ -152,7 +152,7 @@ fn owner_evidence_requires_a_typed_finding_despite_supported_tool_names() {
         json!({
             "title": "Scan workspace failures",
             "acceptance_criteria": ["List owner tasks and read only this task's artifacts."],
-            "required_tools": ["orbit.task.artifact.get", "orbit.task.list", "orbit.task.show"],
+            "required_tools": ["orbit.task.artifact:get", "orbit.task.list", "orbit.task.show"],
         }),
     );
     let leaf = pair.queued_leaf(&drain, 1);

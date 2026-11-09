@@ -26,7 +26,7 @@ template:
       subcommands (they skip agent provenance). Find the previous pass with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["architecture-audit","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       and fetch its artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"architecture.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"architecture.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
       (task search matches non-adjacent terms, full matches first: use a
@@ -370,7 +370,7 @@ template:
     - the overflow list.
 
     Attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/architecture.json","path":"architecture.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/architecture.json","path":"architecture.json","model":"<agent-family>"}'`.
     The execution summary covers:
     - the graph method used (metadata tool or import scan) and its stated
       precision limits;
@@ -398,8 +398,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

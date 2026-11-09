@@ -1057,7 +1057,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         &pair.owner_repo,
         "src/owner_only.rs",
         None,
-        json!({"required_tools": ["orbit.codebase.analytics", "orbit.codebase.show"]}),
+        json!({"required_tools": ["orbit.codebase:analytics", "orbit.codebase:show"]}),
     );
     let drain = pair.start_drain();
     let idle = pair.pass(&drain);
@@ -1084,7 +1084,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         .expect("the skip is recorded for the held task")["reason"]
         .as_str()
         .unwrap();
-    assert!(reason.contains("orbit.codebase.analytics"), "{reason}");
+    assert!(reason.contains("orbit.codebase:analytics"), "{reason}");
     assert!(reason.contains("owner-only"), "{reason}");
     assert!(
         reason.contains("outside the closed claimed-owner bridge"),
@@ -1103,10 +1103,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         .resolve_activity_tool_denials(std::slice::from_ref(&held), "agent_implement", &[])
         .unwrap();
     assert!(
-        grant
-            .effective_tools
-            .iter()
-            .any(|name| name == "orbit.codebase.analytics"),
+        orbit_types::workflow::tool_allowed("orbit.codebase:analytics", &grant.effective_tools),
         "{grant:?}"
     );
 
@@ -1117,7 +1114,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         "src/crossing.rs",
         None,
         json!({"required_tools": [
-            "orbit.task.show", "orbit.search", "orbit.task.artifact.put", "proc.spawn",
+            "orbit.task.show", "orbit.search", "orbit.task.artifact:put", "proc.spawn",
         ]}),
     );
     let leaf = pair.queued_leaf(&drain, 1);
@@ -1133,7 +1130,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
     let pair = Pair::new(0);
     let owner = &pair.wire.owner;
     let mut held = Vec::new();
-    for tool in ["orbit.task.update", "orbit.task.requeue"] {
+    for tool in ["orbit.task.update", "orbit.task.recover:requeue"] {
         for automated in [false, true] {
             let file = format!("src/requirement{}.rs", held.len());
             let task = if automated {
@@ -1243,7 +1240,10 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
             .resolve_activity_tool_denials(std::slice::from_ref(task), "agent_implement", &[])
             .unwrap();
         assert_eq!(grant.requested_tools, vec![tool.to_string()]);
-        assert!(grant.effective_tools.iter().any(|name| name == tool));
+        assert!(orbit_types::workflow::tool_allowed(
+            tool,
+            &grant.effective_tools
+        ));
     }
     for peers in held.as_chunks::<2>().0 {
         let reason = |task: &str| {
@@ -1266,8 +1266,8 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
         "src/supported.rs",
         None,
         json!({"required_tools": [
-            "orbit.task.show", "orbit.task.add", "orbit.friction.add",
-            "orbit.task.artifact.get", "orbit.task.artifact.put", "proc.spawn",
+            "orbit.task.show", "orbit.task.add", "orbit.friction:add",
+            "orbit.task.artifact:get", "orbit.task.artifact:put", "proc.spawn",
         ]}),
     );
     assert_eq!(

@@ -34,15 +34,15 @@ that the step runner starts outside the sandbox (`ORBIT_PLUGIN_BROKER`). The
 gate's `review-*` artifacts keep the running attempt's scope, which carries
 only these:
 
-- `orbit.task.artifact.get` of `review-manifest.json`, `review-report.json`,
+- `orbit.task.artifact` action `get` of `review-manifest.json`, `review-report.json`,
   `review-report-history.json` and `review-evidence-hold.json`;
-- `orbit.task.artifact.get` of a `review-*` evidence artifact the owner's
+- `orbit.task.artifact` action `get` of a `review-*` evidence artifact the owner's
   current `review-evidence-hold.json` names: a requirement's result artifact,
   or the log that result names for that requirement. The coordinator reads
   the hold and results from the owner to decide, never from the request; with
   no hold, no such path is readable. Evidence outside the `review-*`
   namespace is an ordinary artifact of the claimed task;
-- `orbit.task.artifact.put` of `review-report.json`.
+- `orbit.task.artifact` action `put` of `review-report.json`.
 
 Only the manifest read and the report write are required. The other reads
 are optional prior evidence: the reviewer continues from the manifest when
@@ -106,7 +106,7 @@ attaching a report by hand, or disabling before-PR review.
 | `owner_route_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | The reviewer ends its step on this code, and the run skips recovery and retains release evidence while the owner holds the task for an operator decision. Treat the outcome as unknown: preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
 | `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
 | `owner_route_unavailable`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | The owner holds the task as above. Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before the task is pulled again; a version string alone is not proof. |
-| An `orbit.task.artifact.put` source-path or size refusal | The report source is outside the workspace `.orbit/tmp`, is a link out of it, or is over 1 MiB | Fixed in the reviewer, not the host; the refusal happens before anything reaches the coordinator |
+| An `orbit.task.artifact` action `put` source-path or size refusal | The report source is outside the workspace `.orbit/tmp`, is a link out of it, or is over 1 MiB | Fixed in the reviewer, not the host; the refusal happens before anything reaches the coordinator |
 
 An owner that cannot be reached over SSH fails the call outside the sandbox
 with the owner-route error, which the coordinator returns unchanged. Recover it
@@ -190,8 +190,8 @@ ssh "$OWNER" orbit run show "$OWNER_LANDING_RUN" --workspace "$OWNER_WS" \
 # wrapper. The artifact bytes are the wrapper's `.content` string: hash and
 # encode that, never the wrapper. jq -j adds no trailing newline.
 for ARTIFACT in review-manifest review-report review-gate; do
-  ssh "$OWNER" orbit tool run orbit.task.artifact.get --workspace "$OWNER_WS" \
-    --input "'{\"id\":\"$TASK\",\"path\":\"$ARTIFACT.json\"}'" \
+  ssh "$OWNER" orbit tool run orbit.task.artifact --workspace "$OWNER_WS" \
+    --input "'{\"action\":\"get\",\"id\":\"$TASK\",\"path\":\"$ARTIFACT.json\"}'" \
     --format json > "$ARTIFACT.output.json"
   jq -e '.encoding == "utf8"' "$ARTIFACT.output.json" > /dev/null
   jq -j '.content' "$ARTIFACT.output.json" > "$ARTIFACT.json"
@@ -223,12 +223,12 @@ jq -e '.. | objects | select(.phase == "complete" and has("merge")) | .merge |
 
 # Follower: retain all success, failure and denial rows for each artifact call.
 orbit audit list --since "$START" --run "$LEAF_RUN" \
-  --tool orbit.task.artifact.get --limit 1000 --json > follower-get-audit.json
+  --tool orbit.task.artifact:get --limit 1000 --json > follower-get-audit.json
 orbit audit list --since "$START" --run "$LEAF_RUN" \
-  --tool orbit.task.artifact.put --limit 1000 --json > follower-put-audit.json
+  --tool orbit.task.artifact:put --limit 1000 --json > follower-put-audit.json
 
 # Owner: find the authenticated follower transport and report attachment.
-ssh "$OWNER" orbit audit list --since "$START" --tool orbit.task.artifact.put \
+ssh "$OWNER" orbit audit list --since "$START" --tool orbit.task.artifact:put \
   --caller-machine '<follower-machine-id>' --transport ssh-mcp --limit 1000 --json \
   > owner-put-audit.json
 

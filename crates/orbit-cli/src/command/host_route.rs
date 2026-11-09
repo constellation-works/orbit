@@ -20,7 +20,7 @@ use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
 use orbit_registry::hosts::HostEntry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value, json};
 
 use super::run::RunSubcommand;
@@ -434,13 +434,22 @@ fn routed_task_id(command: &Commands) -> Result<Option<String>, OrbitError> {
     Ok(match command {
         Commands::Task(task) => routed_command_id(&task.command).map(ToOwned::to_owned),
         Commands::Tool(tool) => match &tool.command {
-            ToolSubcommand::Run(args) if is_id_routed_tool(&args.name) => args
-                .parsed_input()?
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(ToOwned::to_owned),
+            // A family names its operation in the input.
+            ToolSubcommand::Run(args)
+                if is_id_routed_tool(&args.name) || tool_family(&args.name).is_some() =>
+            {
+                let input = args.parsed_input()?;
+                if is_id_routed_tool(tool_operation_name(&args.name, &input)) {
+                    input
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         _ => None,
@@ -730,10 +739,12 @@ fn deliver(
     {
         object.insert("workspace".into(), Value::String(selector));
     }
+    // Output policy is keyed by the operation a family call names.
+    let operation = tool_operation_name(&call.name, &input).to_owned();
     let answer =
         orbit_mcp::McpHost::call_tool(&client, &call.name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| {
-        render(&call.name, call.render, value, holder)
+        render(&operation, call.render, value, holder)
     })))
 }
 

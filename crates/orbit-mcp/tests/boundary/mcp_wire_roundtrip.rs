@@ -706,13 +706,13 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["orbit_task_show", "orbit_ui_inspect", "orbit_ui_open"])
+        BTreeSet::from(["orbit_task_show", "orbit_ui"])
     );
     let selected = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-1"}),
         ))
         .await
         .expect("inspect");
@@ -746,7 +746,7 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     }
     let missing = client
         .peer()
-        .call_tool(call("orbit_ui_inspect", json!({"id":"TST-1"})))
+        .call_tool(call("orbit_ui", json!({"action":"inspect","id":"TST-1"})))
         .await
         .unwrap();
     assert_eq!(missing.is_error, Some(true));
@@ -758,8 +758,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let wrong = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"wrong","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"wrong","id":"TST-1"}),
         ))
         .await
         .unwrap();
@@ -770,8 +770,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let mismatch = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-2"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-2"}),
         ))
         .await
         .unwrap();
@@ -790,8 +790,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let hidden = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-1"}),
         ))
         .await
         .unwrap();
@@ -822,12 +822,7 @@ impl McpHost for PresentationCollisionHost {
 
 #[tokio::test]
 async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
-    for name in [
-        "orbit.ui_open",
-        "orbit_ui.open",
-        "orbit.ui_inspect",
-        "orbit_ui.inspect",
-    ] {
+    for name in ["orbit.ui", "orbit_ui"] {
         let host = Arc::new(PresentationCollisionHost {
             name,
             calls: std::sync::atomic::AtomicUsize::new(0),
@@ -883,11 +878,11 @@ impl McpHost for DesktopWireHost {
             task_show,
             definition("orbit.task.list"),
             definition("orbit.task.update"),
-            definition("orbit.workflow.run.show"),
+            definition("orbit.run"),
         ];
         for definition in &mut definitions {
             definition.schema.builtin = true;
-            if definition.schema.name == "orbit.workflow.run.show" {
+            if definition.schema.name == "orbit.run" {
                 definition
                     .schema
                     .parameters
@@ -989,8 +984,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let opened = client
         .peer()
         .call_tool(call(
-            "orbit_ui_open",
-            json!({"workspace":"host-qualified:opaque-workspace"}),
+            "orbit_ui",
+            json!({"action":"open","workspace":"host-qualified:opaque-workspace"}),
         ))
         .await
         .unwrap();
@@ -1006,8 +1001,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let inspected = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-proof","kind":"run"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"host-qualified:opaque-workspace","id":"jrun-proof","kind":"run"}),
         ))
         .await
         .unwrap();
@@ -1019,7 +1014,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     {
         let calls = host.calls.lock().unwrap();
         assert_eq!(calls.len(), 4);
-        assert_eq!(calls[3].0, "orbit.workflow.run.show");
+        assert_eq!(calls[3].0, "orbit.run");
+        assert_eq!(calls[3].1["action"], "show");
         assert_eq!(calls[3].1["view"], "bounded");
         assert_eq!(
             calls[3].2.effective_capabilities, trusted.effective_capabilities,
@@ -1030,8 +1026,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let mismatch = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-other","kind":"run"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"host-qualified:opaque-workspace","id":"jrun-other","kind":"run"}),
         ))
         .await
         .unwrap();
@@ -1230,7 +1226,7 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
     });
     let client = ClientConfig::default().serve(client_io).await.unwrap();
     let listed = client.peer().list_all_tools().await.unwrap();
-    assert!(listed.iter().any(|tool| tool.name == "orbit_ui_inspect"));
+    assert!(listed.iter().any(|tool| tool.name == "orbit_ui"));
     for tool in &listed {
         assert!(serde_json::to_value(tool).unwrap().get("rules").is_none());
     }
@@ -1283,8 +1279,8 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
     let result = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace": "opaque-token", "id": "TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace": "opaque-token", "id": "TST-1"}),
         ))
         .await
         .unwrap();

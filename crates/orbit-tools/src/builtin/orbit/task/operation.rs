@@ -60,7 +60,7 @@ impl GuardedModes for TaskVerb {
                     )));
                 }
                 if guarded::is_guarded(input) && input.get("repilot") == Some(&Value::Bool(true)) {
-                    return Some(Err(OrbitError::InvalidInput("repilot cannot accompany a guarded update; request orbit.task.repilot after the guarded write completes".into())));
+                    return Some(Err(OrbitError::InvalidInput("repilot cannot accompany a guarded update; request orbit.task.recover action repilot after the guarded write completes".into())));
                 }
                 if guarded::is_guarded(input) {
                     return Some(guarded::write(ctx, input.clone(), false));

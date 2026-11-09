@@ -57,7 +57,7 @@ template:
     finding without context selectors. Skip duplicates. Add `ui` to the tags
     of a finding in something a user sees (dashboard, web pages, docs site,
     desktop app UI), and attach its screenshot to the filed task with
-    `orbit.task.artifact.put` at a stable path such as
+    `orbit.task.artifact` action `put` at a stable path such as
     `screenshots/<view>-<theme>-<width>.png`, under the 1 MiB artifact limit:
     `.orbit/tmp/` is cleared with the worktree.
 
@@ -111,7 +111,7 @@ template:
     whether the next tick has anything left to validate. Its exact content is
     `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`;
     write it to `.orbit/tmp/sweep-cursor.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema. Write it on every
     completed sweep, including one that found nothing to fix — a sweep without
     it leaves the next tick no cursor to compare the branch tip against.
@@ -143,7 +143,7 @@ template:
   - no-diff-expected
   required_tools:
   - orbit.task.add
-  - orbit.task.artifact.put
+  - orbit.task.artifact:put
   - orbit.task.show
   priority: medium
   complexity: medium

@@ -755,7 +755,7 @@ not the work), requeue it as an operator decision:
 orbit task requeue <task-id> --reason '<why this candidate can continue>'
 ```
 
-The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
+The MCP equivalent is `orbit.task.recover` action `requeue` with `id`, `reason` and optional
 `discard_candidate`; it needs operator authority and is unavailable inside a
 managed run. An operator or agent return from `blocked` or `review` to
 `backlog` is authenticated the same way: a plain
@@ -898,20 +898,21 @@ is refused before the task or the lineage changes.
 
 ### Repair a kept inline publication after completion expired
 
-Use `orbit.workflow.run.resume` with `source_repair` on the owning host when
+Use `orbit.run` action `resume` with `source_repair` on the owning host when
 the run published through its own host steps but its candidate needs repair.
 This works with red hosted checks and an expired completion budget. It grants
 one new repair attempt on the original branch and PR; it neither renews the
 old completion deadline nor resumes the old completion authority.
 
 Select the **original publishing run** explicitly, even when the task now names
-a later failed attempt with no publication. Use `orbit.workflow.run.list` and
+a later failed attempt with no publication. Use `orbit.run` action `list` and
 the original run's checkpoints and failure receipt to identify it; do not pick
 the newest run merely because it is the current binding. Stop all delivery
 attempts first. Inspect with:
 
 ```json
 {
+  "action": "resume",
   "id": "<original-publishing-run>",
   "source_repair": {"action": "inspect", "task_id": "<task>"}
 }
@@ -1066,7 +1067,7 @@ Generic resume and automatic candidate reuse do not acquire this authority.
 First update the task's canonical remaining specification and record the
 diagnosis and evidence for the unmet acceptance on the published candidate.
 Inspect the original **successful publishing run**, using its `id` with
-`orbit.workflow.run.resume` and
+`orbit.run` action `resume` and
 `source_repair: {action: "inspect", task_id: "<task>"}`. The task must remain
 in review and bound to that exact stopped, owner-local single-task run. A newer
 binding, a live or foreign owner, a claimed delivery, or a merged/closed PR
@@ -1083,6 +1084,7 @@ duration and hosted run/job on this candidate). Both text fields accept
 
 ```json
 {
+  "action": "resume",
   "id": "<successful-publishing-run>",
   "source_repair": {
     "action": "submit",
@@ -1154,7 +1156,7 @@ reservation explicitly:
 2. Inspect the original publishing run again with `source_repair.action: inspect`.
    Review its fresh `binding`, `review`, `policy_digest`, immutable `reservations`
    and `reservation_digests` (a map from original request key to payload digest).
-3. Submit `action: reconcile` through the same operator `orbit.workflow.run.resume`
+3. Submit `action: reconcile` through the same operator `orbit.run` action `resume`
    route. Supply the **original** request key, its `reservation_digest`, the fresh
    binding, and the original diagnosis, unmet-acceptance evidence and policy
    digest. This is a new authorization of the corrected plan, not a retry of old
@@ -1163,6 +1165,7 @@ reservation explicitly:
 
 ```json
 {
+  "action": "resume",
   "id": "<original-publishing-run>",
   "source_repair": {
     "action": "reconcile",
@@ -1281,7 +1284,7 @@ explicit source repair against the **original publishing run**. Inspection also
 accepts an owner-local failed source with a durable applied final-recovery
 requeue. A refusal that reports no publication evidence for the predecessor
 does not identify that predecessor as the publisher: select the older publishing
-run from `orbit.workflow.run.list` and inspect it explicitly. Stop any newer
+run from `orbit.run` action `list` and inspect it explicitly. Stop any newer
 attempt before inspection. If the task now names a newer replacement, inspection
 binds every owner run that bound the task after the publishing run, up to the
 current binding, in `binding.superseded`: it names the current binding and digests each
@@ -1344,7 +1347,7 @@ candidate from scratch. Source and owner receipts stay unchanged.
 An operator source-repair admission authorizes one attempt. Generic resume
 cannot restart that attempt. If a repair publishes a new head on the original
 PR and is then cancelled with its task still in review, inspect the cancelled
-repair run through `orbit.workflow.run.resume` with
+repair run through `orbit.run` action `resume` with
 `source_repair: {action: "inspect", task_id: "<task>"}` and the run's `id`.
 Submit that fresh binding with a new `request_key` and a diagnosis of the
 remaining work to authorize another attempt.

@@ -360,8 +360,8 @@ mod task_route {
             .insert(McpCapability::Operator);
         let response = host
             .call_tool(
-                "orbit.task.repilot",
-                json!({"id": "OWN-7"}),
+                "orbit.task.recover",
+                json!({"action": "repilot", "id": "OWN-7"}),
                 operator.clone(),
             )
             .expect("repilot must reach the owner without a workspace selector");
@@ -370,12 +370,16 @@ mod task_route {
             log.calls(),
             vec![(
                 OWNER_MACHINE.to_string(),
-                "orbit.task.repilot".to_string(),
-                json!({"id": "OWN-7"})
+                "orbit.task.recover".to_string(),
+                json!({"action": "repilot", "id": "OWN-7"})
             )]
         );
         let error = host
-            .call_tool("orbit.task.repilot", json!({"id": "ZZZ-1"}), operator)
+            .call_tool(
+                "orbit.task.recover",
+                json!({"action": "repilot", "id": "ZZZ-1"}),
+                operator,
+            )
             .expect_err("an unknown prefix must not search or fall back to another host");
         assert_eq!(
             error.host_registry_code(),

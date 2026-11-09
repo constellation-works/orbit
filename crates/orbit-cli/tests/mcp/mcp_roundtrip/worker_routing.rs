@@ -154,8 +154,8 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
         );
         let mut owner_client = owner.serve();
         let read = owner_client.call_tool_ok(
-            "orbit_task_artifact_get",
-            json!({"id": task_id, "path": artifact_path}),
+            "orbit_task_artifact",
+            json!({"action": "get", "id": task_id, "path": artifact_path}),
         );
         assert_eq!(read["content"], "exact CLI bytes\n", "{source:?}");
     }
@@ -311,15 +311,15 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
                 .expect("trailing-space sibling");
         }
         client.call_tool_ok(
-            "orbit_task_artifact_put",
-            json!({
+            "orbit_task_artifact",
+            json!({"action": "put",
                 "id": task_id, "source_path": format!(".orbit/tmp/{source} "),
                 "path": format!(" {artifact_path} "), "model": "codex",
             }),
         );
         let read = client.call_tool_ok(
-            "orbit_task_artifact_get",
-            json!({"id": task_id, "path": artifact_path}),
+            "orbit_task_artifact",
+            json!({"action": "get", "id": task_id, "path": artifact_path}),
         );
         assert_eq!(read["content"], "trimmed MCP bytes\n", "{source}");
     }
@@ -344,8 +344,8 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
         ".orbit/tmp/oversized.txt ",
     ] {
         let refused = client.call_tool_err(
-            "orbit_task_artifact_put",
-            json!({"id": task_id, "source_path": source, "path": "evidence/refused.txt"}),
+            "orbit_task_artifact",
+            json!({"action": "put", "id": task_id, "source_path": source, "path": "evidence/refused.txt"}),
         );
         assert_eq!(refused["code"], "invalid_input", "{source}: {refused}");
     }
@@ -445,7 +445,8 @@ requests = [
  {{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-03-26","capabilities":{{}},"clientInfo":{{"name":"worker-probe","version":"1"}}}}}},
  {{"jsonrpc":"2.0","method":"notifications/initialized"}},
  {{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}},
- {{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"orbit_decision_list","arguments":{{}}}}}},
+ {{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"orbit_decision","arguments":{{"action":"list"}}}}}},
+ {{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{{"name":"orbit_decision","arguments":{{"action":"show","id":"never-granted"}}}}}},
 ]
 result = subprocess.run([{binary}, "mcp", "serve"], input="".join(json.dumps(r)+"\n" for r in requests), text=True, capture_output=True, timeout=20)
 open({evidence}, "w").write(result.stdout)
@@ -460,7 +461,7 @@ print(json.dumps({{"schemaVersion":1,"status":"success","result":{{}},"error":No
         .home
         .join(".orbit/resources/activities/historical_invocation.yaml");
     let mut yaml = std::fs::read_to_string(&activity).unwrap();
-    yaml.push_str("  tools:\n    - orbit.task.show\n    - orbit.decision.list\n");
+    yaml.push_str("  tools:\n    - orbit.task.show\n    - orbit.decision:list\n");
     std::fs::write(activity, yaml).unwrap();
     let submitted = operator.call_tool_ok(
         "orbit_pipeline_invoke",
@@ -476,10 +477,16 @@ print(json.dumps({{"schemaVersion":1,"status":"success","result":{{}},"error":No
     let listed = messages.iter().find(|v| v["id"] == 2).unwrap();
     let names = tool_names(listed);
     assert!(names.contains(&"orbit_task_show"), "{listed}");
-    assert!(names.contains(&"orbit_decision_list"), "{listed}");
-    assert!(!names.contains(&"orbit_decision_show"), "{listed}");
+    assert!(names.contains(&"orbit_decision"), "{listed}");
     let called = messages.iter().find(|v| v["id"] == 3).unwrap();
     assert_ne!(called["result"]["isError"], true, "{called}");
+    // The activity allows only the `list` action of the advertised family.
+    let other_action = messages.iter().find(|v| v["id"] == 4).unwrap();
+    assert_eq!(other_action["result"]["isError"], true, "{other_action}");
+    assert!(
+        !other_action.to_string().contains("request_not_found"),
+        "an action the activity does not allow is refused before any lookup: {other_action}"
+    );
 
     // A task's exact operator grant already allowed by its implementing
     // activity must also reach that worker's MCP server.
@@ -527,12 +534,12 @@ spec:
         "orbit_task_add",
         json!({
             "title":"Grant probe", "description":"Probe an admitted grant", "complexity":"low", "crew":"sol", "model":"codex",
-            "granted_tools":["orbit.decision.list"]
+            "granted_tools":["orbit.decision:list"]
         }),
     );
     assert_eq!(
         task["granted_tools"],
-        json!(["orbit.decision.list"]),
+        json!(["orbit.decision:list"]),
         "{task}"
     );
     let submitted = operator.call_tool_ok(
@@ -550,8 +557,7 @@ spec:
         .collect();
     let listed = messages.iter().find(|v| v["id"] == 2).unwrap();
     let names = tool_names(listed);
-    assert!(names.contains(&"orbit_decision_list"), "{names:?}");
-    assert!(!names.contains(&"orbit_decision_show"), "{names:?}");
+    assert!(names.contains(&"orbit_decision"), "{names:?}");
     let called = messages.iter().find(|v| v["id"] == 3).unwrap();
     assert_ne!(called["result"]["isError"], true, "{called}");
 }

@@ -176,7 +176,7 @@ spec:
       # admits each selector; `claim_validate` replays them on the base on
       # the claim host before the NoDiff handoff. Owner runs instead attach
       # no-diff.json or already-landed.json and their validation logs directly
-      # with orbit.task.artifact.put; selectors are refused on that route.
+      # with orbit.task.artifact action put; selectors are refused on that route.
       already_resolved:
         type: [object, "null"]
         required: [selectors]
@@ -265,7 +265,7 @@ spec:
       `orbit tool show <tool>` prints a schema.
     - Use each tool's schema for argument names; before task, GitHub-run or search calls, read Step 1 of the Orbit skill's task-execution reference.
     - To attach a file, write it under `.orbit/tmp/` and call
-      `orbit.task.artifact.put` with `id`, `source_path` (the local file) and
+      `orbit.task.artifact` action `put` with `id`, `source_path` (the local file) and
       `path` (the artifact name). Names starting with `review-` in any case
       are reserved for the review gate, except `review-report.json`; use
       names like `examination-checks.json`.
@@ -338,7 +338,7 @@ spec:
        `orbit.task.update`; that write is refused. A criterion that
        contradicts the workspace guide is not a blocker: the guide wins; skip
        it and record the deviation and its source in the execution summary.
-    8. File `orbit.friction.add`, with evidence, only for a contradicted
+    8. File `orbit.friction` action `add`, with evidence, only for a contradicted
        assumption, a recurring failure, an incident root cause, or a
        non-obvious gotcha that cost over 10 minutes.
     9. Review the deliverable and diff for accuracy, unintended changes and
@@ -441,7 +441,7 @@ spec:
 
     - Write scratch, logs and evidence under `.orbit/tmp/`
       (`$ORBIT_SCRATCH_DIR`: git-ignored, run-scoped, the only place
-      `orbit.task.artifact.put` accepts), never `/tmp`. It needs no
+      `orbit.task.artifact` action `put` accepts), never `/tmp`. It needs no
       Trash-based cleanup.
     - Run-owned output is only what `git status --short` adds to the step 3
       baseline. Ignored build output, caches and sandbox-owned paths such as
@@ -569,7 +569,7 @@ spec:
     When `input.claimed` is true, the pipeline delivers your output to the
     owning machine. The injected task is authoritative; `orbit.task.update`
     and owner artifact writes are unavailable, while `orbit.task.show` and
-    `orbit.task.artifact.get` read any task in the claimed workspace, except
+    `orbit.task.artifact` action `get` read any task in the claimed workspace, except
     that a `review-*` artifact of another task is refused on the remote route
     (the review gate keeps its stricter scope). Return
     writes as output fields instead:
@@ -641,15 +641,15 @@ spec:
       rerun the checks the change affects.
   fleet_notices: post
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.show
-    - orbit.workflow.land
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

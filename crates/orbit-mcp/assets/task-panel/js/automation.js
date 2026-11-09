@@ -75,8 +75,8 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       const data=scope==='routines'
         ?await tool('orbit_routine_control',{workspace,action:'list',offset,limit:25})
         :scope==='auto_tasks'
-          ?await tool('orbit_auto_task_list',{workspace,view:'bounded',offset,limit:25})
-          :(await tool('orbit_workflow_run_list',{workspace,view:'bounded',include_catalog:true,offset,limit:25})).catalog;
+          ?await tool('orbit_auto_task',{action:'list',workspace,view:'bounded',offset,limit:25})
+          :(await tool('orbit_run',{action:'list',workspace,view:'bounded',include_catalog:true,offset,limit:25})).catalog;
       if(g!==revision||workspace!==current()||expectedScope!==scope)return;
       if(data.schema_version!==1||data.workspace!==workspace||data.scope!==scope||!Array.isArray(data.items)||data.controls_authorized!==true)throw new Error('Incompatible automation projection');
       fresh=true;render(data);feedback(uncertain.get(key())||'');
@@ -102,7 +102,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       if(args.kind==='routine'){
         name='orbit_routine_control';delete arguments_.kind;
       }else if(args.kind==='auto_task'){
-        name=args.action==='toggle'?'orbit_auto_task_update':'orbit_auto_task_mint';delete arguments_.kind;delete arguments_.action;
+        name='orbit_auto_task';delete arguments_.kind;arguments_.action=args.action==='toggle'?'update':'mint';
       }else{
         name='orbit_pipeline_invoke';arguments_={workspace:args.workspace,job_name:args.name,default_input:true};
       }

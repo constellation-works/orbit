@@ -1,5 +1,5 @@
 //! Every auto-task listing reports one decision: the CLI table and records,
-//! MCP `orbit.auto_task.list` and its bounded view agree on whether a
+//! MCP `orbit.auto_task` action `list` and its bounded view agree on whether a
 //! definition fires here and why not.
 
 use std::fs;
@@ -31,9 +31,10 @@ fn named<'a>(rows: &'a Value, name: &str) -> &'a Value {
 
 /// The bounded view is an operator surface.
 fn bounded(fixture: &Fixture) -> Value {
-    let input = json!({"view":"bounded","workspace":"audit-qa","limit":50}).to_string();
+    let input =
+        json!({"action": "list", "view":"bounded","workspace":"audit-qa","limit":50}).to_string();
     let output = fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .success()
@@ -110,7 +111,7 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
     .unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let fired = named(&rows, "fired");
     assert_eq!(
@@ -201,7 +202,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     .unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert!(
         named(&rows, CONSUMER)["last_fire"].is_null(),
@@ -264,7 +265,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     let minted = runtime.get_task(&minted_id).unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let consumer = named(&rows, CONSUMER);
     assert_eq!(
@@ -295,7 +296,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     assert!(retry_at > now);
     let closed = runtime.get_task(&minted_id).unwrap();
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert_eq!(
         named(&rows, CONSUMER)["last_fire"],
@@ -323,7 +324,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     assert_ne!(retry_id, minted_id);
     let retry = runtime.get_task(&retry_id).unwrap();
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert_eq!(
         named(&rows, CONSUMER)["last_fire"],
@@ -387,7 +388,7 @@ fn every_listing_reports_a_delivery_definition_owned_elsewhere_as_skipped() {
 
     let runtime = open_runtime(&fixture);
     let plain = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let listed = named(&plain, CONSUMER);
     assert_eq!(listed["skipped_reason"], reason, "{listed}");
@@ -476,7 +477,7 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     assert!(delivery["skip_reason"].is_null(), "{delivery}");
     // Plain MCP and CLI records read the same effective state and skip decision.
     let plain = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let records = fixture.json(&["auto-task", "list", "--format", "json"]);
     for rows in [&plain, &records] {
@@ -537,7 +538,7 @@ fn bounded_listing_reports_malformed_definition() {
     assert_eq!(page["load_errors_truncated"], false);
     assert!(
         runtime
-            .run_tool_as_human("orbit.auto_task.list", json!({}))
+            .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
             .unwrap()
             .is_array()
     );
@@ -555,9 +556,11 @@ fn bounded_listing_reports_malformed_definition() {
     let cursor = orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
     fs::create_dir_all(cursor.parent().unwrap()).unwrap();
     fs::write(cursor, "{broken").unwrap();
-    let input = json!({"view":"bounded","workspace":"audit-qa","offset":1,"limit":1}).to_string();
+    let input =
+        json!({"action": "list", "view":"bounded","workspace":"audit-qa","offset":1,"limit":1})
+            .to_string();
     let output = fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .success()
@@ -599,7 +602,7 @@ fn bounded_listing_reports_malformed_definition() {
         }
     }
     fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .failure();
@@ -664,7 +667,7 @@ fn listing_profiles_preserve_documents_and_bounded_text() {
         );
     }
     let plain = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let cli = fixture.json(&["auto-task", "list", "--format", "json"]);
     let bounded = bounded(&fixture);

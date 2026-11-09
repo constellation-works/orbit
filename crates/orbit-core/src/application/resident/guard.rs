@@ -335,7 +335,7 @@ impl OrbitRuntime {
                 RESIDENT_DONE_PR_OPEN,
                 format!(
                     "task `{id}` still has open pull requests {open:?}; land it with \
-                     `orbit.workflow.land` instead of marking it done"
+                     `orbit.workflow` action `land` instead of marking it done"
                 ),
             )),
         }
