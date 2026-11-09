@@ -600,9 +600,10 @@ if [[ "$checks" == false ]]; then
   # build instead of extending the exclusive suites.
   start_waiting_guard "$repo_root/scripts/test-ci-download-verified.py"
   # Start the longer repository scans first; the pool keeps pool_width running.
-  # The dependency-direction self-test is the pool's longest member on hosted
-  # runs (380-486 s of the 451-611 s pool wall, 2026-11-08 cohort), so launch
-  # it first: started late, its tail alone extends the wall past every other
+  # The dependency-direction self-test set the pool wall on hosted runs
+  # (335-505 s, 2026-11-09 cohort) until it ran its cases four at a time; it
+  # and the QA sweep remain the longest members, so both launch in the first
+  # slots: started late, either tail alone extends the wall past every other
   # awaited job (longest-processing-time-first makespan scheduling).
   run_guard "$repo_root/scripts/test-check-dependency-direction.py"
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
