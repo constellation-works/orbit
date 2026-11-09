@@ -566,8 +566,39 @@ function trendSection() {
   ]);
 }
 
+function groupedSeriesCard(card) {
+  const rows = card.entries.map((entry) => {
+    const button = el("button", {
+      class: `mx-series-row mx-s-${entry.swatch || entry.key}${entry.on ? " on" : " off"}${entry.dashed ? " dashed" : ""}`,
+      type: "button",
+      "aria-pressed": entry.on ? "true" : "false",
+      title: entry.on ? `Hide ${entry.label}` : `Show ${entry.label}`,
+    }, [
+      el("span", { class: "mx-series-row-head" }, [
+        el("span", { class: `mx-swatch${entry.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
+        el("span", { text: entry.label }),
+      ]),
+      el("span", { class: "mx-series-row-value", text: entry.value }),
+      el("span", { class: "mx-series-row-sub", text: entry.sub }),
+      el("span", { class: "mx-series-row-foot", text: entry.foot }),
+    ]);
+    button.addEventListener("click", () => {
+      const shown = view.shown[shownKey()];
+      if (!card.entries.some((other) => (other.key === entry.key ? !entry.on : other.on))) return;
+      view.shown[shownKey()] = { ...shown, [entry.key]: !entry.on };
+      rerender();
+    });
+    return button;
+  });
+  return el("div", { class: "mx-sc mx-sc-static mx-sc-breakdown", role: "group", "aria-label": card.label }, [
+    el("span", { class: "mx-sc-label", text: card.label }),
+    el("div", { class: "mx-sc-breakdown-list" }, rows),
+  ]);
+}
+
 function seriesCards(cards) {
   return el("div", { class: "mx-series", role: "group", "aria-label": "Series" }, cards.map((card) => {
+    if (card.grouped) return groupedSeriesCard(card);
     // A figure derived from the series, not a series: no toggle.
     if (card.static) {
       return el("div", { class: "mx-sc mx-sc-static", role: "group", "aria-label": card.label }, [
