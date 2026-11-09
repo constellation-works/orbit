@@ -1099,6 +1099,7 @@ spec:
       result, return `"status":"failed"` explaining why.
   fleet_notices: read
   tool_disallow_list:
+    - orbit.agents.rank_snapshot
     - orbit.decision.digest
     - orbit.decision.raise
     - orbit.decision.submit

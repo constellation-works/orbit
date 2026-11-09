@@ -19,6 +19,7 @@ const READ_ONLY_FS_PROFILE: &str = "reviewer";
 /// correction activities' disallow lists in sync with the tool registry.
 /// File and process access is separately confined by the filesystem profile.
 pub const MUTATING_TOOLS: &[&str] = &[
+    "orbit.agents.rank_snapshot",
     "orbit.auto_task.add",
     "orbit.auto_task.mint",
     "orbit.auto_task.update",
