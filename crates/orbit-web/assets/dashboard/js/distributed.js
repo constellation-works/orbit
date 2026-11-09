@@ -900,7 +900,9 @@ function buildClaimActions(claim, capabilities, handlers) {
       },
     });
   }
-  if (claim.unsettled || claim.phase === "failed") {
+  // Only the owner can prove currency: a failed claim can survive a later
+  // pull, and creation-time ordering does not grant it recovery authority.
+  if (claim.current === true && (claim.unsettled || claim.phase === "failed")) {
     const targets = recoverTargets(claim);
     offers.push({
       key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",

@@ -374,7 +374,9 @@ impl OrbitRuntime {
                     )
                 });
             let mut row = claim_json(claim, handoff, local_machine.as_deref(), now);
-            row["recover_targets"] = self.claim_recover_targets_json(claim)?;
+            let current = self.claim_is_current_on_task(claim);
+            row["current"] = serde_json::json!(current);
+            row["recover_targets"] = self.claim_recover_targets_json(claim, current)?;
             rows.push(row);
         }
 
@@ -546,16 +548,34 @@ impl OrbitRuntime {
         }))
     }
 
-    /// The statuses an operator may recover `claim` to, for the console's
+    /// Use the same latest `pulled_by` identity as the store's claim authority,
+    /// rather than a claim's phase or creation time. A failed claim can remain
+    /// in history after a newer pull; unreadable provenance proves no currency.
+    fn claim_is_current_on_task(&self, claim: &ClaimInspection) -> bool {
+        let Ok(history) = self.get_task_history(&claim.claim.task_id) else {
+            return false;
+        };
+        history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == "pulled_by")
+            .and_then(|entry| {
+                serde_json::from_str::<serde_json::Value>(entry.note.as_deref()?).ok()
+            })
+            .is_some_and(|note| note["claim_id"].as_str() == Some(claim.claim.claim_id.as_str()))
+    }
+
+    /// The statuses an operator may recover the current `claim` to, for the console's
     /// picker; empty when the claim cannot be recovered. Advisory: the
     /// guarded recovery rechecks every target.
     fn claim_recover_targets_json(
         &self,
         claim: &ClaimInspection,
+        current: bool,
     ) -> Result<serde_json::Value, OrbitError> {
         let recoverable =
             claim.claim.phase.is_unsettled() || claim.claim.phase == ExecutionClaimPhase::Failed;
-        if !recoverable {
+        if !current || !recoverable {
             return Ok(serde_json::json!([]));
         }
         // A task this owner cannot read offers no target rather than failing
