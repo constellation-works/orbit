@@ -221,6 +221,8 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.unlocked_context_paths` | Default `["**/*.md"]`; array of workspace-relative globs (`*` within a component, `**` across components; no absolute paths or `..`). Matching context entries take no lock in mixed tasks; an all-matching task still locks every entry. `[]` locks all entries. Verify with `orbit run readiness` and `orbit task eligible`. Keep code and build/CI definitions locked. |
 | `workflow.lock_modes` | **Advanced: admission policy.** Default `[]` (every overlap blocks); ordered `[[workflow.lock_modes]]` tables, each a `pattern` (Rust regex searched for in the workspace-relative path; anchor with `^`/`$`) and a `mode` of `exclusive` (default) or `shared`. First match wins. An overlap is waived when its point, the narrower selector's path, is shared, so tasks sharing only, say, `(^|/)mod\.rs$` run together and the second to land resolves any conflict. `module:`/`command:` selectors stay exclusive. Set it in the workspace config only for files that merge cleanly or are regenerated. Verify with `orbit run readiness` and `orbit task eligible`. |
 | `workflow.unlocked_path_validation_commands` | **Advanced: validation policy.** Default `[]` keeps full validation; array of command strings, trimmed with blank entries dropped. Replaces required commands only when the candidate differs from this run's last fully validated tree solely in unlocked paths. Verify `validation_scope` in validation logs. See [Recovery settings](#recovery-settings). |
+| `workflow.ci_infrastructure_retry.max_attempts` | Total failed-jobs reruns for one pull-request head whose failures are all logged infrastructure/transient. Default `3`; integer `0`..`10`. `0` disables this recovery. See [CI infrastructure reruns](#ci-infrastructure-reruns). |
+| `workflow.ci_infrastructure_retry.backoff_seconds` | Initial delay between infrastructure reruns, doubled after each reservation. Default `60`; integer `1`..`3600` seconds; the first rerun is immediate. See [CI infrastructure reruns](#ci-infrastructure-reruns). |
 | `worktree.reclaim_below_free_mib` | **Advanced: reclaims rebuildable output.** Default unset; non-negative integer MiB (`u64`). During admission, reclaim `worktree.reclaim` paths from oldest terminal worktrees while free space under the state directory is below this mark; active runs remain protected. `0` never triggers it. Verify candidates with `orbit gc worktrees --reclaim --dry-run --estimate-bytes` and actual reclamation via the `worktree.reclaim` audit event. See [Worktree GC](maintenance.md#worktree-garbage-collection). |
 | `workflow.provider_limit_overrides` | Delivery admission skips a crew while a live usage window of its provider or model is exhausted or used at or above 90%. Each entry replaces that percent for one provider: `provider:percent` (1..=100; 100 skips only on exhaustion) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
@@ -913,6 +915,64 @@ Each validation log and step output records `validation_scope` (`full` or
 `narrowed`, reason and compared trees); a narrowed pass never becomes the
 comparison point and cannot satisfy completion evidence requiring the full
 list. Verify that record, rather than an agent's account of what changed.
+
+### CI infrastructure reruns
+
+When every authenticated failure on a pull-request head is logged
+infrastructure/transient, the watcher reruns the failed jobs instead of
+starting a code-repair agent. Two keys bound that recovery; the read-only
+[GitHub evidence sweep](automation.md#github-evidence-sweeps) lists such jobs
+under `infrastructure` without rerunning them.
+
+- `workflow.ci_infrastructure_retry.max_attempts`: total failed-jobs reruns for
+one pull-request head. Default `3`; integer `0`..`10`. `0` disables this
+recovery, so logged infrastructure failures keep their usual route.
+- `workflow.ci_infrastructure_retry.backoff_seconds`: initial delay between
+reruns. Default `60`; integer `1`..`3600` seconds. The first rerun is
+immediate, then each reservation doubles the wait (by default `60`, then
+`120` seconds, and so on).
+
+`workflow.ci_infrastructure_signatures` selects what counts: a failed job
+matches only when a line it emitted starts with one of those prefixes.
+Declare only failures a rerun can clear; anything else keeps its repair
+route, and no repair agent runs for a match.
+
+Behavior notes:
+
+- The whole failure set must be logged infrastructure/transient. Any
+candidate failure excludes the set, including a candidate sibling beside a
+transient failure. Flaky failures and conclusion-only cancellation or timeout
+sets keep their existing single rerun rather than this budget.
+- Reservations are durable per head across restarts and workflow runs,
+including unknown send outcomes; an unchanged provider attempt is never
+resent. A new head gets its own budget.
+- The existing watch or completion deadline is never extended. Backoff uses
+durable reservation timestamps and avoids re-reading completed-job logs or
+authenticating another rerun while one is owed. Provider throttling uses the
+recorded read deferral and spends no rerun attempt.
+- Once the budget is spent, `ci_infrastructure_retry_exhausted` appears in
+task history naming `classification=transient` and the attempt count; no
+repair agent runs and the candidate stays in review. A passing retry resumes
+the existing observation with its merge authority unchanged.
+- Inspecting this policy, or changing it where authorized, grants no
+repair or merge authority by itself.
+
+Discover, read and — only where authorized to change policy, for example a
+disposable fixture — set the keys with the installed commands:
+
+```sh
+orbit config keys | grep ci_infrastructure_retry
+orbit config get workflow.ci_infrastructure_retry.max_attempts
+orbit config get workflow.ci_infrastructure_retry.backoff_seconds
+orbit config show --all | grep ci_infrastructure_retry
+# Only where authorized to change policy:
+orbit config set workflow.ci_infrastructure_retry.max_attempts 3
+orbit config set workflow.ci_infrastructure_retry.backoff_seconds 60
+```
+
+Confirm the exhausted-budget record with `orbit task show <task-id>` history.
+Use `orbit config show --all` for effective values and provenance, and
+`orbit doctor` to catch configuration errors before relying on a change.
 
 ## Crews
 
