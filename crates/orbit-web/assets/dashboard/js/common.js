@@ -821,7 +821,8 @@ export function infoHint(text, { id = null } = {}) {
 // a 44px target that also opens on tap, even in a browser that does not focus
 // a tapped span, and closes on Escape. Lines in `text` stay separate lines.
 // The bubble flips above the icon when it would run off the bottom. The
-// stylesheet shows it on hover and focus; this only says where it goes.
+// stylesheet shows it on hover and focus; this only says where it goes. A
+// supplied trigger keeps its own appearance and link navigation, if any.
 let pinnedHintFollowsScroll = false;
 
 function placePinnedInfoHint(hint) {
@@ -841,25 +842,31 @@ function placePinnedInfoHint(hint) {
   hint.style.setProperty("--hint-tip-left", `${left}px`);
   hint.style.setProperty("--hint-tip-width", `${width}px`);
   const height = bubble.getBoundingClientRect().height;
-  const below = icon.bottom - 10;
-  const top = below + height + gutter > window.innerHeight ? Math.max(gutter, icon.top + 10 - height) : below;
+  const inset = hint.classList.contains("info-hint") ? 10 : -4;
+  const below = icon.bottom - inset;
+  const top = below + height + gutter > window.innerHeight ? Math.max(gutter, icon.top + inset - height) : below;
   hint.style.setProperty("--hint-tip-top", `${top}px`);
 }
 
-export function pinnedInfoHint(text) {
-  const hint = infoHint(text);
+export function pinnedInfoHint(text, { trigger = null } = {}) {
+  const hint = trigger || infoHint(text);
+  if (trigger) hint.appendChild(el("span", { class: "info-hint-text", text }));
+  hint.classList.add("pinned-hint-trigger");
   hint.classList.add("info-hint-pinned");
   const place = () => placePinnedInfoHint(hint);
   hint.addEventListener("mouseenter", place);
   hint.addEventListener("focus", place);
   hint.addEventListener("click", (event) => {
-    event.preventDefault();
+    if (hint.tagName !== "A") event.preventDefault();
     event.stopPropagation();
     hint.focus();
     place();
   });
   hint.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") hint.blur();
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      hint.blur();
+    }
   });
   return hint;
 }

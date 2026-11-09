@@ -72,6 +72,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/common.js"),
     ),
     (
+        "/static/js/progress-strip.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/progress-strip.js"),
+    ),
+    (
         "/static/js/config.js",
         JS,
         include_bytes!("../assets/dashboard/js/config.js"),
