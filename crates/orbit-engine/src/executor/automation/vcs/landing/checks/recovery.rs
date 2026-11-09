@@ -128,9 +128,11 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     /// to the backlog for its next run to repair the candidate, with this
     /// evidence.
     Requeue(String),
-    /// Stop in review and fail the run, with this evidence. A designed stay
-    /// — unclassified, inconclusive, or a transient failure the rerun planner
-    /// will not run again — is [`Self::HoldInReview`].
+    /// Stop in review and fail the run, with this evidence. A status that
+    /// reports no head or number has no jobs to read, so it fails here too. A
+    /// designed stay on a readable head — unclassified, inconclusive, or a
+    /// transient failure the rerun planner will not run again — is
+    /// [`Self::HoldInReview`].
     Stop(String),
     /// The candidate stays in review and the run is held, not failed.
     /// Unclassified evidence, inconclusive evidence, and a transient failure
@@ -189,7 +191,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
 ) -> Result<CheckRecoveryStep, OrbitError> {
     let workspace = &context.workspace_path;
     let (Some(head), Some(pr)) = (status.head_sha.as_deref(), status.number) else {
-        return Ok(CheckRecoveryStep::HoldInReview(format!(
+        return Ok(CheckRecoveryStep::Stop(format!(
             "{reason}; the failure was not classified: the pull request reported no head or \
              number"
         )));
