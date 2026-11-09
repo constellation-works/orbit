@@ -1,6 +1,6 @@
 ---
 name: orbit-setup
-description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, `orbit workspace init`, onboarding, provider/crew and MCP configuration, the Linux sandbox, the headless browser kit for UI checks, the scheduler (sweep clock, routines, auto-tasks), worktree GC, `orbit doctor`, upgrades, task publication and backup, remote access, the dashboard, or host and service log troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
+description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, `orbit workspace init`, onboarding, provider/crew and MCP configuration, experimental crew memory, the Linux sandbox, the headless browser kit for UI checks, the scheduler (sweep clock, routines, auto-tasks), worktree GC, `orbit doctor`, upgrades, task publication and backup, remote access, the dashboard, or host and service log troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
 ---
 
 # Orbit Setup
@@ -29,6 +29,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Choose an MCP role, configure global MCP roles and toolsets, understand server flag precedence, or inspect the advertised surface | [Configuration — MCP roles and toolsets](references/configuration.md#mcp-roles-and-toolsets); [Remote access](references/remote-access.md#role-and-toolset-selection) |
 | Activity-scoped workspace knowledge: map exact activities in `[workflow.agent_corpus]` to a shared `INDEX.md`, verify `activity.agent_corpus_applied` in the run audit trail, or understand append proposals versus reviewed corpus changes | [Configuration — Activity-scoped agent corpus](references/configuration.md#activity-scoped-agent-corpus) |
 | Experiments: `[experiments]` settings, approved config overlays, operator lifecycle, shadow/live modes and readouts | [Configuration — Experiments](references/configuration.md#experiments) |
+| Discover, configure, inspect or stop experimental crew memory (`crew_memory.enabled`, `orbit memory`, shadow capture and live delivery) | [Crew memory](references/crew-memory.md) |
 | Executor image input: declaring `spec.image_input` on an executor, `vision = false` on a crew, the canary and visual hold, or reading `orbit agents vision-probe` results | [Configuration — Executor image input](references/configuration.md#executor-image-input-image_input) |
 | Host capability labels: set `machine.labels`, understand the implicit OS label and `requires_labels` matching, or inspect placement waits | [Host capability labels](references/configuration.md#host-capability-labels) |
 | Landed-delivery line classes (Analytics › Metrics › Lines changed): `workflow.test_paths`, `workflow.non_code_paths`, their defaults and verification; backfilling missing history with `migrate --backfill-diff-stats` | [Configuration — Landed diff classification](references/configuration.md#landed-diff-classification) |
@@ -101,6 +102,7 @@ the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-h
 seed enabled when the seeding policy selects them. Seeded enabled does not
 turn the experimental crew-memory feature on: `crew-memory-dream` mints
 nothing while `crew_memory.enabled` is false or no running memory-arm
-experiment applies. Preserve
+experiment applies. Configure, inspect and stop crew memory with
+[Crew memory](references/crew-memory.md). Preserve
 existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.
