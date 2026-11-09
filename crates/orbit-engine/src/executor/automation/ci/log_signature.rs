@@ -72,7 +72,8 @@ pub const ERROR_MARKERS: &[&str] = &[
 /// 3. A specific `##[error]` annotation.
 /// 4. A labelled diagnostic (`error[vulnerability]: …`).
 /// 5. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
-/// 6. The nearest unannotated content line with letters or digits before a generic trailer.
+/// 6. The nearest unannotated content line with letters or digits before a generic trailer,
+///    excluding `ci-await-api:` bookkeeping the waiter prints after its own report.
 /// 7. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
 ///
@@ -176,6 +177,12 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
 /// `ci-await:` from the job waiter. `ci-await-api:` bookkeeping does not match.
 fn is_await_waiter_signal(line: &str) -> bool {
     signature_payload(line).trim().starts_with("ci-await:")
+}
+
+/// `ci-await-api:` counters the waiter prints in a `finally` block, after any
+/// timeout it just reported. Bookkeeping, not a diagnostic.
+fn is_await_api_bookkeeping(line: &str) -> bool {
+    signature_payload(line).trim().starts_with("ci-await-api:")
 }
 
 /// Bounded raw evidence around the same emitted diagnostic used for identity.
@@ -497,7 +504,9 @@ fn is_assertion_payload(lowered: &str) -> bool {
 fn is_diagnostic_content(line: &str) -> bool {
     let payload = signature_payload(line);
     let trimmed = payload.trim();
-    trimmed.chars().any(char::is_alphanumeric) && !trimmed.starts_with("##[")
+    trimmed.chars().any(char::is_alphanumeric)
+        && !trimmed.starts_with("##[")
+        && !is_await_api_bookkeeping(line)
 }
 
 /// The `##[group]Run …` line that opens a step's command.

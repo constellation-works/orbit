@@ -89,6 +89,47 @@ fn nearest_diagnostic_keeps_compiler_test_and_annotation_precedence() {
 }
 
 #[test]
+fn ci_await_timeout_keeps_identity_through_api_bookkeeping_and_runner_trailer() {
+    let timeout = "ci-await: timed out after 2400 s waiting for test (in_progress)";
+    let log = format!(
+        "{timeout}\nci-await-api: listings=1 not_modified=0 paginated=false\n\
+         ##[error]Process completed with exit code 1."
+    );
+    let signature = error_signature(&log, "Wait");
+    assert_eq!(
+        signature.text,
+        orbit_engine::ci_log_signature::normalize_signature(timeout)
+    );
+    assert!(!signature.step_fallback);
+    assert!(diagnostic_excerpt(&log, 1024).contains(timeout));
+
+    // Bookkeeping alone is not a signature.
+    let bookkeeping_only = "ci-await-api: listings=1 not_modified=0 paginated=false\n##[error]Process completed with exit code 1.";
+    let signature = error_signature(bookkeeping_only, "Wait");
+    assert_eq!(signature.text, "wait");
+    assert!(signature.step_fallback);
+
+    // Stronger diagnostics keep their precedence over the waiter timeout.
+    for strongest in [
+        "error[E0062]: duplicate field `owner`",
+        "test failing_case ... FAILED",
+        "##[error]specific runner diagnostic",
+        "error[vulnerability]: timing variability",
+        "error: actual failure",
+    ] {
+        let log = format!(
+            "{timeout}\nci-await-api: listings=1 not_modified=0 paginated=false\n{strongest}\n\
+             ##[error]Process completed with exit code 1."
+        );
+        assert_eq!(
+            error_signature(&log, "Wait").text,
+            orbit_engine::ci_log_signature::normalize_signature(&strongest.to_ascii_lowercase()),
+            "stronger diagnostic keeps precedence: {strongest}"
+        );
+    }
+}
+
+#[test]
 fn tap_success_output_with_marker_words_is_not_selected_as_diagnostic() {
     let subtest = "# Subtest: failed rename leaves the final path absent and removes the temp file";
     let passing_result =
