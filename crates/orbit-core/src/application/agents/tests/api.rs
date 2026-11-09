@@ -811,6 +811,127 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
 }
 
 #[test]
+fn reviewer_rows_keep_re_review_settlements_own_effort() {
+    use orbit_types::identity::ReasoningEffort::{High, Low, Medium};
+
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(1);
+    let first_at = start + chrono::Duration::minutes(20);
+    let second_at = start + chrono::Duration::minutes(35);
+    let third_at = start + chrono::Duration::minutes(50);
+    // One pipeline run, three before-PR settlements of the same reviewer
+    // model: `review` ran high for 10s, `re_review` medium for 60s and
+    // `re_review_2` low for 30s. A re-review settlement comment carries the
+    // same lead as the first round's, so each is bound to the gate's `review`
+    // step; none may fall to effort unknown or relabel another.
+    let reviewer = |activity_id: &str, at: chrono::DateTime<Utc>| {
+        let mut review = Review {
+            attempt_id: activity_id.into(),
+            activity_id: Some(activity_id.into()),
+            at,
+            verdict: ReviewVerdict::Accept,
+            reviewer: Default::default(),
+            findings: Vec::new(),
+            reviewed: None,
+            final_candidate: None,
+            seconds: None,
+            fix_failed: false,
+            infrastructure: false,
+            outcome: RejectOutcome::Pending,
+        };
+        review.reviewer.crew = Some("crew".into());
+        review.reviewer.model = Some("rev-model".into());
+        review
+    };
+    let mut attempt = Attempt {
+        start,
+        end: Some(now),
+        runner: Default::default(),
+        job: true,
+        tags: Vec::new(),
+    };
+    attempt.runner.crew = Some("impl".into());
+    attempt.runner.model = Some("impl-model".into());
+    attempt.runner.run_id = Some("run-pr".into());
+    let mut task = minimal_task("reviewed-task", start);
+    task.attempts = vec![attempt];
+    task.final_attempt = Some(0);
+    task.reviews = vec![
+        reviewer("review", first_at),
+        reviewer("review", second_at),
+        reviewer("review", third_at),
+    ];
+    let tasks = vec![task];
+    let invocations = vec![
+        unit_invocation(
+            1,
+            "run-pr",
+            "reviewed-task",
+            "review",
+            "rev-model",
+            High,
+            10_000,
+            first_at - chrono::Duration::minutes(1),
+        ),
+        unit_invocation(
+            2,
+            "run-pr",
+            "reviewed-task",
+            "re_review",
+            "rev-model",
+            Medium,
+            60_000,
+            second_at - chrono::Duration::minutes(1),
+        ),
+        unit_invocation(
+            3,
+            "run-pr",
+            "reviewed-task",
+            "re_review_2",
+            "rev-model",
+            Low,
+            30_000,
+            third_at - chrono::Duration::minutes(1),
+        ),
+    ];
+    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
+    let facts = AgentFacts {
+        invocations,
+        computed_at: now,
+        tasks_scanned: tasks.len(),
+        tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots: Vec::new(),
+    };
+    let payload = agent_scorecard(
+        &facts,
+        AgentRole::Reviewers,
+        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
+        Duration::ZERO,
+    );
+    let rows = payload["rows"].as_array().unwrap();
+    let units = |label: &str| {
+        rows.iter()
+            .find(|row| row["label"] == label)
+            .unwrap_or_else(|| panic!("row {label}: {payload}"))["units"]
+            .clone()
+    };
+    assert_eq!(units("rev-model @ high"), json!(1));
+    assert_eq!(units("rev-model @ medium"), json!(1));
+    assert_eq!(units("rev-model @ low"), json!(1));
+    assert!(
+        rows.iter()
+            .all(|row| row["label"] != "rev-model @ effort unknown"),
+        "{payload}"
+    );
+}
+
+#[test]
 fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     use orbit_types::identity::ReasoningEffort::High;
 

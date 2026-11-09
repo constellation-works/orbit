@@ -11,8 +11,9 @@
 //! the invocations of the unit's job run whose activity matches the role
 //! (implementing, reviewing or piloting), narrowed to the unit itself by
 //! the model it recorded and, when the producing step or worker is known
-//! (a pilot receipt's worker, a review settlement's gate), by that exact
-//! activity id. A run that carried several rounds — an initial and a
+//! (a pilot receipt's worker, a review settlement's gate), by that
+//! activity id (a review gate also covers its re-review rounds, told apart by
+//! the settlement times). A run that carried several rounds — an initial and a
 //! repair pilot, a before-PR and a before-landing review — therefore
 //! never lends one round's effort to another round's model. A unit with
 //! no recorded run has no invocation evidence of its own and is
@@ -125,6 +126,20 @@ pub(super) struct MainInvocationUnit<'a> {
     pub(super) model: Option<&'a str>,
     pub(super) activity_id: Option<&'a str>,
     pub(super) after: Option<chrono::DateTime<chrono::Utc>>,
+    /// The unit's own settlement time, when it has one: an invocation that
+    /// ended after it belongs to a later round.
+    pub(super) until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Whether the invocation recorded under pipeline step `step` can have
+/// produced a unit bound to `id`. A pilot receipt's worker and a review
+/// settlement's gate step (`review`, `landing_review`) match exactly, except
+/// that a gate also covers the re-review rounds (`re_review`, `re_review_2`):
+/// they settle through the same gate, so the settlement comment names the
+/// gate's timing, never the round's step. The unit's `after` and `until`
+/// bounds then pick its own round among them.
+fn step_produced(id: &str, step: &str) -> bool {
+    step == id || (matches!(id, "review" | "landing_review") && step.starts_with("re_review"))
 }
 
 /// The effort of a unit's main invocation: among the unit's own
@@ -142,6 +157,7 @@ pub(super) fn main_invocation_effort(
         model,
         activity_id,
         after,
+        until,
     } = unit
     else {
         return Some(EFFORT_UNKNOWN.to_string());
@@ -149,9 +165,14 @@ pub(super) fn main_invocation_effort(
     let candidates = facts.invocations.iter().filter(|fact| {
         fact.job_run_id == run_id
             && activity.matches(fact.activity_id.as_deref())
-            && activity_id.is_none_or(|id| fact.activity_id.as_deref() == Some(id))
+            && activity_id.is_none_or(|id| {
+                fact.activity_id
+                    .as_deref()
+                    .is_some_and(|step| step_produced(id, step))
+            })
             && model.is_none_or(|model| fact.model.as_deref() == Some(model))
             && after.is_none_or(|after| fact.ts > after)
+            && until.is_none_or(|until| fact.ts <= until)
     });
     let linked: Vec<_> = match task_id {
         Some(task) => {

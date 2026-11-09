@@ -211,6 +211,7 @@
         "application/agents/tests/api.rs::pilot_rows_keep_each_rounds_own_effort",
         "application/agents/tests/api.rs::reviewer_ranks_are_dense_over_ranked_rows",
         "application/agents/tests/api.rs::reviewer_rows_keep_each_settlements_own_effort",
+        "application/agents/tests/api.rs::reviewer_rows_keep_re_review_settlements_own_effort",
         "application/agents/tests/api.rs::sparse_tier_scorecard_retains_own_evidence_and_conserves_fleet",
         "application/agents/tests/api.rs::supported_tier_scorecard_keeps_existing_scores",
         "application/agents/tests/rank.rs::calibrated_season_stores_window_and_reference_size_and_drives_the_board",
