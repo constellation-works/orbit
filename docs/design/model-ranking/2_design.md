@@ -190,10 +190,12 @@ with a `cost unknown` flag. Cost never moves a model across a band boundary.
 
 ### 4.6 Value chart
 
-For each tier with at least 3 models of at least 10 tasks, the view plots each model's
-tier-specific score against its cost per task on that tier. Models that no other model
-beats on both score and cost are marked as the **frontier**. This is the input for pool
-weights, which stay Daniel's. The chart is not part of the ranking.
+For each tier with at least 3 ranked models of at least 10 tasks, the view plots each
+model's tier-specific score against its cost per task on that tier, one tier at a time
+behind a tier switch. Models that no other model beats on both score and cost are marked
+as the **frontier**; a model whose tier cost covers too few of its tasks is drawn hollow
+and never joins it. This is the input for pool weights, which stay Daniel's. The chart is
+not part of the ranking.
 
 ## 5. New data
 
@@ -286,8 +288,9 @@ change starts a new season (§4.2).
   - per row: score, interval, band, cost ratio, per-measure actual, expected, residual and
     contribution, units, eligibility and the effort split;
   - per board: the season's scales and weights, and whether the board is qualified.
-- **Dashboard:** Analytics › Agents gains a **Rank** tab. It shows the band table, an
-  expandable per-measure breakdown for each row, and the per-tier value chart.
+- **Dashboard:** Analytics › Agents opens on a **Rank** tab. It shows the band ladder, an
+  expandable per-measure breakdown for each row, the models still below the evidence gate,
+  and the value chart with a tier switch ([user interface §5c](../user-interface/2_design.md#5c-analytics--agents)).
 - **Snapshots:** a weekly routine freezes the settled ranking, with its inputs, as a task
   artifact. The weekly MVP note and the public analytics site read the frozen snapshot,
   never a live query.

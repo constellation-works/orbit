@@ -333,7 +333,7 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
   }
   syncViewTabs("reliability-views", view, name === "reliability");
-  syncViewTabs("agents-roles", typeof ctx.getAgentsRole === "function" ? ctx.getAgentsRole() : "orchestrators", name === "agents");
+  syncViewTabs("agents-roles", typeof ctx.getAgentsRole === "function" ? ctx.getAgentsRole() : "rank", name === "agents");
   for (const [key, mainId] of Object.entries(ANALYTICS_MAINS)) {
     const node = $(mainId);
     if (node) node.style.display = key === shown ? "grid" : "none";
@@ -526,14 +526,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   } else dockView = null;
   // Old standalone Agents links normalize to Analytics › Agents in place.
   if (head === "agents") {
-    const role = AGENT_ROLES.includes(segments[1]) ? segments[1] : ctx.getAgentsRole();
+    const role = AGENT_ROLES.includes(segments[1]) || segments[1] === "orchestrators" ? segments[1] : ctx.getAgentsRole();
     head = "analytics";
     segments.splice(0, segments.length, "analytics", "agents", role);
     legacyRoute = true;
   }
-  // Analytics › Orchestrators became Analytics › Agents › Orchestrators.
-  if (head === "analytics" && segments[1] === "orchestrators") {
-    segments.splice(0, segments.length, "analytics", "agents", "orchestrators");
+  // Analytics › Orchestrators became Analytics › Agents › Orchestrators, and
+  // that role was retired: both links open Rank.
+  if (head === "analytics" && (segments[1] === "orchestrators" || (segments[1] === "agents" && segments[2] === "orchestrators"))) {
+    segments.splice(0, segments.length, "analytics", "agents", "rank");
     legacyRoute = true;
   }
   // A `#comment-<task>-<n>` fragment, as older copies of a comment link carry
