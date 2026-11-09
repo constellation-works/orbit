@@ -616,7 +616,7 @@ unblocks into the doc, config or code that owns it, in that task's PR.
 
 ### Agent scorecards
 
-`orbit_agents_scorecard` ranks one agent role's models by recorded reasoning effort over the window: one row per model and recorded effort, labelled `model @ effort` (orchestrators excepted below). Over
+`orbit_agents_scorecard` ranks one agent role's models by recorded reasoning effort over the window: one row per model and recorded effort, labelled `model @ effort`. Over
 MCP it is in the `analytics` toolset.
 
 - **Score.** Each term's count per 100 units of work is weighted and summed.
@@ -654,8 +654,7 @@ MCP it is in the `analytics` toolset.
   Units with unknown effort form a separate effort-unknown row per model and are never folded into a known effort.
   Scores retain their model-and-recorded-effort population. The top-level breakdown covers
   completed workspace invocations in the selected window; `effort_population`
-  identifies that separate descriptive population. Orchestrator authorship stays
-  unknown because authorship does not record an execution effort. Never infer
+  identifies that separate descriptive population. Never infer
   historical effort from the crew's current configuration or an audit event.
   To follow a row to its tasks, pass its crew with `crew` and narrow an ambiguous
   crew-and-model selection with `row_effort` (`--effort` on the CLI, the `effort`
