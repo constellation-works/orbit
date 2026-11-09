@@ -191,6 +191,7 @@ pub fn attention_query(
         targets
     };
     let mut seen_workspaces = BTreeSet::new();
+    let mut seen_notice_items = BTreeSet::new();
     for target in targets {
         if !seen_workspaces.insert(target.workspace_id.clone()) {
             continue;
@@ -279,6 +280,10 @@ pub fn attention_query(
         }
         source_costs.insert(workspace.id.clone(), candidates.timings);
         candidates.items.retain(|item| filter.matches(item));
+        // A global notice is listed by every workspace read; keep the first.
+        candidates.items.retain(|item| {
+            item.kind != AttentionKind::NoticeOpen || seen_notice_items.insert(item.id.clone())
+        });
         matching_before_cap += candidates.items.len();
         attention_order(&mut candidates.items);
         let cap = ATTENTION_PER_WORKSPACE_ITEM_CAP;

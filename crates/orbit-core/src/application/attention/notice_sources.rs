@@ -37,6 +37,14 @@ fn notice_attention_severity(notice: &Notice, now: DateTime<Utc>) -> AttentionSe
     }
 }
 
+/// Effective-open notices this owner derives for `workspace`: the notices
+/// homed in the runtime's own store partition, plus every global notice.
+///
+/// The notice record carries the store partition id, which can differ from
+/// `workspace.id` (the registry selector), so home is the runtime's
+/// partition rather than a comparison with the selector. A global notice is
+/// listed by every workspace read, so its item id is independent of the
+/// reading workspace and `attention_query` keeps one copy per read.
 pub(super) fn notice_attention_items(
     runtime: &OrbitRuntime,
     workspace: &AttentionWorkspace,
@@ -46,14 +54,14 @@ pub(super) fn notice_attention_items(
     use crate::application::notice::{NoticeListFilter, NoticeStatusFilter};
     let listing = runtime.list_notices(&NoticeListFilter {
         status: NoticeStatusFilter::Open,
-        include_global: false,
+        include_global: true,
         all_workspaces: false,
         limit: None,
         ..NoticeListFilter::default()
     })?;
     let mut items = Vec::new();
     for notice in &listing.notices {
-        if notice.status != EffectiveStatus::Open || notice.workspace.id != workspace.id {
+        if notice.status != EffectiveStatus::Open {
             continue;
         }
         let severity = notice_attention_severity(notice, now);

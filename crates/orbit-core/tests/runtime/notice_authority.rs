@@ -1092,7 +1092,7 @@ fn attention_notice_config() -> String {
         .to_string()
 }
 
-fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
+fn attention_pages_home_notices() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let home_root = root.path().join("home-ws/.orbit");
@@ -1104,7 +1104,7 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     let home_id = home.workspace_id().unwrap().to_string();
     assert_ne!(home_id, other.workspace_id().unwrap().as_str());
 
-    // Within the fixed open-notice limits: 20 per workspace, 10 global per owner.
+    // Within the fixed open-notice limit of 20 per workspace.
     let mut home_notice_ids = Vec::new();
     for index in 0..11 {
         let posted = call(
@@ -1115,16 +1115,6 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
         )
         .unwrap();
         home_notice_ids.push(posted["notice"]["id"].as_str().unwrap().to_string());
-    }
-    for index in 0..10 {
-        call(
-            &other,
-            "orbit.notice.post",
-            json!({"kind": "incident", "title": format!("Foreign notice {index:02}"),
-                "scope": "global"}),
-            &operator,
-        )
-        .unwrap();
     }
 
     let query = |runtime: &OrbitRuntime, input: Value| {
@@ -1173,6 +1163,113 @@ fn attention_reads_all_home_notices_and_pages_them_without_foreign_globals() {
     assert_eq!(filtered["counts"]["matching"], 0);
     assert!(filtered["items"].as_array().unwrap().is_empty());
     assert!(filtered["degraded"].as_array().unwrap().is_empty());
+}
+
+/// A notice's home is the runtime's store partition, which a registered
+/// checkout can hold under an id other than its registry selector
+/// (`ws_orbit` against `orbit-5c61b3`). Attention must still list the
+/// workspace's own notices, and a global notice homed in another workspace
+/// on the same owner, once each.
+fn attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let bind = |name: &str, logical: &str| {
+        let orbit = root.path().join(format!("{name}/.orbit"));
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+        OrbitRuntime::from_roots_with_binding(
+            &global,
+            &orbit,
+            orbit_core::WorkspaceRuntimeBinding {
+                logical_workspace_id: logical.into(),
+                task_partition_id: format!("{}-5c61b3", logical.trim_start_matches("ws_")),
+                owner_machine_id: None,
+                checkout_role: None,
+                repo_root: root.path().join(name),
+                ship_mode: orbit_core::ShipMode::Local,
+                base_branch: Some("main".into()),
+            },
+        )
+        .unwrap()
+    };
+    let home = bind("home-ws", "ws_home");
+    let other = bind("other-ws", "ws_other");
+    let operator = session(McpCapability::Operator);
+    let home_store_id = home.workspace_id().unwrap();
+    assert_ne!(
+        home_store_id, "ws_home",
+        "the fixture needs a store id that differs from the registry selector"
+    );
+
+    let post = |runtime: &OrbitRuntime, input: Value| {
+        call(runtime, "orbit.notice.post", input, &operator).unwrap()["notice"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let scoped = post(&home, json!({"kind": "info", "title": "Home only"}));
+    let maintenance = post(
+        &home,
+        json!({"kind": "maintenance", "title": "Binary update", "scope": "global"}),
+    );
+    let closed = post(&home, json!({"kind": "info", "title": "Closed one"}));
+    call(
+        &home,
+        "orbit.notice.close",
+        json!({"id": closed, "reason": "done"}),
+        &operator,
+    )
+    .unwrap();
+
+    let ids_of = |runtime: &OrbitRuntime| -> Vec<(String, String, String)> {
+        let page = call(
+            runtime,
+            "orbit.attention",
+            json!({"kind": "notice_open", "severity": "low"}),
+            &operator,
+        )
+        .unwrap();
+        assert!(page["degraded"].as_array().unwrap().is_empty(), "{page}");
+        let mut found = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["refs"]["notice_id"].as_str().unwrap().to_string(),
+                    item["severity"].as_str().unwrap().to_string(),
+                    item["workspace"]["id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        found.sort();
+        found
+    };
+
+    // Home workspace: its own notice and the global one; severity follows
+    // the kind (maintenance medium, info low); the closed notice is absent.
+    let mut expected = vec![
+        (scoped.clone(), "low".to_string(), "ws_home".to_string()),
+        (
+            maintenance.clone(),
+            "medium".to_string(),
+            "ws_home".to_string(),
+        ),
+    ];
+    expected.sort();
+    assert_eq!(ids_of(&home), expected);
+
+    // A different workspace on the same owner sees the global notice, and
+    // not the home workspace's scoped one.
+    assert_eq!(
+        ids_of(&other),
+        vec![(
+            maintenance.clone(),
+            "medium".to_string(),
+            "ws_other".to_string()
+        )]
+    );
 }
 
 /// A notice in one workspace may link a task in another workspace the
@@ -1282,5 +1379,6 @@ crate::scenario_table!(
     close_preserves_corroboration_committed_after_close_read,
     linked_task_this_owner_does_not_hold_is_refused,
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
-    attention_reads_all_home_notices_and_pages_them_without_foreign_globals,
+    attention_pages_home_notices,
+    attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
 );
