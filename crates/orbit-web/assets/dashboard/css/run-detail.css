@@ -9,7 +9,7 @@
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
-  background: var(--bg-elev);
+  background: var(--bg-control);
   font-size: 13.5px;
 }
 .run-meta-grid .label {
