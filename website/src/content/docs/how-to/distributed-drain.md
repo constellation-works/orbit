@@ -166,8 +166,12 @@ ask your agent on the replica what went wrong: the `orbit-orchestrate` skill
 reads the run's evidence and names the cause.
 
 Nothing reclaims a stuck claim on its own. On the owner's dashboard, open the
-task and use **Recover claim → blocked** or **Recover claim → backlog**; both
-ask for a reason.
+task, choose a target status in the Recovery panel and use **Recover
+claim**. The picker offers only the statuses the task can move to from where it
+stands: `blocked` to diagnose, `backlog` to retry, or `review`, `done`,
+`archived`, `rejected` or `someday` where the task lifecycle allows them.
+`done` appears only when the task meets the normal completion rules. Recovery
+asks for a reason and a confirmation.
 
 ## Recover missing settlement evidence
 

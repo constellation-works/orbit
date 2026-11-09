@@ -210,7 +210,7 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
   landing. A bound remote run's absence from the owner's store proves nothing and is not a
   diagnostic. `since` is the inspection's last event time (`updated_at`). Advice says
   “possibly stale”; recovery is never called. `needs` uses exact tool keys `reason`,
-  `request_key`, `expected_phase`, and `status` (operator chooses blocked or backlog);
+  `request_key`, `expected_phase`, and `status` (operator chooses a lifecycle-valid status);
   the observed phase is exposed in `detail.phase`, not invented in the proposed input.
 - **Resume advice is conservative.** Failed-run advice suggests generic resume only when
   a pinned or catalog definition is readable, no claim bound the run, input does not carry

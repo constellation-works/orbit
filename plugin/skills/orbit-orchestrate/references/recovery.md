@@ -188,8 +188,15 @@ revocation is final. When exactly that handoff's PR merged into its landing
 branch outside Orbit, `orbit task settle-merged <task-id>` settles it: one
 owner store write ends the claim as `revoked` and moves the task to `done`.
 It is refused while an owner landing job still carries the handoff or a merge
-intent is unresolved. When the PR will not merge, recover the claim to
-`blocked` or `backlog` instead. The owner console's authority line names both
+intent is unresolved. When the PR will not merge, recover the claim instead,
+choosing any status the task lifecycle allows from `review` (`blocked`,
+`backlog`, `archived`, `rejected`, or `review` to keep it there). Recovering a
+handed-off claim to `done` is also one write, and keeps the ordinary
+completion gates: the task's execution summary, any owed post-deploy
+measurement and applied mutation proposals; a refused target names the rule.
+The dashboard's Recovery panel offers one **Recover claim** action with a
+status picker of exactly those targets, beside the required reason and a
+confirmation. The owner console's authority line names both
 steps. The command names the reason when the task
 does not settle. The settlement starts no work, so another task's claim on the
 same files does not refuse it. History records it as `external_merge_settled`, with a

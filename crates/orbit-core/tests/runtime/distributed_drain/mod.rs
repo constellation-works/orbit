@@ -66,6 +66,7 @@ mod browser_kit;
 mod cancel;
 mod candidate_carry;
 mod capacity_backoff;
+mod claim_recovery_target;
 #[cfg(unix)]
 mod claimed_held_pull_request;
 #[cfg(unix)]

@@ -212,6 +212,61 @@ pub(crate) fn ensure_status_change_allowed(
     }
 }
 
+/// Statuses a deliberate claim recovery may choose, before the lifecycle
+/// table narrows them to the task's current status. Recovery fences the
+/// claimed attempt, so it never leaves the task `in-progress` (no run would
+/// own it) and never returns it to `proposed`.
+const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
+    TaskStatus::Blocked,
+    TaskStatus::Backlog,
+    TaskStatus::Review,
+    TaskStatus::Done,
+    TaskStatus::Archived,
+    TaskStatus::Rejected,
+    TaskStatus::Someday,
+];
+
+/// The statuses a claim recovery may move `task` to: every recovery status
+/// the lifecycle table allows from the task's status, with `done` only when
+/// it would pass the ordinary completion gates now. Advisory for a picker:
+/// the guarded recovery stays the authority that accepts or refuses.
+pub(crate) fn claim_recovery_targets(runtime: &OrbitRuntime, task: &Task) -> Vec<TaskStatus> {
+    CLAIM_RECOVERY_STATUSES
+        .into_iter()
+        .filter(|target| task_status_transition_allowed(task.status, *target))
+        .filter(|target| {
+            *target != TaskStatus::Done
+                || ensure_claim_recovery_target(runtime, task, *target).is_ok()
+        })
+        .collect()
+}
+
+/// Refuse a claim recovery target the lifecycle does not allow from the
+/// task's status, naming the rule. A `done` target passes the same completion
+/// gates an ordinary completion does: the table (`done` only from `review`),
+/// completion evidence, owed post-deploy criteria, a stopped run and applied
+/// mutation proposals. Recovery never bypasses them.
+pub(crate) fn ensure_claim_recovery_target(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    target: TaskStatus,
+) -> Result<(), OrbitError> {
+    if !CLAIM_RECOVERY_STATUSES.contains(&target) {
+        return Err(refused(
+            &task.id,
+            task.status,
+            target,
+            "claim recovery fences the attempt, so it cannot leave the task 'in-progress' \
+             or return it to 'proposed'",
+        ));
+    }
+    ensure_status_change_allowed(runtime, task, &TaskUpdateParams::default(), target)?;
+    if target == TaskStatus::Done {
+        runtime.ensure_mutation_proposals_applied(task)?;
+    }
+    Ok(())
+}
+
 /// Every ordinary completion writer checks the same persisted measurement
 /// record under the task lock. A successful run or review cannot substitute
 /// for an operator's post-deploy result, including on a reused candidate.

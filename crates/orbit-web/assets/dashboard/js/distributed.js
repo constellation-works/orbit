@@ -831,6 +831,14 @@ const RECOVERY_GROUPS = [
 
 let reasonFieldSeq = 0;
 
+/// The statuses the owner says this claim's task may be recovered to. An
+/// owner that predates the list offered blocked and backlog, so those stay
+/// the fallback when the field is absent; an empty list means none is valid.
+function recoverTargets(claim) {
+  if (Array.isArray(claim.recover_targets)) return claim.recover_targets.filter((value) => typeof value === "string");
+  return ["blocked", "backlog"];
+}
+
 /// The owner actions, in one card apart from the task's own actions: approval
 /// first, then recovery — one reason field shared by every reason-gated
 /// action, and those actions grouped by what they act on.
@@ -893,16 +901,16 @@ function buildClaimActions(claim, capabilities, handlers) {
     });
   }
   if (claim.unsettled) {
+    const targets = recoverTargets(claim);
     offers.push({
       key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",
       onRun: (reason, status, requestId) => handlers.onRecover && handlers.onRecover(claim, reason, status, requestId),
       opts: {
         reasonRequired: true,
-        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
-        statusChoices: [
-          { value: "blocked", label: "Recover claim → blocked" },
-          { value: "backlog", label: "Recover claim → backlog" },
-        ],
+        blocked: claim.unresolved_merge_intent
+          ? MERGE_INTENT_BLOCK
+          : (targets.length === 0 ? "no status is valid for this task from where it stands" : null),
+        statusPicker: targets,
         confirm: (_reason, status) =>
           `Recover claim ${shortId(claim.claim_id)} for task ${claim.task_id}?\n\nThis fences the current attempt and moves the task to ${status}. Recovery is deliberate and cannot be undone.`,
       },
@@ -968,12 +976,27 @@ function buildClaimActions(claim, capabilities, handlers) {
       return;
     }
     const field = opts.reasonRequired && !opts.blocked ? input : null;
-    const choices = opts.statusChoices || [{ value: null, label: text }];
+    // A status picker offers only the targets the owner says are valid for
+    // this task; one button then acts on the chosen status.
+    let picker = null;
+    if (opts.statusPicker && opts.statusPicker.length > 0) {
+      picker = el("select", { class: "claim-status-picker" });
+      picker.setAttribute("aria-label", `${text}: target status`);
+      picker.setAttribute("data-status-for", key);
+      for (const status of opts.statusPicker) {
+        const option = el("option", { text: `→ ${status}` });
+        option.value = status;
+        picker.appendChild(option);
+      }
+      picker.disabled = !!opts.blocked;
+      controls.push({ node: picker, blocked: !!opts.blocked });
+      target.appendChild(picker);
+    }
+    const choices = [{ value: null, label: text }];
     for (const choice of choices) {
       const button = el("button", { class: `claim-action ${key}`, text: choice.label });
       button.type = "button";
       button.setAttribute("data-action", key);
-      if (choice.value) button.setAttribute("data-status", choice.value);
       const blocked = !!opts.blocked;
       button.disabled = blocked;
       controls.push({ node: button, blocked, text: choice.label });
@@ -990,12 +1013,13 @@ function buildClaimActions(claim, capabilities, handlers) {
           return;
         }
         clearProblem();
-        if (opts.confirm && !confirmed(opts.confirm(reason, choice.value))) return;
+        const status = picker ? picker.value : choice.value;
+        if (opts.confirm && !confirmed(opts.confirm(reason, status))) return;
         setBusy(true, button);
-        const requestId = requestIdFor(`${key}|${choice.value || ""}|${reason || ""}`);
+        const requestId = requestIdFor(`${key}|${status || ""}|${reason || ""}`);
         // An async wrapper: the request starts now, and a synchronous throw in
         // a handler still releases the card.
-        (async () => onRun(reason, choice.value, requestId))()
+        (async () => onRun(reason, status, requestId))()
           .catch(() => {})
           .then(() => setBusy(false));
       });

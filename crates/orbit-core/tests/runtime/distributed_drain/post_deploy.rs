@@ -171,6 +171,48 @@ fn a_claimed_handoff_owing_an_untyped_criterion_is_refused() {
     assert!(task.get("owed_criteria").is_none(), "{task}");
 }
 
+/// [ORB-23540] Recovering a handed-off claim to `done` keeps the ordinary
+/// completion gate: while the handoff owes a post-deploy criterion, the picker
+/// does not offer `done`, the recovery is refused naming the rule, and the
+/// claim and its task are left as they were.
+fn a_done_recovery_is_refused_while_a_post_deploy_criterion_is_owed() {
+    let pair = Pair::new(1);
+    assess(&pair, true);
+    let (settled, delivered, _) = hand_off_owing(&pair);
+    assert!(settled["error"].is_null(), "{settled}");
+    let owner = &pair.wire.owner;
+    assert_eq!(pair.owner_status(&delivered.task_id), "review");
+    let console = owner.distributed_claim_console().unwrap();
+    let targets = &console["claims"][0]["recover_targets"];
+    assert_eq!(
+        targets,
+        &json!(["blocked", "backlog", "review", "archived", "rejected"]),
+        "{console:#}"
+    );
+
+    let refused = owner
+        .recover_claim_as_operator(
+            &delivered.claim_id,
+            "handed_off",
+            orbit_types::task::TaskStatus::Done,
+            "operator",
+            "merged by hand",
+            "recover-done",
+        )
+        .expect_err("done while a post-deploy criterion is owed")
+        .to_string();
+
+    assert!(
+        refused.contains("completion requires an operator's post-deploy met record"),
+        "{refused}"
+    );
+    assert_eq!(pair.owner_status(&delivered.task_id), "review");
+    assert_eq!(
+        pair.owner_claim(&delivered.claim_id)["claim"]["phase"],
+        "handed_off"
+    );
+}
+
 /// A repair or replacement must honor the accepted history. Operator results
 /// are recorded after the original landing releases its claim; the automatic
 /// repair case keeps the original, still-unmeasured obligation.
@@ -307,5 +349,6 @@ crate::scenario_table!(
     a_claimed_handoff_owing_a_typed_criterion_lands_in_review_scenarios,
     a_claimed_handoff_owing_a_typed_criterion_lands_in_review,
     a_claimed_handoff_owing_an_untyped_criterion_is_refused,
+    a_done_recovery_is_refused_while_a_post_deploy_criterion_is_owed,
     a_repair_omitting_criteria_preserves_the_prior_operator_obligation
 );

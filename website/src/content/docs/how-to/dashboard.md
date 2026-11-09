@@ -368,8 +368,10 @@ state and the accepted handoff.
 
 - **approve** on a `review` task with a handed-off claim sends **Approve
   handoff** for the exact candidate shown.
-- **Revoke authority** and **Recover claim → blocked** / **Recover claim →
-  backlog** require a reason. With the field empty, they send nothing.
+- **Revoke authority** and **Recover claim** require a reason. With the
+  field empty, they send nothing. **Recover claim** moves the task to the status
+  chosen in its picker, which lists only the statuses the task can take from
+  where it stands.
 - A replica shows the claim as held by its owner and refuses all three
   actions.
 

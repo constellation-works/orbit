@@ -441,6 +441,19 @@ a.failure-id-link:focus-visible {
   min-width: 0;
 }
 .claim-reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The recover target picker sits before its one action button. */
+.claim-status-picker {
+  min-height: 30px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.claim-status-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.claim-status-picker:disabled { opacity: 0.5; cursor: not-allowed; }
 .claim-reason[aria-invalid="true"] { border-color: var(--danger-fg); }
 
 /* An unauthorized action is explained, not hidden: the operator learns

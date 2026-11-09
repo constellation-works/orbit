@@ -258,7 +258,7 @@ const TASK_HEALTH: &[GroupedRow] = &[
     ),
     (
         "recover-claim",
-        "Recover a live claim to blocked or backlog with an audited reason",
+        "Recover a live claim to a lifecycle-valid status with an audited reason",
     ),
     (
         "revoke-handoff",

@@ -1929,9 +1929,10 @@ out:
   and moves the task `review → done` with the usual landing note. The write grants
   no completion authority, records no merge intent or landing attempt, and leaves
   the revoked request revoked.
-- Otherwise, recover the claim to `blocked` or `backlog` from the dashboard's
-  claim panel, or with `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
-  (or `--status backlog`).
+- Otherwise, recover the claim from the dashboard's claim panel (**Recover
+  claim** with a target status: `blocked`, `backlog` or any other status the
+  task lifecycle allows), or with `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
+  (or another `--status`).
 
 Settlement is refused, with the reason, while an owner landing job still carries
 the handoff (its attempt is `dispatched`) or a merge intent is unresolved. It is

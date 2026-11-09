@@ -22,7 +22,7 @@ runs remain visible beyond the 48-hour failure window.
 a missing/terminal local bound run, unresolved merge intent or invalidated landing are
 diagnostics. A remote run missing locally proves nothing. Its recovery advice uses
 `orbit.task.recover` action `recover_claim`, with `claim_id` and `workspace` known; `needs` declares `reason`,
-`request_key`, `expected_phase` and `status` (blocked/backlog). Read `detail.phase` and inspect
+`request_key`, `expected_phase` and `status` (a status the task lifecycle allows, such as blocked or backlog). Read `detail.phase` and inspect
 the claim before supplying operator inputs. Attention never executes recovery, resume or
 cancellation. Generic resume advice preserves the action's ordinary admission guards.
 
