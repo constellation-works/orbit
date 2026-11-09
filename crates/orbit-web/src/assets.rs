@@ -222,11 +222,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/agents.js"),
     ),
     (
-        "/static/js/agents-orchestrators.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/agents-orchestrators.js"),
-    ),
-    (
         "/static/js/agents-reviewers.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents-reviewers.js"),
@@ -245,6 +240,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/agents-rank.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents-rank.js"),
+    ),
+    (
+        "/static/js/agents-rank-frontier.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank-frontier.js"),
+    ),
+    (
+        "/static/js/agents-rank-format.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank-format.js"),
     ),
     (
         "/static/js/scoreboard.js",

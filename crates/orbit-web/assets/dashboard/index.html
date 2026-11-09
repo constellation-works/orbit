@@ -664,22 +664,21 @@
            model, with who each problem counts against. The role tabs carry
            their ranked-row counts; js/agents.js renders every role. -->
       <nav class="subtabs view-tabs" id="agents-roles" aria-label="Agent roles">
-        <button class="subtab active" data-view="orchestrators" type="button">Orchestrators<span class="agents-role-count" id="agents-count-orchestrators"></span></button>
+        <button class="subtab active" data-view="rank" type="button">Rank<span class="agents-role-count" id="agents-count-rank"></span></button>
         <button class="subtab" data-view="implementers" type="button">Implementers<span class="agents-role-count" id="agents-count-implementers"></span></button>
         <button class="subtab" data-view="reviewers" type="button">Reviewers<span class="agents-role-count" id="agents-count-reviewers"></span></button>
         <button class="subtab" data-view="pilots" type="button">Pilots<span class="agents-role-count" id="agents-count-pilots"></span></button>
-        <button class="subtab" data-view="rank" type="button">Rank<span class="agents-role-count" id="agents-count-rank"></span></button>
       </nav>
       <main id="agents-main" style="grid-template-columns: minmax(0, 1fr);">
         <section class="panel" id="agents-panel">
           <header>
-            <span id="agents-title">Orchestrators</span>
+            <span id="agents-title">Rank</span>
             <span id="agents-rank-provisional" class="agents-provisional" hidden>Provisional</span>
             <span class="scoreboard-controls-meta agents-meta" id="agents-meta"></span>
             <span class="count" id="agents-count">—</span>
           </header>
           <div class="scoreboard-controls agents-controls" id="agents-controls">
-            <div class="scoreboard-control-group" id="agents-window-control">
+            <div class="scoreboard-control-group" id="agents-window-control" hidden>
               <span class="scoreboard-control-label">window</span>
               <div class="scoreboard-window-selector" id="agents-window-selector" data-fallback-window="last500" role="tablist" aria-label="Agent scorecard window">
                 <button type="button" role="tab" class="scoreboard-window-seg on" data-window="last500" aria-selected="true" tabindex="0" title="The newest 500 delivery attempts, whatever their age">Last 500</button>
@@ -688,7 +687,7 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
               </div>
             </div>
-            <div class="scoreboard-control-group" id="agents-rank-window-control" hidden>
+            <div class="scoreboard-control-group" id="agents-rank-window-control">
               <span class="scoreboard-control-label">window</span>
               <div class="scoreboard-window-selector" id="agents-rank-window-selector" data-fallback-window="30d" role="tablist" aria-label="Model ranking window">
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
@@ -697,14 +696,14 @@
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1" title="The longest window the ranking serves, 90 days">All</button>
               </div>
             </div>
-            <div class="scoreboard-control-group" id="agents-settle-control" hidden>
+            <div class="scoreboard-control-group" id="agents-settle-control">
               <span class="scoreboard-control-label">board</span>
               <div class="scoreboard-window-selector" id="agents-settle-selector" role="tablist" aria-label="Settled or live ranking">
                 <button type="button" role="tab" class="scoreboard-window-seg on" data-settle="settled" aria-selected="true" tabindex="0" title="Ends the window at the settle lag so escaped regressions have had time to arrive">Settled</button>
                 <button type="button" role="tab" class="scoreboard-window-seg" data-settle="live" aria-selected="false" tabindex="-1" title="Ends the window now. Provisional: escaped regressions have not had time to arrive">Live</button>
               </div>
             </div>
-            <div class="scoreboard-control-group" id="agents-execution-control" hidden>
+            <div class="scoreboard-control-group" id="agents-execution-control">
               <span class="scoreboard-control-label">execution</span>
               <div class="scoreboard-window-selector" id="agents-execution-selector" role="tablist" aria-label="Implementer tasks counted by execution">
                 <button type="button" role="tab" class="scoreboard-window-seg on" data-execution="managed" aria-selected="true" tabindex="0" title="Tasks a job worked: the default, and the only ones with cost and run time">Managed</button>
