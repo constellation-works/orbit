@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::executor::automation::vcs::RecoveryCommitRefusal;
-use crate::executor::automation::vcs::git::git_output;
+use crate::executor::automation::vcs::git::{git_output, git_output_paths};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,13 +71,38 @@ pub(super) enum CheckScopeBind {
 }
 
 /// Whether the worktree holds a delivery edit outside `.orbit/` scratch.
+///
+/// Uses the NUL-delimited porcelain form through [`git_output_paths`]:
+/// trimmed line output would eat the first status column of a single-line
+/// result (` M x` becomes `M x`), misaligning the path offset and hiding
+/// a one-character path. A rename or copy record carries its source as
+/// the following NUL field; both sides count as delivery paths.
 fn worktree_has_delivery_edit(root: &Path) -> Result<bool, RecoveryCommitRefusal> {
-    let status = git_output(root, &["status", "--porcelain"]).map_err(refused)?;
-    Ok(status.lines().any(|line| {
-        let path = line.get(3..).unwrap_or_default();
-        let path = path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"');
-        !path.is_empty() && path != ".orbit" && !path.starts_with(".orbit/")
-    }))
+    let fields = git_output_paths(
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    .map_err(refused)?;
+    let is_delivery =
+        |path: &str| !path.is_empty() && path != ".orbit" && !path.starts_with(".orbit/");
+    let mut fields = fields.iter();
+    while let Some(entry) = fields.next() {
+        let mut codes = entry.chars();
+        let (Some(index_state), Some(_worktree_state)) = (codes.next(), codes.next()) else {
+            continue;
+        };
+        // `XY ` is always three ASCII bytes, so byte 3 is a char boundary.
+        if is_delivery(entry.get(3..).unwrap_or_default()) {
+            return Ok(true);
+        }
+        if matches!(index_state, 'R' | 'C')
+            && let Some(source) = fields.next()
+            && is_delivery(source)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Require a host admission for this exact run/head, then bind explanations.
