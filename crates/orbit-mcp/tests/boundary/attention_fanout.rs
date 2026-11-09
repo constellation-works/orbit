@@ -21,6 +21,7 @@ const FOLLOWER_MACHINE: &str = "hm_follower";
 #[derive(Clone)]
 enum Behaviour {
     Answer(Value),
+    SelectorRefusal { remote: bool },
     Down,
     AnswersAs(&'static str),
     WithoutAttention,
@@ -122,6 +123,18 @@ impl RoutedSession for Route {
             .push((self.machine_id.clone(), arguments));
         match &self.behaviour {
             Behaviour::Answer(body) => Ok(body.clone()),
+            Behaviour::SelectorRefusal { remote } => {
+                let message = "tool 'orbit.attention' requires an explicit workspace selector";
+                if *remote {
+                    Err(OrbitError::RemoteTool {
+                        code: "invalid_input".into(),
+                        message: message.into(),
+                        payload: json!({"code": "invalid_input", "message": message}),
+                    })
+                } else {
+                    Err(OrbitError::InvalidInput(message.into()))
+                }
+            }
             _ => unreachable!("only answering destinations are called"),
         }
     }
@@ -298,6 +311,37 @@ fn unreadable_destinations_become_items_within_the_budget() {
         response["items"][0]["detail"]["cause"],
         "unreachable_destination"
     );
+}
+
+#[test]
+fn selector_refusals_are_distinct_from_unreachable_attention_destinations() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    for remote in [false, true] {
+        fleet.set(OWNER_MACHINE, Behaviour::SelectorRefusal { remote });
+        let response = attention(&mux(&fleet, Duration::from_secs(20)), json!({}));
+        assert_eq!(
+            response["hosts"][0]["reachability"], "reachable",
+            "{response}"
+        );
+        assert_eq!(
+            response["hosts"][1]["reachability"], "reachable",
+            "{response}"
+        );
+        assert_eq!(kinds(&response), ["host_unhealthy"], "{response}");
+        assert_eq!(
+            response["items"][0]["detail"]["cause"], "attention_read_refused",
+            "{response}"
+        );
+        assert_eq!(
+            response["degraded"][0]["code"], "attention_read_refused",
+            "{response}"
+        );
+        let reason = response["items"][0]["reason"].as_str().unwrap();
+        assert!(reason.contains("attention read refused"), "{response}");
+        assert!(reason.contains("workspace selector"), "{response}");
+        assert!(!reason.contains("unreachable"), "{response}");
+    }
 }
 
 fn session_on_follower() -> ToolSessionContext {

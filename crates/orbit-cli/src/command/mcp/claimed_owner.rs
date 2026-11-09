@@ -16,7 +16,7 @@ use orbit_core::adapter::command::{
 };
 use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::tool::{McpToolDefinition, ToolSessionContext, tool_family_operation_call};
 use serde_json::Value;
 
 /// Wraps a worker's MCP host with the claimed-owner route.
@@ -82,9 +82,12 @@ impl McpHost for ClaimedOwnerBridge {
                     // transport failures here, with this MCP session's caller
                     // and call identity; a broker response already owns its
                     // audit row and is returned above without a duplicate.
+                    // Audit rows record the operation a family action runs,
+                    // as the CLI's refusal does [ORB-23280].
+                    let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
                         &self.global_root,
-                        name,
+                        &operation,
                         input,
                         ToolEntryPoint::Mcp,
                         session_context,
