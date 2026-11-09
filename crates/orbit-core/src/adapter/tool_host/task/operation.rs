@@ -685,7 +685,25 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
             "`run_id` selects a delivery run and requires `field: \"{TASK_SHOW_DELIVERY_FIELD}\"`"
         )));
     }
-    let task = runtime.get_task(&id)?;
+    let task = match runtime.get_task(&id) {
+        Ok(task) => task,
+        Err(error) => {
+            // A full bundle read verifies every artifact before projection. A
+            // broken pilot artifact must still allow its proposed task's
+            // readout, using the same lightweight records as task list.
+            let task = runtime.list_tasks()?.into_iter().find(|task| task.id == id);
+            let Some(task) = task else { return Err(error) };
+            let comments = runtime.get_task_comments(&id)?;
+            let unavailable = runtime
+                .task_pilot_warning_findings(&task, &comments, &|_| false)
+                .iter()
+                .any(|finding| finding.kind == "pilot_assessment_unavailable");
+            if !unavailable {
+                return Err(error);
+            }
+            task
+        }
+    };
     match fields {
         Some(fields) => {
             let projected = task_fields_to_json(runtime, &task, &fields)?;
