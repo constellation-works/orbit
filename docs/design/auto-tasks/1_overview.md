@@ -134,6 +134,7 @@ missing file as `enabled: false`, except `host-health`, which it writes enabled;
 re-init does not overwrite a workspace-authored definition of the same name.
 
 - `qa-sweep` — hands-on validation of recent changes (ORB-10148, embedded by ORB-10550).
+- `model-ranking-snapshot` — disabled-by-default weekly freeze of the settled agent ranking, attaching its immutable, recomputable snapshot and a comparison with the implementer board and weekly MVP (ORB-23305).
 - `host-health` — enabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps.
 - `friction-curation` — disabled-by-default daily evidence-first pass that deduplicates open
   friction records, re-verifies survivors against current behavior, resolves
