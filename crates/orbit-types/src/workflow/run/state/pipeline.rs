@@ -56,6 +56,17 @@ impl CrewEnvUnset {
 /// request [ORB-14849]; its output's `applies` says whether that review runs.
 const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
 
+/// A successful indexed checkpoint checked against its named pipeline entry.
+/// This borrowed read result is not part of the persisted checkpoint format.
+pub enum SuccessfulCheckpoint<'a> {
+    /// Successful indexed output, with an equal or absent named entry.
+    Recorded(&'a Value),
+    /// The step has no successful state or no readable indexed output.
+    Absent,
+    /// Successful indexed output disagrees with the named pipeline entry.
+    Inconsistent,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -520,6 +531,27 @@ impl PipelineState {
                 .get(&step_index)
                 .and_then(|pointer| self.pipeline.pointer(pointer))
         })
+    }
+
+    /// Read successful indexed output whose named pipeline entry agrees when
+    /// present. Callers bind the index/id to a resolved action and decide
+    /// whether a missing named entry is admissible. This does not authenticate
+    /// inherited checkpoint pointers or parent-run ownership.
+    pub fn successful_checkpoint(
+        &self,
+        step_index: u32,
+        step_id: &str,
+    ) -> SuccessfulCheckpoint<'_> {
+        if self.step_states.get(&step_index) != Some(&JobRunState::Success) {
+            return SuccessfulCheckpoint::Absent;
+        }
+        let Some(output) = self.step_output(step_index) else {
+            return SuccessfulCheckpoint::Absent;
+        };
+        match self.pipeline.get(step_id) {
+            Some(entry) if entry != output => SuccessfulCheckpoint::Inconsistent,
+            _ => SuccessfulCheckpoint::Recorded(output),
+        }
     }
 
     /// The output the step named `step_id` checkpointed into `pipeline`.
