@@ -228,11 +228,38 @@ pub(crate) fn heal_auto_task_catalog(
     orbit_root: &Path,
     write: bool,
 ) -> Result<Vec<ToolNameRewrite>, OrbitError> {
+    heal_auto_task_catalog_with_fork_policy(orbit_root, write, false)
+}
+
+/// Rewrite pre-family names during workspace sync while preserving edits to a
+/// tracked definition. Upgrade and load paths use `heal_auto_task_catalog`
+/// and still migrate every stored definition, including forks.
+pub(crate) fn heal_workspace_sync_auto_task_catalog(
+    orbit_root: &Path,
+    write: bool,
+) -> Result<Vec<ToolNameRewrite>, OrbitError> {
+    heal_auto_task_catalog_with_fork_policy(orbit_root, write, true)
+}
+
+fn heal_auto_task_catalog_with_fork_policy(
+    orbit_root: &Path,
+    write: bool,
+    preserve_managed_forks: bool,
+) -> Result<Vec<ToolNameRewrite>, OrbitError> {
     let dir = auto_tasks_dir(orbit_root);
     match fs::symlink_metadata(&dir) {
         Ok(metadata) if metadata.file_type().is_dir() => {}
         _ => return Ok(Vec::new()),
     }
+    let manifest = if preserve_managed_forks {
+        load_managed_asset_manifest(
+            &dir.join(MANAGED_ASSET_MANIFEST_FILE),
+            AUTO_TASK_ASSET_KIND,
+            ManagedAssetLayout::YamlStem,
+        )?
+    } else {
+        None
+    };
     let mut paths = fs::read_dir(&dir)
         .map_err(|error| {
             OrbitError::io_with_context(&error, format!("read {}: {error}", dir.display()))
@@ -248,6 +275,21 @@ pub(crate) fn heal_auto_task_catalog(
     paths.sort();
     let mut rewrites = Vec::new();
     for path in paths {
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let is_modified_managed_asset = manifest
+            .as_ref()
+            .and_then(|manifest| manifest.assets.get(name))
+            .is_some_and(|expected_digest| {
+                fs::read(&path)
+                    .ok()
+                    .is_some_and(|raw| sha256_hex(&raw) != *expected_digest)
+            });
+        if is_modified_managed_asset {
+            continue;
+        }
         match heal_auto_task_definition_file(&dir, &path, write) {
             Ok(Some(rewrite)) => rewrites.push(rewrite),
             Ok(None) => {}

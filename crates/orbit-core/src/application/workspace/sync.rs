@@ -26,7 +26,7 @@ use crate::application::routines::materialize::reconcile_default_routines_for_po
 use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::seeding_policy::{seeded_defaults, workspace_seeding_policies};
 use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
-use crate::application::tool_name_migration::heal_auto_task_catalog;
+use crate::application::tool_name_migration::heal_workspace_sync_auto_task_catalog;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -256,7 +256,7 @@ fn reconcile_managed_artifacts(
         let renamed_tools = if mode.creates_only() {
             Vec::new()
         } else {
-            heal_auto_task_catalog(workspace_orbit_root, mode.writes())?
+            heal_workspace_sync_auto_task_catalog(workspace_orbit_root, mode.writes())?
         };
         let migrated = if mode.creates_only() {
             Vec::new()
@@ -306,15 +306,27 @@ fn reconcile_managed_artifacts(
                 .iter()
                 .any(|action| action.detail.as_ref() == Some(warning))
         });
+        let reported_names = kept
+            .iter()
+            .chain(&migrated)
+            .chain(&replaced.actions)
+            .chain(&released.actions)
+            .map(|action| action.name.clone())
+            .collect::<BTreeSet<_>>();
         kept.extend(migrated);
         kept.extend(replaced.actions);
         kept.extend(released.actions);
-        kept.extend(renamed_tools.into_iter().map(|rewrite| ManagedAssetAction {
-            detail: Some(rewrite.describe()),
-            name: rewrite.name,
-            path: rewrite.path,
-            outcome: ManagedAssetOutcome::Migrated,
-        }));
+        kept.extend(
+            renamed_tools
+                .into_iter()
+                .filter(|rewrite| !reported_names.contains(&rewrite.name))
+                .map(|rewrite| ManagedAssetAction {
+                    detail: Some(rewrite.describe()),
+                    name: rewrite.name,
+                    path: rewrite.path,
+                    outcome: ManagedAssetOutcome::Migrated,
+                }),
+        );
         auto_tasks.actions = kept;
         auto_tasks.warnings.extend(replaced.warnings);
         auto_tasks.warnings.extend(released.warnings);
