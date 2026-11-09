@@ -585,12 +585,22 @@ fn a_confined_callback_to_another_local_workspace_is_refused_before_store_open()
         environment_mode: EnvironmentMode::ClearAndSet(environment.into_iter().collect()),
         debug: false,
     };
+    // The product markers above the roots are granted as the plugin sandbox
+    // grants them, so the refusal under test is the workspace policy's and not
+    // a marker read the boundary happens to deny (a fixture under another
+    // Orbit tree, as in a managed worktree lane) [ORB-23682].
+    let mut read = vec![
+        fixture.root.clone(),
+        fixture.base.work.clone(),
+        other.clone(),
+    ];
+    read.extend(orbit_tools::plugin::orbit_product_markers_above_roots([
+        fixture.root.clone(),
+        fixture.base.work.join(".orbit"),
+        other.join(".orbit"),
+    ]));
     let boundary = LandlockBoundary {
-        read: vec![
-            fixture.root.clone(),
-            fixture.base.work.clone(),
-            other.clone(),
-        ],
+        read,
         read_denies: vec![other.join(".orbit")],
         write: vec![fixture.root.clone(), fixture.base.work.join(".orbit")],
         ..Default::default()

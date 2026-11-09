@@ -172,6 +172,20 @@ impl PluginBackendSpec {
                 }
                 read.push(workspace_orbit);
             }
+            // Before it opens anything, the nested `orbit` reads the product
+            // marker in every physical ancestor of its roots. An ancestor
+            // outside the read roots above — an Orbit root nested under
+            // another Orbit tree, such as a managed worktree inside its
+            // repository's `.orbit/state/worktrees/` — would otherwise refuse
+            // the callback with EACCES. Each marker that exists is granted as
+            // a single file; its directory stays unreadable.
+            let marker_bases = std::iter::once(self.global_root.clone())
+                .chain(workspace_root.map(|root| root.join(".orbit")));
+            for marker in orbit_product_markers_above_roots(marker_bases) {
+                if !read.contains(&marker) {
+                    read.push(marker);
+                }
+            }
         }
         write.extend(host_write_dirs.iter().cloned());
         // Each declared program at the path the operator consented to, read

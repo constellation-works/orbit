@@ -317,7 +317,24 @@ fn unbound_plugin_completion_callbacks_run_in_the_backend_sandbox() {
     ) {
         return;
     }
-    let fixture = Fixture::new();
+    run_unbound_completion_callback(&Fixture::new());
+}
+
+/// Regression [ORB-23682]: a confined callback's nested `orbit` reads the
+/// product marker in every ancestor of its roots, and a marker above the
+/// granted read roots (an Orbit home inside another Orbit tree, as in a
+/// managed worktree lane) refused the callback with `storage_access_denied`.
+#[test]
+fn plugin_callbacks_run_for_an_orbit_root_nested_under_a_marked_ancestor() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "plugin_callbacks_run_for_an_orbit_root_nested_under_a_marked_ancestor",
+    ) {
+        return;
+    }
+    run_unbound_completion_callback(&Fixture::nested_under_orbit_root());
+}
+
+fn run_unbound_completion_callback(fixture: &Fixture) {
     let task = fixture.json([
         "task",
         "add",

@@ -900,7 +900,12 @@ explicitly (`ToolCaller`). The kind is never inferred from an empty or missing
 
 **The `orbit_tools` inventory.** A callback *is* `orbit tool run`, which needs `config.toml`,
 the recorded install and `workspaces.json`, so the global root and the workspace `.orbit/`
-become **readable**. Writable is a named inventory, never the roots:
+become **readable**. Before it opens state, the nested `orbit` also reads the product marker
+(`.orbit-product`) in every physical ancestor of those roots, so each such marker that exists
+as a regular file is granted read as a single file and its directory stays unreadable. An
+Orbit root nested under another Orbit tree (a managed worktree inside its repository's
+`.orbit/state/worktrees/`) otherwise refuses every callback with `storage_access_denied`.
+Writable is a named inventory, never the roots:
 
 - directories `state/logs`, `state/audit`, `tasks` under the global root, and `tasks`,
   `frictions`, `state/audit`, `state/logs`, `state/job-runs` under the workspace `.orbit/`;
