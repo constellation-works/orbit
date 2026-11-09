@@ -249,6 +249,20 @@
   font-weight: 600;
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
+.rail-host .host-picker-control { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; }
+.rail-host .host-serving-badge {
+  flex: none;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-control);
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
 
 /* The rail's foot, pinned below the destinations: the host block, then the
    last refresh time (the destination rides in its title and accessible
