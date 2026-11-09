@@ -111,6 +111,7 @@ implementation with the old candidate discarded. See
 |---|---|
 | Correct course while a task is running | [Mid-run steering](#mid-run-steering) |
 | Prepare/promote work and supervise progress | [Operating loop](references/loop.md) |
+| Compare implementer models when selecting a crew | [Model ranking](references/model-ranking.md) |
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
