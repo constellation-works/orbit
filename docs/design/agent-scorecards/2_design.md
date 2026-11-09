@@ -670,7 +670,7 @@ The deprecated `orbit orchestrator scorecard|show` command and `orbit.orchestrat
 
 **Current.**
 
-One `AgentFacts` scan per workspace serves all four roles and the attribution strip. It reads:
+One `AgentFacts` scan per workspace serves all three roles and the attribution strip. It reads:
 - every task created or updated in the last 90 days, with its history and comments;
 - the implementation job runs (owned and claimed PR and local delivery) active in that time, matched to the tasks their input names, read without their steps;
 - the review gate's settlement and escalation comments, and, for each judged `reject`, the cited paths' blobs in the rejected and next reviewed candidates, read from the workspace repository without fetching;
