@@ -118,7 +118,7 @@ pub(super) fn role_header(
     payload["effort_breakdown"] = json!(orbit_store::contracts::agent_effort_usage(
         facts
             .invocations
-            .iter()
+            .iter_invocations()
             .filter(|fact| window.admits(fact.ts))
     ));
     payload["effort_population"] = json!("completed_workspace_invocations");
@@ -433,8 +433,8 @@ fn row_effort_breakdown(
     _effort: &super::effort::RecordedEffort,
 ) -> Value {
     let crew = crews.first().map(String::as_str).unwrap_or_default();
-    let rows =
-        orbit_store::contracts::agent_effort_usage(facts.invocations.iter().filter(|fact| {
+    let rows = orbit_store::contracts::agent_effort_usage(
+        facts.invocations.iter_invocations().filter(|fact| {
             window.admits(fact.ts)
                 && fact
                     .execution
@@ -456,7 +456,8 @@ fn row_effort_breakdown(
                         .as_deref()
                         .is_some_and(|id| id.contains("pilot")),
                 }
-        }));
+        }),
+    );
     if rows.is_empty() {
         json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "no_dispatch_evidence"}])
     } else {
