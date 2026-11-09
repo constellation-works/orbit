@@ -941,8 +941,9 @@ Behavior notes:
 
 - The whole failure set must be logged infrastructure/transient. Any
 candidate failure excludes the set, including a candidate sibling beside a
-transient failure. Flaky failures and conclusion-only cancellation or timeout
-sets keep their existing single rerun rather than this budget.
+transient failure. Flaky failures, conclusion-only cancellation or timeout
+sets, and a failure whose log is only a ci-await timeout keep their existing
+single rerun rather than this budget.
 - Reservations are durable per head across restarts and workflow runs,
 including unknown send outcomes; an unchanged provider attempt is never
 resent. A new head gets its own budget.

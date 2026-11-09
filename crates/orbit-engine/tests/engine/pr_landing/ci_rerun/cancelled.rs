@@ -6,6 +6,13 @@ lint\tWait\tci-await: test concluded cancelled: https://github.com/orbit/test/ac
 lint\tWait\tci-await-api: listings=1 not_modified=0 paginated=false
 ";
 
+/// A waiter that timed out itself. No awaited job concluded `cancelled` or
+/// `timed_out`, so this log is the set's only root.
+const AWAIT_TIMEOUT: &str = "\
+lint\tWait\tci-await: timed out after 2400 s waiting for test (in_progress)
+lint\tWait\tci-await-api: listings=1 not_modified=0 paginated=false
+";
+
 fn patch_config(fx: &Fixture, edit: impl FnOnce(&mut Value)) {
     let path = fx.forge.join("retry-config.json");
     let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -164,6 +171,58 @@ fn exhausted_cancel_budget_names_the_jobs_and_skips_auto_fix() {
                     .any(|entry| entry.event == "ci_check_rerun_exhausted"),
                 "{:?}",
                 host.history(TASK_ID)
+            );
+        },
+    );
+}
+
+#[test]
+fn ci_await_timeout_only_set_uses_one_rerun_then_names_the_job() {
+    isolated(
+        "ci_rerun::cancelled::ci_await_timeout_only_set_uses_one_rerun_then_names_the_job",
+        |sandbox| {
+            let (fx, host, _) = fixture(sandbox);
+            // The configured infrastructure budget is 3. This set must not use it.
+            locked(&host.pr_config).ci_infrastructure_retry.max_attempts = 3;
+            patch_config(&fx, |config| {
+                config["conclusions"] =
+                    json!({"test": "success", "lint": "failure", "independent": "success"});
+                config["run_override"] = json!({"conclusion": "failure"});
+            });
+            fs::write(fx.forge.join("retry-log-1001"), AWAIT_TIMEOUT).unwrap();
+            // The rerun is a new attempt; the waiter keeps the same timeout log.
+            fs::write(fx.forge.join("retry-log-1011"), AWAIT_TIMEOUT).unwrap();
+            let error = complete_auto_fix(&fx, &host).expect_err("the spent single rerun stops");
+            assert_eq!(
+                fx.forge_lines("retry-sends"),
+                vec!["run rerun 700 --failed".to_string()]
+            );
+            assert_no_auto_fix(&host);
+            let message = error.to_string();
+            assert!(
+                message.contains("required CI jobs keep cancelling or timing out:"),
+                "a ci-await timeout with no stopped job keeps the one shared rerun: {message}"
+            );
+            assert!(
+                message.contains("CI / lint"),
+                "the stop names the waiter: {message}"
+            );
+            assert!(
+                !message.contains("ci_infrastructure_retry_exhausted"),
+                "this set does not spend the infrastructure budget: {message}"
+            );
+            let history = host.history(TASK_ID);
+            assert!(
+                history
+                    .iter()
+                    .any(|entry| entry.event == "ci_check_rerun_exhausted"),
+                "exhaustion is the keep-cancelling stop: {history:?}"
+            );
+            assert!(
+                history
+                    .iter()
+                    .all(|entry| entry.event != "ci_infrastructure_retry_exhausted"),
+                "no infrastructure hold: {history:?}"
             );
         },
     );

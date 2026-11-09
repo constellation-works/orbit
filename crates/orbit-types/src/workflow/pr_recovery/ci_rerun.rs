@@ -42,7 +42,8 @@ pub struct CiRerunPlan {
 }
 
 /// Owner-configured budget for logged infrastructure/transient failures.
-/// Conclusion-only cancellations/timeouts and flaky failures retain one rerun.
+/// Conclusion-only cancellations/timeouts, a failure whose log is only a
+/// `ci-await` timeout, and flaky failures retain one rerun.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CiInfrastructureRetryPolicy {
     pub max_attempts: u32,
@@ -58,13 +59,24 @@ impl Default for CiInfrastructureRetryPolicy {
     }
 }
 
+/// Normalized prefix of a failure log that is only a `ci-await` timeout.
+/// The adapter still authenticates that log line; it is not a `concluded `
+/// signature, and it stays on the one shared rerun.
+const CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX: &str = "ci-await: timed out";
+
 /// A logged transient set can use the infrastructure budget. A candidate or
-/// flaky sibling, or a conclusion-only stop, cannot expand its authorization.
+/// flaky sibling, a conclusion-only stop, or a pure `ci-await` timeout cannot
+/// expand its authorization.
 pub fn ci_rerun_is_infrastructure(plan: &CiRerunPlan) -> bool {
     !plan.roots.is_empty()
         && plan.roots.iter().all(|root| {
-            root.classification == "transient" && !root.signature.starts_with("concluded ")
+            root.classification == "transient" && !signature_keeps_single_rerun(&root.signature)
         })
+}
+
+/// A provider conclusion, or a log whose only signal is a `ci-await` timeout.
+fn signature_keeps_single_rerun(signature: &str) -> bool {
+    signature.starts_with("concluded ") || signature.starts_with(CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX)
 }
 
 /// Admission is atomic under the owning task/claim boundary.
@@ -180,8 +192,9 @@ pub fn decide_ci_rerun_with_policy(
     }
     if let Some((prior, _)) = reserved.last() {
         if !ci_rerun_is_infrastructure(plan) {
-            // Flaky and conclusion-only failures retain the shared one-rerun
-            // contract: observe its reservation even on a later attempt.
+            // Flaky failures, conclusion-only stops and a pure ci-await timeout
+            // retain the shared one-rerun contract: observe its reservation
+            // even on a later attempt.
             return CiRerunAdmission::Observe(Box::new(prior.clone()));
         }
         let attempts = u32::try_from(reserved.len()).unwrap_or(u32::MAX);
