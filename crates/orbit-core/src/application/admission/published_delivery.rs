@@ -57,9 +57,12 @@ const DEFAULT_FOOTPRINT_WAIT_SECONDS: u64 = 3600;
 /// gate's own default poll interval.
 const DEFAULT_FOOTPRINT_POLL_SECONDS: u64 = 30;
 
-/// The leaf's footprint reservation lasts as long as a reservation may; the
-/// run's terminal cleanup releases it sooner.
-const FOOTPRINT_TTL_SECONDS: u32 = 14400;
+/// The leaf's footprint reservation covers the longest edit it may protect:
+/// the gate's child dispatch wait in `task_gate_pipeline.yaml` (the 12h
+/// workspace implementation override plus a 1h delivery/review tail), so a
+/// resumed run editing past 4h never loses its files mid-activity [ORB-23568];
+/// the run's terminal cleanup releases it sooner.
+const FOOTPRINT_TTL_SECONDS: u32 = 46800;
 
 /// The decision-only activity that edits nothing, so never waits on locks.
 const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";

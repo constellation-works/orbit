@@ -532,6 +532,88 @@ fn proposed_pickup_preserves_typed_store_error_when_start_write_fails_after_appr
     );
 }
 
+/// The deferred footprint a resumed published delivery takes before its first
+/// edit must outlive the whole resolved edit budget [ORB-23568]: the shipped
+/// 6h implement default and 12h `workflow.activity_timeouts` overrides, which
+/// the gate's 13h child dispatch wait already covers. At 4h a resumed run
+/// editing past its fourth hour lost its files mid-activity while the gate
+/// still considered the child live, so another task could reserve and edit
+/// the same footprint concurrently.
+#[test]
+fn deferred_footprint_reservation_outlives_the_resolved_edit_budget() {
+    const TEST: &str = "dispatch_admission::reservation_grants::deferred_footprint_reservation_outlives_the_resolved_edit_budget";
+    if !isolated(TEST) {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+    let task = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let run = running_run(
+        &runtime,
+        "task_pr_pipeline",
+        json!({"task_ids": [task.id], "footprint_deferred": true, "footprint_wait_seconds": 0}),
+    );
+    runtime
+        .acquire_deferred_footprint(&run, "agent_implement")
+        .expect("the leaf takes its deferred footprint through the dispatch boundary");
+    let locks = as_operator(&runtime, "orbit.task.locks", json!({}));
+    let reservation = locks["by_reservation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["owner_run_id"] == run)
+        .unwrap_or_else(|| panic!("the leaf holds a file reservation: {locks}"));
+    assert_eq!(
+        reservation["files"],
+        json!(["file:shared.txt"]),
+        "{reservation}"
+    );
+    // The bounds the TTL must cover, read from the shipped declarations the
+    // gate already uses — never a copy of the constant under test.
+    let activity: serde_yaml::Value = serde_yaml::from_str(include_str!(
+        "../../../assets/activities/agent_implement.yaml"
+    ))
+    .expect("shipped implementation activity");
+    let shipped = activity["spec"]["wall_clock_timeout_seconds"]
+        .as_u64()
+        .expect("declared implement timeout");
+    let gate: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../../assets/jobs/task_gate_pipeline.yaml"))
+            .expect("shipped gate pipeline");
+    let gate_wait = gate["spec"]["default_input"]["dispatch_timeout_seconds"]
+        .as_u64()
+        .expect("declared gate child wait");
+    let created: DateTime<Utc> = reservation["created_at"]
+        .as_str()
+        .expect("reservation creation time")
+        .parse()
+        .expect("rfc3339 creation time");
+    let expires: DateTime<Utc> = reservation["expires_at"]
+        .as_str()
+        .expect("reservation expiry time")
+        .parse()
+        .expect("rfc3339 expiry time");
+    let ttl = expires - created;
+    assert!(
+        ttl >= chrono::Duration::seconds(shipped as i64),
+        "ORB-23568: the deferred footprint must outlive the shipped {shipped}s implement budget, got {ttl}: {reservation}"
+    );
+    assert!(
+        ttl >= chrono::Duration::seconds(43200),
+        "ORB-23568: the deferred footprint must outlive the 43200s workflow.activity_timeouts maximum, got {ttl}: {reservation}"
+    );
+    assert!(
+        ttl >= chrono::Duration::seconds(gate_wait as i64 - 60),
+        "ORB-23568: the deferred footprint must cover the gate's {gate_wait}s child dispatch wait, got {ttl}: {reservation}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     no_diff_grants_check_frozen_claims_after_reservation_expiry_scenarios,
