@@ -48,3 +48,8 @@ export function num(value, digits = 2) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
+
+export function dollars(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `$${value.toFixed(2)}`;
+}
