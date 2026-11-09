@@ -61,12 +61,7 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         _ if name.starts_with("orbit.experiment.") || name.starts_with("orbit.memory.") => {
             T::Experiments
         }
-        _ if name.starts_with("orbit.agents.")
-            || name.starts_with("orbit.crew.")
-            || name.starts_with("orbit.orchestrator.") =>
-        {
-            T::Analytics
-        }
+        _ if name.starts_with("orbit.agents.") || name.starts_with("orbit.crew.") => T::Analytics,
         _ => return None,
     };
     Some(toolset)
