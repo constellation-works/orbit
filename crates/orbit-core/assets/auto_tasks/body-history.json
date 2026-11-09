@@ -3560,6 +3560,56 @@
         "## Read the evidence",
         "## Record"
       ],
+      "digest": "12c16cff74dfa41a031746acf861d1ccfd2f5240f88c27cfb944e33b70bfae62",
+      "revision": "c368caf1980d820e7529346eb9911ef0a6444034",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "path-risk-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Find the cause",
+        "## Minimum support",
+        "## Pick the paths",
+        "## Propose fixes",
+        "## Read the evidence",
+        "## Record"
+      ],
+      "digest": "1c42a025746641c8d2f34ba682b9ebfcbb4784ee04d26a9aceb689d82a4eee86",
+      "revision": "6d0ea42ca75275ffba17d220c0caa456c0bbe618",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "path-risk-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Find the cause",
+        "## Minimum support",
+        "## Pick the paths",
+        "## Propose fixes",
+        "## Read the evidence",
+        "## Record"
+      ],
       "digest": "281c7f51f7b4ae24360c37dca56dc45f072a28f5bedae08c62e814a0f959092f",
       "revision": "3a404d7a8d45d466198ee7550afb407228b38f69",
       "settings": {
@@ -3692,6 +3742,31 @@
       ],
       "digest": "78be88af139529badc3a1baaec11835ad07cc6b966069a49b661f376bff93da1",
       "revision": "562e01df48ed47dbb473b5c04cff588badc73b37",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "959dd38154cf4dada27658f7ffe239179ac56038bc44d7fdd1b3f11893641216",
+      "revision": "d07a926817492b88e3f3d2b30fc3271989f66ed3",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
