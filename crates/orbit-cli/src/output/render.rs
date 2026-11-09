@@ -17,7 +17,7 @@ use std::io::Write;
 use orbit_core::OrbitError;
 use serde_json::Value;
 
-use crate::output::payload::{Block, CommandOutput, View};
+use crate::output::payload::{Block, CommandOutput, ConfigShow, View};
 use crate::output::sink::{OutputMode, OutputSink};
 
 /// Project a command's output into the resolved mode and write it to stdout.
@@ -156,7 +156,7 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                         if sink.mode() == OutputMode::Table {
                             println!("{}", config_show_text(&text, sink.width()));
                         } else {
-                            println!("{text}");
+                            println!("{}", text.text);
                         }
                     }
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
@@ -332,20 +332,6 @@ fn wrap_message(message: &str, width: u16) -> String {
         .join("\n")
 }
 
-/// Row states in `config show` text (layer labels and three-way states), used
-/// to locate the description column of a key row.
-const CONFIG_SHOW_STATES: &[&str] = &[
-    "workspace",
-    "global",
-    "environment",
-    "built-in",
-    "default",
-    "unset",
-    "derived",
-    "identity",
-    "set",
-];
-
 /// Minimum columns a description column must leave before aligned wrapping
 /// gives way to a shallower hanging indent.
 const CONFIG_SHOW_MIN_TRAILING: usize = 24;
@@ -360,69 +346,40 @@ const CONFIG_SHOW_MIN_TRAILING: usize = 24;
 /// themselves approach the width — the whole line wraps with a shallow
 /// hanging indent instead, so no line exceeds the width. Width `0` (no
 /// terminal width) leaves the text whole.
-fn config_show_text(text: &str, width: u16) -> String {
+fn config_show_text(text: &ConfigShow, width: u16) -> String {
     if width == 0 {
-        return text.to_string();
+        return text.text.clone();
     }
-    let width = usize::from(width);
-    let mut in_crews = false;
-    let mut in_paths = false;
-    text.split('\n')
+    let mut line_start = 0;
+    text.text
+        .split('\n')
         .map(|line| {
-            if !line.starts_with(' ') && !line.is_empty() {
-                in_crews = line.starts_with("Crews (");
-                in_paths = line == "Paths";
-            }
-            fit_config_show_line(line, width, in_crews, in_paths)
+            let column = text.trailing_columns.get(&line_start).copied();
+            line_start += line.len() + 1;
+            fit_config_show_line(line, usize::from(width), column)
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn fit_config_show_line(line: &str, width: usize, in_crews: bool, in_paths: bool) -> String {
+fn fit_config_show_line(line: &str, width: usize, trailing_column: Option<usize>) -> String {
     if line.chars().count() <= width {
         return line.to_string();
     }
-    // (prefix kept on the first line, trailing prose to wrap, its column)
-    let aligned = if line.starts_with("  ") {
-        let tokens = token_offsets(line);
-        if in_paths {
-            tokens.get(1).map(|(start, _)| {
-                (
-                    line[..byte_at(line, *start)].to_string(),
-                    line[byte_at(line, *start)..].to_string(),
-                    *start,
-                )
-            })
-        } else if in_crews {
-            tokens.get(7).map(|(start, _)| {
-                (
-                    line[..byte_at(line, *start)].to_string(),
-                    line[byte_at(line, *start)..].to_string(),
-                    *start,
-                )
-            })
-        } else if tokens.len() >= 4 && CONFIG_SHOW_STATES.contains(&tokens[2].1) {
-            let start = tokens[3].0;
-            Some((
-                line[..byte_at(line, start)].to_string(),
-                line[byte_at(line, start)..].to_string(),
-                start,
-            ))
-        } else {
+    // Row boundaries come from the command's padded cells, never word positions:
+    // values, tags and path labels may all contain whitespace.
+    let column = trailing_column.or_else(|| {
+        // Headings retain their fixed padded title/blurb layout.
+        if line.starts_with(' ') {
             None
+        } else {
+            find_blurb_start(line)
         }
-    } else {
-        // Heading/banner: the blurb starts after the padded title's run of
-        // two or more spaces.
-        find_blurb_start(line).map(|start| {
-            (
-                line[..byte_at(line, start)].to_string(),
-                line[byte_at(line, start)..].to_string(),
-                start,
-            )
-        })
-    };
+    });
+    let aligned = column.map(|column| {
+        let split = byte_at(line, column);
+        (line[..split].to_string(), line[split..].to_string(), column)
+    });
     if let Some((prefix, trailing, column)) = aligned
         && prefix.chars().count() + 8 <= width
     {
@@ -452,25 +409,6 @@ fn fit_config_show_line(line: &str, width: usize, in_crews: bool, in_paths: bool
         indent,
         width,
     )
-}
-
-/// Whitespace-separated tokens of `line` as (char offset, token) pairs.
-fn token_offsets(line: &str) -> Vec<(usize, &str)> {
-    let mut tokens = Vec::new();
-    let mut token_start: Option<(usize, usize)> = None; // (char, byte)
-    for (char_index, (byte, ch)) in line.char_indices().enumerate() {
-        if ch.is_whitespace() {
-            if let Some((start_char, start_byte)) = token_start.take() {
-                tokens.push((start_char, &line[start_byte..byte]));
-            }
-        } else if token_start.is_none() {
-            token_start = Some((char_index, byte));
-        }
-    }
-    if let Some((start_char, start_byte)) = token_start {
-        tokens.push((start_char, &line[start_byte..]));
-    }
-    tokens
 }
 
 /// Byte index of the `char_offset`-th char of `line` (its length when beyond).

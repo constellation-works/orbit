@@ -28,6 +28,8 @@ use orbit_config::{
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
+use crate::output::payload::ConfigShow;
+
 /// Rendered in place of a value that does not exist, so an unset key is not an
 /// empty column that reads as an empty string.
 const NO_VALUE: &str = "–";
@@ -80,7 +82,7 @@ impl Layout {
         }
     }
 
-    fn write_row(&self, out: &mut String, row: &Row) {
+    fn write_row(&self, out: &mut ConfigShow, row: &Row) {
         let _ = write!(
             out,
             "  {:<label$}  {:<value$}  {:<state$}",
@@ -92,10 +94,16 @@ impl Layout {
             state = self.state,
         );
         if !row.description.is_empty() {
-            let _ = write!(out, "  {}", row.description);
+            out.push_str("  ");
+            out.mark_trailing_column();
+            out.push_str(&row.description);
         }
         if let Some(note) = &row.note {
-            let _ = write!(out, "  {note}");
+            out.push_str("  ");
+            if row.description.is_empty() {
+                out.mark_trailing_column();
+            }
+            out.push_str(note);
         }
         let _ = writeln!(out);
     }
@@ -107,8 +115,8 @@ pub(super) fn effective_text(
     runtime: &OrbitRuntime,
     values: &[EffectiveConfigValue],
     all: bool,
-) -> String {
-    let mut out = String::new();
+) -> ConfigShow {
+    let mut out = ConfigShow::default();
     let global_path = runtime.global_root().join("config.toml");
     let workspace_path = runtime.shared_root().join("config.toml");
     let has_workspace_layer = super::support::runtime_config_roots(runtime).has_workspace_layer();
@@ -166,8 +174,8 @@ pub(super) fn scoped_text(
     snapshot: &ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
     all: bool,
-) -> String {
-    let mut out = String::new();
+) -> ConfigShow {
+    let mut out = ConfigShow::default();
     let _ = writeln!(
         out,
         "orbit config — {} scope{}",
@@ -267,7 +275,7 @@ pub(super) fn workspace_binding_json(runtime: &OrbitRuntime) -> JsonValue {
 }
 
 fn write_sections(
-    out: &mut String,
+    out: &mut ConfigShow,
     rows: &[SectionRows],
     values: &[EffectiveConfigValue],
     all: bool,
@@ -480,7 +488,7 @@ fn scoped_rows(
 }
 
 /// Identity facts lead the text view, outside the Machine key rows.
-fn write_identity(out: &mut String, layout: &Layout, rows: &[Row]) {
+fn write_identity(out: &mut ConfigShow, layout: &Layout, rows: &[Row]) {
     if rows.is_empty() {
         return;
     }
@@ -510,7 +518,7 @@ fn env_inherit_row(inherit: bool) -> Row {
     }
 }
 
-fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &SectionRows) {
+fn write_crews(out: &mut ConfigShow, values: &[EffectiveConfigValue], section: &SectionRows) {
     let crews = crew_table(values);
     if crews.is_empty() {
         let _ = writeln!(
@@ -560,13 +568,18 @@ fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &Sect
             widths[index] = widths[index].max(cell.chars().count());
         }
     }
-    let write_cells = |out: &mut String, cells: &[String; 7], trailing: &str| {
+    let write_cells = |out: &mut ConfigShow, cells: &[String; 7], trailing: &str| {
         let mut line = String::new();
         for (index, cell) in cells.iter().enumerate() {
             let _ = write!(line, "  {:<width$}", cell, width = widths[index]);
         }
-        let line = line.trim_end().to_string();
-        let _ = writeln!(out, "{line}{trailing}");
+        if let Some(trailing) = trailing.strip_prefix("  ") {
+            let _ = write!(out, "{line}  ");
+            out.mark_trailing_column();
+            let _ = writeln!(out, "{trailing}");
+        } else {
+            let _ = writeln!(out, "{}", line.trim_end());
+        }
     };
     write_cells(out, &columns.map(str::to_string), "  DESCRIPTION");
     for crew in &crews {
@@ -703,7 +716,7 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
 /// and its single-line `persistence` JSON blob. The rows themselves come from
 /// `orbit_core::application::config`, so this view and the dashboard's Paths
 /// grid name the same locations.
-fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Path>) {
+fn write_paths(out: &mut ConfigShow, runtime: &OrbitRuntime, config_path: Option<&Path>) {
     let rows = orbit_core::application::config::path_rows(runtime, config_path);
     let width = rows
         .iter()
@@ -713,7 +726,9 @@ fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Pa
     let _ = writeln!(out);
     let _ = writeln!(out, "Paths");
     for (label, value) in rows {
-        let _ = writeln!(out, "  {label:<width$}  {value}");
+        let _ = write!(out, "  {label:<width$}  ");
+        out.mark_trailing_column();
+        let _ = writeln!(out, "{value}");
     }
 }
 
