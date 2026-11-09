@@ -106,10 +106,15 @@ expectations; it never re-attributes them.
 A model is eligible only when all of these hold:
 
 - at least 30 implemented tasks in the window;
-- spanning at least two assessed tiers, with at least 5 tasks in each
+- at least one assessed tier with at least 5 tasks in it
   (tasks in the `unassessed` tier do not count toward this);
 - at least one measure with units and a noise scale, so a composite
   exists.
+
+An eligible model spanning exactly one assessed tier is single-tier: its
+row's `single_tier` names that tier (`single tier: <tier>` in the text board
+and beside the model name in the dashboard Rank table, the tier name or
+`null` in JSON). It is a flag, not a scoring change.
 
 Tasks whose runs recorded no model are unattributed: they count in the
 fleet expectation only, are reported in the payload's `unattributed`
@@ -180,7 +185,7 @@ orbit agents rank --json
   `no_scale`), `weight`, `scale` and `reason`; then each row's
   `weights_measured`, per-measure `status`, `actual`, `expected`,
   `residual` and `contribution`.
-- Per row: `eligible` and `ineligible_reason`, `units`,
+- Per row: `eligible`, `single_tier` and `ineligible_reason`, `units`,
   `tasks_by_tier`, `crews`, `score` against `raw_score`, `rank`,
   `rank_label` and `band_size`, `interval`, and the `cost` object.
 - `unattributed.tasks`, `execution_split` and `not_scored`: work the

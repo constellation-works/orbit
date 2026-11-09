@@ -18,7 +18,9 @@
 //!   job or log, or a runner or network failure stops without an agent. A
 //!   required check whose unsuccessful jobs only concluded `cancelled` or
 //!   `timed_out` is rerun once before any repair, even when that log cannot
-//!   be read; an exhausted rerun names those jobs and admits no agent. A
+//!   be read. A failure job whose log is only a `ci-await` of those
+//!   conclusions, or only a `ci-await` timeout, is in that same one-rerun
+//!   set. An exhausted rerun names those jobs and admits no agent. A
 //!   failed job's log read the provider throttled (an authenticated rate
 //!   limit) instead waits, read-only and recorded, for the provider's reset
 //!   or a bounded backoff, never past the completion deadline

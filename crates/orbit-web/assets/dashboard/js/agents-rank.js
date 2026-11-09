@@ -279,9 +279,11 @@ function modelNode(row) {
   const crews = Array.isArray(row.crews) ? [...row.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
   const crewNames = crews.map((crew) => crew.crew).filter(Boolean).join(", ");
   const crewTitle = crews.map((crew) => `${crew.crew || "—"} (${crew.tasks ?? 0})`).join(", ");
+  const singleTier = typeof row.single_tier === "string" && row.single_tier ? row.single_tier : null;
   return el("span", { class: "agents-rank-model" }, [
     rankFormat.providerDot(row.model),
     el("span", { class: "agents-rank-model-name", text: row.model || "—", title: row.model || "" }),
+    singleTier ? el("span", { class: "agents-rank-single-tier", text: `single tier: ${singleTier}`, title: `Ranked on the ${singleTier} tier only` }) : null,
     crewNames ? el("span", { class: "agents-rank-crew", text: crewNames, title: crewTitle }) : null,
   ]);
 }
@@ -427,7 +429,7 @@ function pendingNode(payload, pending) {
   const rules = payload.rules || {};
   const gate = [];
   if (rules.min_tasks) gate.push(`${rules.min_tasks} tasks`);
-  if (rules.min_tiers) gate.push(`${rules.min_tiers} tiers with ${rules.min_tier_tasks || 0}+ each`);
+  if (rules.min_tiers) gate.push(rules.min_tiers === 1 ? `1 tier with ${rules.min_tier_tasks || 0}+ tasks` : `${rules.min_tiers} tiers with ${rules.min_tier_tasks || 0}+ each`);
   const items = pending
     .map((row) => ({ row, gate: gateProgress(rules, row) }))
     .sort((a, b) => b.gate.progress - a.gate.progress || (b.row.units || 0) - (a.row.units || 0));

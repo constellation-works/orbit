@@ -1187,8 +1187,8 @@ concluded `cancelled` or `timed_out` retain one shared rerun. A job with either 
 that single-rerun set even when its log cannot be read, as is a failure job whose log is only a
 `ci-await` of those conclusions or only a `ci-await` timeout. A job that concluded `failure` keeps
 log classification; a mixed failure is not reduced to this set. When that single rerun is already
-spent and those jobs are still cancelled or timed out, landing records `required CI jobs keep
-cancelling or timing out` and the job names, and dispatches no repair agent. An untouched-path
+spent and the set is still only those conclusions or a `ci-await` timeout, landing records
+`required CI jobs keep cancelling or timing out` and the job names, and dispatches no repair agent. An untouched-path
 failure waits for same-check base evidence: a successful completed push
 run of the same job on the accepted base or a descendant through the landing tip authorizes one
 rerun of the failed `pull_request` run on its unchanged head. The base run may predate the

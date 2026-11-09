@@ -293,7 +293,7 @@ The owner enforces what it is owed in two places:
   reads follow the recorded read-deferral path without spending an attempt.
   Owner-local review deliveries use the same planner from their existing
   review watcher, then resume check observation; merge authorization is unchanged.
-  Conclusion-only cancellations/timeouts and flaky failures still get one rerun.
+  Conclusion-only cancellations/timeouts, a failure whose log is only a ci-await timeout, and flaky failures still get one rerun.
   If the evidence remains incomplete,
   `handoff_land` holds in review (`delivery_base_checks_pending`) after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`

@@ -331,11 +331,18 @@ impl OrbitToolServer {
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
         {
-            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 `view` reads never use the session's bound workspace. Pass `workspace` with a \
+            // Name `view` only when the caller set it. Other echo conditions,
+            // such as `mode` on `auto`, need a selector and nothing else.
+            let guidance = if input.get("view").is_some() {
+                "`view` reads never use the session's bound workspace. Pass `workspace` with a \
                  selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
                  workspace"
+            } else {
+                "pass `workspace` with a selector copied from `orbit_workspace_list`"
+            };
+            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
+                "tool '{canonical}' requires an explicit workspace selector from discovery: \
+                 {guidance}"
             ))));
         }
         let host = Arc::clone(&self.host);
