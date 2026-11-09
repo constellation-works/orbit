@@ -21,6 +21,10 @@ EXCLUSIONS = (
     "docs/dev/rca/*",
     "CHANGELOG.md",
     "crates/*/tests/fixtures/*",
+    # Read-only copies vendored from the constellation canon by sync-standards.sh.
+    # Their links point into the umbrella, and their exemplar paths name Orbit as
+    # of the canon commit; docs/standards/check.sh verifies them byte for byte.
+    "docs/standards/*",
 )
 SOURCE_PATH = re.compile(
     r"^(?:crates|scripts|docs|plugin|npm|website|\.github)/"

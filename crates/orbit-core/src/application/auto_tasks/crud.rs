@@ -343,6 +343,14 @@ impl OrbitRuntime {
         let raw = std::fs::read_to_string(path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
+        // A definition written before tool families reads with family
+        // actions; mint, sync and the upgrade pass rewrite the file
+        // [ORB-23552].
+        if let Some(required_tools) =
+            orbit_types::tool::family_action_tool_names(&definition.template.required_tools)
+        {
+            definition.template.required_tools = required_tools;
+        }
         if definition.name != name {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task file stem '{name}' does not match definition name '{}'",
@@ -456,6 +464,9 @@ impl OrbitRuntime {
     /// definitions exposed by read fallback do not become mint authority.
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        // A definition that still names pre-family tools is rewritten before
+        // it mints [ORB-23552].
+        self.heal_local_auto_task_tool_names_best_effort();
         // Fail closed before admission. This copy is not mint authority: a
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_local_auto_task(name)?;

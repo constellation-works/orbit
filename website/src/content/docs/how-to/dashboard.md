@@ -172,7 +172,7 @@ prove that a particular task or run succeeded.
 | **Drain** | Shown only at 1000px and narrower. Above that width the Tasks dock's Drain tab sits beside the list instead. On a narrow window the item opens the Drain tab in place of the task list, where you start and stop a window by touch. While a drain runs, the item shows its state on every view. |
 | **Jobs** | Job runs and the job catalogue: **Live** (runs pending or running now), **History** (every run, newest first, and run detail), and **Catalogue** (jobs you can run by hand). See [Runs and errors](#runs-and-errors) and [Jobs](#jobs). |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
-| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Rank**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
 | **Knowledge** | Friction records. |
@@ -1177,7 +1177,7 @@ and it is not a model the tool call reported. Tools offers `24h`, `7d`, and
 
 **Agents** is an Analytics view. It ranks the models by recorded reasoning effort behind each
 agent role in the selected workspace: one row per model and recorded effort
-(`model @ effort`; orchestrators keep their attribution rows). The window starts at **Last 500**: the
+(`model @ effort`). The window starts at **Last 500**: the
 newest 500 delivery attempts, whatever their age. The selector offers
 **Last 500**, **Last 1000**, **7d**, and **30d**: a calendar tab (`7d` or
 `30d`) follows the dashboard's window, while the `1h`, `24h`, and **all**
@@ -1207,16 +1207,24 @@ on.
 - **How the score works** lists every term with its weight and definition and
   the smoothing formula. It stays open while the page refreshes.
 
-The **Orchestrators** tab replaces Analytics → Orchestrators, and old
-`#analytics/orchestrators` links open it. An orchestrator earns one point per
-landed task, whatever its complexity, and loses one per spec defect or
-spec-caused rework, all per 100 owned tasks. Complexity does not count because
-the orchestrator sets it when filing or piloting a task. Rework caused by the
-crew and review rejects count against **Implementers**, and reviewer fixes
-that failed revalidation count against **Reviewers**. Rework and regressions
-with no recorded cause count against no one; their number shows under the
-score as `N unclassified`, because such a score rests on less evidence.
-The **Rework by cause** panel shows where each orchestrator's rework went.
+The **Rank** tab, the first tab and the one Agents opens on, ranks implementer
+models into bands with its own window (**7d**, **30d**, **90d**, **All**), a
+**Settled** or **Live** board, and the execution selector. Cards at the top
+name the leader, the best value (the lowest cost against the fleet among ranked
+models), how many models are ranked, and how much of the score's weight is
+measured. Each band lists its models with the probability that one is ahead of
+another; a line between bands gives the lowest probability that the band above
+is ahead. A row shows its score with its 10th–90th percentile range on one axis
+shared by the board, what each measure adds to or takes from 100 (blue helps,
+amber hurts), its cost against the fleet on the same tier mix, its tier mix and
+its units. Select a model's name for its breakdown. Models still short of the
+evidence needed to rank are listed under **Not yet ranked** with their progress,
+and **Not scored** counts the problems charged to no model. **Score against
+cost, by tier** plots one tier at a time: pick Low, Medium or Hard. The dashed
+frontier joins the models no other model beats on both a higher score and a
+lower cost; a model with too little of its cost recorded is drawn hollow and
+never joins it. The Orchestrators tab is retired, and its links open Rank.
+Problems caused by a task's spec are not scored.
 
 The **Implementers** tab ranks each model at each recorded effort separately (`model @ effort`). It credits
 weighted landed work and first-pass accepts, and counts review rejects,

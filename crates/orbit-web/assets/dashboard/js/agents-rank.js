@@ -1,18 +1,41 @@
-// Analytics › Agents › Rank. Reads GET /api/agents/rank and draws the band
-// table, each row's measure breakdown, and one score-against-cost chart per
-// qualifying tier. The tier score is the server's unsmoothed 100+10×z for
-// that tier only; this page decides the frontier.
+// Analytics › Agents › Rank. Reads GET /api/agents/rank and draws, top to
+// bottom: summary cards; the band ladder (one group per shared rank, each row
+// with an interval whisker on one shared score axis, its per-measure
+// contributions, cost against the fleet, tier mix and units, and a Breakdown
+// under it); the models below the evidence gate with their progress toward
+// it; the tasks no one was scored on; and one score-against-cost chart with a
+// tier switch (js/agents-rank-frontier.js). Everything is derived from the
+// payload; HTML uses `el()`.
 
 import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint } from './common.js';
+import * as rankFormat from './agents-rank-format.js';
+import { rankFrontierNode } from './agents-rank-frontier.js';
 
 const BODY_ID = "agents-body";
 const COUNT_ID = "agents-count";
-const SVG_NS = "http://www.w3.org/2000/svg";
-const TIER_ORDER = ["low", "medium", "hard", "xhard", "unassessed"];
-const MIN_MODELS = 3;
-const MIN_TASKS = 10;
-const COLUMNS = 8;
+const TIER_SHORT = { low: "L", medium: "M", hard: "H", xhard: "X", unassessed: "U" };
+// The cost bar fills at 2^±1.5, about 0.35× and 2.8× the fleet.
+const COST_LOG_SPAN = 1.5;
+// A contribution smaller than this reads as neutral.
+const NEUTRAL_POINTS = 0.5;
+const MEASURE_SHORT = { escaped_regressions: "Regr.", review_outcome: "Review", crew_rework: "Rework" };
+const NOT_SCORED_REASONS = {
+  infrastructure: "rework caused by infrastructure",
+  no_cause: "rework with no recorded cause",
+  spec: "problems caused by the task's spec",
+  unattributed: "no attribution",
+  no_run: "no implementation run to charge",
+  no_review: "no settled review to charge",
+  no_diff_expected: "no diff expected",
+  merge_reintroduced: "regressions a merge reintroduced",
+  contract_drift: "contract-drift regressions",
+  test_not_selected: "regressions no selected test covered",
+  platform_only: "platform-only regressions",
+  nondeterministic: "nondeterministic regressions",
+  unclassified: "unclassified regressions",
+};
 
+// Reader state that survives polls: which breakdowns are open.
 const openModels = new Set();
 
 export function fetchAndRenderRank({ window: selectedWindow, execution, live, onCount }) {
@@ -72,9 +95,12 @@ function renderRank(payload, onCount) {
   } else if (!rows.length) {
     nodes.push(stateNode("empty", "No models in this window", "Widen the window to rank implementer models."));
   } else {
-    nodes.push(boardNode(payload, rows));
+    const ladder = ladderModel(payload, rows);
+    nodes.push(summaryNode(payload, rows, ladder));
+    nodes.push(ladderNode(payload, ladder));
+    nodes.push(asideNode(payload, rows));
+    nodes.push(rankFrontierNode(payload, rows));
   }
-  nodes.push(...chartNodes(rows));
   nodes.push(howNode(payload));
   syncNodes(body, nodes);
 }
@@ -96,6 +122,7 @@ function metaHint(payload) {
     `Counting ${payload.execution || "managed"} tasks. The execution split below still counts every mode.`,
   ];
   if (payload.settle_lag) lines.push(`Settled boards end ${payload.settle_lag} before the requested instant.`);
+  if (typeof payload.tasks_scanned === "number") lines.push(`${rankFormat.num(payload.tasks_scanned, 0)} tasks scanned.`);
   if (payload.computed_at) lines.push(`Computed ${payload.computed_at}.`);
   return lines.join("\n");
 }
@@ -117,74 +144,238 @@ function stateNode(key, heading, text) {
   return node;
 }
 
-function boardNode(payload, rows) {
-  const head = el("tr", {}, [
-    el("th", { text: "" }),
-    el("th", { text: "Rank" }),
-    el("th", { text: "Model" }),
-    el("th", { class: "agents-num", text: "Score" }),
-    el("th", { class: "agents-num", text: "Interval", title: "10th to 90th percentile of the shrunk score" }),
-    el("th", { class: "agents-num", text: "Cost ratio", title: "List-price cost per task divided by the fleet's on the same tier mix" }),
-    el("th", { class: "agents-num", text: "Units" }),
-    el("th", { text: "Eligibility" }),
-  ]);
-  const bodyRows = rows.flatMap((row) => rowPair(payload, row));
-  const table = el("table", { class: "agents-table" }, [
-    el("thead", {}, [head]),
-    el("tbody", {}, bodyRows),
-  ]);
-  const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": "Model ranking" }, [table]);
-  wrap.tabIndex = 0;
-  const note = payload.qualified
-    ? "Shared ranks such as 1= are one band. Cost orders the band and never crosses it."
-    : "Scores are shown. This board has no bands or ranks.";
-  const node = el("section", { class: "agents-ranking", "aria-label": "Model ranking" }, [
-    el("p", { class: "agents-ranking-note", text: note }),
-    wrap,
-  ]);
-  node.dataset.key = "board";
-  node.dataset.hash = JSON.stringify(rows.map(rowSignature));
+// --- the ladder's model: bands, their notes and the shared score axis ---
+
+function ladderModel(payload, rows) {
+  const ranked = rows.filter((row) => row.eligible);
+  const pending = rows.filter((row) => !row.eligible);
+  const bands = [];
+  if (payload.qualified) {
+    for (const row of ranked) {
+      const label = row.rank_label == null ? "" : String(row.rank_label);
+      const last = bands[bands.length - 1];
+      if (last && last.label === label) last.rows.push(row);
+      else bands.push({ label, rows: [row] });
+    }
+  } else if (ranked.length) {
+    bands.push({ label: "", rows: [...ranked].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)) });
+  }
+  const pairs = payload.paired_probabilities || {};
+  bands.forEach((band, index) => {
+    band.name = payload.qualified ? `Band ${index + 1}` : "Scores, no bands";
+    band.note = inBandNote(band.rows, pairs);
+    const next = bands[index + 1];
+    band.edge = next ? minAcross(band.rows, next.rows, pairs) : null;
+    band.nextName = next ? `band ${index + 2}` : "";
+  });
+  return { ranked, pending, bands, axis: scoreAxis(ranked) };
+}
+
+function probability(pairs, a, b) {
+  const row = pairs[a];
+  return row && typeof row[b] === "number" ? row[b] : null;
+}
+
+function inBandNote(rows, pairs) {
+  if (rows.length < 2) return "";
+  const ordered = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  const parts = [];
+  for (let i = 0; i < ordered.length; i += 1) {
+    for (let j = i + 1; j < ordered.length; j += 1) {
+      const p = probability(pairs, ordered[i].model, ordered[j].model);
+      if (p != null) parts.push(`${ordered[i].model} vs ${ordered[j].model} ${rankFormat.num(p, 2)}`);
+    }
+  }
+  if (!parts.length) return "";
+  const shown = parts.slice(0, 6);
+  if (parts.length > shown.length) shown.push(`${parts.length - shown.length} more pairs`);
+  return shown.join(" · ");
+}
+
+function minAcross(upper, lower, pairs) {
+  let min = null;
+  for (const a of upper) {
+    for (const b of lower) {
+      const p = probability(pairs, a.model, b.model);
+      if (p != null && (min == null || p < min)) min = p;
+    }
+  }
+  return min;
+}
+
+function scoreAxis(rows) {
+  const values = [];
+  for (const row of rows) {
+    if (typeof row.score === "number") values.push(row.score);
+    const interval = row.interval || {};
+    if (typeof interval.p10 === "number") values.push(interval.p10);
+    if (typeof interval.p90 === "number") values.push(interval.p90);
+  }
+  if (!values.length) values.push(90, 110);
+  const span = Math.max(...values) - Math.min(...values);
+  const step = span > 100 ? 20 : span > 50 ? 10 : 5;
+  let lo = Math.floor(Math.min(...values) / step) * step;
+  let hi = Math.ceil(Math.max(...values) / step) * step;
+  if (lo === hi) { lo -= step; hi += step; }
+  const ticks = [];
+  for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
+  return { lo, hi, ticks, pos: (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100)) };
+}
+
+// --- summary cards ---
+
+function summaryNode(payload, rows, ladder) {
+  const cards = [leaderCard(payload, ladder), valueCard(ladder), rankedCard(payload, rows, ladder), coverageCard(payload)];
+  const node = el("section", { class: "agents-rank-summary", "aria-label": "Board summary" }, cards);
+  node.dataset.key = "summary";
+  node.dataset.hash = JSON.stringify(cards.map((card) => card.textContent));
   return node;
 }
 
-function rowSignature(row) {
-  return [row.model, row.rank_label, row.score, row.eligible, row.cost && row.cost.ratio, row.cost && row.cost.cost_unknown, row.units];
+function card(label, value, valueRest, sub) {
+  return el("div", { class: "agents-rank-card" }, [
+    el("span", { class: "agents-rank-card-label", text: label }),
+    el("span", { class: "agents-rank-card-value" }, [value, valueRest ? el("span", { class: "agents-rank-card-rest", text: ` ${valueRest}` }) : null]),
+    el("span", { class: "agents-rank-card-sub", text: sub }),
+  ]);
 }
 
-function rowPair(payload, row) {
-  const open = openModels.has(row.model);
-  const button = el("button", {
-    class: "agents-rank-expand",
-    type: "button",
-    text: open ? "Hide" : "Breakdown",
-    "aria-expanded": open ? "true" : "false",
-  });
-  button.setAttribute("aria-controls", breakdownId(row.model));
-  const main = el("tr", {}, [
-    el("td", {}, [button]),
-    el("td", { class: "agents-num", text: rankText(payload, row) }),
-    el("td", { text: row.model || "—" }),
-    el("td", { class: "agents-num", text: num(row.score) }),
-    el("td", { class: "agents-num", text: intervalText(row) }),
-    el("td", { class: "agents-num", text: costText(row), title: costTitle(row) }),
-    el("td", { class: "agents-num", text: row.units == null ? "—" : String(row.units) }),
-    el("td", { class: row.eligible ? "" : "agents-muted", text: row.eligible ? "eligible" : (row.ineligible_reason || "ineligible") }),
+function leaderCard(payload, ladder) {
+  const top = ladder.bands[0];
+  if (!top) return card("Leader", "—", "", "No model has passed the evidence gate.");
+  if (!payload.qualified) {
+    return card("Leader", top.rows[0].model || "—", "", "Highest score; this board has no bands.");
+  }
+  const names = top.rows.map((row) => row.model).join(", ");
+  const edge = top.edge == null ? "" : ` · ${rankFormat.num(top.edge, 2)} ahead of band 2`;
+  const sub = top.rows.length === 1 ? `Alone in band 1${edge}` : `${top.rows.length} share band 1${edge}`;
+  return card("Leader", names, "", sub);
+}
+
+function valueCard(ladder) {
+  const priced = ladder.ranked.filter((row) => row.cost && !row.cost.cost_unknown && typeof row.cost.ratio === "number");
+  if (!priced.length) return card("Best value", "—", "", "No ranked model has a known cost.");
+  const best = priced.reduce((a, b) => (b.cost.ratio < a.cost.ratio ? b : a));
+  const rank = best.rank_label ? `Rank ${best.rank_label}` : "Unbanded";
+  return card("Best value", best.model, "", `${rank} at ${rankFormat.num(best.cost.ratio, 2)}× fleet cost`);
+}
+
+function rankedCard(payload, rows, ladder) {
+  const bands = payload.qualified ? ` · ${rankFormat.plural(ladder.bands.length, "band")}` : "";
+  const below = ladder.pending.length;
+  return card("Ranked", String(ladder.ranked.length), `of ${rankFormat.plural(rows.length, "model")}${bands}`,
+    below ? `${below} below the evidence gate` : "Every model passed the evidence gate");
+}
+
+function coverageCard(payload) {
+  const measures = Array.isArray(payload.measures) ? payload.measures : [];
+  const measured = measures.filter((m) => m.status === "measured").reduce((sum, m) => sum + (m.weight || 0), 0);
+  const total = typeof payload.weights_total === "number" ? payload.weights_total : measures.reduce((sum, m) => sum + (m.weight || 0), 0);
+  const missing = measures.filter((m) => m.status !== "measured").map((m) => m.label || m.key);
+  return card("Score coverage", rankFormat.num(measured, 0), `of ${rankFormat.num(total, 0)} weight measured`,
+    missing.length ? `Unmeasured: ${missing.join(", ")}` : "Every measure is measured");
+}
+
+// --- the band ladder ---
+
+function ladderNode(payload, ladder) {
+  const measures = (Array.isArray(payload.measures) ? payload.measures : []).filter((m) => m.status === "measured");
+  const columns = 7 + measures.length;
+  const axisHead = el("div", { class: "agents-rank-axis-head", "aria-hidden": "true" },
+    ladder.axis.ticks.map((tick) => el("span", { text: String(tick), style: { left: `${ladder.axis.pos(tick)}%` } })));
+  const head = el("tr", {}, [
+    el("th", { text: "Rank" }),
+    el("th", { text: "Model" }),
+    el("th", { class: "agents-num", text: "Score" }),
+    el("th", { class: "agents-rank-interval-col" }, [
+      el("span", { text: "Score, 10th–90th percentile" }),
+      axisHead,
+    ]),
+    ...measures.map((m) => el("th", { class: "agents-num", text: MEASURE_SHORT[m.key] || m.label || m.key, title: `${m.label || m.key} contribution, points added to 100` })),
+    el("th", { text: "Cost vs fleet", title: "List-price cost per task divided by the fleet's on the same tier mix, on a log scale centred at 1.0×" }),
+    el("th", { text: "Tier mix" }),
+    el("th", { class: "agents-num", text: "Units" }),
+  ]);
+  const groups = ladder.bands.map((band) => bandBody(payload, band, measures, ladder.axis, columns));
+  const table = el("table", { class: "agents-table agents-rank-ladder" }, [el("thead", {}, [head]), ...groups]);
+  const wrap = el("div", { class: "agents-table-wrap agents-rank-ladder-wrap", role: "region", "aria-label": "Model ranking" }, [table]);
+  wrap.tabIndex = 0;
+  const empty = ladder.bands.length ? null : el("p", { class: "agents-rank-note", text: "No model has passed the evidence gate yet." });
+  const node = el("section", { class: "agents-rank-board", "aria-label": "Model ranking" }, [
+    empty || wrap,
+    legendNode(),
+  ]);
+  node.dataset.key = "board";
+  node.dataset.hash = JSON.stringify([ladder.ranked, payload.paired_probabilities, payload.qualified, payload.measures]);
+  return node;
+}
+
+function bandBody(payload, band, measures, axis, columns) {
+  const headCell = el("th", { class: "agents-rank-band-head" }, [
+    el("span", { class: "agents-rank-band-name", text: band.name }),
+    band.note ? el("span", { class: "agents-rank-band-note", text: band.note, title: "Probability the first model's score is above the second's. Close to 0.5 is a tie." }) : null,
+  ]);
+  headCell.colSpan = columns;
+  headCell.setAttribute("scope", "rowgroup");
+  const rows = [el("tr", { class: "agents-rank-band-row" }, [headCell])];
+  for (const row of band.rows) rows.push(...ladderRow(payload, row, measures, axis, columns));
+  if (band.edge != null) {
+    const edge = el("td", { class: "agents-rank-edge" }, [
+      el("span", { class: "agents-rank-edge-rule", "aria-hidden": "true" }),
+      el("span", { text: `P(ahead of ${band.nextName}) ≥ ${rankFormat.num(band.edge, 2)}` }),
+    ]);
+    edge.colSpan = columns;
+    rows.push(el("tr", { class: "agents-rank-edge-row" }, [edge]));
+  }
+  return el("tbody", { class: "agents-rank-band" }, rows);
+}
+
+function ladderRow(payload, row, measures, axis, columns) {
+  const toggle = breakdownToggle(row, "agents-rank-model-button");
+  const main = el("tr", { class: "agents-rank-row" }, [
+    el("td", { class: "agents-rank-label", text: rankText(payload, row) }),
+    el("td", { class: "agents-rank-model" }, [rankFormat.providerDot(row.model), toggle.button]),
+    el("td", { class: "agents-num agents-rank-score", text: rankFormat.num(row.score) }),
+    el("td", { class: "agents-rank-interval-col" }, [whiskerNode(row, axis)]),
+    ...measures.map((m) => contributionCell(row, m)),
+    el("td", {}, [costNode(row)]),
+    el("td", {}, [tierMixNode(row)]),
+    el("td", { class: "agents-num agents-muted", text: row.units == null ? "—" : String(row.units) }),
   ]);
   main.dataset.model = row.model || "";
+  main.style.setProperty("--provider", rankFormat.providerColor(row.model));
   const detailCell = el("td", {}, [breakdownNode(payload, row)]);
-  detailCell.colSpan = COLUMNS;
+  detailCell.colSpan = columns;
   const detail = el("tr", { class: "agents-rank-detail" }, [detailCell]);
-  detail.id = breakdownId(row.model);
-  detail.hidden = !open;
-  button.addEventListener("click", () => {
-    const next = !openModels.has(row.model);
-    if (next) openModels.add(row.model);
-    else openModels.delete(row.model);
-    detail.hidden = !next;
-    button.textContent = next ? "Hide" : "Breakdown";
-    button.setAttribute("aria-expanded", next ? "true" : "false");
-  });
+  toggle.bind(detail);
   return [main, detail];
+}
+
+// The model name opens its Breakdown under the row (a table row or a block).
+function breakdownToggle(row, className) {
+  const open = openModels.has(row.model);
+  const button = el("button", {
+    class: className,
+    type: "button",
+    "aria-expanded": open ? "true" : "false",
+    title: `${row.model || "Model"}: show or hide the breakdown`,
+  }, [
+    el("span", { class: "agents-rank-model-name", text: row.model || "—" }),
+    el("span", { class: "agents-rank-chevron", "aria-hidden": "true", text: "▸" }),
+  ]);
+  const bind = (detail) => {
+    detail.id = breakdownId(row.model);
+    detail.hidden = !open;
+    button.setAttribute("aria-controls", detail.id);
+    button.addEventListener("click", () => {
+      const next = !openModels.has(row.model);
+      if (next) openModels.add(row.model);
+      else openModels.delete(row.model);
+      detail.hidden = !next;
+      button.setAttribute("aria-expanded", next ? "true" : "false");
+    });
+  };
+  return { button, bind };
 }
 
 function breakdownId(model) {
@@ -196,25 +387,196 @@ function rankText(payload, row) {
   return String(row.rank_label);
 }
 
-function intervalText(row) {
-  const interval = row.interval;
-  if (!interval || typeof interval.p10 !== "number" || typeof interval.p90 !== "number") return "—";
-  return `${num(interval.p10)}–${num(interval.p90)}`;
+function whiskerNode(row, axis) {
+  const interval = row.interval || {};
+  const hasInterval = typeof interval.p10 === "number" && typeof interval.p90 === "number";
+  const label = hasInterval
+    ? `${row.model} score ${rankFormat.num(row.score)}, interval ${rankFormat.num(interval.p10, 1)} to ${rankFormat.num(interval.p90, 1)}`
+    : `${row.model} score ${rankFormat.num(row.score)}, no interval`;
+  const node = el("div", { class: "agents-rank-whisker", role: "img", "aria-label": label, title: label });
+  for (const tick of axis.ticks) node.append(el("span", { class: "agents-rank-grid", style: { left: `${axis.pos(tick)}%` } }));
+  if (hasInterval) {
+    const lo = axis.pos(interval.p10);
+    const hi = axis.pos(interval.p90);
+    node.append(
+      el("span", { class: "agents-rank-whisker-line", style: { left: `${lo}%`, width: `${Math.max(0, hi - lo)}%` } }),
+      el("span", { class: "agents-rank-whisker-cap", style: { left: `${lo}%` } }),
+      el("span", { class: "agents-rank-whisker-cap", style: { left: `${hi}%` } }),
+    );
+    const flip = hi > 72;
+    const text = el("span", {
+      class: flip ? "agents-rank-whisker-text is-left" : "agents-rank-whisker-text",
+      text: `${rankFormat.num(interval.p10, 1)}–${rankFormat.num(interval.p90, 1)}`,
+      style: { left: `${flip ? lo : hi}%` },
+    });
+    node.append(text);
+  }
+  if (typeof row.score === "number") node.append(el("span", { class: "agents-rank-whisker-dot", style: { left: `${axis.pos(row.score)}%` } }));
+  return node;
 }
 
-function costText(row) {
-  const cost = row.cost || {};
-  if (cost.cost_unknown) return "cost unknown";
-  if (typeof cost.ratio !== "number") return "—";
-  return `${num(cost.ratio, 2)}×`;
+function contributionCell(row, measure) {
+  const cell = (row.measures || {})[measure.key] || {};
+  if (cell.status !== "measured" || typeof cell.contribution !== "number") {
+    return el("td", { class: "agents-num agents-rank-contrib", text: "—", title: cell.reason || "unmeasured" });
+  }
+  const value = cell.contribution;
+  const tone = Math.abs(value) < NEUTRAL_POINTS ? "is-flat" : value > 0 ? "is-up" : "is-down";
+  return el("td", {
+    class: `agents-num agents-rank-contrib ${tone}`,
+    text: signed(value),
+    title: `${measure.label || measure.key}: actual ${rankFormat.num(cell.actual)}, expected ${rankFormat.num(cell.expected)} over ${cell.units ?? "—"} ${cell.unit || ""}`.trim(),
+  });
 }
 
-function costTitle(row) {
+function costNode(row) {
   const cost = row.cost || {};
-  const coverage = typeof cost.coverage === "number" ? `${num(cost.coverage * 100, 0)}% of tasks priced` : "coverage unknown";
-  if (cost.cost_unknown) return `Cost unknown. ${coverage}.`;
-  return coverage;
+  const coverage = typeof cost.coverage === "number" ? `${rankFormat.num(cost.coverage * 100, 0)}% of tasks priced` : "coverage unknown";
+  if (cost.cost_unknown || typeof cost.ratio !== "number" || cost.ratio <= 0) {
+    return el("span", { class: "agents-rank-cost is-unknown", text: cost.cost_unknown ? "cost unknown" : "—", title: coverage });
+  }
+  const scaled = Math.max(-1, Math.min(1, Math.log2(cost.ratio) / COST_LOG_SPAN));
+  const half = Math.abs(scaled) * 50;
+  const cheaper = cost.ratio < 1;
+  const bar = el("span", { class: "agents-rank-costbar", "aria-hidden": "true" }, [
+    el("span", { class: "agents-rank-costbar-mid" }),
+    el("span", { class: "agents-rank-costbar-fill", style: { left: `${cheaper ? 50 - half : 50}%`, width: `${half}%` } }),
+  ]);
+  return el("span", {
+    class: `agents-rank-cost ${cheaper ? "is-cheaper" : "is-dearer"}`,
+    title: `${rankFormat.num(cost.ratio, 2)}× the fleet's cost per task on the same tier mix. ${coverage}.`,
+  }, [bar, el("span", { class: "agents-rank-cost-text", text: `${rankFormat.num(cost.ratio, 2)}×` })]);
 }
+
+function tierEntries(row) {
+  const byTier = row.tasks_by_tier || {};
+  return Object.entries(byTier)
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .sort(([a], [b]) => rankFormat.tierIndex(a) - rankFormat.tierIndex(b));
+}
+
+function tierMixNode(row) {
+  const entries = tierEntries(row);
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  const text = entries.map(([tier, count]) => `${count} ${TIER_SHORT[tier] || tier}`).join(" · ");
+  const title = entries.map(([tier, count]) => `${count} ${tier}`).join(", ") || "no tasks by tier";
+  const bar = el("span", { class: "agents-rank-mix", "aria-hidden": "true" },
+    entries.map(([tier, count]) => el("span", { class: `agents-rank-mix-${tier}`, style: { width: `${total ? (count * 100) / total : 0}%` } })));
+  return el("span", { class: "agents-rank-mixcell", title }, [bar, el("span", { class: "agents-rank-mix-text", text: text || "—" })]);
+}
+
+function legendNode() {
+  const swatch = (tier) => el("span", { class: "agents-rank-legend-item" }, [
+    el("span", { class: `agents-rank-legend-swatch agents-rank-mix-${tier}`, "aria-hidden": "true" }),
+    el("span", { text: tier }),
+  ]);
+  return el("div", { class: "agents-rank-legend" }, [
+    el("span", {}, [
+      "Contribution is the points each measure adds to 100. ",
+      el("span", { class: "agents-rank-contrib is-up", text: "Blue" }), " helps, ",
+      el("span", { class: "agents-rank-contrib is-down", text: "amber" }), " hurts, — is unmeasured. ",
+      "Inside a band, rows are ordered by cost and the order is not a ranking.",
+    ]),
+    ...["low", "medium", "hard", "xhard", "unassessed"].map(swatch),
+  ]);
+}
+
+// --- not yet ranked and not scored ---
+
+function asideNode(payload, rows) {
+  const pending = rows.filter((row) => !row.eligible);
+  const node = el("div", { class: "agents-rank-aside" }, [
+    pending.length ? pendingNode(payload, pending) : null,
+    notScoredNode(payload),
+  ]);
+  node.dataset.key = "aside";
+  node.dataset.hash = JSON.stringify([pending, payload.rules, payload.not_scored, payload.unattributed]);
+  return node;
+}
+
+function gateProgress(rules, row) {
+  const minTasks = typeof rules.min_tasks === "number" ? rules.min_tasks : 0;
+  const minTiers = typeof rules.min_tiers === "number" ? rules.min_tiers : 0;
+  const minTierTasks = typeof rules.min_tier_tasks === "number" ? rules.min_tier_tasks : 0;
+  const units = row.units || 0;
+  const tiers = tierEntries(row).filter(([tier, count]) => tier !== "unassessed" && count >= minTierTasks).length;
+  const parts = [];
+  const fractions = [];
+  if (minTasks) {
+    fractions.push(Math.min(1, units / minTasks));
+    if (units < minTasks) parts.push(`${units} / ${minTasks} tasks`);
+  }
+  if (minTiers) {
+    fractions.push(Math.min(1, tiers / minTiers));
+    if (tiers < minTiers) parts.push(`${tiers} / ${rankFormat.plural(minTiers, "tier")}`);
+  }
+  const progress = fractions.length ? Math.min(...fractions) : 0;
+  const text = parts.length ? parts.join(" · ") : (row.ineligible_reason || "not eligible");
+  return { progress, text };
+}
+
+function pendingNode(payload, pending) {
+  const rules = payload.rules || {};
+  const gate = [];
+  if (rules.min_tasks) gate.push(`${rules.min_tasks} implemented tasks`);
+  if (rules.min_tiers) gate.push(`${rankFormat.plural(rules.min_tiers, "tier")} with ${rules.min_tier_tasks || 0}+ tasks each`);
+  const items = pending
+    .map((row) => ({ row, gate: gateProgress(rules, row) }))
+    .sort((a, b) => b.gate.progress - a.gate.progress || (b.row.units || 0) - (a.row.units || 0));
+  const list = el("ul", { class: "agents-rank-pending-list" }, items.map(({ row, gate: progress }) => {
+    const toggle = breakdownToggle(row, "agents-rank-model-button is-muted");
+    const raw = typeof row.raw_score === "number" ? row.raw_score : row.score;
+    const line = el("div", { class: "agents-rank-pending-row" }, [
+      el("span", { class: "agents-rank-model" }, [rankFormat.providerDot(row.model), toggle.button]),
+      el("span", { class: "agents-rank-progress", role: "img", "aria-label": `${rankFormat.num(progress.progress * 100, 0)}% of the evidence gate` }, [
+        el("span", { style: { width: `${progress.progress * 100}%` } }),
+      ]),
+      el("span", { class: "agents-rank-pending-gate", text: progress.text, title: row.ineligible_reason || "" }),
+      el("span", { class: "agents-num agents-rank-pending-score", title: "Unshrunk score; not comparable to ranked rows" }, [
+        rankFormat.num(raw), el("span", { class: "agents-rank-raw", text: " raw" }),
+      ]),
+    ]);
+    const detail = el("div", { class: "agents-rank-detail" }, [breakdownNode(payload, row)]);
+    toggle.bind(detail);
+    return el("li", {}, [line, detail]);
+  }));
+  return el("section", { class: "agents-rank-box agents-rank-pending", "aria-label": "Not yet ranked" }, [
+    el("div", { class: "agents-rank-box-head" }, [
+      el("h3", {}, ["Not yet ranked ", el("span", { class: "agents-rank-box-count", text: String(pending.length) })]),
+      gate.length ? el("span", { class: "agents-rank-box-meta", text: `Gate: ${gate.join(" and ")}` }) : null,
+    ]),
+    list,
+  ]);
+}
+
+function notScoredNode(payload) {
+  const notScored = payload.not_scored || {};
+  const unattributed = payload.unattributed || {};
+  const reasons = Object.entries(notScored.reasons || {}).filter(([, count]) => count > 0).sort((a, b) => b[1] - a[1]);
+  const max = reasons.length ? reasons[0][1] : 0;
+  const crews = Array.isArray(unattributed.crews) ? [...unattributed.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crewText = crews.map((crew) => `${crew.crew || "—"} ${crew.tasks ?? 0}`).join(", ");
+  const list = reasons.length
+    ? el("ul", { class: "agents-rank-reasons" }, reasons.map(([reason, count]) => el("li", { title: NOT_SCORED_REASONS[reason] || reason.replace(/_/g, " ") }, [
+      el("span", { class: "agents-rank-reason-key", text: reason.replace(/_/g, " ") }),
+      el("span", { class: "agents-rank-reason-bar", "aria-hidden": "true" }, [el("span", { style: { width: `${max ? (count * 100) / max : 0}%` } })]),
+      el("span", { class: "agents-num", text: rankFormat.num(count, 0) }),
+    ])))
+    : el("p", { class: "agents-rank-note", text: "Every problem in this window was charged to a model." });
+  return el("section", { class: "agents-rank-box agents-rank-unscored", "aria-label": "Not scored" }, [
+    el("div", { class: "agents-rank-box-head" }, [
+      el("h3", {}, ["Not scored ", el("span", { class: "agents-rank-box-count", text: rankFormat.plural(notScored.count || 0, "problem") })]),
+      el("span", {
+        class: "agents-rank-box-meta",
+        text: `${rankFormat.num(unattributed.tasks || 0, 0)} unattributed tasks`,
+        title: crewText ? `Tasks with no model to charge, by crew: ${crewText}` : "",
+      }),
+    ]),
+    list,
+  ]);
+}
+
+// --- the breakdown under a row ---
 
 function breakdownNode(payload, row) {
   return el("div", { class: "agents-rank-breakdown" }, [
@@ -235,10 +597,10 @@ function measureTable(payload, row) {
     return el("tr", {}, [
       el("td", { text: measure.label || measure.key }),
       el("td", { text: cell.status || "—", title: cell.reason || "" }),
-      el("td", { class: "agents-num", text: unmarked ? num(cell.actual) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? num(cell.expected) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? num(cell.residual) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? num(cell.contribution) : "—" }),
+      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.actual) : "—" }),
+      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.expected) : "—" }),
+      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.residual) : "—" }),
+      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.contribution) : "—" }),
       el("td", { text: unmarked ? `${cell.units ?? "—"} ${cell.unit || measure.units || ""}`.trim() : (cell.reason || "unmeasured") }),
     ]);
   });
@@ -289,7 +651,7 @@ function effortNode(row) {
       el("td", { class: "agents-num", text: String(item.invocations ?? 0) }),
       el("td", { class: "agents-num", text: String(item.tasks ?? 0) }),
       el("td", { class: "agents-num", text: formatDuration(item.duration_ms || 0), title: "Sum of completed implementation invocations, not queue or CI time" }),
-      el("td", { class: "agents-num", text: num((item.input_tokens || 0) + (item.output_tokens || 0), 0), title: `${item.input_tokens || 0} in, ${item.output_tokens || 0} out` }),
+      el("td", { class: "agents-num", text: rankFormat.num((item.input_tokens || 0) + (item.output_tokens || 0), 0), title: `${item.input_tokens || 0} in, ${item.output_tokens || 0} out` }),
     ]))),
   ]);
 }
@@ -298,11 +660,11 @@ function shownNode(payload, row) {
   const totals = effortTotals(row);
   const cost = row.cost || {};
   const lines = [
-    `Cost per task: ${typeof cost.per_task === "number" ? num(cost.per_task, 4) : "—"}${cost.cost_unknown ? " (cost unknown)" : ""}. Coverage ${typeof cost.coverage === "number" ? num(cost.coverage * 100, 0) + "%" : "—"}.`,
+    `Cost per task: ${typeof cost.per_task === "number" ? rankFormat.num(cost.per_task, 4) : "—"}${cost.cost_unknown ? " (cost unknown)" : ""}. Coverage ${typeof cost.coverage === "number" ? rankFormat.num(cost.coverage * 100, 0) + "%" : "—"}.`,
     totals.empty
       ? "Tokens and run time: — (no completed implementation invocations)."
-      : `Tokens: ${num(totals.input + totals.output, 0)} (${num(totals.input, 0)} in, ${num(totals.output, 0)} out). Run time: ${formatDuration(totals.duration)}, the sum of completed implementation invocations, not queue or CI.`,
-    `Landed rate: ${typeof row.landed_rate === "number" ? num(row.landed_rate * 100, 1) + "%" : "—"} (${num(row.landed_tasks, 2)} landed of ${row.units ?? 0}).`,
+      : `Tokens: ${rankFormat.num(totals.input + totals.output, 0)} (${rankFormat.num(totals.input, 0)} in, ${rankFormat.num(totals.output, 0)} out). Run time: ${formatDuration(totals.duration)}, the sum of completed implementation invocations, not queue or CI.`,
+    `Landed rate: ${typeof row.landed_rate === "number" ? rankFormat.num(row.landed_rate * 100, 1) + "%" : "—"} (${rankFormat.num(row.landed_tasks, 2)} landed of ${row.units ?? 0}).`,
     `Per 1,000 landed lines: ${lineRates(row, totals)}.`,
     executionText(row.execution),
     boardStats(payload),
@@ -329,14 +691,14 @@ function lineRates(row, totals) {
   if (!changed) return "no landed diff size";
   const regressions = row.measures && row.measures.escaped_regressions;
   const regressionText = regressions && regressions.status === "measured" && typeof regressions.actual === "number"
-    ? `${num(regressions.actual * 1000 / changed)} escaped regressions`
+    ? `${rankFormat.num(regressions.actual * 1000 / changed)} escaped regressions`
     : "escaped regressions unmeasured";
   const cost = row.cost || {};
   let costText = "cost unknown";
   if (typeof cost.per_task === "number" && row.units) {
     const priced = (cost.coverage || 0) * row.units;
     const perThousand = cost.per_task * priced * 1000 / changed;
-    costText = `${num(perThousand, 4)} USD${cost.cost_unknown ? " (cost unknown)" : ""}`;
+    costText = `${rankFormat.num(perThousand, 4)} USD${cost.cost_unknown ? " (cost unknown)" : ""}`;
   }
   const timeText = totals.empty ? "run time unavailable" : `${formatDuration(totals.duration * 1000 / changed)} run time`;
   return `${regressionText}, ${costText}, ${timeText}`;
@@ -357,176 +719,6 @@ function boardStats(payload) {
   return `Board: ${unattributed.tasks || 0} unattributed tasks. Not-scored problems: ${notScored.count || 0}${reasonText}.`;
 }
 
-function chartNodes(rows) {
-  const tiers = qualifyingTiers(rows);
-  if (!tiers.length) {
-    const note = el("p", {
-      class: "agents-rank-note",
-      role: "note",
-      text: "No tier has at least 3 models with at least 10 tasks, so there is no score-against-cost chart.",
-    });
-    note.dataset.key = "charts-empty";
-    note.dataset.hash = "none";
-    return [note];
-  }
-  return tiers.map(({ tier, points }) => chartNode(tier, points));
-}
-
-function qualifyingTiers(rows) {
-  const byTier = new Map();
-  for (const row of rows) {
-    const points = Array.isArray(row.tiers) ? row.tiers : [];
-    for (const point of points) {
-      if (!point || (point.tasks || 0) < MIN_TASKS) continue;
-      const list = byTier.get(point.tier) || [];
-      list.push({ model: row.model, ...point });
-      byTier.set(point.tier, list);
-    }
-  }
-  const tiers = [];
-  for (const [tier, points] of byTier) {
-    if (points.length >= MIN_MODELS) tiers.push({ tier, points });
-  }
-  tiers.sort((a, b) => tierIndex(a.tier) - tierIndex(b.tier) || String(a.tier).localeCompare(String(b.tier)));
-  return tiers;
-}
-
-function tierIndex(tier) {
-  const index = TIER_ORDER.indexOf(tier);
-  return index < 0 ? TIER_ORDER.length : index;
-}
-
-function chartNode(tier, points) {
-  const split = splitFrontier(points);
-  const label = tierLabel(tier);
-  const section = el("section", { class: "agents-rank-chart", "aria-label": `${label} score against cost` }, [
-    el("div", { class: "agents-rank-chart-head" }, [
-      el("h3", { text: `${label}: score against cost per task` }),
-      pinnedInfoHint("Each point is that tier's score, 100 + 10 × z on the tier's tasks only, before the board's shrinkage, against recorded cost per task on the tier. A frontier model is one no other plotted model beats on both a higher score and a lower cost. Models with unknown cost are counted toward the tier and are not plotted."),
-    ]),
-  ]);
-  section.dataset.tier = tier || "";
-  if (!split.plot.length) {
-    section.append(el("p", {
-      class: "agents-rank-note",
-      text: `${points.length} models have at least 10 tasks on ${label}, but none has both a score and a known cost to plot.`,
-    }));
-  } else {
-    section.append(scatterPlot(split), legendNode(split), captionNode(split));
-  }
-  section.dataset.key = `chart-${tier}`;
-  section.dataset.hash = JSON.stringify(points.map((point) => [point.model, point.score, point.cost_per_task, point.cost_unknown, point.tasks]));
-  return section;
-}
-
-function splitFrontier(points) {
-  const plot = points.filter((point) => typeof point.score === "number"
-    && !point.cost_unknown
-    && typeof point.cost_per_task === "number");
-  const front = plot.filter((point) => !plot.some((other) => other !== point
-    && other.score > point.score
-    && other.cost_per_task < point.cost_per_task));
-  const plotted = new Set(plot);
-  const omitted = points.filter((point) => !plotted.has(point));
-  return { plot, front, omitted };
-}
-
-function scatterPlot(split) {
-  const width = 640;
-  const height = 320;
-  const left = 52;
-  const right = 16;
-  const top = 16;
-  const bottom = 36;
-  const costs = split.plot.map((point) => point.cost_per_task);
-  const scores = split.plot.map((point) => point.score);
-  let x0 = Math.min(...costs);
-  let x1 = Math.max(...costs);
-  let y0 = Math.min(...scores);
-  let y1 = Math.max(...scores);
-  if (x0 === x1) { x0 -= 1; x1 += 1; }
-  if (y0 === y1) { y0 -= 1; y1 += 1; }
-  const xPad = (x1 - x0) * 0.08;
-  const yPad = (y1 - y0) * 0.08;
-  x0 -= xPad;
-  x1 += xPad;
-  y0 -= yPad;
-  y1 += yPad;
-  const xOf = (cost) => left + ((cost - x0) / (x1 - x0)) * (width - left - right);
-  const yOf = (score) => top + ((y1 - score) / (y1 - y0)) * (height - top - bottom);
-  const names = split.front.map((point) => point.model).join(", ");
-  const svg = svgEl("svg", {
-    class: "agents-rank-plot",
-    viewBox: `0 0 ${width} ${height}`,
-    role: "img",
-    "aria-label": `Score against cost per task. Frontier: ${names || "none"}.`,
-  });
-  svg.append(
-    svgEl("line", { class: "agents-rank-axis", x1: left, y1: top, x2: left, y2: height - bottom }),
-    svgEl("line", { class: "agents-rank-axis", x1: left, y1: height - bottom, x2: width - right, y2: height - bottom }),
-  );
-  const xLabel = svgEl("text", { class: "agents-rank-axis-label", x: (left + width - right) / 2, y: height - 8, "text-anchor": "middle" });
-  xLabel.textContent = "cost per task";
-  const yLabel = svgEl("text", {
-    class: "agents-rank-axis-label",
-    x: 14,
-    y: (top + height - bottom) / 2,
-    "text-anchor": "middle",
-    transform: `rotate(-90 14 ${(top + height - bottom) / 2})`,
-  });
-  yLabel.textContent = "score";
-  svg.append(xLabel, yLabel);
-  const sorted = [...split.front].sort((a, b) => a.cost_per_task - b.cost_per_task || String(a.model).localeCompare(String(b.model)));
-  if (sorted.length >= 2) {
-    svg.append(svgEl("polyline", {
-      class: "agents-rank-front",
-      points: sorted.map((point) => `${xOf(point.cost_per_task).toFixed(1)},${yOf(point.score).toFixed(1)}`).join(" "),
-    }));
-  }
-  const frontier = new Set(split.front.map((point) => point.model));
-  for (const point of split.plot) {
-    const marked = frontier.has(point.model);
-    const dot = svgEl("circle", {
-      class: marked ? "agents-rank-dot is-frontier" : "agents-rank-dot",
-      cx: xOf(point.cost_per_task).toFixed(1),
-      cy: yOf(point.score).toFixed(1),
-      r: marked ? 6 : 4.5,
-    });
-    dot.setAttribute("data-frontier", marked ? "true" : "false");
-    dot.setAttribute("data-model", point.model || "");
-    const title = svgEl("title", {});
-    title.textContent = `${point.model}: score ${num(point.score)}, cost ${num(point.cost_per_task, 4)}${marked ? ", frontier" : ""}`;
-    dot.append(title);
-    svg.append(dot);
-  }
-  return svg;
-}
-
-function legendNode(split) {
-  const frontier = new Set(split.front.map((point) => point.model));
-  const list = el("ul", { class: "agents-rank-legend" });
-  const ordered = [...split.plot].sort((a, b) => String(a.model).localeCompare(String(b.model)));
-  for (const point of ordered) {
-    const marked = frontier.has(point.model);
-    const mark = el("span", { class: "agents-rank-frontier-label", text: marked ? "frontier" : "" });
-    if (!marked) mark.hidden = true;
-    list.append(el("li", { class: marked ? "is-frontier" : "" }, [
-      el("span", { class: marked ? "agents-rank-swatch is-frontier" : "agents-rank-swatch", "aria-hidden": "true" }),
-      el("span", { text: point.model || "—" }),
-      mark,
-    ]));
-  }
-  return list;
-}
-
-function captionNode(split) {
-  const names = split.front.map((point) => point.model).join(", ") || "none";
-  const omitted = split.omitted.length
-    ? ` ${split.omitted.length === 1 ? "1 model is" : `${split.omitted.length} models are`} not plotted (${split.omitted.map((point) => point.model).join(", ")}).`
-    : "";
-  return el("p", { class: "agents-rank-note", text: `Frontier: ${names}.${omitted}` });
-}
-
 function howNode(payload) {
   const measures = Array.isArray(payload.measures) ? payload.measures : [];
   const list = el("ul", { class: "agents-rank-how-list" });
@@ -535,25 +727,24 @@ function howNode(payload) {
     const status = measure.status === "measured" ? "" : `, ${measure.status || "unmeasured"}`;
     list.append(el("li", { text: `${measure.label || measure.key}${weight}${status}. ${measure.definition || ""}`.trim() }));
   }
+  const rules = payload.rules || {};
+  const draws = typeof rules.draws === "number" ? `${rankFormat.num(rules.draws, 0)} draws give` : "Draws give";
+  const band = typeof rules.band_probability === "number" ? rankFormat.num(rules.band_probability, 2) : "the band threshold";
   const node = el("details", { class: "agents-how agents-disclosure" }, [
     el("summary", { text: "How the score works" }),
-    el("p", { text: "The score starts at 100. Each measured residual, already signed so that positive is better, is divided by the noise scale and weighted. The result shrinks toward the other eligible models. Bands are shared ranks such as 1=. An unqualified board shows scores without bands. Cost orders a band and never changes it. A chart point is 100 + 10 × z on that tier's tasks only, before this shrinkage." }),
+    el("p", { text: `The score starts at 100. Each measured residual, already signed so that positive is better, is divided by the noise scale and weighted; a measure's contribution is the points it adds. The result shrinks toward the other eligible models (k = ${rankFormat.num(rules.shrinkage_k, 0)}), and ${draws} the 10th–90th percentile interval. Models share a band while the probability that one is ahead of the next stays below ${band}. An unqualified board shows scores without bands. Cost orders a band and never changes it. A chart point is 100 + 10 × z on that tier's tasks only, before this shrinkage.` }),
     list,
   ]);
   node.dataset.key = "how";
-  node.dataset.hash = JSON.stringify(measures.map((measure) => [measure.key, measure.status, measure.weight]));
+  node.dataset.hash = JSON.stringify([measures.map((measure) => [measure.key, measure.status, measure.weight]), rules]);
   return node;
 }
 
-function tierLabel(tier) {
-  if (!tier) return "Tier";
-  if (tier === "xhard") return "Xhard";
-  return tier.charAt(0).toUpperCase() + tier.slice(1);
-}
+// --- small helpers ---
 
-function num(value, digits = 2) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
-  return value.toLocaleString(undefined, { maximumFractionDigits: digits });
+function signed(value) {
+  if (Math.abs(value) < 0.05) return "0.0";
+  return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}`;
 }
 
 function formatDuration(ms) {
@@ -564,12 +755,4 @@ function formatDuration(ms) {
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function svgEl(name, attrs) {
-  const node = document.createElementNS(SVG_NS, name);
-  for (const [key, value] of Object.entries(attrs || {})) {
-    if (value != null) node.setAttribute(key, String(value));
-  }
-  return node;
 }

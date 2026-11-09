@@ -10,6 +10,10 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
         id: &str,
         params: TaskDocumentUpdateParams,
     ) -> Result<(), OrbitError>;
+    /// Rewrite the task's stored pre-family tool names (`required_tools`,
+    /// `granted_tools`) to family actions and record the rewrite in its
+    /// history. `Ok(false)` when it holds none; no other field changes.
+    fn migrate_task_tool_names(&self, id: &str, actor: &str) -> Result<bool, OrbitError>;
 }
 
 pub trait TaskHistoryStoreBackend: Send + Sync {

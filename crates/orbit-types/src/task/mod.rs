@@ -67,7 +67,8 @@ pub use fields_updated::{
     TASK_FIELDS_UPDATED_EVENT, task_fields_updated_documents, task_fields_updated_note,
 };
 pub use granted_tools::{
-    GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, granted_tools_change_note,
+    GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, TOOL_NAMES_MIGRATED_EVENT,
+    granted_tools_change_note, tool_names_migrated_note,
 };
 pub use host_labels::{
     MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, effective_host_labels, host_labels_unavailable,

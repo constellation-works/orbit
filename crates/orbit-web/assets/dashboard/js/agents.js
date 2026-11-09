@@ -14,7 +14,6 @@
 
 import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, clockStamp, relativeTime } from './common.js';
 import * as common from './common.js';
-import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
 import { implementersPanel } from './agents-implementers.js';
@@ -22,12 +21,11 @@ import { fetchAndRenderRank } from './agents-rank.js';
 
 const $ = (id) => document.getElementById(id);
 
-export const AGENT_ROLES = ["orchestrators", "implementers", "reviewers", "pilots", "rank"];
+export const AGENT_ROLES = ["rank", "implementers", "reviewers", "pilots"];
 // The attribution strip and the scorecard counts. Rank is a view of the
 // implementer board, not an owner of problems.
-const SCORECARD_ROLES = ["orchestrators", "implementers", "reviewers", "pilots"];
+const SCORECARD_ROLES = ["implementers", "reviewers", "pilots"];
 const ROLE_LABELS = {
-  orchestrators: "Orchestrators",
   implementers: "Implementers",
   reviewers: "Reviewers",
   pilots: "Pilots",
@@ -46,7 +44,6 @@ const ROLE_LABELS = {
 // its `render` gets `rerender()` to redraw after a control changes.
 // `fetch` also gets the implementer execution scope as its second argument.
 const ROLE_PANELS = {
-  orchestrators: orchestratorsPanel,
   implementers: implementersPanel,
   reviewers: reviewersPanel,
   pilots: pilotsPanel,
@@ -54,6 +51,7 @@ const ROLE_PANELS = {
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
   no_cause: "rework with no recorded cause",
+  spec: "problems caused by the task's spec",
   unattributed: "no orchestrator attribution",
   no_run: "no implementation run to charge",
   no_review: "no settled review to charge",

@@ -900,7 +900,7 @@ function buildClaimActions(claim, capabilities, handlers) {
       },
     });
   }
-  if (claim.unsettled) {
+  if (claim.unsettled || claim.phase === "failed") {
     const targets = recoverTargets(claim);
     offers.push({
       key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",
