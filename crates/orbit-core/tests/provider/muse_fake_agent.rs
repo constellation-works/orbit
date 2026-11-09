@@ -184,6 +184,14 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
 }
 
 fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcome, String> {
+    try_dispatch_activity(harness, spec, "muse_fake_agent")
+}
+
+fn try_dispatch_activity(
+    harness: &Harness,
+    spec: AgentLoopSpec,
+    activity_name: &str,
+) -> Result<DispatchOutcome, String> {
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
@@ -196,7 +204,7 @@ fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcom
     .expect("build audit writer");
 
     dispatch_v2_activity(V2DispatchInput {
-        activity_name: "muse_fake_agent",
+        activity_name,
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
         input: serde_json::json!({
@@ -929,4 +937,41 @@ fn shipped_executor_is_sandboxed_and_missing_binary_is_stable() {
         error.contains("failed to spawn"),
         "stable diagnostic names spawn failure: {error}"
     );
+}
+
+// The 3h implement deadline killed a completed candidate (ORB-23280).
+// Read the shipped declaration and observe the deadline delivered to a real
+// provider process; workspace policy must also reach that same boundary.
+#[test]
+fn implement_deadline_uses_the_shipped_budget_or_workspace_override() {
+    let activity: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../assets/activities/agent_implement.yaml"))
+            .expect("shipped implementation activity");
+    let declared = activity["spec"]["wall_clock_timeout_seconds"]
+        .as_u64()
+        .expect("declared implement timeout");
+    for (configured, expected) in [(None, 21600), (Some(28800), 28800)] {
+        let dir = tempfile::tempdir().expect("isolated runtime");
+        let global = dir.path().join("global");
+        let workspace = dir.path().join("workspace/.orbit");
+        std::fs::create_dir_all(&global).expect("global config directory");
+        std::fs::create_dir_all(&workspace).expect("workspace config directory");
+        if let Some(seconds) = configured {
+            std::fs::write(
+                workspace.join("config.toml"),
+                format!("[workflow.activity_timeouts]\nagent_implement = {seconds}\n"),
+            )
+            .expect("workspace timeout override");
+        }
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("isolated runtime");
+        let harness = Harness::with_runtime(&success_body(), None, runtime, Some(dir));
+        let outcome = try_dispatch_activity(&harness, spec(declared), "agent_implement")
+            .expect("dispatch implementation");
+        assert!(outcome.success, "{:?}", outcome.message);
+        assert_eq!(
+            harness.env_value(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV),
+            Some((expected * 1000_u64).to_string()),
+            "ORB-23280: a 3h ceiling must not cut off the implementation budget"
+        );
+    }
 }

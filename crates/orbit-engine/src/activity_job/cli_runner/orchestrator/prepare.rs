@@ -28,7 +28,7 @@ pub(super) fn reject_removed_trusted_host_execution(
     Ok(())
 }
 
-/// The provider's wall-clock bound in seconds from the activity declaration.
+/// The provider's wall-clock bound in seconds from the resolved activity spec.
 pub(super) fn invocation_timeout_seconds(spec: &AgentLoopSpec) -> u64 {
     if spec.wall_clock_timeout_seconds == 0 {
         DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS

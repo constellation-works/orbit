@@ -371,6 +371,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.activity_timeouts": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.auto_effort.bands": {
       "scope": "built-in",
       "state": "default",

@@ -822,6 +822,36 @@ set instead. Promotion warnings keep their proposed-only semantics.
 
 An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds. A fresh assessment from an explicit or routine pilot is approved without another pilot. A stale one whose certified description/criteria or other material (selectors, complexity, crew/provenance, relations, or a configured material field) drifted is selected again for a fresh drain pilot like a new proposal when no live execution claim holds it; a failed repilot, a holding warning, a live claim, or a running pilot keeps it proposed until the task changes or an operator acts.
 
+### `[workflow.activity_timeouts]` — CLI agent wall-clock budgets
+
+```toml
+[workflow.activity_timeouts]
+agent_implement = 28800 # 8 hours, overriding the shipped 6-hour budget
+```
+
+Maps exact activity names to integer seconds (`1..43200`, inclusive; maximum
+12 hours). Applies to CLI agent-loop activities, including custom activities,
+regardless of provider. Zero, negative, non-integer or excessive values fail
+config loading with an error identifying the key. Names must be non-empty and
+contain no whitespace. A workspace table replaces the global table; omitted
+activities keep their declaration, with the runner fallback for a zero
+declaration. An empty table overrides nothing. Restart long-running processes
+after editing. `orbit config get workflow.activity_timeouts` shows the effective
+table; `orbit config set workflow.activity_timeouts '{ agent_implement = 28800 }'`
+replaces it.
+
+The budget is resolved once per activity step: continuations and response
+corrections spend what remains rather than renewing it. An admitted review
+keeps its `review.minutes` bound ahead of activity overrides. Shipped
+`agent_implement` defaults to 21600 seconds (6 hours). The task gate's child
+wait and reservation TTL are 46800 seconds (13 hours), covering the maximum
+12-hour override plus a bounded 1-hour delivery/review tail. The auto pipeline's
+gate wait is 54000 seconds (15 hours), including admission and tail headroom.
+Child waits and reservation TTLs accept up to 86400 seconds (24 hours).
+Recovery/review budgets are independent and do not enclose implementation.
+Custom jobs and explicitly shorter enclosing waits can still cancel a child
+first; keep those waits and reservation TTLs consistent with activity budgets.
+
 ### `[workflow.mid_run_steering]` — operator comments after dispatch
 
 ```toml

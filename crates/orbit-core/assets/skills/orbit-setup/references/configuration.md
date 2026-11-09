@@ -311,6 +311,50 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
+## Activity wall-clock timeouts
+
+Set CLI agent activity budgets by exact activity name in the workspace's
+`.orbit/config.toml` (or globally for a host-wide policy):
+
+```toml
+[workflow.activity_timeouts]
+agent_implement = 28800 # 8 hours; shipped default is 21600 seconds (6 hours)
+```
+
+`workflow.activity_timeouts` is a table of activity names to integer seconds,
+from `1` through `43200` (12 hours), inclusive. Zero, negative, non-integer and
+larger values fail configuration loading; the error names the setting. Names
+must be non-empty and contain no whitespace. Match the activity name, such as
+`agent_implement`, rather than a pipeline step ID or provider name. Custom CLI
+agent activities use the same table. Unmapped activities retain their declared
+timeout, including the runner fallback when the declaration is zero. An empty
+table overrides nothing. A workspace table replaces the global table, so copy
+any global entries you want to retain.
+
+The override is resolved once per activity step. Implementation continuations
+and response corrections consume the remaining resolved budget rather than
+starting a fresh full budget. An admitted review keeps its `review.minutes`
+bound ahead of activity overrides. Restart long-running Orbit processes after an
+edit so they load the new policy.
+
+The shipped task gate allows 13 hours for child delivery and reserves its
+footprint for the same interval: the maximum 12-hour implementation override
+plus a bounded 1-hour delivery/review tail. The auto pipeline allows 15 hours
+for the gate (1-hour admission, 13-hour delivery and 1-hour tail). Child waits
+and reservation TTLs admit up to 86400 seconds (24 hours). Recovery and review
+activities keep their separate declared budgets; they do not enclose
+implementation. Custom jobs and explicit shorter wait inputs can still cancel
+a child earlier; keep enclosing waits and reservation TTLs consistent with the
+activity budgets you choose.
+
+Inspect or replace the effective table with installed commands:
+
+```bash
+orbit config get workflow.activity_timeouts
+orbit config set workflow.activity_timeouts '{ agent_implement = 28800 }'
+orbit config show --all
+```
+
 ## Mid-run steering
 
 Mid-run steering lets an operator's task comments guide a run at a later prompt

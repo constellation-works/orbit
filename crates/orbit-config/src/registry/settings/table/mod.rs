@@ -15,6 +15,7 @@ use super::super::{
     CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues,
     ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
 };
+use super::resolve;
 use super::resolve::{
     DEFAULT_RETENTION_DAYS, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_pass_list, normalize_logins, normalize_pass_list, resolve_at, resolve_bounded_range,

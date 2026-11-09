@@ -25,5 +25,6 @@ pub fn run_cli_backend(
         audit,
         input,
         fs_profile,
+        None,
     )
 }

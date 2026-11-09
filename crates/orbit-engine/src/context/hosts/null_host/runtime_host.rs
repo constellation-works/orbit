@@ -484,6 +484,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn agent_provider_config(&self) -> HashMap<String, String> {
         NullRuntimeHost::agent_provider_config(self)
     }
+    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
+        NullRuntimeHost::activity_wall_clock_timeout_seconds(self, activity_name)
+    }
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
         NullRuntimeHost::agent_stall_window(self)
     }

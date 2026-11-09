@@ -585,6 +585,9 @@ pub trait NullRuntimeHost: Send + Sync {
     fn agent_provider_config(&self) -> HashMap<String, String> {
         HashMap::new()
     }
+    fn activity_wall_clock_timeout_seconds(&self, _activity_name: &str) -> Option<u64> {
+        None
+    }
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
         Some(std::time::Duration::from_secs(
             crate::context::AGENT_STALL_MINUTES * 60,

@@ -15,7 +15,7 @@
 use std::time::Instant;
 
 use orbit_types::workflow::ReviewerInvocationEvent;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, TargetStep};
+use orbit_types::workflow::activity_job::TargetStep;
 use serde_json::Value;
 
 use super::ExecCtx;
@@ -64,18 +64,10 @@ impl ReviewerInvocation {
         self.bound_seconds == Some(0)
     }
 
-    /// `spec` with its wall clock set to the host's deadline for this
-    /// invocation, whichever way it differs from the activity's own bound.
-    pub(super) fn bounded_spec(&self, spec: &ActivityV2Spec) -> Option<ActivityV2Spec> {
-        let bound = self.bound_seconds.filter(|bound| *bound > 0)?;
-        match spec {
-            ActivityV2Spec::AgentLoop(agent) if bound != agent.wall_clock_timeout_seconds => {
-                let mut agent = agent.clone();
-                agent.wall_clock_timeout_seconds = bound;
-                Some(ActivityV2Spec::AgentLoop(agent))
-            }
-            _ => None,
-        }
+    /// The review budget takes precedence over activity declarations and
+    /// workspace activity overrides, whichever way its bound differs.
+    pub(super) fn wall_clock_timeout_seconds(&self) -> Option<u64> {
+        self.bound_seconds.filter(|bound| *bound > 0)
     }
 
     /// Report the reviewer's end with the runtime it actually took, whether

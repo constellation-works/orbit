@@ -18,7 +18,7 @@ impl Tool for OrbitPipelineWaitTool {
             },
             ToolParam {
                 name: "timeout_seconds".to_string(),
-                description: "Optional timeout in seconds (default 3600, max 7200).".to_string(),
+                description: "Optional timeout in seconds (default 3600, max 86400).".to_string(),
                 param_type: "number".to_string(),
                 required: false,
             },

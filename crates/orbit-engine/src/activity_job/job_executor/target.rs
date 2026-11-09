@@ -214,10 +214,6 @@ fn dispatch_once(
         reviewer.finish(ctx, false);
         return Ok(None);
     }
-    let bounded_spec = reviewer
-        .as_ref()
-        .and_then(|reviewer| reviewer.bounded_spec(spec));
-    let spec = bounded_spec.as_ref().unwrap_or(spec);
     // Events keep the step id; policy and broker identity use the catalog
     // activity the step targets (a step `review` runs `agent_review_repair`).
     let dispatch = dispatch_v2_target_activity(
@@ -231,6 +227,9 @@ fn dispatch_once(
             host: Some(ctx.host),
         },
         t.activity_name.as_deref(),
+        reviewer
+            .as_ref()
+            .and_then(|reviewer| reviewer.wall_clock_timeout_seconds()),
     );
     if let Err(DispatchError::LocalShellFailed { output, .. }) = &dispatch {
         record_pipeline(ctx, &step.id, output.as_ref().clone());

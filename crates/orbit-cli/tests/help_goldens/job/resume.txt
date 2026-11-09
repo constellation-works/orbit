@@ -11,7 +11,7 @@ Options:
           Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
 
       --timeout-seconds <TIMEOUT_SECONDS>
-          Wait deadline in seconds (0..=21600); requires --wait
+          Wait deadline in seconds (0..=86400); requires --wait
 
   -h, --help
           Print help (see a summary with '-h')
