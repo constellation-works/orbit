@@ -500,12 +500,12 @@ fn frozen_at() -> DateTime<Utc> {
 #[test]
 fn frozen_snapshot_carries_its_inputs_and_recomputes_to_the_same_result() {
     let facts = fleet();
+    // One query for both freezes; see a_frozen_snapshot_is_never_overwritten.
+    let query = settled();
     let snapshot =
-        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
-            .unwrap();
+        agent_rank_freeze_snapshot(&facts, &query, &RankSeasons::default(), frozen_at()).unwrap();
     let again =
-        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
-            .unwrap();
+        agent_rank_freeze_snapshot(&facts, &query, &RankSeasons::default(), frozen_at()).unwrap();
     assert_eq!(snapshot, again, "the same facts freeze identically");
     assert_eq!(snapshot["schema_version"], 1);
     assert_eq!(snapshot["cutoff"], snapshot["ranking"]["until"]);
@@ -614,9 +614,11 @@ fn a_frozen_snapshot_is_never_overwritten() {
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
+    // One query for both freezes: `settled()` reads the wall clock, so two
+    // calls can straddle a second and name different cutoffs.
+    let query = settled();
     let first =
-        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), frozen_at())
-            .unwrap();
+        agent_rank_freeze_snapshot(&facts, &query, &RankSeasons::default(), frozen_at()).unwrap();
     let (stored, already) = write_rank_snapshot_immutable(&dir, &first).unwrap();
     assert!(!already);
     assert_eq!(stored, first);
@@ -632,7 +634,7 @@ fn a_frozen_snapshot_is_never_overwritten() {
         .unwrap()
         .with_timezone(&Utc);
     let second =
-        agent_rank_freeze_snapshot(&facts, &settled(), &RankSeasons::default(), later).unwrap();
+        agent_rank_freeze_snapshot(&facts, &query, &RankSeasons::default(), later).unwrap();
     assert_eq!(second["content_hash"], first["content_hash"]);
     let (stored, already) = write_rank_snapshot_immutable(&dir, &second).unwrap();
     assert!(already);
