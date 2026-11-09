@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
 import { humanCrewFor } from './task-crew.js';
-import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM } from './task-shared.js';
+import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
 import { buildActionsRow } from './task-actions.js';
@@ -29,12 +29,12 @@ export function taskRunsTabActive() {
   return activeDetailTab === "runs";
 }
 
-export function primeTaskRuns(taskId, payload, task = null) {
-  if (typeof taskId !== "string" || !taskId || !payload || typeof payload !== "object") return;
-  const previous = taskRunLoads.get(taskId);
+export function primeTaskRuns(task, payload) {
+  if (!task?.id || !payload || typeof payload !== "object") return;
+  const previous = taskRunLoads.get(taskDispatchIdentity(task));
   const items = Array.isArray(payload.items) ? payload.items : [];
   const failed = typeof payload.error === "string";
-  taskRunLoads.set(taskId, {
+  taskRunLoads.set(taskDispatchIdentity(task), {
     pending: false,
     error: failed ? payload.error : null,
     // A failed first read knows nothing about the run history: keep `items`
@@ -47,18 +47,19 @@ export function primeTaskRuns(taskId, payload, task = null) {
     at: failed ? (previous?.at ?? 0) : Date.now(),
   });
   if (task && taskRunsTabActive()) {
-    const node = document.getElementById(`detail-${taskId}-runs`);
-    if (node) renderTaskRuns(node, task, taskState.paneContext);
+    const node = document.getElementById(`detail-${task.id}-runs`);
+    if (node?.dataset.taskIdentity === taskDispatchIdentity(task)) renderTaskRuns(node, task, taskState.paneContext);
   }
 }
 // The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
-export function detailFeedbackSignature(taskId) {
+export function detailFeedbackSignature(task) {
+  const taskId = taskDispatchIdentity(task);
   const parts = [feedbackSignature(taskState.statusFeedback, taskId), feedbackSignature(taskState.complexityFeedback, taskId), feedbackSignature(taskState.crewFeedback, taskId)];
   for (const field of Object.keys(taskFields.TASK_FIELD_EDITORS)) {
-    parts.push(feedbackSignature(taskState.fieldFeedback, taskFields.fieldFeedbackKey(taskId, field)));
+    parts.push(feedbackSignature(taskState.fieldFeedback, taskFields.fieldFeedbackKey(task, field)));
   }
   return parts.join("|");
 }
@@ -198,7 +199,7 @@ export function buildTaskDetail(task, context, drain = null) {
       ...(count ? { count } : {}),
     });
     if (taskWhyStuck.isLongCriteria(task.acceptance_criteria)) {
-      const open = taskState.expandedCriteria.has(task.id);
+      const open = taskState.expandedCriteria.has(taskDispatchIdentity(task));
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "ac-toggle",
@@ -210,8 +211,8 @@ export function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) taskState.expandedCriteria.add(task.id);
-        else taskState.expandedCriteria.delete(task.id);
+        if (nowOpen) taskState.expandedCriteria.add(taskDispatchIdentity(task));
+        else taskState.expandedCriteria.delete(taskDispatchIdentity(task));
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full AC";
       });
@@ -223,7 +224,7 @@ export function buildTaskDetail(task, context, drain = null) {
     const actions = actionSlot();
     const block = addField(leftCol, "Description", taskFields.taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
     if (taskWhyStuck.isLongDescription(task.description)) {
-      const open = taskState.expandedDescriptions.has(task.id);
+      const open = taskState.expandedDescriptions.has(taskDispatchIdentity(task));
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "description-toggle",
@@ -235,8 +236,8 @@ export function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) taskState.expandedDescriptions.add(task.id);
-        else taskState.expandedDescriptions.delete(task.id);
+        if (nowOpen) taskState.expandedDescriptions.add(taskDispatchIdentity(task));
+        else taskState.expandedDescriptions.delete(taskDispatchIdentity(task));
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full description";
       });
@@ -489,22 +490,25 @@ function buildDetailTabs(task, detail, tabs, context) {
 // store's task filter. Read when the tab shows, at most once per freshness
 // window, and painted in place so a read never rebuilds the detail.
 function taskRunCount(task) {
-  const load = taskRunLoads.get(task.id);
+  const load = taskRunLoads.get(taskDispatchIdentity(task));
   return load && load.items ? load.total : null;
 }
 
 function loadTaskRuns(task, context, fallback = null) {
-  const previous = taskRunLoads.get(task.id);
-  const target = () => document.getElementById(`detail-${task.id}-runs`) || fallback;
+  const previous = taskRunLoads.get(taskDispatchIdentity(task));
+  const target = () => {
+    const node = document.getElementById(`detail-${task.id}-runs`);
+    return node?.dataset.taskIdentity === taskDispatchIdentity(task) ? node : fallback;
+  };
   if (previous && (previous.pending || Date.now() - previous.at < TASK_RUNS_FRESH_MS)) return;
   if (isAggregateView() && !task.workspace_id) {
-    taskRunLoads.set(task.id, { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
+    taskRunLoads.set(taskDispatchIdentity(task), { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
     renderTaskRuns(target(), task, context);
     return;
   }
   const visit = captureWorkspaceVisit();
   const load = { pending: true, error: null, items: previous ? previous.items : null, total: previous ? previous.total : null, at: Date.now() };
-  taskRunLoads.set(task.id, load);
+  taskRunLoads.set(taskDispatchIdentity(task), load);
   renderTaskRuns(target(), task, context);
   fetchJson(taskWorkspacePath(task, `/api/job-runs?task_id=${encodeURIComponent(task.id)}&limit=${TASK_RUNS_LIMIT}`)).then(
     (payload) => {
@@ -518,14 +522,15 @@ function loadTaskRuns(task, context, fallback = null) {
   ).finally(() => {
     load.pending = false;
     load.at = Date.now();
-    if (!visit.isCurrent() || taskRunLoads.get(task.id) !== load) return;
+    if (!visit.isCurrent() || taskRunLoads.get(taskDispatchIdentity(task)) !== load) return;
     renderTaskRuns(target(), task, context);
   });
 }
 
 function renderTaskRuns(node, task, context) {
   if (!node) return;
-  const load = taskRunLoads.get(task.id);
+  node.dataset.taskIdentity = taskDispatchIdentity(task);
+  const load = taskRunLoads.get(taskDispatchIdentity(task));
   const children = [];
   if (!load || (load.pending && !load.items && !load.error)) {
     const note = el("p", { class: "panel-placeholder", text: "Loading runs…", role: "status", "aria-live": "polite" });
@@ -535,7 +540,7 @@ function renderTaskRuns(node, task, context) {
       const retry = el("button", { class: "action", type: "button", text: "Retry" });
       retry.addEventListener("click", (event) => {
         event.stopPropagation();
-        taskRunLoads.delete(task.id);
+        taskRunLoads.delete(taskDispatchIdentity(task));
         loadTaskRuns(task, context, node);
       });
       children.push(el("div", { class: "action-error", text: `Could not load runs: ${load.error}`, role: "alert" }), retry);
@@ -553,7 +558,9 @@ function renderTaskRuns(node, task, context) {
   }
   node.replaceChildren(...children);
   const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
-  if (count) count.textContent = load && load.items ? String(load.total) : "";
+  if (count && document.getElementById(`detail-${task.id}-runs`) === node) {
+    count.textContent = load && load.items ? String(load.total) : "";
+  }
 }
 
 function buildTaskRun(run, task, context) {
@@ -591,7 +598,7 @@ export function buildTaskDetailPlaceholder(task, state, context) {
     retry.type = "button";
     retry.addEventListener("click", (e) => {
       e.stopPropagation();
-      forgetTaskDetailLoad(task.id);
+      forgetTaskDetailLoad(task);
       rerender(context);
     });
     detail.appendChild(el("div", { class: "actions" }, [retry]));

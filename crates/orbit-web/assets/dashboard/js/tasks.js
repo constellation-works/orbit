@@ -1,11 +1,11 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
-import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag } from './task-shared.js';
+import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
 import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
 import { recoveryRefusals } from './task-agent-actions.js';
@@ -31,6 +31,7 @@ onWorkspaceChange(() => {
   taskState.taskActionNotice = null;
   quickActionState.clear();
   taskState.selectedTaskId = null;
+  taskState.selectedTaskWorkspace = null;
   taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
@@ -234,18 +235,20 @@ function runCellSignature(task) {
 // The feedback of a status change whose detail folded in, with its undo. Null
 // while the detail is open again (it shows the feedback itself) or once the
 // feedback has expired.
-function buildFoldedStatusFeedback(taskId, context) {
-  if (!taskState.foldedStatusTasks.has(taskId) || taskState.selectedTaskId === taskId) return null;
+function buildFoldedStatusFeedback(task, context) {
+  const taskId = taskDispatchIdentity(task);
+  if (!taskState.foldedStatusTasks.has(taskId) || isSelectedTask(task)) return null;
   const entry = taskState.statusFeedback.get(taskId);
   return buildMutationFeedback(entry, () => {
     if (!entry || !entry.undo) return;
-    const task = taskList(context).find((t) => t && t.id === taskId) || taskState.foldedStatusTasks.get(taskId);
-    applyTaskStatusChange(task, entry.undo.previousValue, context);
+    const current = taskList(context).find((t) => t && taskDispatchIdentity(t) === taskId) || taskState.foldedStatusTasks.get(taskId);
+    applyTaskStatusChange(current, entry.undo.previousValue, context);
   });
 }
 
-function foldedStatusSignature(taskId) {
-  return taskState.foldedStatusTasks.has(taskId) && taskState.selectedTaskId !== taskId ? feedbackSignature(taskState.statusFeedback, taskId) : "";
+function foldedStatusSignature(task) {
+  const key = taskDispatchIdentity(task);
+  return taskState.foldedStatusTasks.has(key) && !isSelectedTask(task) ? feedbackSignature(taskState.statusFeedback, key) : "";
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
@@ -254,15 +257,15 @@ function foldedStatusSignature(taskId) {
 function buildFoldedStatusNotices(rowIds, context) {
   const notices = [];
   for (const [taskId, task] of taskState.foldedStatusTasks) {
-    if (rowIds.has(taskId) || (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) continue;
-    const feedback = buildFoldedStatusFeedback(taskId, context);
+    if (rowIds.has(taskId) || (taskState.pinnedExternalTask && taskDispatchIdentity(taskState.pinnedExternalTask.task) === taskId)) continue;
+    const feedback = buildFoldedStatusFeedback(task, context);
     if (!feedback) continue;
     const notice = el("div", { class: "task-status-notice" }, [
-      el("span", { class: "mono", text: `${taskId} → ${task.status}` }),
+      el("span", { class: "mono", text: `${task.id} → ${task.status}` }),
       feedback,
     ]);
     notice.dataset.key = `status-notice-${taskId}`;
-    notice.dataset.hash = `${task.status}-${foldedStatusSignature(taskId)}`;
+    notice.dataset.hash = `${task.status}-${foldedStatusSignature(task)}`;
     notices.push(notice);
   }
   return notices;
@@ -469,9 +472,12 @@ export function renderTasks(tasks, context) {
   // omit the jumped task even when its chip is on.
   if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task) {
     const p = taskState.pinnedExternalTask.task;
-    if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
+    if (filterTasks(tasks, context).some((task) => taskDispatchIdentity(task) === taskDispatchIdentity(p))) {
       taskState.pinnedExternalTask = null;
-      if (taskState.openTaskId === p.id) taskState.selectedTaskId = p.id;
+      if (taskState.openTaskId === p.id) {
+        taskState.selectedTaskId = p.id;
+        taskState.selectedTaskWorkspace = p.workspace_id || getWorkspace() || null;
+      }
     }
   }
   resolvePendingOpenTask(tasks, context);
@@ -549,14 +555,14 @@ export function renderTasks(tasks, context) {
     if (status === "backlog") {
       const strip = buildBacklogReadiness(group, context);
       if (strip) groupNodes.push(strip);
-      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t.id)?.pool === readyPoolFilter);
+      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter);
     }
     for (const t of rows) {
-      const rowKey = `task-${t.id}`;
+      const rowKey = `task-${taskDispatchIdentity(t)}`;
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -592,7 +598,7 @@ export function renderTasks(tasks, context) {
           tags.length ? el("span", { class: "title-tags" }, tags) : null,
         ]);
         const quickError = buildQuickActionError(t, context);
-        const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
+        const statusFeedbackNode = buildFoldedStatusFeedback(t, context);
         const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
         if (statusNote) stopRowInteraction(statusNote);
         row = el("div", { class: `row${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
@@ -604,6 +610,8 @@ export function renderTasks(tasks, context) {
           statusNote,
         ]);
         row.dataset.key = rowKey;
+        row.dataset.taskId = t.id;
+        row.dataset.workspace = t.workspace_id || getWorkspace() || "";
         row.dataset.hash = rowHash;
         // Selection is painted after the sync (syncRowSelection), so moving it
         // rebuilds no row and the focused one keeps its node.
@@ -611,13 +619,13 @@ export function renderTasks(tasks, context) {
           expanded: false,
           controls: "task-detail-pane",
           onToggle: () => {
-            if (taskState.selectedTaskId === t.id && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
-            else selectTask(t.id, context, { anchor: row });
+            if (isSelectedTask(t) && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
+            else selectTask(t.id, context, { anchor: row, workspace: row.dataset.workspace });
           },
         });
       }
       groupNodes.push(row);
-      rowIds.add(t.id);
+      rowIds.add(taskDispatchIdentity(t));
     }
     if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
     // A card whose rows carry no action (Blocked) gives the action column
@@ -651,7 +659,8 @@ export function renderTasks(tasks, context) {
 // The selected row reads as selected without being rebuilt: its class and
 // its disclosure state are set on the node the list already holds.
 function syncRowSelection(body) {
-  const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId ? `task-${taskState.selectedTaskId}` : null;
+  const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId
+    ? `task-${taskState.selectedTaskWorkspace || getWorkspace() || ""}:${taskState.selectedTaskId}` : null;
   for (const row of body.querySelectorAll(".row")) {
     if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
     const on = row.dataset.key === selected;

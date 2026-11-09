@@ -61,7 +61,12 @@ export function routineEditorElement({ payload, routine, nextAt, onClose }) {
 
 /** Whether a visible editor is present inside `container`. */
 export function editorVisibleIn(container) {
-  return Boolean(container?.querySelector(".schedule-editor"));
+  return [...(container?.querySelectorAll(".schedule-editor") || [])].some((editor) => {
+    for (let parent = editor.parentElement; parent && parent !== container; parent = parent.parentElement) {
+      if (parent.matches("details:not([open])")) return false;
+    }
+    return true;
+  });
 }
 
 /**

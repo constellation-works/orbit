@@ -17,6 +17,7 @@ const editors = new Map();
 const ROUTINE_KIND_LABELS = { cron: "Cron schedule", state: "Task state", deliveries_landed: "Deliveries landed" };
 const AUTO_TASK_KIND_LABELS = { cron: "Cron schedule", every_minutes: "Fixed interval", deliveries_landed: "Deliveries landed" };
 const STATE_KIND_LABELS = {
+  resident_due: "Resident mandate due",
   preparation_eligible: "Task ready for preparation",
   finding_unverified: "Review finding unverified",
   pilot_warnings_held: "Pilot warnings held promotion",

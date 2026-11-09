@@ -122,30 +122,43 @@ export function retireClosedDecisionCards(container, task) {
 }
 
 // Answered decisions for a task, read from the closed-inclusive list:
-// the picked option label, who answered and when. Empty until the read
-// lands (and stays empty when there is nothing answered), so callers can
-// always mount it. Works in the federated view via taskWorkspacePath.
+// the picked option label, who answered and when. Only a successful empty
+// read removes the enclosing block; failures keep an unavailable note and
+// Retry. Works in the federated view via taskWorkspacePath.
 export function buildAnsweredDecisions(task, context) {
   const wrap = el("div", { class: "decision-answered-list" });
   const visit = captureWorkspaceVisit();
   const path = taskShared.taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}&include_closed=true`);
-  fetchJson(path).then((payload) => {
-    if (!visit.isCurrent()) return;
-    const items = Array.isArray(payload?.items) ? payload.items : [];
-    const answered = items.filter((r) => r && r.resolution && (r.state === "answered" || r.resolution.answer_id));
-    if (!answered.length) { const block = wrap.closest(".field-block"); if (block) block.remove(); return; }
-    for (const request of answered) {
-      const res = request.resolution;
-      const picked = (Array.isArray(request.answers) ? request.answers : []).find((a) => String(a.id) === String(res.answer_id));
-      const label = picked ? picked.label : res.answer_id;
-      const when = res.answered_at ? taskShared.fmtAbsTimeValue(context, res.answered_at) : "";
-      wrap.appendChild(el("div", { class: "decision-answered" }, [
-        el("span", { class: "decision-answered-option", text: `Answered: ${label}` }),
-        el("span", { class: "decision-answered-meta", text: `by ${res.answered_by || "unknown"}${when ? ` · ${when}` : ""}` }),
-        res.note ? el("span", { class: "decision-answered-note", text: res.note }) : null,
-      ]));
-    }
-  }).catch(() => { const block = wrap.closest(".field-block"); if (block) block.remove(); });
+  const load = () => {
+    wrap.replaceChildren(el("p", { class: "field-empty", text: "Loading decision history…", role: "status" }));
+    return fetchJson(path).then((payload) => {
+      if (!visit.isCurrent()) return;
+      wrap.replaceChildren();
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const answered = items.filter((r) => r && r.resolution && (r.state === "answered" || r.resolution.answer_id));
+      if (!answered.length) { const block = wrap.closest(".field-block"); if (block) block.remove(); return; }
+      for (const request of answered) {
+        const res = request.resolution;
+        const picked = (Array.isArray(request.answers) ? request.answers : []).find((a) => String(a.id) === String(res.answer_id));
+        const label = picked ? picked.label : res.answer_id;
+        const when = res.answered_at ? taskShared.fmtAbsTimeValue(context, res.answered_at) : "";
+        wrap.appendChild(el("div", { class: "decision-answered" }, [
+          el("span", { class: "decision-answered-option", text: `Answered: ${label}` }),
+          el("span", { class: "decision-answered-meta", text: `by ${res.answered_by || "unknown"}${when ? ` · ${when}` : ""}` }),
+          res.note ? el("span", { class: "decision-answered-note", text: res.note }) : null,
+        ]));
+      }
+    }).catch((error) => {
+      if (!visit.isCurrent()) return;
+      const retry = el("button", { class: "action", type: "button", text: "Retry" });
+      retry.addEventListener("click", (event) => { event.stopPropagation(); load(); });
+      wrap.replaceChildren(
+        el("p", { class: "action-error", role: "alert", text: `Decision history unavailable: ${error.message || String(error)}` }),
+        retry,
+      );
+    });
+  };
+  load();
   return wrap;
 }
 
@@ -170,7 +183,7 @@ const decisionAnswersInFlight = new Set();
 async function answerDecision(task, detail, requestId, answer, note, btnNode, context) {
   const visit = captureWorkspaceVisit();
   if (!taskShared.canMutateTask(task)) return;
-  const flightKey = `${task.id}:${requestId}`;
+  const flightKey = `${taskShared.taskDispatchIdentity(task)}:${requestId}`;
   if (decisionAnswersInFlight.has(flightKey)) return;
   decisionAnswersInFlight.add(flightKey);
   const requestPath = visit.path(
@@ -197,7 +210,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   decisionAnswersInFlight.delete(flightKey);
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
-  forgetTaskDetailLoad(task.id);
+  forgetTaskDetailLoad(task);
   taskShared.notifyDecisionAnswered();
   await taskShared.refreshTasks(context);
 }

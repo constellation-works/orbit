@@ -101,6 +101,14 @@ function restoreActionFocus(actions, selector) {
   if (opener && typeof opener.focus === "function") opener.focus();
 }
 
+function disableActionControls(detail) {
+  const controls = [...detail.querySelectorAll(".action")].map(node => ({ node, disabled: node.disabled }));
+  for (const { node } of controls) node.disabled = true;
+  return () => {
+    for (const { node, disabled } of controls) node.disabled = disabled;
+  };
+}
+
 async function shipTask(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
   const dispatchKey = taskShared.taskDispatchIdentity(task);
@@ -110,7 +118,7 @@ async function shipTask(task, detail, btnNode, context) {
   taskState.shipInFlightTaskIds.add(dispatchKey);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  const restoreControls = disableActionControls(detail);
   const oldText = btnNode.textContent;
   btnNode.innerHTML = `<span class="spinner"></span>wait`;
   let dispatched = false;
@@ -127,11 +135,11 @@ async function shipTask(task, detail, btnNode, context) {
   } catch (error) {
     if (!dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
+    restoreControls();
     // A refresh may have replaced the detail while this request was pending.
     rerender(context);
     detail = $("detail-" + task.id) || detail;
     btnNode = detail.querySelector(".action.ship") || btnNode;
-    for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
     detail.prepend(actionErrorNode(dispatched
       ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
@@ -262,13 +270,13 @@ async function archiveTaskWithForce(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
   const requestPath = visit.path(taskMutationPath(task, "/archive"));
   if (!canMutateTask(task)) return;
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  const restoreControls = disableActionControls(detail);
   const oldText = btnNode && btnNode.tagName === "BUTTON" ? btnNode.textContent : "";
   if (btnNode && btnNode.tagName === "BUTTON") btnNode.innerHTML = `<span class="spinner"></span>wait`;
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
   const restore = () => {
-    for (const b of detail.querySelectorAll(".action")) b.disabled = false;
+    restoreControls();
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
   };
   try {
@@ -314,7 +322,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
   const requestPath = visit.path(opts.path ? taskWorkspacePath(task, opts.path) : taskMutationPath(task, `/${kind}`));
   if (!canMutateTask(task)) return;
   // Disable action controls while in flight to prevent double-clicks.
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  const restoreControls = disableActionControls(detail);
   let oldText = "";
   if (btnNode && btnNode.tagName === "BUTTON") {
     oldText = btnNode.textContent;
@@ -352,7 +360,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     await refreshTasks(context);
   } catch (err) {
     if (!visit.isCurrent()) return;
-    for (const b of detail.querySelectorAll(".action")) b.disabled = accepted;
+    if (!accepted) restoreControls();
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
     if (!accepted && opts.onFailure) opts.onFailure();
     detail.prepend(actionErrorNode(accepted

@@ -450,5 +450,3 @@ export function autoDrainProviderAuth(failures) {
   }
   return list;
 }
-
-// A recorded forecast object, or null when the field is absent or not an object.

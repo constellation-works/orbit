@@ -541,7 +541,9 @@ export function renderClock(payload) {
   }
   const selectedCadence = pendingCadenceSeconds ?? clock.configured_cadence_seconds;
   const cadence = el("select", { class: "operation-cadence", title: "Clock cadence" });
-  for (const seconds of [60, 300, 900, 1800, 3600]) {
+  const cadences = new Set([60, 300, 900, 1800, 3600]);
+  if (Number.isFinite(selectedCadence)) cadences.add(selectedCadence);
+  for (const seconds of [...cadences].sort((a, b) => a - b)) {
     const option = el("option", { text: seconds === 60 ? "Every minute" : `Every ${seconds / 60} minutes` });
     option.value = String(seconds);
     option.selected = seconds === selectedCadence;

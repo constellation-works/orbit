@@ -10,7 +10,7 @@ import { stopRowInteraction } from './task-nav.js';
 import { APPROVE_STATUSES, PULL_REQUEST_LINK_STATUSES, SHIP_STATUSES } from './task-actions.js';
 
 // Row shortcuts (Approve on proposed or review tasks, Ship on backlog): the
-// pending or failed state of each, keyed by task id, so a refresh repaints it.
+// pending or failed state of each, keyed by workspace-scoped task identity, so a refresh repaints it.
 export let quickActionState = new Map();
 // A failed row action stays visible long enough to be read, then clears
 // itself: about three minutes, after which the row loses `has-quick-error`
@@ -31,7 +31,7 @@ export function pruneQuickActionErrors(now = Date.now()) {
 }
 
 export function quickActionSignature(task) {
-  const state = quickActionState.get(task.id);
+  const state = quickActionState.get(taskShared.taskDispatchIdentity(task));
   const machine = task.job_run_machine;
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
@@ -96,7 +96,7 @@ function buildRemoteRunAction(task, location) {
 export function buildQuickAction(task, context) {
   const cell = el("span", { class: "task-quick-cell" });
   stopRowInteraction(cell);
-  const state = quickActionState.get(task.id);
+  const state = quickActionState.get(taskShared.taskDispatchIdentity(task));
   if (task.status === "in-progress" && task.job_run_id) {
     // A missing flag stays a link: that is the historical unrecorded-host row.
     // An explicit false means the run was recorded on another machine, so open
@@ -136,7 +136,7 @@ export function buildQuickAction(task, context) {
   const pending = (state && state.kind === "pending") || (spec.kind === "ship" && taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task)));
   // Ship reads in the accent while nothing holds the task, and quietly while
   // the drain snapshot says it waits; it ships either way.
-  const ready = spec.kind === "ship" && drainReadinessFor(task.id)?.pool === "eligible";
+  const ready = spec.kind === "ship" && drainReadinessFor(task)?.pool === "eligible";
   // Pending keeps the idle label so the button keeps its idle width: the
   // longer "Approving…"/"Shipping…" labels overflow the 73px desktop action
   // column into the crew control. The pending state is named for assistive
@@ -159,10 +159,10 @@ export function buildQuickAction(task, context) {
 }
 
 export function buildQuickActionError(task, context) {
-  const state = quickActionState.get(task.id);
+  const state = quickActionState.get(taskShared.taskDispatchIdentity(task));
   if (!state || state.kind !== "error") return null;
   if (typeof state.at === "number" && Date.now() - state.at >= QUICK_ACTION_ERROR_MS) {
-    quickActionState.delete(task.id);
+    quickActionState.delete(taskShared.taskDispatchIdentity(task));
     return null;
   }
 
@@ -194,8 +194,8 @@ export function buildQuickActionError(task, context) {
   dismiss.type = "button";
   dismiss.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (quickActionState.get(task.id) === state) {
-      quickActionState.delete(task.id);
+    if (quickActionState.get(taskShared.taskDispatchIdentity(task)) === state) {
+      quickActionState.delete(taskShared.taskDispatchIdentity(task));
       rerender(context || taskState.paneContext);
     }
   });
@@ -214,9 +214,9 @@ async function runQuickAction(task, kind, context) {
   const dispatchKey = taskShared.taskDispatchIdentity(task);
   const requestPath = visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));
   if (!canRunQuickAction(task)) return;
-  if (quickActionState.get(task.id)?.kind === "pending") return;
+  if (quickActionState.get(taskShared.taskDispatchIdentity(task))?.kind === "pending") return;
   if (kind === "ship" && taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))) return;
-  quickActionState.set(task.id, { kind: "pending", text: kind });
+  quickActionState.set(taskShared.taskDispatchIdentity(task), { kind: "pending", text: kind });
   if (kind === "ship") taskState.shipInFlightTaskIds.add(dispatchKey);
   rerender(context);
   let dispatched = false;
@@ -253,15 +253,15 @@ async function runQuickAction(task, kind, context) {
         ? `${task.id}: handoff approved; the owner landing job completes it`
         : `${task.id} approved and moved to ${task.status === "review" ? "done" : "backlog"}`;
     }
-    quickActionState.delete(task.id);
+    quickActionState.delete(taskShared.taskDispatchIdentity(task));
     await refreshTasks(context);
   } catch (error) {
     if (kind === "ship" && !dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
-    quickActionState.set(task.id, { kind: "error", text: dispatched
+    quickActionState.set(taskShared.taskDispatchIdentity(task), { kind: "error", text: dispatched
       ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
       : `${kind} failed: ${error.message || String(error)}`, at: Date.now() });
     rerender(context);
-    scheduleFeedbackExpiry(quickActionState, task.id, context, QUICK_ACTION_ERROR_MS);
+    scheduleFeedbackExpiry(quickActionState, taskShared.taskDispatchIdentity(task), context, QUICK_ACTION_ERROR_MS);
   }
 }

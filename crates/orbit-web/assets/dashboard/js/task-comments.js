@@ -1,12 +1,12 @@
 // Orbit dashboard task comment thread: expansion, raw/rendered toggle and thread order.
 
 import { el, makeDisclosure, copyWithFeedback, clockStamp } from './common.js';
-import { taskState, fmtAbsTimeValue, absTimeNode } from './task-shared.js';
+import { taskState, fmtAbsTimeValue, absTimeNode, taskDispatchIdentity } from './task-shared.js';
 import { explicitCrewValue, isConfiguredCrewValue } from './task-crew.js';
 import * as taskFields from './task-fields.js';
 
 // ORB-12645: which comments show their Markdown source instead of the rendered
-// body, keyed `<task id>#<index into task.comments>` like
+// body, keyed `<workspace>:<task id>#<index into task.comments>` like
 // `taskState.expandedComments` so a refresh that rebuilds the detail restores
 // the thread the way it was left. The thread order is a page-wide preference,
 // so it persists like the other dashboard presentation prefs.
@@ -24,7 +24,7 @@ let commentPrefs = loadCommentPrefs();
 
    Expansion, the raw/rendered toggle and the thread order are operator state
    rather than task data, so they live in this module — keyed
-   `<task id>#<index into task.comments>` — and survive the 30 s refresh that
+   `<workspace>:<task id>#<index into task.comments>` — and survive the 30 s refresh that
    rebuilds the detail node. */
 const COMMENT_COLLAPSE_HEIGHT_PX = 300;
 // A rendered body is 13px sans at line-height 1.65 (~22px a line), and the
@@ -171,8 +171,8 @@ function pilotAssessmentView({ receipt, assessment }) {
   return view;
 }
 
-export function commentKey(taskId, index) {
-  return `${taskId}#${index}`;
+export function commentKey(task, index) {
+  return `${taskDispatchIdentity(task)}#${index}`;
 }
 
 // Stable across a reorder and across the refresh: the position in
@@ -290,7 +290,7 @@ export function disconnectCommentCards(container) {
 }
 
 function buildCommentCard(task, comment, index, context) {
-  const key = commentKey(task.id, index);
+  const key = commentKey(task, index);
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
   const pilot = pilotAssessment(comment);
@@ -577,7 +577,7 @@ export function renderCommentsPanel(panel, task, context) {
     collapseAll.addEventListener("click", (event) => {
       event.stopPropagation();
       for (let index = 0; index < comments.length; index++) {
-        taskState.expandedComments.delete(commentKey(task.id, index));
+        taskState.expandedComments.delete(commentKey(task, index));
       }
       renderCommentsPanel(panel, task, context);
     });

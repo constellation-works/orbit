@@ -369,7 +369,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
 // the dot's label and the full wait in the tooltip. A row the snapshot does
 // not mention keeps a hidden dot and says nothing.
 function buildReadinessDot(task) {
-  const readiness = drainReadinessFor(task.id);
+  const readiness = drainReadinessFor(task);
   if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
   const dot = el("span", { class: "ready-dot", role: "img", "aria-label": readiness.label, title: readiness.title });
   dot.dataset.pool = readiness.pool;
@@ -382,7 +382,7 @@ function buildReadinessDot(task) {
 // hidden from it rather than read twice.
 export function buildRowReason(task) {
   const dot = buildReadinessDot(task);
-  const readiness = drainReadinessFor(task.id);
+  const readiness = drainReadinessFor(task);
   if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
   const words = readiness.badge ? readiness.badge.text : readiness.label;
   const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
@@ -482,12 +482,12 @@ async function runSkipPilot(task, button, context) {
     return;
   }
   if (!visit.isCurrent()) return;
-  applyUpdatedTask(updated, context);
-  forgetTaskDetailLoad(task.id);
+  applyUpdatedTask(updated, context, task);
+  forgetTaskDetailLoad(task);
   try {
     const payload = await fetchJson(taskShared.taskWorkspacePath(task, `/api/workflows/auto/readiness?task=${encodeURIComponent(task.id)}`));
     const entry = Array.isArray(payload?.tasks) ? payload.tasks.find((item) => item?.task_id === task.id) : null;
-    if (entry && visit.isCurrent()) replaceDrainReadinessEntry(entry);
+    if (entry && visit.isCurrent()) replaceDrainReadinessEntry(entry, task);
   } catch (error) {
     console.error(error);
   }

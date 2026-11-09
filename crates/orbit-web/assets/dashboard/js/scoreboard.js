@@ -65,15 +65,7 @@ export function fetchAndRenderScoreboard() {
     scoreboardRequestScope = scope;
     clearCostChrome();
   }
-  // One GET feeds both tab bodies. Both hosts get their own requestPanel
-  // state so the visible panel — Spend or exploration — shows the loading,
-  // error, and stale-data note; sharing this invocation's promise keeps the
-  // pair to a single fetch, and a tab switch never refetches.
-  let shared = null;
-  const request = () => {
-    if (!shared) shared = fetchJson(path);
-    return shared;
-  };
+  // Keep loading, error and stale-data feedback on the Spend & tokens panel.
   const render = (summary) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
     if (!payloadHonorsWindow(summary, selectedWindow)) {
@@ -84,9 +76,7 @@ export function fetchAndRenderScoreboard() {
     }
     renderScoreboard(summary);
   };
-  return Promise.all([
-    requestPanel("scoreboard-orchestration", path, request, render, "scoreboard-orchestration-count"),
-  ]);
+  return requestPanel("scoreboard-orchestration", path, () => fetchJson(path), render, "scoreboard-orchestration-count");
 }
 
 onWorkspaceChange(() => {

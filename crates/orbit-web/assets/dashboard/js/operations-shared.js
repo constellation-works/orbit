@@ -601,7 +601,3 @@ export function taskLink(taskId, workspaceId) {
 export function autoDrainNumber(value) {
   return value == null || value === "" ? NaN : Number(value);
 }
-
-// Capacity in words: how many leaf runs hold a slot against the limit, a bar
-// that shows any overflow past the limit, and one sentence on what a window
-// started now would do with that.
