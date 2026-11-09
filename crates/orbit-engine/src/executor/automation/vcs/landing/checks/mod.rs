@@ -23,12 +23,13 @@
 //!   `cancelled` or `timed_out` is transient from that conclusion alone,
 //!   even when its log cannot be read. A failure job whose log is only a
 //!   `ci-await` of those conclusions, or only a `ci-await` timeout, is the
-//!   same set. Conclusion-only stops retain one rerun. Logged transient
+//!   same set. That set keeps one shared rerun. Logged transient
 //!   failures use the configured bounded infrastructure budget and exponential
-//!   backoff, then resume landing. Exhaustion records the class and count.
-//!   When that rerun is already spent and the jobs are still cancelled or
-//!   timed out, it records `required CI jobs keep cancelling or timing out`
-//!   and the job names, and dispatches no repair. A job that concluded
+//!   backoff, then resume landing. Spending that budget records the class
+//!   and count. When the single rerun is already spent and the set is still
+//!   only those conclusions or a `ci-await` timeout, it records `required CI
+//!   jobs keep cancelling or timing out` and the job names, and dispatches
+//!   no repair. A job that concluded
 //!   `failure` keeps log classification, and a mixed failure is not reduced
 //!   to this set.
 //!   A log line starting with an entry of
