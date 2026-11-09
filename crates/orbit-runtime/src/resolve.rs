@@ -41,20 +41,47 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
 /// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run). Update admission,
 /// plugin root selection, and runtime-less commands use this same precedence.
 /// Explicit values expand `~` and resolve relative paths against the cwd,
-/// matching workspace root resolution.
+/// matching workspace root resolution. An explicit value that names an
+/// initialized workspace, or a directory whose `.orbit/` is one, resolves to
+/// that workspace root exactly as the runtime opens it, so the process joins
+/// the authority of the store it uses. A git working tree that is neither is
+/// refused: pinning it would write generation files into the checkout and
+/// register the process where no other participant looks.
 pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     if let Some(root) = root_override {
         let cwd = std::env::current_dir()?;
-        return resolve_root_path_value(&root.to_string_lossy(), &cwd);
+        let root = resolve_root_path_value(&root.to_string_lossy(), &cwd)?;
+        return explicit_generation_root(root, "--root");
     }
     if let Ok(explicit) = std::env::var("ORBIT_ROOT") {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
             let cwd = std::env::current_dir()?;
-            return resolve_root_path_value(trimmed, &cwd);
+            let root = resolve_root_path_value(trimmed, &cwd)?;
+            return explicit_generation_root(root, "ORBIT_ROOT");
         }
     }
     resolve_global_root()
+}
+
+/// The generation authority an explicit root selects.
+///
+/// Mirrors the runtime's `RequireInitialized` mapping so the CLI pin and the
+/// store pin are one authority. An uninitialized root that is not a git
+/// working tree stays as given, so first-create (`orbit init --root <new>`)
+/// keeps working.
+fn explicit_generation_root(root: PathBuf, source: &str) -> Result<PathBuf, OrbitError> {
+    if let Some(initialized) = initialized_root_or_child(&root) {
+        return Ok(initialized);
+    }
+    if root.join(".git").exists() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{source} '{}' is a git working tree, not an Orbit root; pass `--root {}` (run `orbit workspace init` there first if it is not initialized)",
+            root.display(),
+            root.join(".orbit").display()
+        )));
+    }
+    Ok(root)
 }
 
 /// Resolve only the CLI process pin. A macOS managed child uses its parent's
