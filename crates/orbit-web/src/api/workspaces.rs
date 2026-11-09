@@ -431,8 +431,13 @@ pub(super) fn all_job_runs_json(
     let pinned = state.pin();
     let entries = pinned.entries();
     // Per workspace, read only its bounded page (at most `limit` runs), its
-    // exact count and its page's task titles, in pinned entry order so
-    // totals and `unavailable` keep their serial order. The expensive
+    // exact count and its page's task titles. Each workspace's reads are
+    // independent (its own runtime, run store and task store, whose title
+    // read takes that partition's task-commit lock), so they run
+    // concurrently and the request waits for the slowest workspace instead
+    // of the sum of twelve lock-and-read round trips; the fold below runs in
+    // pinned entry order, so totals and `unavailable` keep their serial
+    // order. The expensive
     // projection — reading each candidate's pipeline state and lineage —
     // is deferred until after the global merge below: only runs that
     // survive `truncate(limit)` are projected, so a one-item page pays
@@ -440,31 +445,29 @@ pub(super) fn all_job_runs_json(
     // Phase tracing on a 13-workspace fixture showed that discarded
     // candidates' state reads, not the index-covered page or count,
     // dominated the failed-runs tail.
-    let selections = (0..entries.len())
-        .map(|index| {
-            let entry = &entries[index];
-            if !entry.active {
-                return Err("workspace is unavailable".to_string());
-            }
-            let runtime = match pinned.runtime_for(&entry.id) {
-                Ok(runtime) => runtime,
-                Err(_) => return Err("failed to open workspace".to_string()),
-            };
-            let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
-                Ok((
-                    runs,
-                    workspace_job_run_count(&runtime, state_filter, scope)?,
-                ))
-            });
-            match page {
-                Ok((runs, count)) => match super::runs::task_titles(&runtime, &runs) {
-                    Ok(titles) => Ok((runtime, runs, count, titles)),
-                    Err(error) => Err(error.to_string()),
-                },
+    let selections = fan_out(entries.len(), |index| {
+        let entry = &entries[index];
+        if !entry.active {
+            return Err("workspace is unavailable".to_string());
+        }
+        let runtime = match pinned.runtime_for(&entry.id) {
+            Ok(runtime) => runtime,
+            Err(_) => return Err("failed to open workspace".to_string()),
+        };
+        let page = workspace_job_runs(&runtime, limit, state_filter, scope).and_then(|runs| {
+            Ok((
+                runs,
+                workspace_job_run_count(&runtime, state_filter, scope)?,
+            ))
+        });
+        match page {
+            Ok((runs, count)) => match super::runs::task_titles(&runtime, &runs) {
+                Ok(titles) => Ok((runtime, runs, count, titles)),
                 Err(error) => Err(error.to_string()),
-            }
-        })
-        .collect::<Vec<_>>();
+            },
+            Err(error) => Err(error.to_string()),
+        }
+    });
 
     let mut candidates: Vec<(JobRun, usize)> = Vec::new();
     let mut projections: BTreeMap<
