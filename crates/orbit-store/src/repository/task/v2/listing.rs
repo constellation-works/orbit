@@ -335,7 +335,7 @@ impl TaskV2Store {
                 items.push(row);
             }
         }
-        sort_listing(
+        crate::contracts::sort_task_listing(
             &mut items,
             filter,
             |row| row.task.not_before,
@@ -479,47 +479,5 @@ fn select_candidates(
     filter: &TaskListFilter,
     limit: usize,
 ) -> TaskCandidates {
-    let unbounded = filter.without_cursor();
-    let mut items = envelopes
-        .into_iter()
-        .filter(|task| unbounded.matches(task))
-        .collect::<Vec<_>>();
-    sort_listing(
-        &mut items,
-        filter,
-        |task| task.not_before,
-        |task| &task.created_at,
-        |task| &task.id,
-        |task| task.status,
-    );
-    let total_without_cursor = items.len();
-    if filter.scan_before.is_some() {
-        items.retain(|task| filter.matches_cursor(task));
-    }
-    let total = items.len();
-    items.truncate(limit);
-    TaskCandidates {
-        items,
-        total,
-        total_without_cursor,
-    }
-}
-
-/// Canonical listing order — newest first, task ID ascending for ties — and,
-/// with `terminal_last`, the status-aware partition: tasks in a terminal
-/// status move behind the rest while each partition keeps that order.
-fn sort_listing<T>(
-    items: &mut [T],
-    filter: &TaskListFilter,
-    not_before: impl Fn(&T) -> Option<chrono::DateTime<Utc>>,
-    created_at: impl Fn(&T) -> &chrono::DateTime<Utc>,
-    id: impl Fn(&T) -> &str,
-    status: impl Fn(&T) -> TaskStatus,
-) {
-    sort_by_created_desc_id_asc(items, created_at, id);
-    if filter.scheduled_after.is_some() {
-        items.sort_by_key(not_before);
-    } else if filter.terminal_last {
-        items.sort_by_key(|item| status(item).is_terminal());
-    }
+    filter.select_snapshot(envelopes, limit)
 }

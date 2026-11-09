@@ -223,7 +223,13 @@ flowchart BT
   Compose --> Workflow
 ```
 
-- **`contracts`** holds every consumer-visible trait and DTO. Application code uses only these.
+- **`contracts`** holds every consumer-visible trait and DTO, including pure
+  snapshot selection on `TaskListFilter`. Application code uses only these.
+  `sort_snapshot` prepares an already-loaded envelope snapshot;
+  `select_ordered_snapshot` applies metadata predicates and cursor counts,
+  cloning only the selected page. The repository's owned in-memory fallback
+  uses the same selection and ordering, moving envelopes instead of cloning.
+  These contracts do no I/O and do not validate bundle integrity.
   The distributed pull preflight fingerprints a JSON schema derived with
   Schemars from the actual admission request and nested Types contracts. The
   tool adapter also derives its accepted request fields from that schema.

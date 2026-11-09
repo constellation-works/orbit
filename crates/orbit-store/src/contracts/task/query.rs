@@ -1,5 +1,7 @@
 //! Request-scoped task selection and fully validated response rows (ORB-11205).
 
+use std::borrow::Borrow;
+
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskComment, TaskEnvelopeV2, TaskHistoryEntry,
     TaskOrigin, TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
@@ -45,6 +47,45 @@ pub struct TaskListFilter {
 }
 
 impl TaskListFilter {
+    /// Order an already-loaded snapshot for this filter without reading a store.
+    /// Uses creation time descending and ID ascending for ties, with the
+    /// schedule or terminal partition described by this filter.
+    pub fn sort_snapshot(&self, envelopes: &mut [TaskEnvelopeV2]) {
+        sort_task_listing(
+            envelopes,
+            self,
+            |task| task.not_before,
+            |task| &task.created_at,
+            |task| &task.id,
+            |task| task.status,
+        );
+    }
+
+    /// Select from a snapshot already ordered by [`Self::sort_snapshot`] for
+    /// this filter. Applies all metadata predicates and counts before limiting,
+    /// cloning only the selected page. Does no I/O or bundle validation.
+    pub fn select_ordered_snapshot(
+        &self,
+        envelopes: &[TaskEnvelopeV2],
+        limit: usize,
+    ) -> TaskCandidates {
+        select_task_snapshot_items(envelopes, self, limit, TaskEnvelopeV2::clone)
+    }
+
+    /// Owned fallback: move matches through the same selection, then order
+    /// before limiting. Cursor membership does not depend on listing order.
+    pub(crate) fn select_snapshot(
+        &self,
+        envelopes: Vec<TaskEnvelopeV2>,
+        limit: usize,
+    ) -> TaskCandidates {
+        let mut candidates =
+            select_task_snapshot_items(envelopes, self, usize::MAX, std::convert::identity);
+        self.sort_snapshot(&mut candidates.items);
+        candidates.items.truncate(limit);
+        candidates
+    }
+
     pub(crate) fn normalized(&self) -> Self {
         Self {
             tags: normalize_task_tags(self.tags.clone()),
@@ -165,6 +206,61 @@ impl TaskListFilter {
             task.created_at < *at || (task.created_at == *at && task.id > *id)
         })
     }
+}
+
+fn select_task_snapshot_items<T: Borrow<TaskEnvelopeV2>>(
+    envelopes: impl IntoIterator<Item = T>,
+    filter: &TaskListFilter,
+    limit: usize,
+    into_envelope: impl Fn(T) -> TaskEnvelopeV2,
+) -> TaskCandidates {
+    let mut unbounded = filter.normalized();
+    unbounded.scan_before = None;
+    let mut candidates = TaskCandidates::default();
+    for item in envelopes {
+        let task = item.borrow();
+        if !unbounded.matches(task) {
+            continue;
+        }
+        candidates.total_without_cursor += 1;
+        if !filter.matches_cursor(task) {
+            continue;
+        }
+        candidates.total += 1;
+        if candidates.items.len() < limit {
+            candidates.items.push(into_envelope(item));
+        }
+    }
+    candidates
+}
+
+/// Shared ordering for envelope snapshots and hydrated task rows.
+pub(crate) fn sort_task_listing<T>(
+    items: &mut [T],
+    filter: &TaskListFilter,
+    not_before: impl Fn(&T) -> Option<chrono::DateTime<chrono::Utc>>,
+    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+    id: impl Fn(&T) -> &str,
+    status: impl Fn(&T) -> TaskStatus,
+) {
+    sort_by_created_desc_id_asc(items, created_at, id);
+    if filter.scheduled_after.is_some() {
+        items.sort_by_key(not_before);
+    } else if filter.terminal_last {
+        items.sort_by_key(|item| status(item).is_terminal());
+    }
+}
+
+pub(crate) fn sort_by_created_desc_id_asc<T>(
+    items: &mut [T],
+    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+    id: impl Fn(&T) -> &str,
+) {
+    items.sort_by(|a, b| {
+        created_at(b)
+            .cmp(created_at(a))
+            .then_with(|| id(a).cmp(id(b)))
+    });
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
