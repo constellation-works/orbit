@@ -189,7 +189,9 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 }
 
 /// An admitted check-repair handoff at attempt 1 of budget 3, through the
-/// public job run. A configured check-repair activity receives it. With none
+/// public job run. A configured check-repair activity receives it; if that
+/// activity runs and fails, the in-budget handoff holds the run instead of
+/// ending it as a `pr_complete` failure [ORB-23738]. With none
 /// configured, the in-budget handoff holds the run. An exhausted repair
 /// budget still fails it. Adding recovery after the hold cannot re-admit
 /// the same head, even from a new delivery run.
@@ -197,10 +199,15 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
     auto_fix_table(
         "auto_fix::admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget",
-        "routed held exhausted",
+        "routed recovery_failed held exhausted",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
-            host.script("test_ci_repair", json!({"mode":"repair"}));
+            let mode = if case == "recovery_failed" {
+                "recovery_fails"
+            } else {
+                "repair"
+            };
+            host.script("test_ci_repair", json!({"mode":mode}));
             host.script(
                 "test_checkpoint",
                 json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
@@ -211,7 +218,7 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                 seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
             }
             let input = auto_fix_input(&fx);
-            let outcome = if case == "routed" {
+            let outcome = if matches!(case, "routed" | "recovery_failed") {
                 run_repair_job(&host, input)
             } else {
                 run_unrouted_repair_job(&host, input)
@@ -236,6 +243,35 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                         &head,
                         case,
                     );
+                }
+                "recovery_failed" => {
+                    let error = outcome.expect_err("a failed recovery holds the in-budget handoff");
+                    match error {
+                        DispatchError::DeliveryRefused {
+                            refusal, message, ..
+                        } => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                                "{message}"
+                            );
+                            assert!(
+                                message.contains("attempt 1 of 3"),
+                                "in-budget handoff must stay on the hold: {message}"
+                            );
+                            assert!(is_check_repair(&message), "{message}");
+                        }
+                        other => panic!("expected a typed hold, got {other}"),
+                    }
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    assert!(repair_pushes(&host).is_empty(), "{case}");
+                    assert_eq!(fx.head(), fx.candidate, "{case}");
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
                 }
                 "held" => {
                     let error = outcome.expect_err("absent activity holds the in-budget handoff");
@@ -1213,6 +1249,13 @@ pub(super) fn perform_ci_repair(
         .insert("test_ci_repair".into(), input.clone());
     let error = input["error_message"].as_str().unwrap();
     assert!(is_check_repair(error), "{mode}: {error}");
+    if mode == "recovery_fails" {
+        // The recovery activity is dispatched and returns an unsuccessful outcome.
+        return Err(DispatchError::DeterministicActionFailed {
+            action: "test_ci_repair".into(),
+            message: "scripted check repair failed".into(),
+        });
+    }
     if mode.starts_with("no_edit") {
         // The failure is not the candidate's: no edit, no scope record.
         return Ok(json!({"summary":"failure is not caused by the candidate; no edit"}));
