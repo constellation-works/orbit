@@ -96,3 +96,75 @@ fn human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget() {
     assert_eq!(context["comments_omitted_count"], 2);
     assert_eq!(context["comments_truncated"], Value::Bool(true));
 }
+
+#[test]
+fn pilot_summary_replacement_marks_comments_truncated_without_omitting_a_comment() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Oversized pilot comment budget fixture".into(),
+            description: "A large pilot receipt follows a human comment.".into(),
+            acceptance_criteria: vec!["The envelope marks the replacement.".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+
+    comment_as(
+        &runtime,
+        &task,
+        "HUMAN: keep this short comment.",
+        "human:operator",
+    );
+    let assessment = json!({
+        "disposition": "selectors",
+        "confidence": "high",
+        "recommended_crew": "fixture-crew",
+        "recommended_complexity": "medium",
+        "assessment_rationale": "large pilot receipt",
+        "padding": "x".repeat(20 * 1024),
+    });
+    let oversized_pilot = format!(
+        "operation_id={}\n{}",
+        "b".repeat(64),
+        json!({ "assessment": assessment })
+    );
+    comment_as(&runtime, &task, &oversized_pilot, "task-pilot");
+
+    let context = RuntimeHost::task_context_for_agent_input(
+        &runtime,
+        "run",
+        "step",
+        &json!({ "task_id": task }),
+    )
+    .unwrap()
+    .expect("a task context");
+    let messages: Vec<&str> = context["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|comment| comment["message"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        messages.len(),
+        2,
+        "no comment should be omitted: {messages:?}"
+    );
+    assert!(messages[0].contains("HUMAN"), "{messages:?}");
+    assert!(
+        messages[1].starts_with("selectors (high); crew fixture-crew; complexity medium;"),
+        "the pilot body is replaced by its summary: {:?}",
+        messages[1]
+    );
+    assert_eq!(context["comments_truncated"], Value::Bool(true));
+    assert!(
+        context.get("comments_omitted_count").is_none(),
+        "no comment was omitted: {context:?}"
+    );
+}
