@@ -72,6 +72,7 @@ pub(super) fn row_json(
         "rank_label": rank_label,
         "band_size": (placed.band_size > 0).then_some(placed.band_size),
         "eligible": placed.eligible,
+        "single_tier": row.single_tier(),
         "ineligible_reason": row.ineligibility().or_else(|| {
             (!placed.eligible).then(|| "no measure with units and a scale".to_string())
         }),

@@ -1,8 +1,8 @@
 ---
 title: Model Ranking — Decisions
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-09
+last_validated: 2026-11-09
 status: Draft
 feature: model-ranking
 doc_role: decisions
@@ -191,9 +191,39 @@ frozen or published.
 - The published ranking reflects work that is two to six weeks old.
 - Cost: a model's recent improvement or decline shows up in the ranking two weeks late.
 
+## One assessed tier is enough to be ranked
+
+**Recorded:** 2026-11 · [ORB-23672]
+
+### Context
+
+The eligibility gate required at least two assessed tiers with at least 5 tasks
+each. A model the operator routes to one tier on purpose could never be ranked,
+however many tasks it did, and hard-only crews dropped off as older off-tier
+tasks aged out of the window. The only workaround was putting crews into a
+second tier just to qualify, which turned pool weights into a rank-qualification
+lever. Daniel (2026-11-09): "I also lean towards rule change. certain crews like
+muse-spark and gemini-flash truly belong in one tier only".
+
+### Decision
+
+A model is eligible with at least 30 implemented tasks and at least one assessed
+tier with at least 5 tasks. An eligible model spanning exactly one assessed tier
+is flagged single-tier, naming the tier (for example `single tier: hard`), in the
+rank row, the CLI text and JSON output, and the dashboard Rank table. Scoring,
+shrinkage, the within-tier bootstrap, bands and cost ordering are unchanged.
+
+### Consequences
+
+- Single-tier models are ranked on the tier they actually work, and pool weights
+  are no longer a qualification lever.
+- Cost: a single-tier score is evidence about that tier only; the flag keeps
+  that visible rather than implying breadth the model has not shown.
+
 ## Task References
 
 - [ORB-23297] — designs the model ranking (this folder)
+- [ORB-23672] — admits single-tier models and flags them
 - [ORB-23304] — R3 calibration and replay readout; recommends wider bands for shadow evaluation
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

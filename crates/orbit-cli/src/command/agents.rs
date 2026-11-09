@@ -56,8 +56,9 @@ record yet are shown as unmeasured and leave the weights.
 The ranked window (--window, 30 days) ends --settle-lag (14 days) before \
 --until, so late escaped regressions have arrived; --live ends it at --until \
 instead and is provisional. A model needs at least 30 implemented tasks \
-spanning at least two assessed tiers with at least 5 tasks each to be \
-ranked, and the board needs three such models. Models \
+and at least one assessed tier with at least 5 tasks to be \
+ranked, and the board needs three such models. A ranked model spanning \
+exactly one assessed tier is flagged 'single tier: <tier>'. Models \
 whose scores are not distinguishable share a band, cheapest first.
 
 Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the \
@@ -545,7 +546,10 @@ fn rank_blocks(value: &Value) -> Vec<Block> {
             } else {
                 row["rank_label"].as_str().unwrap_or("-").to_string()
             },
-            text(&row["model"]),
+            match row["single_tier"].as_str() {
+                Some(tier) => format!("{} (single tier: {tier})", text(&row["model"])),
+                None => text(&row["model"]),
+            },
             number(&row["units"]),
             number(&row["score"]),
             if interval.is_object() {

@@ -16,7 +16,7 @@ pub(super) const SHRINKAGE_K: f64 = 30.0;
 /// Implemented tasks a model needs before it is eligible.
 pub(super) const MIN_TASKS: usize = 30;
 /// Assessed tiers an eligible model spans, each with `MIN_TIER_TASKS`.
-pub(super) const MIN_TIERS: usize = 2;
+pub(super) const MIN_TIERS: usize = 1;
 pub(super) const MIN_TIER_TASKS: usize = 5;
 /// Eligible models a qualified board needs.
 pub(super) const MIN_ELIGIBLE_MODELS: usize = 3;
@@ -56,6 +56,25 @@ impl ModelRow {
         tiers
     }
 
+    /// Assessed tiers holding at least `MIN_TIER_TASKS` tasks.
+    pub(super) fn assessed_tiers(&self) -> Vec<&'static str> {
+        self.tiers()
+            .into_iter()
+            .filter(|(tier, count)| *tier != "unassessed" && *count >= MIN_TIER_TASKS)
+            .map(|(tier, _)| tier)
+            .collect()
+    }
+
+    /// The sole assessed tier when this eligible model spans exactly one,
+    /// else `None`. Ineligible models are never single-tier.
+    pub(super) fn single_tier(&self) -> Option<&'static str> {
+        if self.ineligibility().is_some() {
+            return None;
+        }
+        let tiers = self.assessed_tiers();
+        (tiers.len() == 1).then(|| tiers[0])
+    }
+
     /// Why the model is not eligible, or `None` when it is.
     pub(super) fn ineligibility(&self) -> Option<String> {
         if self.model == MODEL_UNKNOWN {
@@ -67,11 +86,7 @@ impl ModelRow {
                 self.units()
             ));
         }
-        let tiers = self
-            .tiers()
-            .into_iter()
-            .filter(|(tier, count)| *tier != "unassessed" && *count >= MIN_TIER_TASKS)
-            .count();
+        let tiers = self.assessed_tiers().len();
         (tiers < MIN_TIERS).then(|| {
             format!(
                 "{tiers} assessed tiers with at least {MIN_TIER_TASKS} tasks; {MIN_TIERS} needed"
