@@ -512,12 +512,20 @@ impl TaskCommitBoundary {
                             ClaimRefusalKind::UnresolvedMergeIntent,
                         ));
                     }
-                    if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog)
-                        || reason.trim().is_empty()
+                    if reason.trim().is_empty() {
+                        return Err(invalid("recovery requires a reason"));
+                    }
+                    // The owner's lifecycle and completion gates chose the
+                    // target before this transaction; the store keeps the
+                    // invariants it can see: a fenced attempt never leaves
+                    // the task in progress or proposed, and `done` follows
+                    // only the review the claim pinned.
+                    if matches!(status, TaskStatus::InProgress | TaskStatus::Proposed)
+                        || (*status == TaskStatus::Done && expected_status != TaskStatus::Review)
                     {
-                        return Err(invalid(
-                            "recovery requires a reason and blocked or backlog target",
-                        ));
+                        return Err(invalid(&format!(
+                            "recovery cannot move a '{expected_status}' task to '{status}'"
+                        )));
                     }
                     self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
                     state.claim.phase = ExecutionClaimPhase::Revoked;

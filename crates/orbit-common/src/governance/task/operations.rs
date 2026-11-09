@@ -81,7 +81,7 @@ operation_registry! {
         BlockTriage => BLOCK_TRIAGE,
         /// Retry a stopped or uncertain authorized owner handoff.
         RetryHandoff => RETRY_HANDOFF,
-        /// Recover a live claim to blocked or backlog, as an operator decision.
+        /// Recover a live claim to a lifecycle-valid status, as an operator decision.
         RecoverClaim => RECOVER_CLAIM,
         /// Revoke a handoff's completion authority, as an operator decision.
         RevokeHandoff => REVOKE_HANDOFF,

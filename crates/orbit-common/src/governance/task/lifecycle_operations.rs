@@ -459,16 +459,25 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     id_route: McpIdRouteDeclaration::Task,
 };
 
-const RECOVER_STATUS_VALUES: &[EnumValue] =
-    &[EnumValue::plain("blocked"), EnumValue::plain("backlog")];
+/// Statuses a claim recovery may choose; the owner narrows them to what the
+/// task lifecycle allows from the task's current status.
+const RECOVER_STATUS_VALUES: &[EnumValue] = &[
+    EnumValue::plain("blocked"),
+    EnumValue::plain("backlog"),
+    EnumValue::plain("review"),
+    EnumValue::plain("done"),
+    EnumValue::plain("archived"),
+    EnumValue::plain("rejected"),
+    EnumValue::plain("someday"),
+];
 
-/// Recover a follower claim to blocked or backlog, fencing its attempt.
+/// Recover a follower claim to a lifecycle-valid status, fencing its attempt.
 pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
     verb: TaskVerb::RecoverClaim,
     cli_path: &["recover-claim"],
     tool_name: "orbit.task.recover_claim",
-    tool_description: "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
-    cli_about: "Recover a live claim to blocked or backlog with an audited reason",
+    tool_description: "Recover a live execution claim on its owner workspace, fencing the attempt, invalidating pending landing authority, releasing its reservation and moving the task to the chosen status in one transaction. The target must be a status the task lifecycle allows from the task's current status; done also needs the ordinary completion evidence (done follows only review, and needs an execution summary or a successful run). A refused target names the rule. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
+    cli_about: "Recover a live claim to a lifecycle-valid status with an audited reason",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
@@ -491,9 +500,9 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
         required(both(
             "status",
             ParamType::Enum(RECOVER_STATUS_VALUES),
-            "Target status: blocked for diagnosis or backlog for retry",
+            "Lifecycle-allowed target; done needs completion evidence",
             flag_named("status", "STATUS"),
-            "Move the task to blocked or backlog",
+            "Lifecycle-valid status to move the task to",
         )),
         required(free_text(both(
             "reason",

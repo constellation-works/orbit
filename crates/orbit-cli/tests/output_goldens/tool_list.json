@@ -3001,7 +3001,7 @@
       },
       {
         "name": "status",
-        "description": "For recover_claim: Target status: blocked for diagnosis or backlog for retry.",
+        "description": "For recover_claim: Lifecycle-allowed target; done needs completion evidence.",
         "param_type": "string",
         "required": false
       },

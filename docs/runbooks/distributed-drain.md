@@ -1634,12 +1634,17 @@ Deliberate recovery is operator-driven:
    revocation cannot cancel a request already sent to GitHub.
 3. Revoke the old claim, invalidate pending landing authority, release only
    that reservation, and choose the task transition in one authorized recovery.
-   On the owner's dashboard, use **Recover claim → blocked** to diagnose or
-   **Recover claim → backlog** to retry, or run the equivalent operator command
+   On the owner's dashboard, use **Recover claim** and pick the target status:
+   `blocked` to diagnose, `backlog` to retry, or another status the task
+   lifecycle allows from where the claim holds the task (`review`, `done`,
+   `archived`, `rejected`, `someday`). The picker lists only valid targets, and
+   `done` only when the task meets the ordinary completion gates. The equivalent
+   operator command is
    `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
-   (or `--status backlog` to retry; the operator tool is `orbit.task.recover` action `recover_claim`).
+   (the operator tool is `orbit.task.recover` action `recover_claim`).
    Both require a reason and the phase you were shown, refuse if the claim moved
-   on, and replay when the same request key is resubmitted with the same input.
+   on or the target is not allowed (naming the rule), and replay when the same
+   request key is resubmitted with the same input.
    Do not admit a second attempt by shipping the task again while the old claim is unfenced.
 4. A sleeping worker that returns receives `stale_claim`. Its local compute
    and an in-flight GitHub write cannot be undone; its old candidate cannot
@@ -2120,7 +2125,7 @@ or provider-evidence JSON from the caller.
 
 A source edit, foreign merge, failed fetch or unavailable proof cannot use
 that exception. If deliberate operator recovery is needed, revoke the handoff
-and use **Recover claim → blocked** (or `orbit task recover-claim`) on the owner before moving the task through
+and use **Recover claim** to `blocked` (or `orbit task recover-claim`) on the owner before moving the task through
 `in-progress` to `review`. The task keeps its original `job_run_id` and
 `job_run_machine`. Changed source needs fresh review and validation; the old
 certificate is never copied to a new head.
@@ -2372,7 +2377,7 @@ settle-only pass ignores the backoff, though it also closes the drain's
 window.
 
 To give the claim up instead, revoke or recover it from the owner's dashboard
-(**Recover claim → blocked** or **→ backlog**) or with `orbit task recover-claim`. The next delivery on the
+(**Recover claim**, choosing `blocked`, `backlog` or another valid status) or with `orbit task recover-claim`. The next delivery on the
 follower, whether a drain iteration or `orbit run auto --stop`, looks the
 claim up, sees it has ended, and closes the record `closed_obsolete`, which
 frees the slot. A claim whose bind the owner refuses before the leaf ever

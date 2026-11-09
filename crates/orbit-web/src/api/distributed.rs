@@ -114,8 +114,9 @@ pub(super) struct RevokeHandoffRequest {
 pub(super) struct RecoverClaimRequest {
     /// The phase the operator was shown. A claim that moved on is refused.
     expected_phase: String,
-    /// `blocked` for diagnosis or `backlog` for retry — the operator's choice,
-    /// never inferred.
+    /// The target task status — the operator's choice, never inferred. The
+    /// owner refuses a target the task lifecycle does not allow, and holds
+    /// `done` to the ordinary completion gates.
     status: String,
     reason: String,
     request_id: String,
@@ -362,15 +363,11 @@ pub(super) async fn recover_claim_action(
         Ok(reason) => reason,
         Err(message) => return bad_request(message),
     };
-    let status = match body.status.as_str() {
-        "blocked" => TaskStatus::Blocked,
-        "backlog" => TaskStatus::Backlog,
-        other => {
-            return bad_request(format!(
-                "recovery moves a task to 'blocked' for diagnosis or 'backlog' for retry, not \
-                 '{other}'"
-            ));
-        }
+    // Any task status parses here; the owner's lifecycle and completion
+    // gates decide which target this claim's task may take.
+    let status = match body.status.parse::<TaskStatus>() {
+        Ok(status) => status,
+        Err(message) => return bad_request(message),
     };
     let expected_phase = body.expected_phase;
     let arguments = json!({

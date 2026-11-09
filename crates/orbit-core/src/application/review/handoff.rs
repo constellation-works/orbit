@@ -373,7 +373,9 @@ impl OrbitRuntime {
                         claim.unresolved_merge_intent.as_deref(),
                     )
                 });
-            rows.push(claim_json(claim, handoff, local_machine.as_deref(), now));
+            let mut row = claim_json(claim, handoff, local_machine.as_deref(), now);
+            row["recover_targets"] = self.claim_recover_targets_json(claim)?;
+            rows.push(row);
         }
 
         Ok(serde_json::json!({
@@ -465,7 +467,9 @@ impl OrbitRuntime {
     }
 
     /// Deliberate recovery of one claim: fence the attempt and choose the task
-    /// transition. Never automatic — there is no heartbeat and no inferred
+    /// transition — any status the lifecycle allows from the task's current
+    /// one except `in-progress`, with `done` held to the ordinary completion
+    /// gates. Never automatic — there is no heartbeat and no inferred
     /// death, so this exists precisely because an operator has to decide.
     ///
     /// `expected_phase` is the phase the operator saw. A claim that moved on
@@ -487,11 +491,6 @@ impl OrbitRuntime {
                 "claim recovery requires a reason".to_string(),
             ));
         }
-        if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog) {
-            return Err(OrbitError::InvalidInput(format!(
-                "claim recovery moves a task to blocked or backlog, not '{status}'"
-            )));
-        }
         self.ensure_coordination_task_write_permitted()?;
         let claim = self
             .stores()
@@ -503,6 +502,19 @@ impl OrbitRuntime {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
+        // The target obeys the task lifecycle from the status the claim holds
+        // the task in, and `done` passes the ordinary completion gates. The
+        // store transaction pins that status, so a task that moved since this
+        // check is refused there as a stale claim. A claim this recovery
+        // already revoked skips the check, so an identical request replays
+        // its receipt even after the task moved on.
+        if claim.claim.phase != ExecutionClaimPhase::Revoked {
+            task::ensure_claim_recovery_target(
+                self,
+                &self.get_task(&claim.claim.task_id)?,
+                status,
+            )?;
+        }
         let observed = task::execution_claim_phase_label(claim.claim.phase);
         let Some(expected_phase) = phase_from_label(expected_phase) else {
             return Err(OrbitError::ClaimRefused {
@@ -532,6 +544,29 @@ impl OrbitRuntime {
             "phase": task::execution_claim_phase_label(result.phase),
             "task_status": result.status.to_string(),
         }))
+    }
+
+    /// The statuses an operator may recover `claim` to, for the console's
+    /// picker; empty when the claim cannot be recovered. Advisory: the
+    /// guarded recovery rechecks every target.
+    fn claim_recover_targets_json(
+        &self,
+        claim: &ClaimInspection,
+    ) -> Result<serde_json::Value, OrbitError> {
+        let recoverable =
+            claim.claim.phase.is_unsettled() || claim.claim.phase == ExecutionClaimPhase::Failed;
+        if !recoverable {
+            return Ok(serde_json::json!([]));
+        }
+        // A task this owner cannot read offers no target rather than failing
+        // the whole console; the recovery itself reports why.
+        let Ok(task) = self.get_task(&claim.claim.task_id) else {
+            return Ok(serde_json::json!([]));
+        };
+        let targets = task::claim_recovery_targets(self, &task);
+        Ok(serde_json::json!(
+            targets.iter().map(ToString::to_string).collect::<Vec<_>>()
+        ))
     }
 
     /// Resolve a handoff id to the claim that currently owns it.
@@ -775,10 +810,10 @@ fn handoff_json(
                 Some(command) => format!(
                     "completion authority was withdrawn; the task stays in review. If its pull \
                      request merged outside Orbit, `{command}` completes the task; otherwise \
-                     recover the claim to blocked or backlog"
+                     recover the claim to another status"
                 ),
                 None => "completion authority was withdrawn; the task stays in review. Recover \
-                         the claim to blocked or backlog"
+                         the claim to another status"
                     .to_string(),
             },
         ),

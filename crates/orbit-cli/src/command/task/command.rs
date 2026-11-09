@@ -43,7 +43,7 @@ Health:
   review-reset      Reset one review lineage budget with an audited reason
   reconcile-review  Validate and review a recovered delivery's changed merged head
   retry-handoff     Retry a stopped authorized handoff through normal owner landing
-  recover-claim     Recover a live claim to blocked or backlog with an audited reason
+  recover-claim     Recover a live claim to a lifecycle-valid status with an audited reason
   revoke-handoff    Revoke a handoff's completion authority with an audited reason
   requeue           Requeue a blocked task onto its published candidate
   recheck-blocked   Requeue tasks whose infrastructure block has cleared

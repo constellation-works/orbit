@@ -485,7 +485,7 @@ with the same input:
 
 ```bash
 orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>
-orbit task recover-claim <claim-id> --phase <phase> --status blocked|backlog --reason <reason> --request <key>
+orbit task recover-claim <claim-id> --phase <phase> --status <status> --reason <reason> --request <key>
 ```
 
 - `revoke-handoff` (`orbit.task.recover` action `revoke_handoff`) cancels the pending landing
@@ -493,8 +493,16 @@ orbit task recover-claim <claim-id> --phase <phase> --status blocked|backlog --r
   `review`.
 - `recover-claim` (`orbit.task.recover` action `recover_claim`) revokes the live claim,
   invalidates pending landing authority and releases its reservation in one
-  transaction. It moves the task to `blocked` to diagnose or `backlog` to retry.
-  Pass the claim phase you observed; a claim that moved on is refused.
+  transaction, and moves the task to the status you choose: `blocked` to
+  diagnose, `backlog` to retry, or `review`, `done`, `archived`, `rejected` or
+  `someday`. The target must be a status the task lifecycle allows from the
+  task's current one (`in-progress` for a running claim, `review` for a
+  handed-off one, `blocked` for a failed one), and recovery never leaves the
+  task `in-progress`. `done` follows only `review` and keeps the ordinary
+  completion gates (an execution summary or successful run, any owed
+  post-deploy measurement, applied mutation proposals). A refused target names
+  the rule. Pass the claim phase you observed; a claim that moved on is
+  refused.
 
 Both refuse with `stale_claim` when the owner moved on, and a replica refuses
 them with `replica_checkout`. A returning worker after revocation receives
