@@ -736,7 +736,7 @@ the address remembers the view you pick for each trend.
 
 | Trend | Counts |
 |---|---|
-| **implement_one duration** | Wall-clock time of `implement_one` runs that finished in each bucket, by complexity (**Low**, **Medium**, **Hard**, and **All runs**). **Succeeded**, the default, counts the final attempt in a successful run that committed a candidate. **All** also counts failed, cancelled, no-diff, and unknown outcomes. Pick **Avg**, **p50**, or **p95**. |
+| **Implementation time** | Wall-clock time of implementation runs (the `implement_one` activity) that finished in each bucket, by complexity (**Low**, **Medium**, **Hard**, and **All runs**). **Succeeded**, the default, counts the final attempt in a successful run that committed a candidate. **All** also counts failed, cancelled, no-diff, and unknown outcomes. Pick **Avg**, **p50**, or **p95**. |
 | **Tasks completed** | Tasks that moved to done in each bucket, by the same complexities. |
 | **Tokens per task** | Mean normalized tokens of the tasks that closed in each bucket, one line per complexity. A task's total sums every managed invocation linked to it; **Implement only** keeps implement invocations. **Done**, the default, counts done tasks; **All closed** adds rejected and archived ones. **Implementing model** keeps tasks whose latest implement run used that model. **Compare a tag** splits each complexity into tasks that carry the tag now and a dashed line for the rest. The tooltip gives the task count, mean, and median; a point from fewer than three tasks is hollow. Tasks with a model that has no price, or with no linked invocation, are left out and counted. A task's time is its last write after it closed. |
 | **Tokens** | Total normalized tokens of the tasks that closed in each bucket, by complexity, with a **Tokens (total)** card for the window total. A task's total sums every managed invocation linked to it, whenever it ran. It shares the **Tokens per task** filters (**Done** / **All closed**, **All invocations** / **Implement only**, implementing model, tag comparison) and the same exclusions: tasks with a model that has no price, or with no linked invocation, are left out and counted. **Tokens per task** shows the mean; **Tokens** shows the sum, with the **Per bucket** / **Cumulative** / **Per day** views above. |
@@ -752,7 +752,7 @@ header counts runs and done tasks in the window.
 
 Under the chart:
 
-- **implement_one by actor** uses the selected window. A row with fewer than
+- **Implementation time by actor** uses the selected window. A row with fewer than
   five runs is dimmed. The list starts at seven actors; **Show all** lists
   the rest.
 - **Slowest runs** uses the selected window. Each row opens its task.
@@ -762,7 +762,7 @@ Under the chart:
   open. It is separate from the **Succeeded** / **All** switch on the
   duration trend.
 
-Set the window to `7d`, open **implement_one duration**, leave **Succeeded**
+Set the window to `7d`, open **Implementation time**, leave **Succeeded**
 and **p50** selected, and compare **Medium** with the previous `7d`. A hollow
 point is one or two runs. This chart has no matching `orbit` command.
 

@@ -55,7 +55,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["tokens-total", "Tokens"], ["turns", "Turns to first edit"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
+const TRENDS = [["duration", "Implementation time"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["tokens-total", "Tokens"], ["turns", "Turns to first edit"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -557,8 +557,8 @@ function trendSection() {
     seriesCards(model.cards),
     model.empty ? emptyTrend(model.empty) : (view.mode === "table" ? trendTable(model.table) : trendChart(model.chart)),
     isDuration ? el("p", { class: "mx-notes", text: view.outcome === "succeeded"
-      ? "Counted: final implement_one attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
-      : "Counted: all implement_one invocations, including failed, cancelled, no-diff and unknown outcomes." }) : null,
+      ? "Counted: final implementation attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
+      : "Counted: all implementation attempts, including failed, cancelled, no-diff and unknown outcomes." }) : null,
   ]);
   return el("section", { class: "mx-card mx-trends", "aria-label": "Trends" }, [
     el("div", { class: "mx-trend-head" }, [trendTabs(), tools]),
@@ -654,13 +654,13 @@ function durationModel() {
     };
   });
 
-  const blurb = `${statLabel} wall-clock time of implement_one runs that finished in each bucket, by task complexity.`;
+  const blurb = `${statLabel} wall-clock time of implementation runs that finished in each bucket, by task complexity.`;
   if (!current.all) {
     return {
       blurb,
       cards,
       empty: {
-        title: `No implement_one runs finished in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`,
+        title: `No implementation runs finished in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`,
         detail: payload.truncated ? "The read hit its row cap." : "",
       },
     };
@@ -711,12 +711,12 @@ function durationModel() {
       volume: { max: volumeMax, stacks: buckets.map((bucket) => STACK.map((key) => (key === "other" ? bucket.other_runs || 0 : (bucket[key] ? bucket[key].n : 0)))) },
       notes,
       hollowNote: true,
-      aria: `implement_one ${statLabel} duration by complexity, window ${windowKeyValue}. ${visible.map((series) => `${series.label} ${current[series.key] ? fmtMs(current[series.key][stat]) : "no runs"}`).join(", ")}. Use the Table view for per-bucket values.`,
+      aria: `Implementation ${statLabel.toLowerCase()} time by complexity, window ${windowKeyValue}. ${visible.map((series) => `${series.label} ${current[series.key] ? fmtMs(current[series.key][stat]) : "no runs"}`).join(", ")}. Use the Table view for per-bucket values.`,
       tip: (index) => {
         const bucket = buckets[index];
         const tip = { title: bucketTitle(bucket.start, seconds, index === buckets.length - 1), rows: [], foot: `${statLabel} per series · ×n = runs` };
         if (!bucket.all) {
-          tip.empty = "No implement_one runs finished in this bucket.";
+          tip.empty = "No implementation runs finished in this bucket.";
           return tip;
         }
         for (const series of SERIES) {
@@ -1228,7 +1228,7 @@ function actorsCard() {
   const actors = payload.actors || [];
   const prevText = previousLabel(lastPayload.windowKey);
   const meta = `window ${lastPayload.windowKey} · sorted by runs${prevText ? ` · Δ = avg vs ${prevText}` : ""}`;
-  if (!actors.length) return card("implement_one by actor", meta, [emptyNote("No implement_one runs in this window.")], "mx-wide");
+  if (!actors.length) return card("Implementation time by actor", meta, [emptyNote("No implementation runs in this window.")], "mx-wide");
   let sparkMax = 0;
   for (const actor of actors) for (const v of actor.trend || []) if (v != null) sparkMax = Math.max(sparkMax, v);
   const rows = (view.allActors ? actors : actors.slice(0, ACTORS_SHOWN)).map((actor) => {
@@ -1253,7 +1253,7 @@ function actorsCard() {
     toggle.addEventListener("click", () => { view.allActors = !view.allActors; rerender(); });
     children.push(el("div", {}, [toggle]));
   }
-  return card("implement_one by actor", meta, children, "mx-wide");
+  return card("Implementation time by actor", meta, children, "mx-wide");
 }
 
 function slowestCard() {
@@ -1294,7 +1294,7 @@ function complexityActorsCard() {
     return button;
   }));
   const band = byKey.get(selected);
-  if (!band) return card("Actors within a complexity", "last 30d · bar = avg, tick = p95", [tabs, emptyNote("No implement_one runs in the last 30d.")], "mx-wide");
+  if (!band) return card("Actors within a complexity", "last 30d · bar = avg, tick = p95", [tabs, emptyNote("No implementation runs in the last 30d.")], "mx-wide");
   const actors = [...band.actors].sort((a, b) => b.n - a.n || a.actor.localeCompare(b.actor));
   const max = Math.max(...actors.map((actor) => actor.p95), 1);
   const rows = actors.map((actor) => {
