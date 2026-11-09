@@ -365,7 +365,7 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
 
 fn rank_admits_single_tier_models_and_flags_them() {
     let days = 20;
-    let mut facts = facts(&[
+    let mut fleet_facts = facts(&[
         Work {
             model: Some("solo"),
             crews: &["solo"],
@@ -414,7 +414,7 @@ fn rank_admits_single_tier_models_and_flags_them() {
         },
     ]);
     // Solo works only the hard tier; unassessed-only has no assessed tier.
-    for task in &mut facts.tasks {
+    for task in &mut fleet_facts.tasks {
         if task.id.starts_with("T0-") {
             task.complexity = Some(TaskComplexity::Hard);
         }
@@ -422,7 +422,12 @@ fn rank_admits_single_tier_models_and_flags_them() {
             task.complexity = None;
         }
     }
-    let payload = agent_rank(&facts, &settled(), &RankSeasons::default(), Duration::ZERO);
+    let payload = agent_rank(
+        &fleet_facts,
+        &settled(),
+        &RankSeasons::default(),
+        Duration::ZERO,
+    );
     assert_eq!(payload["rules"]["min_tiers"], 1);
     let solo = row(&payload, "solo");
     assert_eq!(
@@ -447,6 +452,36 @@ fn rank_admits_single_tier_models_and_flags_them() {
         "{}",
         unassessed["ineligible_reason"]
     );
+
+    // A homogeneous fleet has no nonzero noise scales, even with enough
+    // tasks in an assessed tier. It must not be labeled single-tier.
+    let mut homogeneous = facts(&[Work {
+        model: Some("no-scale"),
+        crews: &["no-scale"],
+        tasks: 40,
+        verdict: accept,
+        regressed: 0,
+        cost: 1.0,
+        days_ago: days,
+    }]);
+    for task in &mut homogeneous.tasks {
+        task.complexity = Some(TaskComplexity::Hard);
+    }
+    let payload = agent_rank(
+        &homogeneous,
+        &settled(),
+        &RankSeasons::default(),
+        Duration::ZERO,
+    );
+    let no_scale = row(&payload, "no-scale");
+    assert_eq!(no_scale["units"], 40);
+    assert_eq!(no_scale["eligible"], false);
+    assert!(no_scale["score"].is_null());
+    assert_eq!(
+        no_scale["ineligible_reason"],
+        "no measure with units and a scale"
+    );
+    assert!(no_scale["single_tier"].is_null());
 }
 
 #[test]
