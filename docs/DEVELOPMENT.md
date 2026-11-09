@@ -87,8 +87,9 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
 - `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the file and
   metadata-only subset of the fast repository guards before candidate handoff.
   It includes unit-test admissions, QA surface inventory, public artifact IDs,
-  test shell waits, dependency direction, orphan modules, doc links and indexes,
-  and the skill mirror check. The QA inventory uses `--check --static` to omit
+  test shell waits, dependency direction, orphan modules, vendored standards
+  integrity (`docs/standards/check.sh`), doc links and indexes, and the skill
+  mirror check. The QA inventory uses `--check --static` to omit
   its fixture self-tests and explicitly request offline metadata. Cargo is used
   only for metadata, with `CARGO_NET_OFFLINE=true`; no compilation, formatting,
   Rust tests or network requests run. It needs Python 3.11+, PyYAML, ripgrep and
