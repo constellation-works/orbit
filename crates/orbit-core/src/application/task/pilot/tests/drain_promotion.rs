@@ -553,7 +553,7 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
     let current = runtime.get_task(&task.id).expect("task");
     assert_eq!(current.status, TaskStatus::Backlog);
     assert_eq!(current.dependencies(), [blocker.id.as_str()]);
-    let comments = runtime.get_task_comments(&task.id).expect("comments");
+    let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
     let warnings = super::super::promotion::task_pilot_warnings(
         TaskStatus::Proposed,
         &comments,
@@ -752,7 +752,7 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
                 assert_eq!(current.status, TaskStatus::Proposed);
                 assert!(current.dependencies().is_empty());
                 assert_eq!(approvals(runtime, &task), 0);
-                let comments = runtime.get_task_comments(&task.id).expect("comments");
+                let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
                 let warnings = crate::application::task::task_pilot_warnings(
                     current.status,
                     &comments,
@@ -799,7 +799,7 @@ fn contract_conflict_holds_promotion_and_advisory_matching_criterion_does_not() 
         TaskStatus::Proposed
     );
     assert_eq!(approvals(runtime, &task), 0);
-    let comments = runtime.get_task_comments(&task.id).expect("comments");
+    let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
     let warnings =
         super::super::promotion::task_pilot_warnings(TaskStatus::Proposed, &comments, &[], &|_| {
             false

@@ -81,7 +81,7 @@ impl Workspace {
         let receipt = comment.receipt().expect("a sealed receipt");
         (
             receipt.operation_id.to_string(),
-            serde_json::from_str(receipt.body).unwrap(),
+            super::pilot_audit(&self.runtime, task_id, comment),
         )
     }
 

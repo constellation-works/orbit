@@ -206,6 +206,62 @@ fn assert_applied(workspace: &Workspace, task_id: &str, output: &Value) {
     let task = workspace.runtime.get_task(task_id).expect("task");
     assert_eq!(task.context_files, vec!["file:README.md".to_string()]);
     assert_eq!(task.complexity, Some(TaskComplexity::Low));
+    let comments = workspace.runtime.get_task_comments(task_id).unwrap();
+    let comment = comments
+        .iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .unwrap();
+    assert_eq!(
+        comment.message.lines().count(),
+        1,
+        "pilot audits must not consume the human comment budget"
+    );
+    let reference: Value = serde_json::from_str(&comment.message).unwrap();
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("full pilot audit belongs in an artifact");
+    assert!(path.starts_with("pilot/assessment-"));
+    assert_eq!(
+        reference["operation_id"].as_str(),
+        comment.receipt().map(|receipt| receipt.operation_id)
+    );
+    assert!(reference["summary"].as_str().unwrap().contains("selectors"));
+    let audit = crate::task_pilot::pilot_audit(&workspace.runtime, task_id, comment);
+    assert_eq!(audit["assessment"]["task_id"], task_id);
+    // A normal attachment must not make trusted pilot evidence unreadable.
+    // Reproduced through the public update API during artifact QA: replacing
+    // the bytes previously succeeded, then even a repair update was refused.
+    let replacement = workspace
+        .runtime
+        .update_task_as_human(
+            task_id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                    path: path.into(),
+                    media_type: "application/json".into(),
+                    content: b"{}".to_vec(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap_err();
+    assert!(
+        replacement.to_string().contains("sealed evidence"),
+        "{replacement}"
+    );
+    assert_eq!(
+        crate::task_pilot::pilot_audit(&workspace.runtime, task_id, comment),
+        audit
+    );
+
+    assert_eq!(
+        audit["assessment"]["context_files_after"],
+        json!(["file:README.md"])
+    );
+
     let history = workspace
         .runtime
         .get_task_history(task_id)

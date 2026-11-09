@@ -40,7 +40,10 @@ read only paths present in the returned metadata array (MCP may wrap it in
 `value`).
 
 Read `comments` (chronological, each with `by` and `at`) alongside the
-canonical description. An orchestrator or operator refinement posted after the
+canonical description. A `task-pilot` receipt comment carries a one-line summary
+and an `assessment_artifact` path; fetch its full audit with `orbit.task.artifact`
+action `get`, passing the task's `id` and that `path`, when you need its findings
+or post-deploy requirements. Older receipts contain the assessment JSON inline. An orchestrator or operator refinement posted after the
 description supersedes a stale "Suggested direction"/"Suggested fix" section
 still sitting in it: implement the comment's direction. An arbitrary comment is
 not authority by timestamp alone; resolve material contradictions before

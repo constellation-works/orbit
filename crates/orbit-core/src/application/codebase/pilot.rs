@@ -364,7 +364,7 @@ pub(super) struct PilotInputs {
 /// Read a task's task-pilot receipts: `None` when no receipt carries the
 /// pilot's final selectors, an error when the comments cannot be read.
 pub(super) fn inputs(runtime: &OrbitRuntime, id: &str) -> Result<Option<PilotInputs>, OrbitError> {
-    let comments = runtime.get_task_comments(id)?;
+    let comments = runtime.get_task_pilot_comments(id)?;
     // Comments are stored oldest first.
     let receipts: Vec<_> = comments
         .iter()

@@ -314,8 +314,7 @@ fn verified_read_only_evidence_can_leave_the_lock_while_change_targets_remain() 
         "evidence remains in the finding description"
     );
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["assessment"]["context_evidence_dropped"], drops,
         "drop reasons must be durable"
@@ -430,7 +429,7 @@ fn verified_no_diff_accepts_evidence_drops_on_initial_and_targeted_repair_apply(
         );
         let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
         let audit: Value =
-            serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+            super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
         assert_eq!(audit["assessment"]["context_evidence_dropped"], drops);
         assert_eq!(audit["recheck_basis"]["source_revision"], pinned);
         assert_eq!(audit["context_files_before"], json!(FILED));

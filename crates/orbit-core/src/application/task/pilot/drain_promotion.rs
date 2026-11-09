@@ -653,7 +653,7 @@ fn classify_reuse(
     task: &Task,
     hold_live_pilot: bool,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
-    let comments = runtime.get_task_comments(&task.id)?;
+    let comments = runtime.get_task_pilot_comments(&task.id)?;
     let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     };

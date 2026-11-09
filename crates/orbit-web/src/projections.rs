@@ -19,8 +19,7 @@ use orbit_core::application::codebase::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRi
 use orbit_core::application::task::{
     self, DashboardPageReads, PullRequestLinks, TaskOsReadout, TaskRow,
     job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,
-    summary_status_transitions, task_detail_with_dashboard_extras, task_pilot_warnings,
-    tasks_in_pilot_preparation,
+    summary_status_transitions, task_detail_with_dashboard_extras, tasks_in_pilot_preparation,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -281,12 +280,10 @@ impl TaskListProjection {
         }
         object.insert(
             "pilot_warnings".into(),
-            json!(task_pilot_warnings(
-                task.status,
-                &row.comments,
-                &task.dependencies(),
-                &|id: &str| runtime.warning_prerequisite_is_done(id),
-            )),
+            json!(
+                runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| runtime
+                    .warning_prerequisite_is_done(id),)?
+            ),
         );
         self.os_readout
             .as_ref()

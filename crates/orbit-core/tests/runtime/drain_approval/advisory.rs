@@ -26,18 +26,23 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     assert_eq!(workspace.record(&drain)["approved"], json!([task.id]));
     assert!(held_reason(&workspace.select(&drain), &task).is_none());
 
-    // The same durable comment is returned by task show and injected in the
-    // implementer's brief. Inspect its structured data, not its prose.
+    // Task show and the implementer's brief retain the same compact receipt.
+    // Its artifact keeps advisory findings accessible without spending the
+    // brief's comment budget on the full assessment.
     let shown = workspace
         .runtime
         .run_tool("orbit.task.show", json!({"id": task.id}))
         .unwrap();
-    let audit: Value = serde_json::from_str(
-        shown["comments"].as_array().unwrap().last().unwrap()["message"]
-            .as_str()
-            .unwrap(),
+    let comment = serde_json::from_value(
+        shown["comments"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
+    let audit = crate::task_pilot::pilot_audit(&workspace.runtime, &task.id, &comment);
     assert_eq!(audit["assessment"]["surface_warnings"], json!([surface]));
     assert_eq!(audit["assessment"]["utility_warnings"], json!([utility]));
     let context = RuntimeHost::task_context_for_agent_input(
@@ -48,12 +53,18 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     )
     .unwrap()
     .unwrap();
-    let worker_audit: Value = serde_json::from_str(
-        context["comments"].as_array().unwrap().last().unwrap()["message"]
-            .as_str()
-            .unwrap(),
+    let worker_comment = serde_json::from_value(
+        context["comments"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
+    assert_eq!(comment, worker_comment);
+    let worker_audit =
+        crate::task_pilot::pilot_audit(&workspace.runtime, &task.id, &worker_comment);
     assert_eq!(worker_audit["assessment"], audit["assessment"]);
 }
 

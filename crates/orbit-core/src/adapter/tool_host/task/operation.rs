@@ -17,8 +17,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::TaskBundleMaintenancePort;
 use crate::application::task::{
     TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
-    TaskWriteResponsePolicy, task_listing_field_json, task_pilot_warnings,
-    task_write_response_json,
+    TaskWriteResponsePolicy, task_listing_field_json, task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -523,12 +522,11 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                 os_readout.insert_into(&row.task, &mut object);
                 object.insert(
                     "pilot_warnings".into(),
-                    json!(task_pilot_warnings(
-                        row.task.status,
+                    json!(runtime.task_pilot_warning_findings(
+                        &row.task,
                         &row.comments,
-                        &row.task.dependencies(),
                         &|id: &str| runtime.warning_prerequisite_is_done(id),
-                    )),
+                    )?),
                 );
                 Ok(Value::Object(object))
             }

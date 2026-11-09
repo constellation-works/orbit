@@ -1,7 +1,7 @@
 //! Pilot warnings: how each task-pilot assessment of a `proposed` task
 //! settled, and the three pilot terms that grade it.
 //!
-//! An assessment is one task-pilot receipt: the audit comment the apply
+//! An assessment is one task-pilot receipt: the resolved audit the apply
 //! boundary sealed with the assessment it persisted. It is held when that
 //! assessment carries at least one finding that holds promotion (a
 //! `blocked_by`, ADR conflict, `contract_conflicts`, utility, surface or

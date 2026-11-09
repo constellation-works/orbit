@@ -231,8 +231,15 @@ impl OrbitRuntime {
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        if self.worker_invocation().is_some() {
-            return self.read_owner(id, "comments");
+        if let Some(binding) = self.worker_invocation() {
+            return self.read_owner_request(serde_json::json!({
+                "id": id,
+                "_worker_read": "comments",
+                // Older owners ignore this hint and return inline audits.
+                // Other tasks' artifacts are outside a worker's claim, so
+                // keep their audits expanded at the owner.
+                "pilot_artifacts": id == binding.task_id,
+            }));
         }
         self.stores()
             .task_history()

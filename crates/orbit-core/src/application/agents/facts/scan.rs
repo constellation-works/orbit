@@ -78,10 +78,12 @@ pub(in crate::application::agents) fn scan(
             tracing::warn!(task_id = %id, %error, "agent scorecards: task history unreadable");
             Vec::new()
         });
-        let comments = runtime.get_task_comments(&id).unwrap_or_else(|error| {
-            tracing::warn!(task_id = %id, %error, "agent scorecards: task comments unreadable");
-            Vec::new()
-        });
+        let comments = runtime
+            .get_task_pilot_comments(&id)
+            .unwrap_or_else(|error| {
+                tracing::warn!(task_id = %id, %error, "agent scorecards: task comments unreadable");
+                Vec::new()
+            });
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
         let classify = |entry: &TaskHistoryEntry| block_cause(entry, &history, task_settlements);
         let task_runs = runs.remove(&id).unwrap_or_default();

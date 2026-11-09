@@ -327,10 +327,33 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
     }
 }
 
+impl crate::OrbitRuntime {
+    /// Holding pilot findings for a task, resolving assessment artifacts as
+    /// well as historical inline audits before classifying its latest receipt.
+    pub fn task_pilot_warning_findings(
+        &self,
+        task: &orbit_types::task::Task,
+        comments: &[TaskComment],
+        is_done: &dyn Fn(&str) -> bool,
+    ) -> Result<Vec<DrainHoldFinding>, orbit_common::OrbitError> {
+        if task.status != TaskStatus::Proposed {
+            return Ok(Vec::new());
+        }
+        Ok(task_pilot_warnings(
+            task.status,
+            &self.resolve_task_pilot_comments(&task.id, comments)?,
+            &task.dependencies(),
+            is_done,
+        ))
+    }
+}
+
 /// Holding warnings from the task's latest durable pilot verification.
 /// Ordinary edits and comments preserve the last findings until re-piloted;
 /// a clean verification or leaving proposed clears the readout. No live
 /// drain or drain-pass snapshot is needed, and advisory findings are excluded.
+/// `comments` must contain resolved pilot audits; runtime readers resolve
+/// artifact references before calling this pure classifier.
 pub fn task_pilot_warnings(
     status: TaskStatus,
     comments: &[TaskComment],

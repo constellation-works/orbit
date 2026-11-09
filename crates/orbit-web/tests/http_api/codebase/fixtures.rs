@@ -666,15 +666,42 @@ pub(in super::super) fn pilot_receipt_with(
     if let Some(run_id) = run_id {
         body["pilot_run_id"] = json!(run_id);
     }
+    let operation_id =
+        orbit_common::security::release::sha256_hex(format!("{task_id}:{}", rows + 1).as_bytes());
+    // Exercise both persisted generations. Proposed cases replay synthetic
+    // future histories: keep them inline so an attachment's current-time task
+    // update cannot interfere with that timeline. Graded tasks use artifacts.
+    if run_id.is_some() && fixture.runtime.get_task(task_id).unwrap().status != TaskStatus::Proposed
+    {
+        let path = format!("fixture-pilot/assessment-{operation_id}.json");
+        let content = serde_json::to_vec(&body).unwrap();
+        let digest = orbit_common::security::release::sha256_hex(&content);
+        fixture
+            .runtime
+            .update_task_as_human(
+                task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                        path: path.clone(),
+                        media_type: "application/json".into(),
+                        content,
+                        created_by: None,
+                    }],
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        body = json!({"summary": "Fixture pilot assessment", "assessment_artifact": path,
+            "assessment_sha256": digest, "operation_id": operation_id});
+    }
     let row = TaskCommentRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
         comment_id: format!("C-{:04}", rows + 1),
         at,
         by: "task-pilot".into(),
         body: body.to_string(),
-        operation_id: Some(orbit_common::security::release::sha256_hex(
-            format!("{task_id}:{}", rows + 1).as_bytes(),
-        )),
+        operation_id: Some(operation_id),
     };
     let mut file = fs::OpenOptions::new()
         .create(true)

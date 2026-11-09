@@ -70,7 +70,7 @@ impl OrbitRuntime {
     /// The pilot state `no-pilot` would bypass on `task`, or `None` when no
     /// pilot has assessed or is preparing it.
     fn pilot_skip_target(&self, task: &Task) -> Result<Option<PilotSkipTarget>, OrbitError> {
-        let comments = self.get_task_comments(&task.id)?;
+        let comments = self.get_task_pilot_comments(&task.id)?;
         let latest = super::pilot_receipts(&comments).next();
         let receipt = latest.map(|(_, receipt)| receipt.operation_id.to_string());
         // An undecodable receipt still counts as an assessment; it only has

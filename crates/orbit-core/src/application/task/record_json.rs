@@ -9,7 +9,7 @@ use orbit_types::task::{
 };
 use serde_json::{Map, Value};
 
-use super::{TaskOsReadout, TaskRow, task_pilot_warnings};
+use super::{TaskOsReadout, TaskRow};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskExperimentPort, TaskReviewPort};
 
@@ -82,12 +82,11 @@ pub fn task_record_json(
     );
     object.insert(
         "pilot_warnings".into(),
-        serde_json::json!(task_pilot_warnings(
-            task.status,
+        serde_json::json!(runtime.task_pilot_warning_findings(
+            task,
             &row.comments,
-            &task.dependencies(),
             &|id: &str| task_is_done(runtime, Some(status_by_id), id),
-        )),
+        )?),
     );
     object.insert(
         "comments".to_string(),
@@ -214,12 +213,11 @@ pub fn task_show_field_json(
             serde_json::to_value(runtime.task_experiment_assignment_readout(&task.id)?)
                 .map_err(serialize_error("experiments"))
         }
-        "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
-            task.status,
+        "pilot_warnings" => Ok(serde_json::json!(runtime.task_pilot_warning_findings(
+            task,
             &runtime.get_task_comments(&task.id)?,
-            &task.dependencies(),
             &|id: &str| task_is_done(runtime, status_by_id, id),
-        ))),
+        )?)),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "placement_wait" => Ok(TaskOsReadout::new(runtime)?
             .placement_wait(task)

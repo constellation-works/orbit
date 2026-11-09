@@ -167,7 +167,7 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
         .unwrap_or_else(|| panic!("no drain approval decision for {}: {applied}", task.id))
         .clone();
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit = serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     (audit, decision)
 }
 

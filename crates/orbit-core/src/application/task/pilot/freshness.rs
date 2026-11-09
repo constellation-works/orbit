@@ -36,7 +36,7 @@ impl OrbitRuntime {
         task_id: &str,
         reassess_requirements: bool,
     ) -> Result<Option<bool>, OrbitError> {
-        let comments = self.get_task_comments(task_id)?;
+        let comments = self.get_task_pilot_comments(task_id)?;
         for (_, receipt) in super::pilot_receipts(&comments) {
             if !super::is_operation_id(receipt.operation_id) {
                 continue;
@@ -142,7 +142,7 @@ impl OrbitRuntime {
         if !description_changed && !criteria_changed {
             return Ok(None);
         }
-        let comments = self.get_task_comments(&task.id)?;
+        let comments = self.get_task_pilot_comments(&task.id)?;
         let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
             return Ok(None);
         };

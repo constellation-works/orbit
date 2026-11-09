@@ -681,7 +681,7 @@ pub(super) fn read_attention_sources(
             } else {
                 metadata.clone()
             };
-            let comments = runtime.get_task_comments(&metadata.id)?;
+            let comments = runtime.get_task_pilot_comments(&metadata.id)?;
             let (history, requests) = if needs_decisions {
                 let history = runtime.get_task_history(&metadata.id)?;
                 let requests = runtime

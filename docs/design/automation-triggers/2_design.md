@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-11-05
+last_updated: 2026-11-09
 last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
@@ -398,6 +398,12 @@ that drifted — title, description, criteria, plan, selectors, or an opted-in
 field such as dependencies, crew, instructions or source — when preparation
 recorded the component. Stable ordering by oldest pending time then task ID
 prevents repeatedly edited work from starving other tasks.
+
+Pilot audits live in task artifacts `pilot/assessment-<operation-id>.json`.
+The single-line receipt comment carries the summary, artifact path and digest;
+readers resolve that reference and retain the legacy inline-JSON fallback.
+See [Task pilot — assessment persistence](../task-pilot/1_scope.md) for write
+ordering, evidence integrity and the mixed-version follower bridge.
 
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are

@@ -69,7 +69,7 @@ pub(super) fn applied_material(
     // Oldest match. `pilot_receipts` is newest first; reversing it preserves
     // the previous selection when two comments share an operation id. A bad
     // id is not rejected here, and an undecodable body fails the read.
-    let comments = runtime.get_task_comments(task_id)?;
+    let comments = runtime.get_task_pilot_comments(task_id)?;
     for (_, receipt) in super::super::pilot_receipts(&comments).rev() {
         if receipt.operation_id != operation_id {
             continue;

@@ -193,7 +193,16 @@ pub(crate) fn execute(
             "task" => serde_json::to_value(runtime.get_task(id)?),
             "artifacts" => serde_json::to_value(runtime.get_task_artifacts(id)?),
             "manifest" => serde_json::to_value(runtime.get_task_artifact_manifest(id)?),
-            "comments" => serde_json::to_value(runtime.get_task_comments(id)?),
+            // Compatibility from 2026-11-09: pre-artifact followers decode
+            // inline pilot audits. Keep this projection for at least 30 days
+            // and until no supported follower needs the old receipt body.
+            "comments" => serde_json::to_value(
+                if input["pilot_artifacts"] == true && id == binding.task_id {
+                    runtime.get_task_comments(id)?
+                } else {
+                    runtime.get_task_pilot_comments(id)?
+                },
+            ),
             "history" => serde_json::to_value(runtime.get_task_history(id)?),
             "dependency_history" => serde_json::to_value(runtime.dependency_history(id)?),
             // Mid-run steering's records for this worker's own claim, never

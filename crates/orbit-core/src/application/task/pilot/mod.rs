@@ -41,6 +41,7 @@ mod admission;
 mod apply;
 mod assessment;
 mod attachment_budget;
+mod audit;
 pub(crate) mod auto_effort;
 mod blockers;
 mod cfg_gate;

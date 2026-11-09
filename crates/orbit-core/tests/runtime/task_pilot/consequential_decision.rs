@@ -358,7 +358,7 @@ fn assess(workspace: &Workspace, task: &Task, utility_warnings: Value) -> Value 
         "apply records the hold and leaves the task proposed"
     );
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap()
+    super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap())
 }
 
 fn assert_holds(audit: &Value, decision: &str, message: &str) {
@@ -418,10 +418,8 @@ fn public_warnings(
     task: &Task,
 ) -> Vec<orbit_types::workflow::DrainHoldFinding> {
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    orbit_core::application::task::task_pilot_warnings(
-        TaskStatus::Proposed,
-        &comments,
-        &[],
-        &|_| false,
-    )
+    workspace
+        .runtime
+        .task_pilot_warning_findings(task, &comments, &|_| false)
+        .unwrap()
 }

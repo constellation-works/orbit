@@ -99,7 +99,7 @@ pub(super) fn record_failed_repilots(
                     {
                         return Ok(());
                     }
-                    let comments = runtime.get_task_comments(task_id)?;
+                    let comments = runtime.get_task_pilot_comments(task_id)?;
                     let Some((_, receipt)) = super::super::pilot_receipts(&comments).next() else {
                         return Ok(());
                     };

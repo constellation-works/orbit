@@ -38,7 +38,7 @@ pub(crate) fn admit_task_artifact(
 
 /// Canonicalize an artifact a caller other than Orbit's system writer
 /// supplies, and refuse it in a reserved name: the review namespace and
-/// mutation application receipts. Gate records are certificates and
+/// mutation application receipts and sealed pilot assessments. Gate records are certificates and
 /// authority, and a receipt suppresses re-application through its key, not
 /// agent claims, so every agent- or operator-originated write applies this
 /// one rule: task updates, task starts and a claimed worker's claim evidence,
@@ -49,6 +49,11 @@ pub(crate) fn admit_task_artifact(
 /// the task's grant.
 pub(crate) fn admit_agent_artifact(artifact: &mut TaskArtifact) -> Result<(), OrbitError> {
     artifact.path = canonical_artifact_path(&artifact.path)?;
+    if artifact.path.starts_with("pilot/assessment-") {
+        return Err(OrbitError::InvalidInput(
+            "pilot assessment artifacts are sealed evidence; attach supporting material at a different path".into(),
+        ));
+    }
     if is_mutation_receipt_artifact(&artifact.path) {
         return Err(OrbitError::InvalidInput(format!(
             "{} is reserved for the pipeline's system writer: only applying a reviewed mutation proposal writes `{MUTATION_RECEIPT_ARTIFACT_DIR}/` receipts",

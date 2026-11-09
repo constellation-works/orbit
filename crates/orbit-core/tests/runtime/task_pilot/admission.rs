@@ -113,16 +113,13 @@ fn task_comments(workspace: &Workspace, task: &Task) -> Vec<TaskComment> {
     workspace.runtime.get_task_comments(&task.id).unwrap()
 }
 fn last_audit(workspace: &Workspace, task: &Task) -> serde_json::Value {
-    serde_json::from_str(
-        task_comments(workspace, task)
-            .last()
-            .unwrap()
-            .receipt()
-            .unwrap()
-            .body,
+    super::pilot_audit(
+        &workspace.runtime,
+        &task.id,
+        task_comments(workspace, task).last().unwrap(),
     )
-    .unwrap()
 }
+
 fn got(workspace: &Workspace, task: &Task) -> Task {
     workspace.runtime.get_task(&task.id).unwrap()
 }
@@ -1965,7 +1962,7 @@ fn only_an_operator_skips_an_assessed_pilot_and_the_skip_is_audited() {
             let receipt = comment.receipt()?;
             Some((
                 receipt.operation_id.to_string(),
-                serde_json::from_str::<serde_json::Value>(receipt.body).ok()?,
+                super::pilot_audit(&workspace.runtime, &task.id, comment),
             ))
         })
         .unwrap();
