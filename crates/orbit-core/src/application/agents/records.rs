@@ -7,10 +7,11 @@
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT,
-    TaskHistoryEntry, TaskStatus, task_fields_updated_documents,
+    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, FINAL_RECOVERY_DECIDED_EVENT,
+    TASK_FIELDS_UPDATED_EVENT, TaskDecision, TaskHistoryEntry, TaskStatus,
+    task_fields_updated_documents,
 };
-use orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT;
+use orbit_types::workflow::{RecoveryFault, TASK_BLOCKED_BY_AGENT_EVENT};
 use serde_json::Value;
 
 use crate::application::codebase::{BlockCause, SettledFailure, actor_kind, classify_block};
@@ -51,9 +52,11 @@ pub(in crate::application) enum Cause {
     /// The task's own specification: an edit to what it asks, a criteria
     /// blocker or escalation.
     Spec,
-    /// The crew's work: a run failure or a review rejection.
+    /// The crew's work: a run failure no final recovery judged otherwise,
+    /// an implementer fault final recovery recorded, or a review rejection.
     Crew,
-    /// An infrastructure failure the run failure classification names.
+    /// An infrastructure failure the run failure classification or a final
+    /// recovery's recorded fault names.
     Infrastructure,
     /// Anything else: base conflicts, manual blocks, unclassified causes.
     Other,
@@ -153,9 +156,17 @@ fn is_spec_signal(entry: &TaskHistoryEntry) -> bool {
     spec_documents(entry).is_some() || spec_blocker_kind(entry).is_some() || cites_criteria(entry)
 }
 
-/// The cause a block or run exit records.
+/// The cause a block or run exit records. `history` is the task's history,
+/// read for the final-recovery verdict on the run the entry names.
+///
+/// A run's exit is the crew's only while nothing judged it otherwise: when
+/// final recovery recorded whose fault that run's failure was, its typed
+/// fault decides, and a fault it could not establish charges no one. A
+/// final-recovery escalation is a handoff to a person, not a judgment of the
+/// work, so without a recorded fault it charges no one either.
 pub(in crate::application) fn block_cause(
     entry: &TaskHistoryEntry,
+    history: &[TaskHistoryEntry],
     settlements: &[SettledFailure],
 ) -> Cause {
     if is_spec_signal(entry) {
@@ -166,11 +177,52 @@ pub(in crate::application) fn block_cause(
         // An agent blocker that does not name the criteria is an external
         // dependency or decision, not the crew's work.
         BlockCause::Run if entry.event == TASK_BLOCKED_BY_AGENT_EVENT => Cause::Other,
-        BlockCause::Run => Cause::Crew,
+        BlockCause::Run => match recovery_fault(entry, history) {
+            Some(fault) => fault_cause(fault),
+            None if entry.event == FINAL_RECOVERY_ESCALATED_EVENT => Cause::Other,
+            None => Cause::Crew,
+        },
         BlockCause::BaseConflict(_)
         | BlockCause::Manual(_)
         | BlockCause::NotFailure
         | BlockCause::Unclassified => Cause::Other,
+    }
+}
+
+/// The fault final recovery recorded for the run `entry` names: of that
+/// run's `final_recovery_decided` entries, the one nearest the entry in time
+/// (the applier stamps its decision beside the transition it writes).
+fn recovery_fault(entry: &TaskHistoryEntry, history: &[TaskHistoryEntry]) -> Option<RecoveryFault> {
+    let run_id = entry.transition_run_id()?;
+    history
+        .iter()
+        .filter(|decided| decided.event == FINAL_RECOVERY_DECIDED_EVENT)
+        .filter_map(|decided| match &decided.decision {
+            Some(TaskDecision::FinalRecovery {
+                run_id: decided_run,
+                fault,
+                ..
+            }) if decided_run == run_id => {
+                Some(((decided.at - entry.at).num_milliseconds().abs(), *fault))
+            }
+            _ => None,
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, fault)| fault)
+}
+
+/// The cause a final-recovery fault names. Only an implementer fault is the
+/// crew's; a fault in review, Orbit, an outside service or one the evidence
+/// did not settle charges no agent.
+fn fault_cause(fault: RecoveryFault) -> Cause {
+    match fault {
+        RecoveryFault::Implementer => Cause::Crew,
+        RecoveryFault::Specification => Cause::Spec,
+        RecoveryFault::Infrastructure => Cause::Infrastructure,
+        RecoveryFault::Review
+        | RecoveryFault::Orbit
+        | RecoveryFault::External
+        | RecoveryFault::Unknown => Cause::Other,
     }
 }
 

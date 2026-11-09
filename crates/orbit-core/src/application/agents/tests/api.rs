@@ -992,3 +992,339 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     );
     assert!(rows.iter().all(|row| row["units"] == json!(1)));
 }
+
+/// One history entry as Orbit stores it, `minutes` after `base`.
+fn entry(base: chrono::DateTime<Utc>, minutes: i64, fields: Value) -> Value {
+    let mut fields = fields;
+    fields["at"] = json!(base + chrono::Duration::minutes(minutes));
+    fields
+}
+
+/// A final-recovery decision on `run`, recorded just before the transition
+/// its applier writes at `minutes`.
+fn decided(
+    base: chrono::DateTime<Utc>,
+    minutes: i64,
+    run: &str,
+    decision: &str,
+    outcome: Value,
+    fault: &str,
+) -> Value {
+    json!({
+        "at": base + chrono::Duration::minutes(minutes) - chrono::Duration::milliseconds(10),
+        "by": "system",
+        "event": "final_recovery_decided",
+        "note": format!("final_recovery run_id={run} decision={decision}"),
+        "decision": {
+            "kind": "final_recovery",
+            "run_id": run,
+            "decision": decision,
+            "outcome": outcome,
+            "fault": fault,
+        },
+    })
+}
+
+fn started(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
+    entry(
+        base,
+        minutes,
+        json!({"by": "system", "event": "started", "from_status": "backlog", "to_status": "in_progress"}),
+    )
+}
+
+fn to_review(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
+    entry(
+        base,
+        minutes,
+        json!({"by": "system", "event": "status_changed", "from_status": "in_progress", "to_status": "review"}),
+    )
+}
+
+fn landed(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
+    entry(
+        base,
+        minutes,
+        json!({"by": "owner-landing", "event": "landing_completed", "from_status": "review", "to_status": "done"}),
+    )
+}
+
+/// A rerun_ci recovery that could not read the pull request's checks and
+/// escalated, recorded with `fault`.
+fn rerun_ci_escalation(
+    base: chrono::DateTime<Utc>,
+    minutes: i64,
+    run: &str,
+    fault: &str,
+) -> [Value; 2] {
+    let reason = "rerun_ci refused: the checks of pull request #8660 cannot be read \
+                  (pull request #8660 mergeability is unknown)";
+    [
+        decided(
+            base,
+            minutes,
+            run,
+            "rerun_ci",
+            json!({"kind": "escalated", "reason": reason}),
+            fault,
+        ),
+        entry(
+            base,
+            minutes,
+            json!({
+                "by": "system",
+                "event": "final_recovery_escalated",
+                "note": format!("final recovery (run_id={run}) escalated: {reason}"),
+                "from_status": "review",
+                "to_status": "blocked",
+                "decision": {"kind": "run_transition", "run_id": run},
+            }),
+        ),
+    ]
+}
+
+/// An operator's requeue of the unchanged, published candidate.
+fn operator_requeue(base: chrono::DateTime<Utc>, minutes: i64, run: &str) -> [Value; 2] {
+    [
+        decided(
+            base,
+            minutes,
+            run,
+            "operator_requeue",
+            json!({"kind": "requeued"}),
+            "unknown",
+        ),
+        entry(
+            base,
+            minutes,
+            json!({
+                "by": "human:daniel",
+                "event": "operator_requeued",
+                "note": "requeued onto the published candidate: auto-fix found no defect; failed \
+                         job was a ripgrep download timeout. Reran CI by hand: required checks \
+                         green. Resume the candidate.",
+                "from_status": "blocked",
+                "to_status": "backlog",
+            }),
+        ),
+    ]
+}
+
+/// A run that failed on its work, then final recovery's requeue with `fault`.
+fn failed_then_requeued(
+    base: chrono::DateTime<Utc>,
+    minutes: i64,
+    run: &str,
+    fault: &str,
+) -> [Value; 3] {
+    [
+        entry(
+            base,
+            minutes,
+            json!({
+                "by": "system",
+                "event": "workflow_run_failed",
+                "note": format!("workflow failed: step=validate, run_id={run}, error_code=validation_failed"),
+                "from_status": "in_progress",
+                "to_status": "blocked",
+            }),
+        ),
+        decided(
+            base,
+            minutes + 5,
+            run,
+            "requeue",
+            json!({"kind": "requeued"}),
+            fault,
+        ),
+        entry(
+            base,
+            minutes + 5,
+            json!({
+                "by": "system",
+                "event": "final_recovery_requeued",
+                "note": format!("final recovery (run_id={run}): requeued for a fresh attempt"),
+                "from_status": "blocked",
+                "to_status": "backlog",
+            }),
+        ),
+    ]
+}
+
+/// A task's facts read by the production reader and block classifier from
+/// `history`, every attempt worked by `model` as a managed job.
+fn observed_task(id: &str, model: &str, history: Vec<Value>) -> TaskFacts {
+    use orbit_types::task::{Task, TaskHistoryEntry};
+    let created = history[0]["at"].clone();
+    let task: Task = serde_json::from_value(json!({
+        "id": id,
+        "title": format!("{id} observation"),
+        "description": "fixture",
+        "context_files": [format!("file:src/{id}.rs")],
+        "status": "done",
+        "priority": "medium",
+        "task_type": "bug",
+        "created_at": created,
+        "updated_at": created,
+    }))
+    .unwrap();
+    let history: Vec<TaskHistoryEntry> = history
+        .into_iter()
+        .map(|entry| serde_json::from_value(entry).unwrap())
+        .collect();
+    let classify =
+        |entry: &TaskHistoryEntry| super::super::records::block_cause(entry, &history, &[]);
+    let mut facts = super::super::facts::task_facts(
+        &task,
+        &history,
+        &[],
+        &[],
+        &Default::default(),
+        &classify,
+        Utc::now(),
+    );
+    for attempt in &mut facts.attempts {
+        attempt.job = true;
+        attempt.runner.crew = Some(format!("{model}-crew"));
+        attempt.runner.model = Some(model.to_string());
+    }
+    facts.execution = super::super::ExecutionMode::Managed;
+    facts
+}
+
+#[test]
+fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() {
+    let base = Utc::now() - chrono::Duration::hours(6);
+    let created = |minutes| {
+        entry(
+            base,
+            minutes,
+            json!({"by": "claude", "event": "created", "to_status": "proposed"}),
+        )
+    };
+    let mut infra = vec![created(0), started(base, 1), to_review(base, 15)];
+    infra.extend(rerun_ci_escalation(base, 40, "jrun-a1", "unknown"));
+    infra.extend(operator_requeue(base, 46, "jrun-a1"));
+    infra.extend([
+        entry(
+            base,
+            47,
+            json!({"by": "hm_mac", "event": "pulled_by", "from_status": "backlog", "to_status": "in_progress", "note": "{}"}),
+        ),
+        entry(
+            base,
+            56,
+            json!({"by": "hm_mac", "event": "claim_handed_off", "from_status": "in_progress", "to_status": "review"}),
+        ),
+        landed(base, 66),
+    ]);
+
+    // A judged implementation fault, then an infrastructure stop of the
+    // retried candidate: only the first restart is the implementer's.
+    let mut mixed = vec![created(0), started(base, 1)];
+    mixed.extend(failed_then_requeued(base, 10, "jrun-b1", "implementer"));
+    mixed.extend([started(base, 20), to_review(base, 30)]);
+    mixed.extend(rerun_ci_escalation(base, 40, "jrun-b2", "infrastructure"));
+    mixed.extend(operator_requeue(base, 46, "jrun-b2"));
+    mixed.extend([started(base, 50), to_review(base, 60), landed(base, 70)]);
+
+    let mut spec = vec![created(0), started(base, 1)];
+    spec.extend(failed_then_requeued(base, 10, "jrun-c1", "specification"));
+    spec.extend([started(base, 20), to_review(base, 30), landed(base, 40)]);
+
+    // A block by hand, requeued by hand, with nothing judging the work.
+    let mut manual = vec![created(0), started(base, 1)];
+    manual.extend([
+        entry(
+            base,
+            10,
+            json!({"by": "human:daniel", "event": "status_changed", "from_status": "in_progress", "to_status": "blocked"}),
+        ),
+        entry(
+            base,
+            20,
+            json!({"by": "human:daniel", "event": "status_changed", "from_status": "blocked", "to_status": "backlog"}),
+        ),
+        started(base, 21),
+        to_review(base, 30),
+        landed(base, 40),
+    ]);
+
+    // An escalation written before faults were recorded.
+    let mut unjudged = vec![created(0), started(base, 1), to_review(base, 15)];
+    unjudged.push(rerun_ci_escalation(base, 40, "jrun-d1", "unknown")[1].clone());
+    unjudged.extend(operator_requeue(base, 46, "jrun-d1"));
+    unjudged.extend([started(base, 50), to_review(base, 60), landed(base, 70)]);
+
+    // Another model's judged fault stays in that model's pack.
+    let mut other = vec![created(0), started(base, 1)];
+    other.extend(failed_then_requeued(base, 10, "jrun-e1", "implementer"));
+    other.extend([started(base, 20), to_review(base, 30), landed(base, 40)]);
+
+    let tasks = vec![
+        observed_task("infra", "fixture-model", infra),
+        observed_task("mixed", "fixture-model", mixed),
+        observed_task("spec", "fixture-model", spec),
+        observed_task("manual", "fixture-model", manual),
+        observed_task("unjudged", "fixture-model", unjudged),
+        observed_task("other", "other-model", other),
+    ];
+    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
+    let facts = AgentFacts {
+        invocations: Vec::new(),
+        computed_at: Utc::now(),
+        tasks_scanned: tasks.len(),
+        tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots: Vec::new(),
+    };
+
+    let claims = |model: &str| -> BTreeMap<String, Vec<(&'static str, Vec<String>)>> {
+        let evidence = super::super::memory_evidence::model_evidence(&facts, model).unwrap();
+        let mut claims: BTreeMap<String, Vec<(&'static str, Vec<String>)>> = BTreeMap::new();
+        for problem in evidence.implementer.problems {
+            for task in problem.tasks {
+                claims.entry(task.task_id).or_default().push((
+                    problem.description,
+                    task.occurrences
+                        .into_iter()
+                        .map(|occurrence| occurrence.detail)
+                        .collect(),
+                ));
+            }
+        }
+        claims
+    };
+    let implemented_wrong = "this change had to be run again, was blocked or did not merge, \
+                             because of how it was implemented";
+
+    let fixture = claims("fixture-model");
+    // ORB-23194: a ripgrep download timeout, a mergeability-unknown recovery
+    // refusal and a requeue of the unchanged candidate are no implementation
+    // fault.
+    assert!(
+        !fixture.contains_key("infra"),
+        "an infrastructure rerun is not an implementation problem: {fixture:?}"
+    );
+    assert_eq!(
+        fixture.get("mixed"),
+        Some(&vec![(implemented_wrong, vec!["run 2 of 3".to_string()])]),
+        "the judged implementation fault stays, and only its own restart"
+    );
+    for task in ["spec", "manual", "unjudged", "other"] {
+        assert!(
+            !fixture.contains_key(task),
+            "{task} must not be an implementation claim against fixture-model: {fixture:?}"
+        );
+    }
+    assert_eq!(
+        claims("other-model").get("other"),
+        Some(&vec![(implemented_wrong, vec!["run 2 of 2".to_string()])]),
+        "a judged fault is scoped to the model that worked the run"
+    );
+}

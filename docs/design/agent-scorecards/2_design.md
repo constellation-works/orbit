@@ -156,6 +156,8 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Lock wait on a path the holder reserved through a selector that covered none of its landed files | lock-wait episodes, pilot receipt | Pilot | the holder task's pilot run |
 | Rework with cause `infrastructure`, `other` or no recorded cause | history | Not scored | — |
 
+A rework's **cause** is the cause of the status change that ended the attempt (an operator's requeue is passed over for the change before it). A run failure is cause `crew` only while nothing judged it otherwise: when final recovery recorded a fault for the run that change names, the fault decides (`implementer` → `crew`, `specification` → `spec`, `infrastructure` → `infrastructure`; `review`, `orbit`, `external` and `unknown` → `other`), and a final-recovery escalation with no recorded fault is `other`, because an escalation hands the task to a person rather than judging the work. So an infrastructure interruption, a recovery refusal and a requeue of the unchanged candidate are never implementer rework, and in a mixed history each restart keeps the cause of its own run [ORB-23642]. Crew memory evidence (`crew_rework`) reads these same charges.
+
 A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** takes precedence: `merge_reintroduced` and `contract_drift` go to Not scored regardless of escape. Every other nature follows the escape's owner. Ownership does not by itself make a problem a scored term; `no_test` regressions are scored for Implementers as escaped regressions (§5.2) [ORB-21789]. Two consequences follow:
 
 - Spec regressions use escape `spec_ambiguous` only, and are Not scored. An incomplete delivery whose escape is not `spec_ambiguous` follows whichever owner its escape names.
@@ -767,5 +769,6 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-20629 — made final recovery the single decider for blocked tasks and retired blocked-task triage, the only writer of the block-triage markers.
 - ORB-21124 — split pilot modes into full assessments and targeted re-checks, reported under `pilot_modes`.
 - ORB-23582 — removed the orchestrators role and its CLI, MCP and `/api/agents/orchestrators/*` surfaces; spec-caused problems became Not scored (`spec`).
+- ORB-23642 — a final recovery's recorded fault decides a run exit's rework cause; an unjudged escalation is no longer implementer rework.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
