@@ -1217,7 +1217,7 @@ fn note_lines(receipt: &Value) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
-// A drain started from the dashboard reports what `orbit run auto` and `orbit.workflow.auto` report: the host throttle, backlog for another OS, unset `execution.env.pass` names and the required-validation note. An explicit ship reports the throttle and the unset names.
+// A drain started from the dashboard reports what `orbit run auto` and `orbit.workflow` action `auto` report: the host throttle, backlog for another OS, unset `execution.env.pass` names and the required-validation note. An explicit ship reports the throttle and the unset names.
 wf_test!(auto_start_and_ship_report_the_submission_notices, {
     let _credential = held_worker_credential();
     let fixture = notice_fixture("");

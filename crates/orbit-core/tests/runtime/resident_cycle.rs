@@ -124,9 +124,11 @@ fn call(
     input: Value,
     capability: McpCapability,
 ) -> Result<Value, String> {
+    // MCP names a family action through its family.
+    let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
     runtime
         .execute_tool_command_dispatch_with_session_context(
-            tool,
+            &tool,
             input,
             None,
             None,

@@ -18,7 +18,9 @@ use orbit_core::adapter::command::{
 use orbit_core::runtime::HostLifetime;
 use orbit_mcp::federated;
 use orbit_mcp::{McpHost, McpSessionAuthority};
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::tool::{
+    McpToolDefinition, ToolSessionContext, tool_family, tool_family_call, tool_operation_name,
+};
 use serde_json::Value;
 
 use super::dispatch::{call_workspace_selector, execute_core_tool};
@@ -311,7 +313,7 @@ impl ServerMcpHost {
         // underscore form before this host sees the call. Federated workspace
         // discovery without crews does not open a runtime. Crew attachment
         // keeps the writable open below.
-        let runtime = if name == WorkflowVerb::RunObserve.tool_name() {
+        let runtime = if tool_operation_name(name, input) == WorkflowVerb::RunObserve.tool_name() {
             self.open_observation_runtime(&selected)?
         } else {
             self.open_selected_runtime(&selected)?
@@ -388,7 +390,8 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let explicit = call_workspace_selector(input)?;
-        if explicit.is_none() && federated::is_id_routed_tool(name) {
+        let operation = tool_operation_name(name, input);
+        if explicit.is_none() && federated::is_id_routed_tool(operation) {
             let task_id = required_string(input, &["id"], "id")?;
             // A v1 server does not relay [ORB-14449]: an id another
             // registered host writes is refused with where it lives, never
@@ -399,7 +402,7 @@ impl ServerMcpHost {
             }
             // An unbound session — including a federated route that carried
             // only the id — resolves it through this host's task registry.
-            if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name)
+            if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation)
                 || Self::workspace_selector(None, context).is_none()
             {
                 return task_owner::resolve_task_owner(&self.global_root, &task_id);
@@ -488,14 +491,17 @@ impl ServerMcpHost {
         if name == "orbit.attention" {
             return self.call_attention_tool(input, context);
         }
+        // Routing and the capability class key on the operation a family
+        // call reaches; the call itself keeps the name the caller gave.
+        let operation = tool_operation_name(name, &input).to_string();
         if let Some(binding) = &context.worker_invocation
             && binding.execution.machine_id == self.process_machine_id
             && binding.owner_machine_id != self.process_machine_id
-            && (name.starts_with("orbit.task.")
-                || name.starts_with("orbit.friction.")
-                || name.starts_with("orbit.notice."))
+            && (operation.starts_with("orbit.task.")
+                || operation.starts_with("orbit.friction.")
+                || operation.starts_with("orbit.notice."))
         {
-            let routed_name = if name == "orbit.task.artifact.put" {
+            if operation == "orbit.task.artifact.put" {
                 let cwd = std::env::current_dir()?;
                 input = orbit_cmd::prepare_remote_task_artifact_put(
                     input,
@@ -503,10 +509,12 @@ impl ServerMcpHost {
                     Some(&cwd),
                     context.transport,
                 )?;
-                name
-            } else {
-                name
-            };
+                // The prepared payload keeps attachment fields only; a family
+                // call still names its action.
+                if tool_family(name).is_some() {
+                    input = tool_family_call(&operation, input).1;
+                }
+            }
             if let Some(selector) = call_workspace_selector(&input)?
                 && selector != binding.owner_destination
                 && selector != binding.owner_workspace_id
@@ -538,11 +546,8 @@ impl ServerMcpHost {
                 context.orchestrator.clone(),
                 McpSessionAuthority::Agent,
             );
-            return federated::FederatedMcpHost::new(destinations, Arc::new(probe)).call_tool(
-                routed_name,
-                input,
-                context,
-            );
+            return federated::FederatedMcpHost::new(destinations, Arc::new(probe))
+                .call_tool(name, input, context);
         }
         if self.workspace_optional_aggregate(name, &input, &context)
             && let Some(object) = input.as_object_mut()
@@ -571,7 +576,7 @@ impl ServerMcpHost {
         // Destination catalog-role gate [ORB-11021]: refuse before the tool body
         // runs. Unclassified and execute-class tools pass and keep their own auth.
         if let Err(error) = federated::ensure_tool_class_held(
-            name,
+            &operation,
             federated::CapabilityClasses::for_checkout(&selected.workspace, &selected.checkout),
         ) {
             return runtime

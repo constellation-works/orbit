@@ -37,7 +37,9 @@ impl McpToolClass {
 /// Classify public tools and internal drain operations by behavior.
 ///
 /// Accepts either the canonical (`orbit.task.add`) or advertised
-/// (`orbit_task_add`) spelling. Task reads are `control_plane` because the
+/// (`orbit_task_add`) spelling. A family call is classified by the operation
+/// its action reaches (`orbit.workflow.run.show` for `orbit.run` with
+/// `action: show`), so callers pass that operation. Task reads are `control_plane` because the
 /// coordination store is owner-authoritative. A name this host does not
 /// advertise or serve internally is unclassified here; public routing rejects it with
 /// `tool_not_on_this_host`, which precedes `capability_refused`.

@@ -222,12 +222,12 @@ fn filing_refuses_an_unliftable_disallowed_required_tool() {
     let error = runtime
         .add_task(TaskAddParams {
             title: "Disallowed mutating requirement".into(),
-            required_tools: vec!["orbit.auto_task.update".into()],
+            required_tools: vec!["orbit.auto_task:update".into()],
             ..Default::default()
         })
         .expect_err("a disallowed mutating tool is refused at filing");
     let message = error.to_string();
-    assert_unliftable_refusal(&message, "orbit.auto_task.update");
+    assert_unliftable_refusal(&message, "orbit.auto_task:update");
     assert!(message.contains("mutating"), "{message}");
     assert!(
         runtime.list_tasks().expect("tasks").is_empty(),

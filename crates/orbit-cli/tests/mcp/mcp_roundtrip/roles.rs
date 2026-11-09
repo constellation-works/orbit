@@ -9,24 +9,20 @@ use super::{McpWorkspace, SpawnPiped, tool_names};
 
 /// The reader role's advertised surface: core discovery plus attention,
 /// task, run, codebase and search reads.
-const READER_TOOLS: [&str; 13] = [
+const READER_TOOLS: [&str; 9] = [
     "orbit_attention",
-    "orbit_codebase_analytics",
-    "orbit_codebase_related",
-    "orbit_codebase_show",
+    "orbit_codebase",
+    "orbit_run",
     "orbit_search",
-    "orbit_task_artifact_get",
+    "orbit_task_artifact",
     "orbit_task_eligible",
     "orbit_task_list",
     "orbit_task_show",
-    "orbit_workflow_run_list",
-    "orbit_workflow_run_observe",
-    "orbit_workflow_run_show",
     "orbit_workspace_list",
 ];
 
 fn sorted(mut names: Vec<&str>) -> Vec<&str> {
-    names.retain(|name| !name.starts_with("orbit_ui_"));
+    names.retain(|name| *name != "orbit_ui");
     names.sort_unstable();
     names
 }
@@ -102,6 +98,15 @@ fn a_role_serves_only_its_toolsets_in_every_mode() {
                 .is_some_and(|message| message.contains("'reader' MCP role")),
             "{case}: {refused}"
         );
+        // An advertised family is scoped per action: the reader reads
+        // artifacts but cannot put one.
+        let refused = client.assert_tool_error(
+            "orbit_task_artifact",
+            json!({"action": "put"}),
+            "toolset_not_enabled",
+        );
+        assert_eq!(refused["action"], "put", "{case}: {refused}");
+        assert_eq!(refused["toolset"], "tasks-write", "{case}: {refused}");
     }
 
     // `--toolset` adds to the role rather than replacing it.
@@ -119,7 +124,7 @@ fn a_role_serves_only_its_toolsets_in_every_mode() {
     let listed = configured.tools_list();
     let names = tool_names(&listed);
     assert!(names.contains(&"orbit_notice_list"), "{names:?}");
-    assert!(names.contains(&"orbit_decision_list"), "{names:?}");
+    assert!(names.contains(&"orbit_decision"), "{names:?}");
     assert!(!names.contains(&"orbit_task_update"), "{names:?}");
     let mut flagged = workspace.serve_with_args(&["--operator", "--role", "reader"]);
     let listed = flagged.tools_list();
@@ -173,13 +178,13 @@ fn a_role_never_grants_operator_capability() {
         let mut agent = workspace.serve_with_args(&["--role", role]);
         let listed = agent.tools_list();
         assert!(
-            !tool_names(&listed).contains(&"orbit_workflow_run_list"),
+            !tool_names(&listed).contains(&"orbit_run"),
             "{role}: an agent session must not be shown an operator-only tool"
         );
-        agent.assert_tool_error("orbit_workflow_run_list", json!({}), "capability_denied");
+        agent.assert_tool_error("orbit_run", json!({"action": "list"}), "capability_denied");
 
         let mut operator = workspace.serve_with_args(&["--operator", "--role", role]);
-        operator.call_tool_ok("orbit_workflow_run_list", json!({}));
+        operator.call_tool_ok("orbit_run", json!({"action": "list"}));
     }
 
     // Attention belongs to tasks-read, shared by every role, and accepts
@@ -334,12 +339,10 @@ fn default_and_operator_profiles_advertise_their_expected_surfaces() {
         tool_names(&listed),
         vec![
             "orbit_attention",
-            "orbit_friction_add",
-            "orbit_friction_update",
+            "orbit_friction",
             "orbit_search",
             "orbit_task_add",
-            "orbit_task_artifact_get",
-            "orbit_task_artifact_put",
+            "orbit_task_artifact",
             "orbit_task_eligible",
             "orbit_task_list",
             "orbit_task_show",
@@ -351,13 +354,13 @@ fn default_and_operator_profiles_advertise_their_expected_surfaces() {
     let listed = operator.tools_list();
     let names = tool_names(&listed);
     for expected in [
-        "orbit_task_recover_claim",
-        "orbit_workflow_ship",
+        "orbit_task_recover",
+        "orbit_workflow",
         "orbit_routine_control",
         "orbit_pipeline_invoke",
-        "orbit_decision_list",
-        "orbit_codebase_show",
-        "orbit_ui_open",
+        "orbit_decision",
+        "orbit_codebase",
+        "orbit_ui",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }

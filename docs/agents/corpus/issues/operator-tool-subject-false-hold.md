@@ -29,7 +29,7 @@ ORB-21291 (done, b929807a1f56cf46078399bdda2e3666ce0ac04f). All observed holds p
 
 Reviewed proposal from fixed resume window `2026-10-19T09:18:37Z` through `2026-11-02T09:18:37Z`, after `2026-10-31T09:45:34Z`. This slice counts 4 source occurrences across 2 tasks; route `pilot`, disposition `counted`. Covering repair: ORB-21291.
 
-Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact.get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
+Durable source exports: ORB-21875 artifact `pilot-block-evidence.json`, retrieved with `orbit.task.artifact` action `get`; the original task histories/comments and `orbit run show <run> --no-reconcile --json` remain authoritative.
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
@@ -51,6 +51,6 @@ Durable sources: the task `history` and `comments` read with `orbit.task.show` a
 | 2026-11-02T04:49:37Z | ORB-21264 | jrun-20261102-0448-c1 | operator_validation_held: criterion 1 names operator-only `orbit.experiment.abandon` and `orbit.experiment.conclude`; triage pilot_warning_triaged disposition=decision outcome=proposed@06:14:24Z (option 1: reword criteria); source ORB-21264 history:operator_validation_held | held until re-piloted |
 | 2026-11-02T06:15:52Z | ORB-21264 | pilot run not read | operator_validation_held again, same requirements, no material change; source ORB-21264 history | operator `task-pilot-admission: clear` at 06:18:16Z (false hold) |
 | 2026-11-02T06:20:59Z | ORB-21264 | pilot run not read | operator_validation_held a third time, same requirements | operator `task-pilot-admission: clear` at 06:22:49Z (false hold); approved, ORB-21264 done 07:03Z |
-| 2026-11-02T05:58:20Z | ORB-21286 | pilot run not read | operator_validation_held: criterion 1 names operator-only `orbit.task.requeue`; source ORB-21286 history:operator_validation_held | acceptance_criteria edited 06:15:20Z, re-piloted clean 06:16:13Z; ORB-21286 done 06:39Z |
+| 2026-11-02T05:58:20Z | ORB-21286 | pilot run not read | operator_validation_held: criterion 1 names operator-only `orbit.task.recover` action `requeue`; source ORB-21286 history:operator_validation_held | acceptance_criteria edited 06:15:20Z, re-piloted clean 06:16:13Z; ORB-21286 done 06:39Z |
 
 Pilot run ids for these three holds were not read (only history operation ids), so the Run column says so; the history timestamps are authoritative. All four precede ORB-21291 landing (2026-11-02T07:25Z); no hold after landing was read.

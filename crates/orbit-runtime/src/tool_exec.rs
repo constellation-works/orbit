@@ -33,6 +33,13 @@ impl RuntimeKernel {
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
+        // Every check below keys on the operation a family call reaches.
+        let (operation, input) = if orbit_types::tool::tool_family(name).is_some() {
+            self.tool_registry().resolve_tool_call(name, input)?
+        } else {
+            (name.to_string(), input)
+        };
+        let name = operation.as_str();
         if super::worker_coordination::is_coordination_tool(name) {
             super::worker_coordination::check_worker_host_input(
                 &input,
@@ -238,12 +245,16 @@ impl RuntimeKernel {
     /// only holds if inactive also means uncallable, which is here: the
     /// registry is the one place every workspace caller passes through.
     /// Enforce a persisted tool disable before built-in application dispatch.
+    /// A family operation is disabled with its family, the tool an operator
+    /// names.
     pub fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
-        if let Some(stored) = self.stores().tools().get_tool(name)?
+        let tool = orbit_types::tool::tool_family_of_operation(name)
+            .map_or(name, |(family, _)| family.name);
+        if let Some(stored) = self.stores().tools().get_tool(tool)?
             && !stored.enabled
         {
             return Err(OrbitError::Execution(format!(
-                "tool '{name}' is disabled; enable it with: orbit tool enable {name}"
+                "tool '{tool}' is disabled; enable it with: orbit tool enable {tool}"
             )));
         }
         Ok(())
@@ -298,7 +309,8 @@ pub fn check_activity_tool_policy(
 ) -> Result<(), OrbitError> {
     if !tool_context.allowed_tools.is_empty() && !tool_allowed(name, &tool_context.allowed_tools) {
         return Err(OrbitError::PolicyDenied(format!(
-            "tool '{name}' is not in the activity allowlist"
+            "tool '{}' is not in the activity allowlist",
+            orbit_types::tool::tool_call_name(name)
         )));
     }
     if let Some(policy) = tool_context

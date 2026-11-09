@@ -324,7 +324,7 @@ before the held candidate lands. A before-PR review always keeps the hold,
 since no hosted CI runs before the pull request opens.
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | {verdict, host_validation, owner_owed_evidence, known_red}'
 ```
 
@@ -485,7 +485,7 @@ The full evidence is in the task artifacts `review-manifest.json`,
 `review-report.json`, and `review-gate.json`:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}'
 ```
 
 A required check can fail on the candidate only because the base it was
@@ -649,9 +649,9 @@ and validation environment are in the log artifact beside the named result
 (`<artifact>.log.json`):
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | .host_evidence'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"<artifact>.log.json"}'
 ```
 
 A workspace `[[review.host_evidence]]` rule makes this deterministic for a
@@ -675,7 +675,7 @@ reuses the held certificate without a reviewer, and the certificate's
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | {owed_evidence, resumed_hold_attempt}'
 ```
 
@@ -705,7 +705,7 @@ orbit audit list --tool review.evidence_fulfilment --json
 # The step's output: fulfilled, reason, detail, retryable, requeued.
 orbit run show <run-id>
 # The command line run, its output, tests passed and validation environment.
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"<artifact>.log.json"}'
 ```
 
 The run also comments its outcome on the task.
@@ -798,7 +798,7 @@ Identify the failed step from `orbit run show`, then act:
 
 - **A claimed reviewer reported `incomplete` because its manifest or report
   call was refused** (distributed drain follower): the reviewer's
-  `orbit.task.artifact.get`/`put` reaches the owner only through the run's
+  `orbit.task.artifact` action `get`/`put` reaches the owner only through the run's
   coordinator, the step runner outside the sandbox, which carries those two
   calls and a claimed worker's other owner calls, and nothing else. The
   refusal names the cause:
@@ -840,8 +840,8 @@ After the delivery run, read `review-gate.json` through the public artifact
 tool and verify its `verdict`, `validation_complete` and `final_candidate`:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input \
-  '{"id":"<task-id>","path":"review-gate.json"}'
+orbit tool run orbit.task.artifact --input \
+  '{"action":"get","id":"<task-id>","path":"review-gate.json"}'
 orbit run show <leaf-run-id> --step handoff --json --no-reconcile
 ```
 

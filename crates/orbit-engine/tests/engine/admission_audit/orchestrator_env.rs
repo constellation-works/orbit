@@ -219,7 +219,7 @@ fail() {
   exit 1
 }
 [ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
-[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*,orbit.task.update" ] || fail claimed_disallow_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow:ship,proc.*,orbit.task.update" ] || fail claimed_disallow_list_missing
 [ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,github.run.list" ] || fail claimed_task_read_unavailable
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
 "#,
@@ -231,7 +231,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
     );
     let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
     spec.tool_disallow_list = Some(vec![
-        "orbit.workflow.ship".to_string(),
+        "orbit.workflow:ship".to_string(),
         "proc.*".to_string(),
     ]);
 
@@ -274,7 +274,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
         tool_disallow_list.as_deref(),
         Some(
             [
-                "orbit.workflow.ship".to_string(),
+                "orbit.workflow:ship".to_string(),
                 "proc.*".to_string(),
                 "orbit.task.update".to_string(),
             ]
@@ -306,7 +306,7 @@ fail() {
   exit 1
 }
 [ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
-[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,orbit.notice.post,orbit.notice.show,orbit.notice.close" ] || fail suppressed_deny_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow:ship,orbit.notice.post,orbit.notice.show,orbit.notice.close" ] || fail suppressed_deny_list_missing
 [ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,proc.spawn,github.run.list,orbit.notice.list" ] || fail suppressed_effective_tools_wrong
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
 "#,
@@ -317,7 +317,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
         "grok:grok-build",
     );
     let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
-    spec.tool_disallow_list = Some(vec!["orbit.workflow.ship".to_string()]);
+    spec.tool_disallow_list = Some(vec!["orbit.workflow:ship".to_string()]);
     let host = TestHost::with_command(script.display().to_string())
         .with_additional_tools(&[
             "orbit.notice.post",
@@ -360,7 +360,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
     assert_eq!(
         tool_disallow_list,
         [
-            "orbit.workflow.ship".to_string(),
+            "orbit.workflow:ship".to_string(),
             "orbit.notice.post".to_string(),
             "orbit.notice.show".to_string(),
             "orbit.notice.close".to_string(),

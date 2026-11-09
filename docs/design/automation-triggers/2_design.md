@@ -420,7 +420,7 @@ execution claim holds it. Active pilots and live execution claims keep their
 holds, and failed attempts retain their retry bounds before reuse. Other
 repilots, such as one for a material or policy-only change or one held by an
 unresolved failed attempt, need an explicit operator request:
-`orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
+`orbit task repilot <id>`, tool `orbit.task.recover` action `repilot`, task update `repilot: true`,
 or a decision option action `re_pilot`. The explicit legacy command
 `orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
 holders and owner authority guard explicit submission.

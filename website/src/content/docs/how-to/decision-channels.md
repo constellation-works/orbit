@@ -112,8 +112,8 @@ orbit decision show '<request-id>'
 orbit decision list --all
 ```
 
-`list` and `show` are read-only and available as `orbit.decision.list` and
-`orbit.decision.show` over MCP. `--all` includes answered, superseded and
+`list` and `show` are read-only and available as `orbit.decision` action `list` and
+`orbit.decision` action `show` over MCP. `--all` includes answered, superseded and
 expired requests. Copy the actual request ID and one of its allowed answer IDs.
 For example, an operator can answer an open approval request directly:
 
@@ -163,7 +163,7 @@ The raise checks these rules before it writes anything:
 - A workspace holds at most 20 open agent-raised requests, and one filer at most
   5. Past either cap the raise is refused and nothing is written.
 
-The same call is `orbit.decision.raise` over MCP. An agent can raise a decision,
+The same call is `orbit.decision` action `raise` over MCP. An agent can raise a decision,
 but it cannot answer one: there is no answering tool for agents.
 
 ### Answer a raised decision

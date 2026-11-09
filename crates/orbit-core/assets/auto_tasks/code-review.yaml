@@ -32,7 +32,7 @@ template:
       list them with
       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
       and fetch the rotation record with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"reviewed-modules.json","model":"<agent-family>"}'`
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"reviewed-modules.json","model":"<agent-family>"}'`
       only when that listing names `reviewed-modules.json`.
       Search existing coverage with
       `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
@@ -271,7 +271,7 @@ template:
 
     On every completed run, write the rotation record to
     `.orbit/tmp/reviewed-modules.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/reviewed-modules.json","path":"reviewed-modules.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/reviewed-modules.json","path":"reviewed-modules.json","model":"<agent-family>"}'`.
     Its shape is
     `{"schema_version":1,"ref":"<integration branch>","pinned_sha":"<full 40-character commit SHA>","modules":[{"id":"<module ID>","selectors":["<selector>"],"line_count":123,"filed_finding_ids":["<filed task ID>"]}],"exclusions":[{"path":"<path>","reason":"<reason>"}]}`.
     List exactly the modules this run fully reviewed (both selected modules,
@@ -289,7 +289,7 @@ template:
     `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
     to a gitignored scratch file inside the checkout (for example
     `.orbit/tmp/sweep-cursor.json`) and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema.
     Write it on every completed run, including a run with no confirmed
     findings: the commit it names is the pinned SHA this run examined, and a
@@ -318,8 +318,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

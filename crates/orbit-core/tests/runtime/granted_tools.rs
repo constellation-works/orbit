@@ -23,8 +23,8 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
     for tool in [
         "orbit.command.exec",
         "orbit.pipeline.invoke",
-        "orbit.workflow.run.resume",
-        "orbit.workflow.ship",
+        "orbit.run:resume",
+        "orbit.workflow:ship",
         "orbit.task.locks.release",
     ] {
         let before = runtime.get_task(&task.id).unwrap();
@@ -61,7 +61,7 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 
-    let usable = "orbit.auto_task.update";
+    let usable = "orbit.auto_task:update";
     let granted = runtime
         .add_task(TaskAddParams {
             title: "Usable grant".into(),
@@ -90,7 +90,8 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
         .stores()
         .tools()
         .insert_tool(&StoredTool {
-            name: usable.into(),
+            // A family action is disabled with its family.
+            name: "orbit.auto_task".into(),
             path: String::new(),
             description: String::new(),
             enabled: false,
@@ -127,8 +128,10 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
         (usable, "inactive"),
         ("orbit.auto_task.*", "wildcard"),
         ("orbit_auto_task_update", "canonical"),
-        ("Orbit.auto_task.update", "canonical"),
-        (" orbit.auto_task.update", "canonical"),
+        ("Orbit.auto_task:update", "canonical"),
+        (" orbit.auto_task:update", "canonical"),
+        ("orbit.auto_task.update", "not a tool"),
+        ("orbit.auto_task:remove", "unknown tool family action"),
         ("orbit.missing.tool", "unknown"),
         ("orbit.friction.show", "agent-facing"),
     ] {
@@ -183,7 +186,7 @@ fn wildcard_covered_grant_refuses_admission_case() {
     let task = runtime
         .add_task(TaskAddParams {
             title: "Wildcard-covered grant".into(),
-            granted_tools: vec!["orbit.auto_task.update".into()],
+            granted_tools: vec!["orbit.auto_task:update".into()],
             ..Default::default()
         })
         .unwrap();
@@ -196,7 +199,7 @@ fn wildcard_covered_grant_refuses_admission_case() {
         )
         .expect_err("a grant cannot lift a wildcard denial");
     let message = error.to_string();
-    assert!(message.contains("orbit.auto_task.update"), "{message}");
+    assert!(message.contains("orbit.auto_task:update"), "{message}");
     assert!(message.contains("exact disallow entry"), "{message}");
     assert!(message.contains("orbit.auto_task.*"), "{message}");
 }

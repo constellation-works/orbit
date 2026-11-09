@@ -8,7 +8,7 @@ Scope defaults to the current workspace; `--workspace` repeats, and `--all` read
 
 `ci_red` reads the provider behind `github.run.list` for the workspace base branch, cached per workspace for 60 seconds and bounded by a 10-second source timeout. The current base-branch head is the fetched remote-tracking branch (`origin/<base>`), not the local branch, which can lag behind it; advancing that head invalidates the cache. When no fetched head is available the source degrades as `source_unavailable` instead of treating any reported head as current. Only completed runs on the current base-branch head count; pending or unknown observations are not green and do not make an older red head current. The newest completed run of a workflow that failed or timed out, with no newer success, is high severity and critical after both age thresholds. Its `since` is that run's `updated_at`, labelled in `detail` (`since_source: updated_at`, `since_is_proxy: true`) as an onset-time proxy, not an exact completion timestamp. When a CI-sweep repair task already exists for the failing run, `refs.task_id` names it and `next` shows that task; otherwise `next` is `github.run.view`. While a task commit is pending, the repair-task lookup is skipped rather than settling the pending commit: the red item still reports the failing run with `github.run.view`, and a `source_unavailable` degraded entry for `ci_red` names the pending commit as the reason the association is unavailable. Missing provider authentication or a timeout yields `degraded` code `source_unavailable` without failing the call; on the workspace owner, a workspace with no recognisable remote contributes nothing and no degradation; a direct read on a replica checkout degrades with `source_unavailable` before the remote is checked, whether or not it has one; a candidate read (Orbit's own fan-out) on a replica contributes nothing and no degradation. `--exclude-kind ci_red` makes no provider call.
 
-`friction_untriaged` lists friction records still `open`, with `since` at `created_at`, low severity (medium after the first age threshold), and `next` as `orbit.friction.update` with `status: triaged`. Triaged and resolved records are not listed.
+`friction_untriaged` lists friction records still `open`, with `since` at `created_at`, low severity (medium after the first age threshold), and `next` as `orbit.friction` action `update` with `status: triaged`. Triaged and resolved records are not listed.
 
 Runtime kinds read stored runs without reconciliation. `run_failed` reports recent failed,
 timed-out or interrupted runs, suppressing older attempts superseded by a newer submission
@@ -21,7 +21,7 @@ runs remain visible beyond the 48-hour failure window.
 `claim_stale` uses owner-side claim inspection and says “possibly stale”: reservation expiry,
 a missing/terminal local bound run, unresolved merge intent or invalidated landing are
 diagnostics. A remote run missing locally proves nothing. Its recovery advice uses
-`orbit.task.recover_claim`, with `claim_id` and `workspace` known; `needs` declares `reason`,
+`orbit.task.recover` action `recover_claim`, with `claim_id` and `workspace` known; `needs` declares `reason`,
 `request_key`, `expected_phase` and `status` (blocked/backlog). Read `detail.phase` and inspect
 the claim before supplying operator inputs. Attention never executes recovery, resume or
 cancellation. Generic resume advice preserves the action's ordinary admission guards.

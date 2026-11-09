@@ -115,7 +115,7 @@ pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
     "orbit.task.show",
     "orbit.task.update",
-    "orbit.task.artifact.put",
+    "orbit.task.artifact:put",
 ];
 
 /// The coordination tools a claimed worker on another machine than its owner
@@ -124,7 +124,8 @@ pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
 /// route needs, so these calls cross the broker instead, each scoped by the
 /// broker's own records to the claimed task or its workspace for search/list.
 /// The list is closed; any other coordination tool from such a worker's sandbox
-/// is refused.
+/// is refused. Entries are operation names: a family tool is an owner tool
+/// for exactly the actions whose operations are listed.
 pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
     "orbit.task.show",
     "orbit.search",
@@ -138,10 +139,14 @@ pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
     "orbit.notice.close",
 ];
 
-/// Whether `tool` is one of the [`CLAIMED_OWNER_TOOLS`].
+/// Whether `tool` reaches only [`CLAIMED_OWNER_TOOLS`]: an operation or a
+/// `family:action` policy name on the list, or a family whose every action
+/// is.
 #[must_use]
 pub fn is_claimed_owner_tool(tool: &str) -> bool {
-    CLAIMED_OWNER_TOOLS.contains(&tool)
+    super::tool_policy_operations(tool)
+        .iter()
+        .all(|operation| CLAIMED_OWNER_TOOLS.contains(operation))
 }
 
 /// Whether a claimed leaf on another machine than its owner can reach

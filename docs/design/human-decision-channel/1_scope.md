@@ -144,7 +144,7 @@ confirmation mail, transport-down behaviour).
 
 - **CLI/MCP (core):** `orbit decision list|show`, `orbit decision answer` (the local
   equivalent of replying), `orbit decision channel register|revoke`; tools
-  `orbit.decision.list`, `orbit.decision.show`, and the governed
+  `orbit.decision` action `list`, `orbit.decision` action `show`, and the governed
   `orbit.decision.submit` the plugin calls. `orbit.task.show` gains the task's open
   requests.
 - **Dashboard:** an open-requests list with the same answer buttons the email offers,

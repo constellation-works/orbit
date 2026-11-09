@@ -95,7 +95,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
     runtime
         .run_tool_with_context_and_role(
             "orbit.task.update",
-            json!({"id": task.id, "granted_tools": ["orbit.auto_task.update"]}),
+            json!({"id": task.id, "granted_tools": ["orbit.auto_task:update"]}),
             Role::Admin,
             context_with([McpCapability::Operator]),
         )
@@ -112,7 +112,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
     let mut context = context_with([McpCapability::Agent]);
     context.tool_deny_policy = Some(orbit_types::workflow::ActivityToolDenyPolicy {
         activity: "agent_implement".into(),
-        disallow_list: vec!["orbit.auto_task.update".into()],
+        disallow_list: vec!["orbit.auto_task:update".into()],
     });
     let error = runtime
         .run_tool_with_context_and_role(
@@ -136,6 +136,6 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
     assert_eq!(denials, vec![("orbit.auto_task.update".to_string(), 1)]);
     assert_eq!(
         runtime.get_task(&task.id).unwrap().granted_tools,
-        ["orbit.auto_task.update"]
+        ["orbit.auto_task:update"]
     );
 }

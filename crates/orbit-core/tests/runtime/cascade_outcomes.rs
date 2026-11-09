@@ -194,9 +194,11 @@ impl Fixture {
 /// through its row of `orbit.workflow.run.list`.
 fn mcp_views(runtime: &OrbitRuntime, run_id: &str) -> [(&'static str, Value); 2] {
     let call = |tool: &str, input: Value| {
+        // MCP names a family action through its family.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         runtime
             .execute_tool_command_with_session_context(
-                tool,
+                &tool,
                 input,
                 None,
                 None,

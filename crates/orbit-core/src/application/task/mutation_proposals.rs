@@ -23,7 +23,8 @@ use orbit_types::task::{
     MutationReceipt, MutationReceiptState, ReviewedMutationProposal, Task, TaskArtifact,
     is_mutation_proposal_artifact, is_mutation_receipt_artifact, mutation_receipt_artifact_path,
 };
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, ToolSessionContext, tool_call_name};
+use orbit_types::workflow::tool_allowed;
 use serde_json::{Value, json};
 
 use super::TaskUpdateParams;
@@ -144,31 +145,37 @@ impl OrbitRuntime {
     /// a grantable mutation, and an agent session passes its admission,
     /// capability and input-dependent field gates.
     fn check_granted_mutation(&self, task: &Task, tool: &str, input: &Value) -> Result<(), String> {
-        if !task.granted_tools.iter().any(|granted| granted == tool) {
-            return Err(format!(
-                "task '{}' does not grant `{tool}`; only an operator's `granted_tools` admits a proposal",
-                task.id
-            ));
-        }
-        let classification = authorization::classify_agent_tool_grant(tool);
-        if classification.grantability == ToolGrantability::AlwaysOperatorOnly {
-            return Err(format!("`{tool}` is always operator-only"));
-        }
-        if classification.effect != GrantedToolEffect::Mutating {
-            return Err(format!(
-                "`{tool}` is classified read/repeat-safe; its grant makes it callable directly"
-            ));
-        }
         if !input.is_object() {
             return Err("`input` must be a JSON object of the tool's arguments".into());
         }
+        // A family call is granted and gated as the action it names.
+        let (operation, operation_input) = self
+            .tool_registry()
+            .resolve_tool_call(tool, input.clone())
+            .map_err(|error| error.to_string())?;
+        let call = tool_call_name(&operation);
+        if !tool_allowed(&operation, &task.granted_tools) {
+            return Err(format!(
+                "task '{}' does not grant `{call}`; only an operator's `granted_tools` admits a proposal",
+                task.id
+            ));
+        }
+        let classification = authorization::classify_agent_tool_grant(&operation);
+        if classification.grantability == ToolGrantability::AlwaysOperatorOnly {
+            return Err(format!("`{call}` is always operator-only"));
+        }
+        if classification.effect != GrantedToolEffect::Mutating {
+            return Err(format!(
+                "`{call}` is classified read/repeat-safe; its grant makes it callable directly"
+            ));
+        }
         self.authorize_registered_tool(
-            tool,
-            input,
+            &operation,
+            &operation_input,
             &agent_tool_context(),
             CapabilityEnforcement::McpSessionOnly,
         )
-        .map_err(|error| format!("a grant does not satisfy `{tool}`'s own gates: {error}"))
+        .map_err(|error| format!("a grant does not satisfy `{call}`'s own gates: {error}"))
     }
 
     /// The task's proposals in path order, each with its digest and receipt.

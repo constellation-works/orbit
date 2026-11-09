@@ -84,15 +84,8 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
     );
     assert_eq!(analytics["regressions"]["rows"][0]["numerator"], 1);
     assert_eq!(analytics["regressions"]["rows"][0]["denominator"], 2);
-    let input = json!({ "window": "30d", "min_support": 1 }).to_string();
-    let mut tool = fixture.json(&[
-        "tool",
-        "run",
-        "orbit.codebase.analytics",
-        "--full",
-        "--input",
-        &input,
-    ]);
+    let input = json!({"action": "analytics", "window": "30d", "min_support": 1 }).to_string();
+    let mut tool = fixture.json(&["tool", "run", "orbit.codebase", "--full", "--input", &input]);
     for payload in [&mut analytics, &mut tool] {
         let object = payload.as_object_mut().unwrap();
         object.remove("computed_at");

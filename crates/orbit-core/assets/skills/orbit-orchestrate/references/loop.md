@@ -19,7 +19,7 @@ orbit run history --limit 20 --json
 orbit run show <run-id> --json
 ```
 
-CLI `orbit run readiness`, MCP `orbit_workflow_auto` with `action: "status"`,
+CLI `orbit run readiness`, MCP `orbit_workflow` action `auto` with `mode: "status"`,
 and HTTP `GET /api/workflows/auto/readiness` render the same readiness snapshot.
 For MCP status, `task` accepts one task id or a list, `concurrency` previews a
 ceiling, `limit` defaults to 50 (1–500), and `allow_crew` selects configured

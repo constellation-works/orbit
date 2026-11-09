@@ -107,7 +107,7 @@ of successful checkpoints. A resume reruns the failed step; its diagnostic
 does not advance the resume cursor. Successful commands retain their normal
 stdout and stderr for templates alongside the bounded summary.
 
-`orbit run show <RUN_ID> --json` and `orbit.workflow.run.show` expose that
+`orbit run show <RUN_ID> --json` and `orbit.run` action `show` expose that
 summary in each displayed step's `output`, including `success`, `exit_code`,
 `duration_ms`, `timed_out`, `log_tail` and `log_tail_truncated`. The bounded run
 view exposes the same summary under `run.steps`. Its step-level `exit_code`

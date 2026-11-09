@@ -133,7 +133,7 @@ Delivery reports what the run committed and landed for the task: typed status,
 base/head and landed commit SHAs, PR number, timestamps and provenance only,
 from the host's own commit and merge step records. Missing or inconsistent
 evidence is reported as unavailable, never inferred. Full run details remain
-on the operator-only `orbit.workflow.run.show`.
+on the operator-only `orbit.run` action `show`.
 
 ## Behavior-affecting optional fields
 
@@ -160,7 +160,7 @@ on the operator-only `orbit.workflow.run.show`.
   workspace on this host is rejected with `friction_not_local` — resolve the
   friction from its owning workspace instead: `orbit friction resolve <id>` is
   the operator CLI path, or an agent runs `orbit tool run
-  orbit.friction.update --input '{"id":"<id>","status":"resolved"}'` (same
+  orbit.friction --input '{"action":"update","id":"<id>","status":"resolved"}'` (same
   resolution metadata); a covering task there also counts. Other types
   (`produces`, `blocked_by`, `child_of`,
   `spawned_from`, `regression_from`, `supersedes`, `related_to`) are tracked
@@ -268,7 +268,7 @@ on the operator-only `orbit.workflow.run.show`.
   passes every other check: capability and field-level operator gates,
   filesystem and process policy, and claimed-mode denials.
 - **Mutation proposals** carry a mutating grant's call instead. Attach
-  `mutation-proposals/<name>.json` with `orbit.task.artifact.put`, content
+  `mutation-proposals/<name>.json` with `orbit.task.artifact` action `put`, content
   `{"tool": "<granted tool>", "input": {…exact tool input…}, "rationale":
   "<why>"}`. It is refused unless the task grants the tool, the tool is a
   grantable mutation, and an agent session could make that exact call (a
@@ -305,7 +305,7 @@ on the operator-only `orbit.workflow.run.show`.
   for any field. Until then a `backlog` task waits `scheduled`, with the time
   in `detail`, in drain listings, `orbit run readiness` and `run show`. No
   local or pull drain starts it, and `orbit run ship <id>` and
-  `orbit.workflow.ship` refuse it with `task_scheduled`. The hold lifts by
+  `orbit.workflow` action `ship` refuse it with `task_scheduled`. The hold lifts by
   itself on the first admission pass after that time, which can be later
   than the time itself. Only an operator's
   `orbit run ship <id> --ignore-schedule` starts it early, recording a
@@ -468,9 +468,9 @@ still refuses implementer admission. Have an operator perform that step,
 or file it as a separate operator-owned task.
 
 1. Before dispatch, set the complete grant list with
-   `orbit task update <id> --granted-tools orbit.auto_task.update`.
+   `orbit task update <id> --granted-tools orbit.auto_task:update`.
    Creation also accepts `orbit task add --title "<title>" --complexity low --granted-tools
-   orbit.auto_task.update`. These are operator commands; an agent must not
+   orbit.auto_task:update`. These are operator commands; an agent must not
    claim operator authority to run them. A replacement is the whole list,
    not an append; `--granted-tools ""` revokes it before the next attempt.
 2. Confirm `Granted Tools` beside `Required Tools` in task show/list and
@@ -481,8 +481,8 @@ or file it as a separate operator-owned task.
    a follower carrying the labels cannot take over the grant.
 3. Have the implementer attach the proposal described above, then inspect it
    with `orbit task show <id> --fields artifacts` and
-   `orbit tool run orbit.task.artifact.get --input
-   '{"id":"<id>","path":"mutation-proposals/<name>.json"}'`.
+   `orbit tool run orbit.task.artifact --input
+   '{"action":"get","id":"<id>","path":"mutation-proposals/<name>.json"}'`.
    Review the exact input with the diff. A proposal-only delivery without a
    reviewed diff is refused. Approval applies the reviewed proposal before
    push/landing; verify its system-written receipt afterward.
@@ -496,7 +496,7 @@ or file it as a separate operator-owned task.
 the `command = "authorization"` rows include grant authorizations (operation
 `orbit.task.grant_tools`) and activity-policy/capability denials. Match them
 with task history to distinguish an authorized attempt from a committed grant
-change. `orbit audit stats --tool orbit.auto_task.update --json` gives the
+change. `orbit audit stats --tool orbit.auto_task:update --json` gives the
 existing denial-by-operation breakdown; it counts a decision once even when
 an entry-point audit row repeats it.
 
@@ -549,7 +549,7 @@ another OS (see [Native host evidence](#native-host-evidence)).
   requirement as a blocking `validation_tool_warnings` finding before
   dispatch. A read/repeat-safe exact denial can still be required. Screenshot and
   task-artifact attachment is part of the implement lane. Owner mode attaches
-  with `orbit.task.artifact.put`. Claimed mode attaches declared files through
+  with `orbit.task.artifact` action `put`. Claimed mode attaches declared files through
   the `task_artifacts` handoff even without that tool. A criterion that only
   requires those screenshots is feasible; task-pilot does not warn that
   artifact attachment is unavailable because `required_tools` is empty. A
@@ -563,7 +563,7 @@ another OS (see [Native host evidence](#native-host-evidence)).
   past that gate. Write the criterion as an explicit operator handoff, or scope
   it to the registered dispatch path an agent can reach. A criterion that
   names an operator-only tool only as the **subject** of the change (its code,
-  description, schema, docs or tests: "`orbit.task.requeue` refuses a dirty
+  description, schema, docs or tests: "`orbit.task.recover` action `requeue` refuses a dirty
   handoff, shown by a runtime test") does not hold: the pilot classifies each
   detected mention as `subject` or `invoke` with a one-line reason in its
   assessment's `operator_tool_classifications`. Only `invoke` (meeting the

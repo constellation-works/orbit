@@ -68,33 +68,38 @@ fn builtin_mcp_rules_with_route(name: &str, id_route: McpIdRoute) -> McpToolRule
             McpInputCondition::Present("view".into()),
             McpInputCondition::True("snapshot".into()),
         ]),
-        "orbit.task.list"
-        | "orbit.workflow.run.show"
-        | "orbit.workflow.run.list"
-        | "orbit.auto_task.list" => McpWorkspaceEcho::WhenAny(present(&["view"])),
+        // `view` belongs to run list and show only.
+        "orbit.task.list" | "orbit.run" => McpWorkspaceEcho::WhenAny(present(&["view"])),
         "orbit.task.add" | "orbit.task.update" => McpWorkspaceEcho::WhenAny(present(&[
             "request_id",
             "expected_revision",
             "verdict",
             "complete",
         ])),
-        "orbit.auto_task.update" => McpWorkspaceEcho::WhenAny(present(&["expected_enabled"])),
-        "orbit.auto_task.mint" => {
-            McpWorkspaceEcho::WhenAny(present(&["acknowledge_unconditional"]))
-        }
+        // Each condition's field belongs to one action: `view` to list,
+        // `expected_enabled` to update, `acknowledge_unconditional` to mint.
+        "orbit.auto_task" => McpWorkspaceEcho::WhenAny(present(&[
+            "view",
+            "expected_enabled",
+            "acknowledge_unconditional",
+        ])),
         "orbit.pipeline.invoke" => {
             McpWorkspaceEcho::WhenAny(vec![McpInputCondition::True("default_input".into())])
         }
-        "orbit.workflow.auto" | "orbit.routine.control" => McpWorkspaceEcho::Always,
+        // Every auto-drain call carries `mode`, which only the `auto` action
+        // takes.
+        "orbit.workflow" => McpWorkspaceEcho::WhenAny(present(&["mode"])),
+        "orbit.routine.control" => McpWorkspaceEcho::Always,
         _ => McpWorkspaceEcho::Never,
     };
     let presentation_read = match name {
         "orbit.task.show" => Some(McpPresentationRead::Task),
-        "orbit.workflow.run.show" => Some(McpPresentationRead::Run),
+        // Read with `action: show`.
+        "orbit.run" => Some(McpPresentationRead::Run),
         _ => None,
     };
     let input_decoration = match name {
-        "orbit.friction.add" | "orbit.friction.update" => McpInputDecoration::Friction,
+        "orbit.friction" => McpInputDecoration::Friction,
         "orbit.search" => McpInputDecoration::Search,
         _ => McpInputDecoration::None,
     };

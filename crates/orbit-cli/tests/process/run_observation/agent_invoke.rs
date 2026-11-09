@@ -366,9 +366,9 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
             &[
                 "tool",
                 "run",
-                "orbit.workflow.run.show",
+                "orbit.run",
                 "--input",
-                &serde_json::json!({"id":id}).to_string(),
+                &serde_json::json!({"action": "show", "id":id}).to_string(),
             ],
         );
         assert_eq!(
@@ -556,9 +556,9 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
         &[
             "tool",
             "run",
-            "orbit.workflow.run.show",
+            "orbit.run",
             "--input",
-            &serde_json::json!({"id": run_id}).to_string(),
+            &serde_json::json!({"action": "show", "id": run_id}).to_string(),
         ],
     );
     let mcp_completed: Vec<_> = mcp["activity_provenance"]
@@ -604,9 +604,9 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
         &[
             "tool",
             "run",
-            "orbit.workflow.run.show",
+            "orbit.run",
             "--input",
-            &serde_json::json!({"id": run_id}).to_string(),
+            &serde_json::json!({"action": "show", "id": run_id}).to_string(),
         ],
     );
     assert_eq!(

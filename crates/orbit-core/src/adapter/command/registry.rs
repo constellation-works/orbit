@@ -107,6 +107,7 @@ impl OrbitRuntime {
     }
 
     pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
+        self.tool_registry().refuse_family_operation_name(name)?;
         let Some(schema) = self.tool_registry().get_schema(name) else {
             // Disabled external tools are deliberately absent from the executable
             // registry. Their persisted catalog entry remains inspectable, using
@@ -314,6 +315,7 @@ impl OrbitRuntime {
     }
 
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
+        self.tool_registry().refuse_family_operation_name(name)?;
         let existing = self.stores().tools().get_tool(name)?;
         let registered = self.tool_registry().has(name);
         let disabled_external = existing

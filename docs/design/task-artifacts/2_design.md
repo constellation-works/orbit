@@ -140,7 +140,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
+Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact` action `get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -152,15 +152,15 @@ Metadata listing stays compact and payloads are fetched on demand:
 
 | step | surface | call |
 | --- | --- | --- |
-| attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
+| attach | MCP | `orbit.task.artifact` action `put` with `id`, `source_path`, optional `path` |
 | attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
 | list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
 | list | CLI | `orbit task show <ID> --fields artifacts` |
-| view | MCP | `orbit.task.artifact.get` with `id` and `path` |
+| view | MCP | `orbit.task.artifact` action `get` with `id` and `path` |
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
 
-The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
+The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact` action `get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
 
 ### Supported formats and the presentation classes
 
@@ -183,11 +183,11 @@ Two related but distinct policies live together in `orbit_types::task`:
 
 ### Size limit
 
-`MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact.put` refuses to read a larger source, and `orbit.task.artifact.get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
+`MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact` action `put` refuses to read a larger source, and `orbit.task.artifact` action `get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
 
 ### Attachment result profiles
 
-Core owns the default `orbit.task.artifact.put` result projection used by
+Core owns the default `orbit.task.artifact` action `put` result projection used by
 `orbit tool run`, including `--host` and federated routing. It keeps the
 compact task fields plus the write sidecars: `warnings`, `warning`,
 `cycle_routine_disabled`, `cycle_routine_name`, `audit_warning`,
@@ -199,13 +199,13 @@ complete tool response. CLI `--full` keeps that complete response, while
 
 ### Transport: what a multimodal client actually receives
 
-`orbit.task.artifact.get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.
+`orbit.task.artifact` action `get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.
 
 To avoid spending the payload twice, the JSON text mirror is replaced with a one-line summary for image reads; the bytes appear in the image block and in `structuredContent` (for a text-only client), and nowhere else.
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. A relative path missing under that cwd is never read from the checkout root; when the same relative path names a confined file at the checkout root, the call is refused naming that file's absolute path, so a scratch-folder caller that repeats the checkout-relative prefix gets a clear remedy instead of a bare missing-file read. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact` action `put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. A relative path missing under that cwd is never read from the checkout root; when the same relative path names a confined file at the checkout root, the call is refused naming that file's absolute path, so a scratch-folder caller that repeats the checkout-relative prefix gets a clear remedy instead of a bare missing-file read. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
 CLI attachment preserves the supplied source filename, including leading
 or trailing whitespace, before filesystem resolution and bounded reads. MCP
@@ -218,9 +218,9 @@ does not select a sibling file with a trimmed name on the CLI.
 
 Attachment accepts only task `id`, `source_path`, optional artifact `path`, `model` attribution, and the transport `workspace` / `_meta` wrappers. The local path and artifact path have compatibility aliases. The authenticated spoke payload replaces the source and path fields with `artifacts`; it accepts the same identity and transport fields. Other task update fields, including `title`, `status`, and `plan`, are rejected before the task host is called. Task metadata changes belong on `orbit.task.update`.
 
-The consequence is the lesson from [ORB-11364]: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
+The consequence is the lesson from [ORB-11364]: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact` action `get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
 
-Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
+Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact` action `get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
 
 Attachment is not injection: storing an artifact on a task does not push it into an already-running worker's context. A worker picks it up on its next read.
 

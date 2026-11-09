@@ -96,9 +96,9 @@ TOOLS = [
     "orbit.task.update",
     "orbit.task.list",
     "orbit.search",
-    "orbit.friction.add",
+    "orbit.friction",
     "proc.spawn",
-    "orbit.task.artifact.put",
+    "orbit.task.artifact",
 ]
 LOREM = (
     "The dashboard polls every visible panel on a fixed interval, and each "

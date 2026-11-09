@@ -335,8 +335,8 @@ fn a_missing_grant_raises_one_request_and_a_repeat_refusal_reuses_it() {
     let listed = fx
         .runtime
         .execute_tool_command_dispatch_with_session_context(
-            "orbit.decision.list",
-            json!({"gate": "script_grant"}),
+            "orbit.decision",
+            json!({"action": "list", "gate": "script_grant"}),
             None,
             None,
             ToolEntryPoint::Mcp,

@@ -8,7 +8,7 @@ under its worktree's `.orbit/tmp/`, which it can then open and look at.
 
 `.orbit/tmp/` is cleared with the worktree, so a worker whose diff changes
 something a user sees hands its screenshots off as task artifacts. Owner mode
-attaches each with `orbit.task.artifact.put`; a claimed implementer returns
+attaches each with `orbit.task.artifact` action `put`; a claimed implementer returns
 each scratch file in `task_artifacts`, setting `path` to its stable
 stored path and `source_path` to its file under `.orbit/tmp/`, for deterministic
 attachment. Capture each changed view in every theme it supports, at a 375px

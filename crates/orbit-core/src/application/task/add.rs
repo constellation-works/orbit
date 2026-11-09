@@ -8,6 +8,7 @@ use orbit_types::task::{
     normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, validate_os_tags,
 };
+use orbit_types::tool::{TOOL_ACTION_SEPARATOR, tool_family_action, tool_family_of_operation};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CreationCrewAssignment;
@@ -84,6 +85,25 @@ impl OrbitRuntime {
     ) -> Result<Vec<String>, OrbitError> {
         let mut warnings = Vec::new();
         for name in normalize_required_tools(names.to_vec()) {
+            // A family action names its family's registry entry; an
+            // operation behind a family is not a tool a list can name.
+            if let Some((family, action)) = tool_family_of_operation(&name) {
+                return Err(self.ungrantable_required_tool(format!(
+                    "{field} contains '{name}', which is not a tool; name the family action `{}`",
+                    family.qualified_action(action.action)
+                )));
+            }
+            let name = match name.split_once(TOOL_ACTION_SEPARATOR) {
+                Some(_) => match tool_family_action(&name) {
+                    Some((family, _)) => family.name.to_string(),
+                    None => {
+                        return Err(self.ungrantable_required_tool(format!(
+                            "{field} contains unknown tool family action '{name}'"
+                        )));
+                    }
+                },
+                None => name,
+            };
             if !self.tool_registry().has(&name) {
                 return Err(self.ungrantable_required_tool(format!(
                     "{field} contains unregistered tool '{name}'"

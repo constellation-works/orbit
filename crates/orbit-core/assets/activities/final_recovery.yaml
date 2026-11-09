@@ -417,7 +417,7 @@ spec:
     - Do not edit the task record (status, fields or comments), start or resume
       runs, or invoke agents or pipelines; the applier refuses a decision on a
       task that changed after the failure. Recording root causes with
-      `orbit.friction.add` and repairing files are fine. Return repair evidence
+      `orbit.friction` action `add` and repairing files are fine. Return repair evidence
       through the host handoff below, without calling task-write tools.
     - Inspect `retained_candidate` (the failed run's own worktree) read-only:
       never edit, copy from or run Git writes in it. Name it in an escalation
@@ -431,7 +431,7 @@ spec:
       using the shell. Report a tool unavailable only after a trivial call to
       it (for the shell, `true`) is also denied, quoting that denial. A
       denial never excuses skipping required validation or the friction you
-      record with `orbit.friction.add`.
+      record with `orbit.friction` action `add`.
 
     Evidence:
     - Every input field except task_id, run_id, workspace_path, repo_root,
@@ -452,7 +452,7 @@ spec:
     - Reads you can make, also on a claimed run: `orbit.task.show` with the
       task_id (the task record); the same with `field: "delivery"` and `run_id`
       set to the input run_id (this run's commit and landing evidence); and,
-      when the run reached review, `orbit.task.artifact.get` for the review
+      when the run reached review, `orbit.task.artifact` action `get` for the review
       artifacts `review-manifest.json`, `review-report.json`,
       `review-report-history.json`, `review-gate.json` and
       `review-baseline.json`, spelled exactly. List them first with
@@ -634,19 +634,19 @@ spec:
       `requeue`.
   fleet_notices: post
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.show
-    - orbit.workflow.run.list
-    - orbit.workflow.land
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.run:list
+    - orbit.workflow:land
+    - orbit.workflow:ship
     - orbit.task.add
     - orbit.task.update
-    - orbit.task.artifact.put
+    - orbit.task.artifact:put
   proc_disallowed_programs:
     - sudo
     - su

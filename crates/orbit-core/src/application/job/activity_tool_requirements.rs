@@ -12,7 +12,9 @@ use orbit_common::governance::authorization::{
     self, GrantedToolEffect, ToolGrantClassification, ToolGrantability,
 };
 use orbit_engine::activity_job::catalog_error_to_orbit;
-use orbit_types::tool::is_exact_canonical_tool_name;
+use orbit_types::tool::{
+    TOOL_ACTION_SEPARATOR, is_exact_canonical_tool_name, tool_family, tool_family_of_operation,
+};
 use orbit_types::workflow::activity_job::{ActivityToolDenyPolicy, ActivityV2Spec, tool_allowed};
 
 use crate::OrbitRuntime;
@@ -196,17 +198,32 @@ pub(crate) fn drops_disallowed_requirements(activity: &str) -> bool {
 }
 
 /// Why `tool_name` cannot be granted beyond an activity's baseline: it is not
-/// an exact canonical name, or not a registered, agent-facing, enabled tool.
+/// an exact canonical name or `family:action`, or not a registered,
+/// agent-facing, enabled tool.
 /// `None` when it can be. Task requirements, grants and experiment arm additions
 /// share this availability rule; task grants also check governed capability.
 pub(crate) fn granted_tool_refusal(
     runtime: &OrbitRuntime,
     tool_name: &str,
 ) -> Result<Option<String>, OrbitError> {
+    // A family action (`orbit.run:show`) is available when its family is.
+    let (tool_name, action) = match tool_name.split_once(TOOL_ACTION_SEPARATOR) {
+        Some((family, action)) => (family, Some(action)),
+        None => (tool_name, None),
+    };
     let reason = if tool_name.contains('*') {
         "wildcard and prefix requirements are not allowed"
     } else if !is_exact_canonical_tool_name(tool_name) {
         "malformed canonical tool name"
+    } else if let Some((family, action)) = tool_family_of_operation(tool_name) {
+        return Ok(Some(format!(
+            "not a tool; name the family action `{}`",
+            family.qualified_action(action.action)
+        )));
+    } else if let Some(action) = action
+        && tool_family(tool_name).is_none_or(|family| family.action(action).is_none())
+    {
+        "unknown tool family action"
     } else if !runtime.tool_registry().has(tool_name) {
         "unknown registered tool"
     } else if !runtime.tool_registry().is_active(tool_name) {

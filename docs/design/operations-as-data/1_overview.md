@@ -74,7 +74,7 @@ audit-metadata match. Six of those seven edits carried no information the other
 five did not already have.
 
 The drift that follows is not hypothetical. Before the pilot, `orbit.friction.show`
-and `orbit.friction.update` described the same `id` field two different ways
+and `orbit.friction` action `update` described the same `id` field two different ways
 because two files owned the wording. After the pilot, the same kind of drift
 survived one level down: the tool host classified friction `show`, `stats` and
 `tags` as read-only while the CLI opened the full read-write runtime for them,
@@ -119,7 +119,7 @@ and again in the tool handler.
 | The task registry and task enum value tables | [crates/orbit-common/src/governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs) | [ORB-15937] |
 | Task nested artifact and lock operations | [crates/orbit-common/src/governance/task/nested_operations.rs](../../../crates/orbit-common/src/governance/task/nested_operations.rs) | [ORB-15939] |
 | Task review and lifecycle operations (`reconcile_review` and its CLI actions, `review_reset`, inactive `reject` and `delete`) | [crates/orbit-common/src/governance/task/lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs) | [ORB-15940] |
-| The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow.auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
+| The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow` action `auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
 | The search registry (root CLI query and tool-only friction listing) | [crates/orbit-common/src/governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] |
 | The codebase registry (read-only `analytics`, `show`, and `related`, on the CLI and MCP) | [crates/orbit-common/src/governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs) | [ORB-16787] |
 | The agent scorecard registry (`scorecard` and `show`, on the CLI and MCP) | [crates/orbit-common/src/governance/agents.rs](../../../crates/orbit-common/src/governance/agents.rs) | [ORB-16957] |

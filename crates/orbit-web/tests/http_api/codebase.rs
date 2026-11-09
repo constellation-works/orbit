@@ -301,8 +301,8 @@ analytics_test!(
         let detail = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": "src/shared.rs", "window": "all", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": "src/shared.rs", "window": "all", "min_support": 1 }),
             )
             .unwrap();
         let waits = detail["rankings"]["lock_contention"]["waits"]
@@ -1198,8 +1198,8 @@ analytics_test!(
         let mut tool = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.analytics",
-                json!({ "window": "30d", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "analytics", "window": "30d", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(api["cache_ttl_seconds"], 300, "the route caches its scan");
@@ -1224,8 +1224,8 @@ analytics_test!(
         let detail = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": shared, "window": "30d", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": shared, "window": "30d", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(detail["path"], shared);
@@ -1301,14 +1301,14 @@ analytics_test!(
         let by_dir = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": "src", "rollup": "dir", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": "src", "rollup": "dir", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(by_dir["path"], "src/");
         let unknown = fixture.runtime.run_tool(
-            "orbit.codebase.show",
-            json!({ "path": "src/absent.rs", "min_support": 1 }),
+            "orbit.codebase",
+            json!({"action": "show", "path": "src/absent.rs", "min_support": 1 }),
         );
         assert!(
             matches!(unknown, Err(OrbitError::InvalidInput(_))),
@@ -1530,8 +1530,8 @@ analytics_test!(
             fixture
                 .runtime
                 .run_tool(
-                    "orbit.codebase.show",
-                    json!({ "path": path, "window": "30d", "min_support": 1 }),
+                    "orbit.codebase",
+                    json!({"action": "show", "path": path, "window": "30d", "min_support": 1 }),
                 )
                 .unwrap()
         };
@@ -1851,8 +1851,8 @@ analytics_test!(
         let detail = fixture
         .runtime
         .run_tool(
-            "orbit.codebase.show",
-            json!({ "path": area, "window": "30d", "min_support": 1, "detected_by": "operator" }),
+            "orbit.codebase",
+            json!({"action": "show", "path": area, "window": "30d", "min_support": 1, "detected_by": "operator" }),
         )
         .unwrap();
         assert_eq!(detail["regression_filter"]["detected_by"], "operator");
@@ -1864,9 +1864,10 @@ analytics_test!(
 
         let bad = codebase_get(&server, "analytics", "layer=frontend");
         assert_eq!(bad.status(), 400, "an unknown layer is refused");
-        let bad = fixture
-            .runtime
-            .run_tool("orbit.codebase.analytics", json!({ "escape": "missed" }));
+        let bad = fixture.runtime.run_tool(
+            "orbit.codebase",
+            json!({"action": "analytics", "escape": "missed" }),
+        );
         assert!(matches!(bad, Err(OrbitError::InvalidInput(_))), "{bad:?}");
     }
 );

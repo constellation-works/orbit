@@ -11,7 +11,10 @@ use orbit_tools::{
     canonical_builtin_mcp_tool_definitions,
 };
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
-use orbit_types::tool::{McpIdRoute, McpToolDefinitionError, McpToolScope, ToolParam, ToolSchema};
+use orbit_types::tool::{
+    McpIdRoute, McpToolDefinitionError, McpToolScope, TOOL_FAMILIES, ToolParam, ToolSchema,
+    tool_family,
+};
 use serde_json::Value;
 
 struct TestTool(&'static str);
@@ -62,19 +65,12 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.agents.scorecard",
             "orbit.agents.show",
             "orbit.attention",
-            "orbit.auto_task.add",
-            "orbit.auto_task.list",
-            "orbit.auto_task.mint",
-            "orbit.auto_task.update",
+            "orbit.auto_task",
             "orbit.automation.explain",
-            "orbit.codebase.analytics",
-            "orbit.codebase.related",
-            "orbit.codebase.show",
+            "orbit.codebase",
             "orbit.command.exec",
+            "orbit.decision",
             "orbit.decision.digest",
-            "orbit.decision.list",
-            "orbit.decision.raise",
-            "orbit.decision.show",
             "orbit.decision.submit",
             "orbit.evolution.add",
             "orbit.evolution.list",
@@ -92,8 +88,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.experiment.show",
             "orbit.experiment.start",
             "orbit.experiment.update",
-            "orbit.friction.add",
-            "orbit.friction.update",
+            "orbit.friction",
             "orbit.memory.propose",
             "orbit.memory.show",
             "orbit.memory.write",
@@ -113,29 +108,17 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.resident.relay",
             "orbit.resident.show",
             "orbit.routine.control",
+            "orbit.run",
             "orbit.search",
             "orbit.task.add",
-            "orbit.task.artifact.get",
-            "orbit.task.artifact.put",
+            "orbit.task.artifact",
             "orbit.task.block_triage",
             "orbit.task.eligible",
             "orbit.task.list",
-            "orbit.task.reconcile_review",
-            "orbit.task.recover_claim",
-            "orbit.task.repilot",
-            "orbit.task.requeue",
-            "orbit.task.retry_handoff",
-            "orbit.task.review_reset",
-            "orbit.task.revoke_handoff",
+            "orbit.task.recover",
             "orbit.task.show",
             "orbit.task.update",
-            "orbit.workflow.auto",
-            "orbit.workflow.land",
-            "orbit.workflow.run.list",
-            "orbit.workflow.run.observe",
-            "orbit.workflow.run.resume",
-            "orbit.workflow.run.show",
-            "orbit.workflow.ship",
+            "orbit.workflow",
         ]
     );
     assert!(
@@ -274,17 +257,35 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
 
     // And no other builtin is classified, while every builtin that
     // addresses one id with an optional workspace is.
+    let classified_name = |name: &str| {
+        task_routed.contains(&name) || workspace_local.iter().any(|(listed, _)| *listed == name)
+    };
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     for schema in registry.all_schemas() {
         let route = builtin_mcp_rules(&schema.name).id_route;
-        let classified = task_routed.contains(&schema.name.as_str())
-            || workspace_local.iter().any(|(name, _)| *name == schema.name);
+        // A family routes ids as the actions that address one do.
+        let classified = match tool_family(&schema.name) {
+            Some(family) => family
+                .actions
+                .iter()
+                .any(|action| classified_name(action.operation)),
+            None => classified_name(&schema.name),
+        };
         assert_eq!(
             route != McpIdRoute::Unspecified,
             classified,
             "{}: declared route {route:?} does not match the preserved classification",
             schema.name
+        );
+    }
+    for action in TOOL_FAMILIES.iter().flat_map(|family| family.actions) {
+        let route = builtin_mcp_rules(action.operation).id_route;
+        assert_eq!(
+            route != McpIdRoute::Unspecified,
+            classified_name(action.operation),
+            "{}: declared route {route:?} does not match the preserved classification",
+            action.operation
         );
     }
 }

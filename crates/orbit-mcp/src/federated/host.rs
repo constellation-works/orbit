@@ -614,6 +614,10 @@ fn ensure_on_public_surface(
     let advertised = session
         .advertised_tools()
         .map_err(|error| delivery_unreachable(destination, error))?;
+    // A family action's operation is served through its family, whose
+    // advertised schema carries the operation's arguments.
+    let surface_name =
+        orbit_types::tool::tool_family_of_operation(name).map_or(name, |(family, _)| family.name);
     for argument in [
         "view",
         "snapshot",
@@ -627,14 +631,16 @@ fn ensure_on_public_surface(
         "default_input",
         "include_catalog",
     ] {
-        if input.get(argument).is_some() && !session.supports_tool_argument(name, argument)? {
+        if input.get(argument).is_some()
+            && !session.supports_tool_argument(surface_name, argument)?
+        {
             return Err(OrbitError::ToolNotOnThisHost(format!(
                 "'{name}' argument '{argument}' is unsupported on '{}'",
                 destination.machine_id
             )));
         }
     }
-    if !tool_on_surface(&advertised, name)
+    if !tool_on_surface(&advertised, surface_name)
         && !session_cannot_authorize_governed_tool(name, session_context)
     {
         return Err(OrbitError::ToolNotOnThisHost(format!(

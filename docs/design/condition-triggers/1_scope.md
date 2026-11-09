@@ -78,7 +78,7 @@ about missing predicates or edge state describe the motivation, not current gaps
 - **Authority.** The governed-operation catalog
   (`crates/orbit-common/src/governance/authorization/catalog/types.rs`) marks routine and
   auto-task toggles and schedule edits from the dashboard as operator-only. The
-  `orbit.auto_task.add` and `orbit.auto_task.update` tools can be granted to agents
+  `orbit.auto_task` action `add` and `orbit.auto_task` action `update` tools can be granted to agents
   (`grants.rs`). Only the operator, or a registered channel's own plugin callback,
   can answer a decision request (`orbit.decision.submit`,
   [human decision channel](../human-decision-channel/2_design.md#3-delegated-human-authority)).
@@ -683,7 +683,7 @@ two things:
    (workspace, host, file) can't use `approval: per_fire` in v1. Its
    operator-authority targets need the grant alone.
 
-**Protection from agent edits.** An agent with `orbit.auto_task.update`, or with
+**Protection from agent edits.** An agent with `orbit.auto_task` action `update`, or with
 write access to a definition file, can still edit a definition. Editing changes
 the digest, which voids the grant (`grant_stale`). The change is visible in
 explain, on the dashboard and in `routine list`, and nothing runs until an operator

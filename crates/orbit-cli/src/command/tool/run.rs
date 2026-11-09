@@ -12,7 +12,7 @@ use orbit_core::application::task::{
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
-use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -84,7 +84,8 @@ impl ToolRunArgs {
         if let Some(selector) = trimmed_string_field(&value, "workspace") {
             return Ok(ToolRunBootstrap::SelectedWorkspace(selector));
         }
-        if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str())
+        if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS
+            .contains(&tool_operation_name(&self.name, &value))
             && let Some(task_id) = trimmed_string_field(&value, "id")
         {
             return Ok(ToolRunBootstrap::TaskOwner(task_id));
@@ -137,10 +138,18 @@ impl ToolRunArgs {
     /// call this only, and their tool names are not on the id-resolved list,
     /// so they return before parsing.
     pub(crate) fn id_resolved_task_id(&self) -> Option<String> {
-        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str()) {
+        // A family names its operation in the input, so parse first.
+        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str())
+            && tool_family(&self.name).is_none()
+        {
             return None;
         }
         let value = self.parsed_input().ok()?;
+        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS
+            .contains(&tool_operation_name(&self.name, &value))
+        {
+            return None;
+        }
         trimmed_string_field(&value, "id")
     }
 }
@@ -168,10 +177,11 @@ impl Execute for ToolRunArgs {
         // worker binding in Core's claimed-owner bridge. Resolving that owner
         // selector as a local checkout here would either fail before the
         // bridge or replace the worker runtime with owner state.
-        let claimed_owner_call = orbit_types::tool::is_claimed_owner_tool(&self.name)
-            && runtime
-                .worker_invocation()
-                .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id);
+        let claimed_owner_call =
+            orbit_types::tool::is_claimed_owner_tool(tool_operation_name(&self.name, &input))
+                && runtime.worker_invocation().is_some_and(|binding| {
+                    binding.execution.machine_id != binding.owner_machine_id
+                });
         let bound = if claimed_owner_call || self.name == "orbit.attention" {
             None
         } else {
@@ -234,7 +244,7 @@ impl Execute for ToolRunArgs {
             task_list_result_profile(self.full, &self.fields),
         );
         let output = shape_tool_output(
-            &self.name,
+            tool_operation_name(&self.name, &input),
             output,
             &list_policy,
             self.full,

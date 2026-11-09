@@ -446,7 +446,7 @@ fn run_show_numeric_step_selectors_follow_displayed_audit_steps() {
     );
 }
 
-/// `orbit run show` and MCP `orbit.workflow.run.show`/`list` choose and
+/// `orbit run show` and MCP `orbit.run` actions `show`/`list` choose and
 /// reconcile an ended run's steps by one rule: the audit trail answers for a
 /// run-level-only record, and the step the run died in reads as the run's
 /// terminal state with an `interrupted` outcome rather than `running`.
@@ -467,10 +467,10 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
 
     let cli = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
     let shown = tool(
-        "orbit.workflow.run.show",
-        serde_json::json!({ "id": INTERRUPTED }),
+        "orbit.run",
+        serde_json::json!({"action": "show", "id": INTERRUPTED }),
     );
-    let listed = tool("orbit.workflow.run.list", serde_json::json!({}));
+    let listed = tool("orbit.run", serde_json::json!({"action": "list"}));
     let listed = listed["items"]
         .as_array()
         .unwrap()

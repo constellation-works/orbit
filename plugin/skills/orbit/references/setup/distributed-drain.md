@@ -170,7 +170,7 @@ artifact paths, naming the path. Task artifacts cannot use either clean-tree
 report name or a report's declared log names, and cannot use the reserved
 `review-` namespace (any ASCII case), which only the review gate writes;
 `no_diff_artifacts` remains limited to the report and its logs. Owner mode
-uses `orbit.task.artifact.put`.
+uses `orbit.task.artifact` action `put`.
 The owner rechecks the report against its live base before authorized completion
 without a PR. A changed base or evidence requires fresh validation.
 
@@ -260,7 +260,7 @@ returns.
   `--force` stops that drain's leaves too and returns their tasks to the
   backlog. A leaf it cannot confirm stopped keeps its claim, is listed under
   `unstopped_leaves`, and fails the command. The MCP stop
-  (`orbit.workflow.auto`, `action: "stop"`) takes the same `force`.
+  (`orbit.workflow` action `auto`, `mode: "stop"`) takes the same `force`.
   `run auto --stop --json`, the MCP stop and the dashboard's stop return one
   result: `outcome`, `pull_settlements`, and per coordinator its `run_id`,
   `job_id`, `outcome`, `remaining_children` (`run_id`, `job_name`, `phase`,
@@ -488,10 +488,10 @@ orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --re
 orbit task recover-claim <claim-id> --phase <phase> --status blocked|backlog --reason <reason> --request <key>
 ```
 
-- `revoke-handoff` (`orbit.task.revoke_handoff`) cancels the pending landing
+- `revoke-handoff` (`orbit.task.recover` action `revoke_handoff`) cancels the pending landing
   request for the accepted candidate and base you name. The task stays in
   `review`.
-- `recover-claim` (`orbit.task.recover_claim`) revokes the live claim,
+- `recover-claim` (`orbit.task.recover` action `recover_claim`) revokes the live claim,
   invalidates pending landing authority and releases its reservation in one
   transaction. It moves the task to `blocked` to diagnose or `backlog` to retry.
   Pass the claim phase you observed; a claim that moved on is refused.

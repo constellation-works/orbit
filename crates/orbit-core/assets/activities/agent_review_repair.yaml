@@ -74,8 +74,8 @@ spec:
     - The manifest's `remaining.seconds` is your deadline. Attach an initial
       `incomplete` report early and update it after meaningful progress, so a
       timeout keeps your findings and checks.
-    - Read and attach task artifacts only with `orbit.task.artifact.get` and
-      `orbit.task.artifact.put` (CLI or MCP); `orbit tool show <tool.name>` prints
+    - Read and attach task artifacts only with `orbit.task.artifact` action `get` and
+      `orbit.task.artifact` action `put` (CLI or MCP); `orbit tool show <tool.name>` prints
       a tool's schema. Only the manifest read and the report write are required.
       Fetch an optional artifact only when its exact path is in the artifact
       listing; never probe by name. If the listing is refused, or a listed
@@ -89,7 +89,7 @@ spec:
       task, run, claim and attempt state as they are.
     - Write reports, logs and scratch files only under `.orbit/tmp/`
       (`$ORBIT_SCRATCH_DIR`), never `/tmp`: the host commits every other changed
-      or untracked path as a fix, and `orbit.task.artifact.put` reads only there.
+      or untracked path as a fix, and `orbit.task.artifact` action `put` reads only there.
     - Uncommitted changes present when you start are an interrupted earlier
       invocation's unverified fixes. Keep one only if a finding you record names
       it and validation passes with it; otherwise edit it back.
@@ -326,7 +326,7 @@ spec:
 
     Write `.orbit/tmp/review-report.json` and attach it for every id in
     `task_ids`:
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/review-report.json","path":"<report_artifact>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<task-id>","source_path":".orbit/tmp/review-report.json","path":"<report_artifact>","model":"<agent-family>"}'`.
     A refused put names the field or record (malformed shape, a missing or reused
     `required` id, an earlier id dropped, relabelled or improperly retired): fix
     the file and put it again until accepted. The report must match this JSON
@@ -428,15 +428,15 @@ spec:
       deliver it; record that in the report.
   fleet_notices: post
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.show
-    - orbit.workflow.land
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

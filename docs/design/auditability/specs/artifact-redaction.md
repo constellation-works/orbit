@@ -19,12 +19,12 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.task.add` | `title`, `description`, `plan`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context`, `external_refs[].url` | workspace, ids, enums, dependency/relation targets, crew, tags |
 | `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `note`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
-| `orbit.task.reconcile_review` | `reason` | - | workspace, action, ids, request key, exact-match command, remediation commit |
-| `orbit.task.review_reset` | `reason` | - | workspace, task id, lineage key, `adopt_configured_budget` |
-| `orbit.task.requeue` | `reason` | - | workspace, task id, `discard_candidate` |
-| `orbit.friction.add` | `title`, `body`, `description` | - | `model`, `during_task`, tags |
-| `orbit.friction.update` | `title`, `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
-| `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
+| `orbit.task.recover` action `reconcile_review` | `reason` | - | workspace, action, ids, request key, exact-match command, remediation commit |
+| `orbit.task.recover` action `review_reset` | `reason` | - | workspace, task id, lineage key, `adopt_configured_budget` |
+| `orbit.task.recover` action `requeue` | `reason` | - | workspace, task id, `discard_candidate` |
+| `orbit.friction` action `add` | `title`, `body`, `description` | - | `model`, `during_task`, tags |
+| `orbit.friction` action `update` | `title`, `body` | - | `id`, status, tags, `rehome_to`, `move`; a `rehome_to` move (also the CLI `orbit friction rehome`) copies a body that was already redacted when it was written |
+| `orbit.auto_task` action `add` / `orbit.auto_task` action `update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
 
 For `orbit.task.update`, `note` is the optional note attached to a lifecycle status change; it is sanitized before the transition body persists it in task history. Task and friction tags are taxonomy fields and pass through verbatim.
 
@@ -37,7 +37,7 @@ bundle, history, or write-journal persistence. The tool policy above additionall
 normalizes home paths and reports redaction metadata for tool calls. Existing
 records and raw artifact bytes retain their existing contracts.
 
-`orbit.task.reconcile_review` sanitizes its free-text `reason` and returned
+`orbit.task.recover` action `reconcile_review` sanitizes its free-text `reason` and returned
 reconciliation response; its selected `command` is preserved byte-for-byte for
 exact evidence matching.
 
@@ -95,7 +95,7 @@ Original and redacted values are not recorded. Tests should inspect these rows t
 ## Non-Goals
 
 - Display-time/read-time redaction.
-- Raw task artifact blob redaction through `orbit.task.artifact.put` or task `artifacts` / `upsert_artifacts`.
+- Raw task artifact blob redaction through `orbit.task.artifact` action `put` or task `artifacts` / `upsert_artifacts`.
 - General-purpose schema validation in the sanitizer; existing typed parsers keep reporting shape errors.
 - Auto-publish, commit, or remote cleanup behavior after a secret has already entered history.
 - Automatic sweeps of existing authored records or git history rewriting; see the forward-only decision recorded for [ORB-10591].

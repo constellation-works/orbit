@@ -105,7 +105,7 @@ jobs, activities, policies, routines, and auto-task definitions. `--mcp`
 auto-detects installed agent clients and registers Orbit's MCP server with
 them as `orbit mcp serve --operator --workspace <ws_id>` — **operator
 authority**, so the registered integration can dispatch workflows
-(`orbit.workflow.ship`), observe/resume runs, and run `orbit.command.exec`.
+(`orbit.workflow` action `ship`), observe/resume runs, and run `orbit.command.exec`.
 This is the deliberate bootstrap path for a human-facing orchestrator; bare
 `orbit mcp serve` and any worker/agent-launched MCP session stay agent-only.
 `--workspace` binds the session to the workspace being registered, so

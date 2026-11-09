@@ -918,7 +918,7 @@ diagnostics without persisting state or dispatching work.
   unready results; wrapper success is not an assessment. The first routine pilot is
   automatic. Edits make evidence stale for dispatch; a certified description or
   acceptance-criteria edit also creates routine pilot debt unless a live execution claim or an unresolved failed pilot holds the task, while edits to other material or policy create none. An `--approve-proposed` drain still repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it. Other later routine pilots require `orbit task repilot <id>` (also available as
-  `orbit.task.repilot`, task update `repilot: true`, or decision action `re_pilot`).
+  `orbit.task.recover` action `repilot`, task update `repilot: true`, or decision action `re_pilot`).
   Shared admission withholds edited requirements until a new assessment
   completes, unless an operator adds `no-pilot` to skip reassessment for an
   assessed or preparing task. The skip bypasses pilot holds, but other holds,

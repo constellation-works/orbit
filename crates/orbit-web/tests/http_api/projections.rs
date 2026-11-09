@@ -1301,7 +1301,7 @@ projections_test!(
         let id = create(&server, body);
         let source = fixture.runtime.paths().repo_root.join("parity.txt");
         fs::write(&source, "parity artifact\n").unwrap();
-        fixture.runtime.run_tool("orbit.task.artifact.put", json!({"id": id, "source_path": source, "path": "reports/parity.txt", "model": "codex"})).unwrap();
+        fixture.runtime.run_tool("orbit.task.artifact", json!({"action": "put", "id": id, "source_path": source, "path": "reports/parity.txt", "model": "codex"})).unwrap();
         let full_detail = task_detail(&server, &id);
         let mut detail = full_detail.clone();
         strip(

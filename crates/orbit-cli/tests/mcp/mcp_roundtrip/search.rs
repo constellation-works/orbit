@@ -121,8 +121,8 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
     );
 
     client.call_tool_ok(
-        "orbit_friction_add",
-        json!({
+        "orbit_friction",
+        json!({"action": "add",
             "title": "generation caution participant", "body": "Substring fixture", "model": "codex"
         }),
     );

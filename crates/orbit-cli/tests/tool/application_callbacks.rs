@@ -45,12 +45,12 @@ fn proposal_task(fixture: &Fixture, title: &str, payload: &str) -> String {
 fn put_payload(fixture: &Fixture, id: &str, payload: &str) {
     let source = fixture.work.join(format!("proposal-{id}.json"));
     std::fs::write(&source, payload).unwrap();
-    let input = json!({"id": id, "path": "proposal.json", "source_path": source});
+    let input = json!({"action": "put", "id": id, "path": "proposal.json", "source_path": source});
     fixture
         .operator_command([
             "tool",
             "run",
-            "orbit.task.artifact.put",
+            "orbit.task.artifact",
             "--input",
             &input.to_string(),
         ])
@@ -109,7 +109,7 @@ metadata:
   description: Accepts one reviewed proposal.
 spec:
   permissions:
-    orbit_tools: [orbit.task.show, orbit.task.artifact.get, orbit.task.update, orbit.task.list]
+    orbit_tools: [orbit.task.show, "orbit.task.artifact:get", orbit.task.update, orbit.task.list]
   backend:
     type: exec
     command: bin/backend.sh
@@ -161,7 +161,7 @@ fn application_bound_accept_runs_callbacks_and_refuses_another_task_or_unlisted_
     let accepted = proposal_task(&fixture, "Accept me", PAYLOAD);
     let other = proposal_task(&fixture, "Leave me alone", PAYLOAD);
     let show = json!({"id": accepted, "fields": ["id", "status", "tags"]});
-    let read = json!({"id": accepted, "path": "proposal.json"});
+    let read = json!({"action": "get", "id": accepted, "path": "proposal.json"});
     let start = json!({"id": accepted, "status": "in-progress",
                        "plan": "Apply the reviewed proposal", "comment": "Accepted in the app"});
     let review = json!({"id": accepted, "status": "review", "execution_summary": "Applied"});
@@ -175,7 +175,7 @@ fn application_bound_accept_runs_callbacks_and_refuses_another_task_or_unlisted_
 cat >/dev/null
 run() {{ orbit tool run "$1" --input "$2" --format json; }}
 run orbit.task.show '{show}' | grep -q '"proposal"' || exit 71
-run orbit.task.artifact.get '{read}' | grep -q 'bound-payload-5c1e' || exit 72
+run orbit.task.artifact '{read}' | grep -q 'bound-payload-5c1e' || exit 72
 if run orbit.task.show '{other_show}' >/dev/null 2>&1; then exit 73; fi
 if run orbit.task.update '{other_start}' >/dev/null 2>&1; then exit 74; fi
 if run orbit.task.update '{comment_only}' >/dev/null 2>&1; then exit 75; fi
@@ -347,9 +347,11 @@ fn application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_
             tool: &str,
             input: Value,
         ) -> Result<Value, OrbitError> {
+            // As the runtime's host does: the route carries the operation.
+            let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
             self.0
                 .execute_tool_command_dispatch_with_session_context(
-                    tool,
+                    &tool,
                     input,
                     None,
                     None,
@@ -418,7 +420,7 @@ fn application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_
         let mut callback = PluginCallbackSession::mint(
             &global,
             &provenance,
-            &["orbit.task.artifact.get".into(), "orbit.task.show".into()],
+            &["orbit.task.artifact:get".into(), "orbit.task.show".into()],
         )
         .unwrap();
         callback.bind_application(Some(entry)).unwrap();
@@ -474,16 +476,14 @@ fn application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_
     // A changed artifact: the payload the entry bound is read once, then the
     // operator replaces it and every bound callback is refused.
     let accept = session(&bound_entry);
-    let read = json!({"id": bound, "path": "proposal.json"});
-    assert!(
-        succeeds(&run(&accept, "orbit.task.artifact.get", &read)).contains("bound-payload-5c1e")
-    );
+    let read = json!({"action": "get", "id": bound, "path": "proposal.json"});
+    assert!(succeeds(&run(&accept, "orbit.task.artifact", &read)).contains("bound-payload-5c1e"));
     put_payload(
         &fixture,
         &bound,
         "{\"kind\":\"knowledge\",\"marker\":\"swapped\"}",
     );
-    let stderr = refused(&run(&accept, "orbit.task.artifact.get", &read));
+    let stderr = refused(&run(&accept, "orbit.task.artifact", &read));
     assert!(stderr.contains("bound artifact changed"), "{stderr}");
     assert!(!stderr.contains("swapped"), "{stderr}");
     let stderr = refused(&run(

@@ -7,7 +7,7 @@
 #
 # Trigger
 # - Only `orbit task reconcile-review submit <task> --request <key>` (the
-#   operator-only `orbit.task.reconcile_review` tool) admits a run. It stamps
+#   operator-only `orbit.task.recover` action `reconcile_review` tool) admits a run. It stamps
 #   the reserved `review_reconciliation_admission` input every other
 #   submission path refuses, and each step re-authenticates against it.
 #

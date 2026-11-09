@@ -202,7 +202,7 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
         "a nonterminal leaf must be the mismatch, not an identity miss: {report}\nwire:\n{wire}"
     );
     assert!(
-        wire.contains("--operator") && wire.contains("orbit_workflow_run_observe"),
+        wire.contains("--operator") && wire.contains("FORWARD_OBSERVE"),
         "hydration did not call the operator observation route\nwire:\n{wire}"
     );
     let seeded = wire.find("SEEDED_BEFORE_START").unwrap_or_else(|| {
@@ -568,7 +568,7 @@ def read_out():
 
 threading.Thread(target=pump_err, daemon=True).start()
 threading.Thread(target=read_out, daemon=True).start()
-observe_names = {"orbit_workflow_run_observe", "orbit.workflow.run.observe"}
+observe_names = {"orbit_run", "orbit.run"}
 for raw in sys.stdin.buffer:
     note("IN " + raw.decode("utf-8", "replace"))
     try:
@@ -577,8 +577,12 @@ for raw in sys.stdin.buffer:
         message = None
     name = None
     if isinstance(message, dict) and message.get("method") == "tools/call":
-        name = (message.get("params") or {}).get("name")
-    if name in observe_names:
+        params = message.get("params") or {}
+        name = params.get("name")
+        action = (params.get("arguments") or {}).get("action")
+    else:
+        action = None
+    if name in observe_names and action == "observe":
         note("FORWARD_OBSERVE\n")
     child.stdin.write(raw)
     child.stdin.flush()

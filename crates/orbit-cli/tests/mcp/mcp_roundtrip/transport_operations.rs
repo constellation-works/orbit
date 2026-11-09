@@ -20,27 +20,27 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
             )
             .unwrap();
         }
-        client.call_tool_ok("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":format!(" {} ", source.display()),"path":" evidence/report.txt ","model":"codex"}));
+        client.call_tool_ok("orbit_task_artifact",json!({"action": "put", "workspace":selector,"id":id,"source_path":format!(" {} ", source.display()),"path":" evidence/report.txt ","model":"codex"}));
         let read = client.call_tool_ok(
-            "orbit_task_artifact_get",
-            json!({"workspace":selector,"id":id,"path":"evidence/report.txt"}),
+            "orbit_task_artifact",
+            json!({"action": "get", "workspace":selector,"id":id,"path":"evidence/report.txt"}),
         );
         assert_eq!(read["content"], "Exact evidence\nπ\n");
     }
     drop(client);
     let mut client = workspace.serve();
     let read = client.call_tool_ok(
-        "orbit_task_artifact_get",
-        json!({"workspace":selector,"id":id,"path":"evidence/report.txt"}),
+        "orbit_task_artifact",
+        json!({"action": "get", "workspace":selector,"id":id,"path":"evidence/report.txt"}),
     );
     assert_eq!(read["content"], "Exact evidence\nπ\n");
     assert_eq!(read["encoding"], "utf8");
     let before = client.call_tool_ok("orbit_task_show", json!({"id":id,"fields":["artifacts"]}));
     let outside = workspace.home.join("outside.txt");
     std::fs::write(&outside, "must not be attached").unwrap();
-    client.call_tool_err("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":outside,"path":"escape.txt","model":"codex"}));
-    client.call_tool_err("orbit_task_artifact_put",json!({"workspace":selector,"id":id,"source_path":source,"path":"../escape.txt","model":"codex"}));
-    client.call_tool_err("orbit_task_artifact_put",json!({"workspace":"ws_missing","id":id,"source_path":source,"path":"wrong-workspace.txt","model":"codex"}));
+    client.call_tool_err("orbit_task_artifact",json!({"action": "put", "workspace":selector,"id":id,"source_path":outside,"path":"escape.txt","model":"codex"}));
+    client.call_tool_err("orbit_task_artifact",json!({"action": "put", "workspace":selector,"id":id,"source_path":source,"path":"../escape.txt","model":"codex"}));
+    client.call_tool_err("orbit_task_artifact",json!({"action": "put", "workspace":"ws_missing","id":id,"source_path":source,"path":"wrong-workspace.txt","model":"codex"}));
     assert_eq!(
         client.call_tool_ok("orbit_task_show", json!({"id":id,"fields":["artifacts"]})),
         before
@@ -57,26 +57,29 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let added=client.call_tool_ok("orbit_auto_task_add",json!({"workspace":selector,"name":"stdio-chore","description":"Initial","schedule":{"every_minutes":60},"template":{"title":"Wire chore","description":"No provider dispatch","acceptance_criteria":["Persisted"],"complexity":"low","status":"proposed"}}));
+    let added=client.call_tool_ok("orbit_auto_task",json!({"action": "add", "workspace":selector,"name":"stdio-chore","description":"Initial","schedule":{"every_minutes":60},"template":{"title":"Wire chore","description":"No provider dispatch","acceptance_criteria":["Persisted"],"complexity":"low","status":"proposed"}}));
     assert_eq!(added["name"], "stdio-chore");
     let definition = workspace.work.join(".orbit/auto_tasks/stdio-chore.yaml");
     client.call_tool_ok(
-        "orbit_auto_task_update",
-        json!({"workspace":selector,"name":"stdio-chore","description":"Updated over stdio"}),
+        "orbit_auto_task",
+        json!({"action": "update", "workspace":selector,"name":"stdio-chore","description":"Updated over stdio"}),
     );
     client.call_tool_ok(
-        "orbit_auto_task_update",
-        json!({"workspace":selector,"name":"stdio-chore","enabled":false,"expected_enabled":true}),
+        "orbit_auto_task",
+        json!({"action": "update", "workspace":selector,"name":"stdio-chore","enabled":false,"expected_enabled":true}),
     );
     // The compare is atomic: a stale expectation changes nothing.
     client.call_tool_err(
-        "orbit_auto_task_update",
-        json!({"workspace":selector,"name":"stdio-chore","enabled":true,"expected_enabled":true}),
+        "orbit_auto_task",
+        json!({"action": "update", "workspace":selector,"name":"stdio-chore","enabled":true,"expected_enabled":true}),
     );
     let bytes = std::fs::read(&definition).unwrap();
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let definitions = client.call_tool_ok("orbit_auto_task_list", json!({"workspace":selector}));
+    let definitions = client.call_tool_ok(
+        "orbit_auto_task",
+        json!({"action": "list", "workspace":selector}),
+    );
     let chore = definitions["items"]
         .as_array()
         .unwrap()
@@ -94,8 +97,8 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     assert!(chore.get("condition").is_none());
     assert!(chore["last_fire"].is_null());
     let bounded = client.call_tool_ok(
-        "orbit_auto_task_list",
-        json!({"workspace":selector,"view":"bounded","limit":50}),
+        "orbit_auto_task",
+        json!({"action": "list", "workspace":selector,"view":"bounded","limit":50}),
     );
     let bounded_chore = bounded["items"]
         .as_array()
@@ -119,12 +122,15 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     }
     let secret = format!("ghp_{}", "a".repeat(36));
     let raw = format!("  {secret} {}", "π".repeat(2200));
-    client.call_tool_ok("orbit_auto_task_add", json!({"workspace":selector,"name":"stdio-profile","description":raw,"schedule":{"every_minutes":60},"template":{"title":raw,"description":"Retained ordinary body"},"dedupe":"always"}));
-    client.call_tool_ok("orbit_auto_task_add", json!({"workspace":selector,"name":"stdio-condition","schedule":{"condition":{"scope":"task","when":"'wire-profile' in task.tags"}},"template":{"title":"Wire condition"}}));
-    let ordinary = client.call_tool_ok("orbit_auto_task_list", json!({"workspace":selector}));
+    client.call_tool_ok("orbit_auto_task", json!({"action": "add", "workspace":selector,"name":"stdio-profile","description":raw,"schedule":{"every_minutes":60},"template":{"title":raw,"description":"Retained ordinary body"},"dedupe":"always"}));
+    client.call_tool_ok("orbit_auto_task", json!({"action": "add", "workspace":selector,"name":"stdio-condition","schedule":{"condition":{"scope":"task","when":"'wire-profile' in task.tags"}},"template":{"title":"Wire condition"}}));
+    let ordinary = client.call_tool_ok(
+        "orbit_auto_task",
+        json!({"action": "list", "workspace":selector}),
+    );
     let bounded = client.call_tool_ok(
-        "orbit_auto_task_list",
-        json!({"workspace":selector,"view":"bounded","limit":50}),
+        "orbit_auto_task",
+        json!({"action": "list", "workspace":selector,"view":"bounded","limit":50}),
     );
     for name in ["stdio-profile", "stdio-condition"] {
         let ordinary_row = ordinary["items"]
@@ -162,13 +168,13 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         assert_eq!(bounded_row["dedupe"], ordinary_row["dedupe"]);
     }
     client.call_tool_err(
-        "orbit_auto_task_update",
-        json!({"workspace":"ws_missing","name":"stdio-chore","description":"Wrong workspace"}),
+        "orbit_auto_task",
+        json!({"action": "update", "workspace":"ws_missing","name":"stdio-chore","description":"Wrong workspace"}),
     );
     assert_eq!(std::fs::read(&definition).unwrap(), bytes);
     let minted = client.call_tool_ok(
-        "orbit_auto_task_mint",
-        json!({"workspace":selector,"name":"stdio-chore"}),
+        "orbit_auto_task",
+        json!({"action": "mint", "workspace":selector,"name":"stdio-chore"}),
     );
     assert_eq!(minted["status"], "proposed");
     let task_id = minted["id"].as_str().unwrap().to_owned();
@@ -198,7 +204,10 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     );
     assert!(!definition.exists());
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let definitions = client.call_tool_ok("orbit_auto_task_list", json!({"workspace":selector}));
+    let definitions = client.call_tool_ok(
+        "orbit_auto_task",
+        json!({"action": "list", "workspace":selector}),
+    );
     assert!(
         !definitions["items"]
             .as_array()
@@ -214,7 +223,7 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
         task["status"], "proposed",
         "forced definition deletion keeps the minted task"
     );
-    let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    let runs = client.call_tool_ok("orbit_run", json!({"action": "list", "workspace":selector}));
     assert!(
         runs["items"].as_array().unwrap().is_empty(),
         "CRUD and mint dispatch no jobs"
@@ -265,25 +274,25 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
     );
     let original = runtime.show_job_run(id).unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let changed=client.call_tool_ok("orbit_workflow_auto",json!({"workspace":selector,"action":"resize","id":id,"concurrency":3,"if_revision":0,"reason":"Wire fixture"}));
+    let changed=client.call_tool_ok("orbit_workflow",json!({"action": "auto", "workspace":selector,"mode":"resize","id":id,"concurrency":3,"if_revision":0,"reason":"Wire fixture"}));
     assert_eq!(changed["outcome"], "updated");
     assert_eq!(changed["revision"], 1);
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);
     let unchanged = client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"resize","concurrency":3,"if_revision":1}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"resize","concurrency":3,"if_revision":1}),
     );
     assert_eq!(unchanged["outcome"], "unchanged");
     assert_eq!(unchanged["revision"], 1);
     let before = runtime.read_run_state(id).unwrap().unwrap();
     client.call_tool_err(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"resize","id":id,"concurrency":4,"if_revision":0}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"resize","id":id,"concurrency":4,"if_revision":0}),
     );
     client.call_tool_err(
-        "orbit_workflow_auto",
-        json!({"workspace":"ws_missing","action":"resize","id":id,"concurrency":4}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":"ws_missing","mode":"resize","id":id,"concurrency":4}),
     );
     assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
     let current = runtime.show_job_run(id).unwrap();
@@ -294,8 +303,8 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
     let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
     assert_eq!(
         client.call_tool_err(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"resize","id":id,"concurrency":4})
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"resize","id":id,"concurrency":4})
         )["code"],
         "capability_denied"
     );
@@ -304,14 +313,14 @@ fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unautho
     // the run, without that state, when the states cannot be read.
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    let listed = client.call_tool_ok("orbit_run", json!({"action": "list", "workspace":selector}));
     assert_eq!(listed["items"][0]["run_id"], id);
     assert_eq!(listed["items"][0]["drain_worker_limit"]["revision"], 1);
     Connection::open(workspace.home.join(".orbit/orbit.db"))
         .unwrap()
         .execute_batch("DROP TABLE job_run_states")
         .unwrap();
-    let listed = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    let listed = client.call_tool_ok("orbit_run", json!({"action": "list", "workspace":selector}));
     assert_eq!(listed["items"][0]["run_id"], id);
     assert_eq!(listed["items"][0]["drain_worker_limit"], Value::Null);
 }
@@ -348,8 +357,8 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     let mut client = workspace.serve_with_args(&["--operator"]);
     for seconds in [json!(86_401), json!(172_800), json!(u64::MAX), json!(0)] {
         let refused = client.call_tool_err(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":seconds}),
         );
         assert_eq!(refused["code"], "invalid_input", "{refused}");
         assert_eq!(
@@ -359,15 +368,15 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     }
     for seconds in [json!(1.5), json!("60"), json!(null)] {
         let refused = client.call_tool_err(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"start","for_seconds":seconds}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":seconds}),
         );
         assert_eq!(refused["code"], "invalid_input", "{refused}");
     }
     assert_eq!(
         client.call_tool_err(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"start"})
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"start"})
         )["code"],
         "invalid_input"
     );
@@ -403,18 +412,19 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
             "invalid input: auto_concurrency is a start setting",
         ),
     ] {
-        let mut input = json!({"workspace":selector,"action":action,"auto_concurrency":mode});
+        let mut input =
+            json!({"action": "auto", "workspace":selector,"mode":action,"auto_concurrency":mode});
         if action == "start" {
             input["for_seconds"] = json!(60);
         }
         if action == "resize" {
             input["concurrency"] = json!(24);
         }
-        let refused = client.call_tool_err("orbit_workflow_auto", input);
+        let refused = client.call_tool_err("orbit_workflow", input);
         assert_eq!(refused["code"], "invalid_input", "{refused}");
         assert_eq!(refused["message"], expected_message, "{refused}");
     }
-    let runs = client.call_tool_ok("orbit_workflow_run_list", json!({"workspace":selector}));
+    let runs = client.call_tool_ok("orbit_run", json!({"action": "list", "workspace":selector}));
     assert_eq!(
         runs["items"].as_array().unwrap().len(),
         1,
@@ -422,8 +432,8 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     );
 
     let changed = client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"resize","concurrency":24}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"resize","concurrency":24}),
     );
 
     assert_eq!(changed["run_id"], id);
@@ -438,11 +448,12 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     let config = std::fs::read(root.join("config.toml")).unwrap();
     for mode in [None, Some("off"), Some("shadow"), Some("enforce")] {
         let seconds = if mode.is_none() { 86_400 } else { 1 };
-        let mut input = json!({"workspace":selector,"action":"start","for_seconds":seconds});
+        let mut input =
+            json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":seconds});
         if let Some(mode) = mode {
             input["auto_concurrency"] = json!(mode);
         }
-        let receipt = client.call_tool_ok("orbit_workflow_auto", input);
+        let receipt = client.call_tool_ok("orbit_workflow", input);
         let id = receipt["run_id"].as_str().unwrap().to_owned();
         // The worker is detached from the MCP server. A 24h window does not
         // stop it, so cancel on unwind unless this run has already finished.
@@ -465,8 +476,8 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
             }
         );
         let shown = client.call_tool_ok(
-            "orbit_workflow_run_show",
-            json!({"workspace":selector,"id":&id}),
+            "orbit_run",
+            json!({"action": "show", "workspace":selector,"id":&id}),
         );
         assert_eq!(shown["auto_concurrency"]["mode"], mode.unwrap_or("off"));
         let recorded = runtime.show_job_run(&id).unwrap();
@@ -486,8 +497,8 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
     let before = runtime.list_job_runs(Default::default()).unwrap();
     drop(client);
     let mut unprivileged = workspace.serve_with_args(&["--toolset", "dispatch"]);
-    assert_eq!(unprivileged.call_tool_err("orbit_workflow_auto",
-        json!({"workspace":selector,"action":"start","for_seconds":60,"auto_concurrency":"enforce"}))["code"], "capability_denied");
+    assert_eq!(unprivileged.call_tool_err("orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":60,"auto_concurrency":"enforce"}))["code"], "capability_denied");
     assert_eq!(runtime.list_job_runs(Default::default()).unwrap(), before);
 }
 
@@ -525,8 +536,8 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
     runtime.write_run_state(source, &checkpoint).unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
     let submitted = client.call_tool_ok(
-        "orbit_workflow_run_resume",
-        json!({"workspace":selector,"id":source,"model":"codex"}),
+        "orbit_run",
+        json!({"action": "resume", "workspace":selector,"id":source,"model":"codex"}),
     );
     let resumed = submitted["run_id"].as_str().unwrap().to_owned();
     assert_ne!(resumed, source);
@@ -534,8 +545,8 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let run = client.call_tool_ok(
-            "orbit_workflow_run_show",
-            json!({"workspace":selector,"id":resumed}),
+            "orbit_run",
+            json!({"action": "show", "workspace":selector,"id":resumed}),
         );
         if run["state"] == "success" {
             break;
@@ -553,8 +564,8 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
     drop(client);
     let mut client = workspace.serve_with_args(&["--operator"]);
     let reopened = client.call_tool_ok(
-        "orbit_workflow_run_show",
-        json!({"workspace":selector,"id":resumed}),
+        "orbit_run",
+        json!({"action": "show", "workspace":selector,"id":resumed}),
     );
     assert_eq!(reopened["state"], "success");
     assert_eq!(reopened["retry_source_run_id"], source);
@@ -573,15 +584,15 @@ fn stdio_resume_runs_only_deterministic_remaining_steps_and_reopens_checkpoint_l
         "resume preserves its source checkpoints"
     );
     client.call_tool_err(
-        "orbit_workflow_run_resume",
-        json!({"workspace":selector,"id":resumed,"model":"codex"}),
+        "orbit_run",
+        json!({"action": "resume", "workspace":selector,"id":resumed,"model":"codex"}),
     );
     drop(client);
     let mut client = workspace.serve_with_args(&["--toolset", "dispatch"]);
     assert_eq!(
         client.call_tool_err(
-            "orbit_workflow_run_resume",
-            json!({"workspace":selector,"id":source})
+            "orbit_run",
+            json!({"action": "resume", "workspace":selector,"id":source})
         )["code"],
         "capability_denied"
     );
@@ -637,9 +648,9 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         .unwrap()
     };
     let original = persisted();
-    let args = json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":"Repair old timeout charges"});
+    let args = json!({"action": "review_reset", "workspace":selector,"id":id,"lineage_key":lineage,"reason":"Repair old timeout charges"});
     let mut client = workspace.serve();
-    client.call_tool_err("orbit_task_review_reset", args.clone());
+    client.call_tool_err("orbit_task_recover", args.clone());
     assert_eq!(
         persisted(),
         original,
@@ -682,11 +693,11 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     assert_eq!(persisted(), original);
     let mut client = workspace.serve_with_args(&["--operator"]);
     client.call_tool_err(
-        "orbit_task_review_reset",
-        json!({"workspace":selector,"id":id,"lineage_key":lineage,"reason":" "}),
+        "orbit_task_recover",
+        json!({"action": "review_reset", "workspace":selector,"id":id,"lineage_key":lineage,"reason":" "}),
     );
     assert_eq!(persisted(), original, "a blank decision changes nothing");
-    let reset = client.call_tool_ok("orbit_task_review_reset", args);
+    let reset = client.call_tool_ok("orbit_task_recover", args);
     assert_eq!(reset["ledger"]["attempts"], current["attempts"]);
     assert_eq!(reset["ledger"]["consumed_seconds"], 0);
     assert_eq!(
@@ -786,8 +797,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
     let mut client = workspace.serve_with_args(&["--operator"]);
 
     let started = client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"start","for_seconds":60}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":60}),
     );
     let mut drain_cleanup = DrainCleanup {
         workspace: &workspace,
@@ -801,8 +812,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         "the start names the empty key it read: {started}"
     );
     let shipped = client.call_tool_ok(
-        "orbit_workflow_ship",
-        json!({"workspace":selector,"task_ids":[task["id"]],"mode":"local"}),
+        "orbit_workflow",
+        json!({"action": "ship", "workspace":selector,"task_ids":[task["id"]],"mode":"local"}),
     );
     let mut ship_cleanup = DrainCleanup {
         workspace: &workspace,
@@ -840,8 +851,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let run = client.call_tool_ok(
-                "orbit_workflow_run_show",
-                json!({"workspace":selector,"id":run_id}),
+                "orbit_run",
+                json!({"action": "show", "workspace":selector,"id":run_id}),
             );
             if run["state"] == "success" {
                 break;
@@ -883,8 +894,8 @@ fn drain_status_and_doctor_report_the_validation_environment() {
     let observe = || {
         let mut client = workspace.serve_with_args(&["--operator"]);
         let readiness = client.call_tool_ok(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"status"}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"status"}),
         );
         let doctor = orbit_ok(
             McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -1422,7 +1433,7 @@ impl Drop for DrainCleanup<'_> {
 }
 
 /// `stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain`
-/// starts this same 24h `orbit_workflow_auto` drain. The worker is detached
+/// starts this same 24h `orbit_workflow` action `auto` drain. The worker is detached
 /// into its own session, so dropping the MCP server does not stop it. A run
 /// that is still going when the test returns must not leave that process
 /// behind. Observed 2026-10-25: the worker stayed up after the fixture
@@ -1456,8 +1467,8 @@ fn a_fixture_auto_drain_worker_does_not_outlive_the_test() {
     .unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
     let receipt = client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"start","for_seconds":86_400}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":86_400}),
     );
     assert_eq!(receipt["auto_concurrency"]["mode"], "off", "{receipt}");
     assert_eq!(
@@ -1511,8 +1522,8 @@ fn a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted() {
         .unwrap();
         let mut client = workspace.serve_with_args(&["--operator"]);
         let receipt = client.call_tool_ok(
-            "orbit_workflow_auto",
-            json!({"workspace":workspace.work,"action":"start","for_seconds":86_400}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":workspace.work,"mode":"start","for_seconds":86_400}),
         );
         let run_id = receipt["run_id"].as_str().unwrap().to_owned();
         let mut cleanup = DrainCleanup {

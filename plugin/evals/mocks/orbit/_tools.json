@@ -140,18 +140,44 @@
       }
     },
     {
-      "name": "orbit_auto_task_add",
-      "description": "Create a recurring auto-task definition.",
+      "name": "orbit_auto_task",
+      "description": "List, add, update or mint recurring auto-task definitions.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "action": {
+            "type": "string",
+            "description": "Operation to run, with its required fields: list; add (name, schedule, template); update (name); mint (name).",
+            "enum": [
+              "list",
+              "add",
+              "update",
+              "mint"
+            ]
+          },
+          "include_inactive_plugins": {
+            "type": "boolean",
+            "description": "For list: Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason."
+          },
+          "view": {
+            "type": "string",
+            "description": "For list: bounded: bounded metadata, explicit workspace, pagination and display truncation."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "For list: Bounded list offset."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "For list: Bounded page size."
+          },
           "name": {
             "type": "string",
-            "description": "Unique definition name (lowercase alphanumeric."
+            "description": "For add: Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric); For update, mint: Definition name."
           },
           "description": {
             "type": "string",
-            "description": "Human description of the recurring chore."
+            "description": "For add: Human description of the recurring chore; For update: New description."
           },
           "schedule": {
             "anyOf": [
@@ -165,7 +191,7 @@
                 }
               }
             ],
-            "description": "Schedule object: exactly one of `{ cron: string."
+            "description": "For add: Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?."
           },
           "template": {
             "anyOf": [
@@ -179,107 +205,12 @@
                 }
               }
             ],
-            "description": "Task template: `{ title, description?."
+            "description": "For add: Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard."
           },
           "dedupe": {
             "type": "string",
-            "description": "Dedupe policy: `skip_if_open` (default) or."
+            "description": "For add: Dedupe policy: `skip_if_open` (default) or `always`; For update: New dedupe policy: `skip_if_open` or `always`."
           },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "name",
-          "schedule",
-          "template",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_auto_task_list",
-      "description": "List auto-task definitions in this workspace.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "include_inactive_plugins": {
-            "type": "boolean",
-            "description": "Also list definitions whose seeding plugin is."
-          },
-          "view": {
-            "type": "string",
-            "description": "bounded: bounded metadata, explicit workspace."
-          },
-          "offset": {
-            "type": "integer",
-            "description": "Bounded list offset"
-          },
-          "limit": {
-            "type": "integer",
-            "description": "Bounded page size"
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "additionalProperties": true,
-        "required": [
-          "workspace"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_auto_task_mint",
-      "description": "Mint one task now from an auto-task definition.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Definition name."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          },
-          "acknowledge_unconditional": {
-            "type": "boolean",
-            "description": "True acknowledges unconditional creation."
-          }
-        },
-        "required": [
-          "name",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "idempotentHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_auto_task_update",
-      "description": "Update an existing auto-task definition (present fields only), including.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
           "waive_batch": {
             "anyOf": [
               {
@@ -292,63 +223,27 @@
                 }
               }
             ],
-            "description": "Explicit settled-batch waiver: { batch_id."
-          },
-          "name": {
-            "type": "string",
-            "description": "Definition name."
-          },
-          "description": {
-            "type": "string",
-            "description": "New description."
-          },
-          "schedule": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "object"
-                }
-              }
-            ],
-            "description": "New schedule object: `{ cron: string }` `{."
-          },
-          "template": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "object"
-                }
-              }
-            ],
-            "description": "Replacement task template object, including."
-          },
-          "dedupe": {
-            "type": "string",
-            "description": "New dedupe policy: `skip_if_open` or `always`."
+            "description": "For update: Explicit settled-batch waiver: { batch_id, reason }."
           },
           "enabled": {
             "type": "boolean",
-            "description": "Enable (`true`) or disable (`false`) the."
+            "description": "For update: Enable (`true`) or disable (`false`) the definition."
           },
           "expected_enabled": {
             "type": "boolean",
-            "description": "Observed enabled state, checked atomically with."
+            "description": "For update: Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches."
           },
           "workspace": {
             "type": "string",
             "description": "Workspace selector from orbit_workspace_list."
+          },
+          "acknowledge_unconditional": {
+            "type": "boolean",
+            "description": "For mint: True acknowledges unconditional creation; requires operator authority."
           }
         },
         "required": [
-          "name",
+          "action",
           "workspace"
         ],
         "additionalProperties": true
@@ -356,7 +251,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
-        "idempotentHint": true,
+        "idempotentHint": false,
         "openWorldHint": false
       }
     },
@@ -391,75 +286,55 @@
       }
     },
     {
-      "name": "orbit_codebase_analytics",
-      "description": "Rank repository paths across codebase risk measures.",
+      "name": "orbit_codebase",
+      "description": "Codebase analytics: ranked rollups, one key's detail, or files changed together.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "action": {
+            "type": "string",
+            "description": "Operation to run, with its required fields: show (path); related (path); analytics.",
+            "enum": [
+              "show",
+              "related",
+              "analytics"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "For show: A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/; For related: A repository-relative file path, including a deleted file with landed."
+          },
           "window": {
             "type": "string",
-            "description": "Counted period ending now: 7d, 30d, 90d or all."
+            "description": "For show, analytics: Counted period ending now: 7d, 30d, 90d or all; For related: Landed period ending now."
           },
           "min_support": {
             "type": "integer",
-            "description": "Smallest denominator a ranked row needs, at."
+            "description": "For show, analytics: Smallest denominator a ranked row needs, at least 1; For related: Minimum shared landed tasks, at least 1."
           },
           "rollup": {
             "type": "string",
-            "description": "How paths are grouped: file, dir (parent."
+            "description": "For show, analytics: How paths are grouped: file, dir (parent directory) or crate."
           },
           "nature": {
             "type": "string",
-            "description": "Count only regressions whose regression_from."
+            "description": "For show, analytics: Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`."
           },
           "escape": {
             "type": "string",
-            "description": "Count only regressions whose regression_from."
+            "description": "For show, analytics: Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`."
           },
           "layer": {
             "type": "string",
-            "description": "Count only regressions whose fix sits in this."
+            "description": "For show, analytics: Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither."
           },
           "detected_by": {
             "type": "string",
-            "description": "Count only regressions found this way, read."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "additionalProperties": true,
-        "required": [
-          "workspace"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_codebase_related",
-      "description": "Rank files by landed co-change Jaccard with a repository-relative file path.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "A repository-relative file path, including a."
-          },
-          "window": {
-            "type": "string",
-            "description": "Landed period ending now."
-          },
-          "min_support": {
-            "type": "integer",
-            "description": "Minimum shared landed tasks, at least 1."
+            "description": "For show, analytics: Count only regressions found this way, read from the regression task's tags, else its filer."
           },
           "top": {
             "type": "integer",
-            "description": "Maximum partners, from 1 to 100."
+            "description": "For related: Maximum partners, from 1 to 100."
           },
           "workspace": {
             "type": "string",
@@ -467,60 +342,7 @@
           }
         },
         "required": [
-          "path",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": true
-      }
-    },
-    {
-      "name": "orbit_codebase_show",
-      "description": "Inspect one repository path across codebase rankings and follow counts to tasks.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "A ranked key at the chosen rollup: a file path."
-          },
-          "window": {
-            "type": "string",
-            "description": "Counted period ending now: 7d, 30d, 90d or all."
-          },
-          "min_support": {
-            "type": "integer",
-            "description": "Smallest denominator a ranked row needs, at."
-          },
-          "rollup": {
-            "type": "string",
-            "description": "How paths are grouped: file, dir (parent."
-          },
-          "nature": {
-            "type": "string",
-            "description": "Count only regressions whose regression_from."
-          },
-          "escape": {
-            "type": "string",
-            "description": "Count only regressions whose regression_from."
-          },
-          "layer": {
-            "type": "string",
-            "description": "Count only regressions whose fix sits in this."
-          },
-          "detected_by": {
-            "type": "string",
-            "description": "Count only regressions found this way, read."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "path",
+          "action",
           "workspace"
         ],
         "additionalProperties": true
@@ -575,65 +397,50 @@
       }
     },
     {
-      "name": "orbit_decision_list",
-      "description": "List the workspace's human decision requests on held work, open ones unless.",
+      "name": "orbit_decision",
+      "description": "List, show or raise human decision requests.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "action": {
+            "type": "string",
+            "description": "Operation to run, with its required fields: list; show (id); raise (task_id, question, options).",
+            "enum": [
+              "list",
+              "show",
+              "raise"
+            ]
+          },
           "gate": {
             "type": "string",
-            "description": "Only requests waiting on this gate."
+            "description": "For list: Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant."
           },
           "task_id": {
             "type": "string",
-            "description": "Only requests on this task."
+            "description": "For list: Only requests on this task; For raise: The human-crew task the decision is for."
           },
           "topic": {
             "type": "string",
-            "description": "Only requests carrying exactly this structured."
+            "description": "For list: Only requests carrying exactly this structured topic; For raise: Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches."
           },
           "include_closed": {
             "type": "boolean",
-            "description": "Include answered, superseded and expired."
+            "description": "For list: Include answered, superseded and expired requests beside the open ones."
           },
-          "workspace": {
+          "id": {
             "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "additionalProperties": true,
-        "required": [
-          "workspace"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true
-      }
-    },
-    {
-      "name": "orbit_decision_raise",
-      "description": "Raise a multiple-choice request on a human-crew task when an operator decision.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "task_id": {
-            "type": "string",
-            "description": "The human-crew task the decision is for."
+            "description": "For show: The decision request id, as action `list` prints it."
           },
           "question": {
             "type": "string",
-            "description": "One or two plain-language sentences naming the."
+            "description": "For raise: One or two plain-language sentences naming the decision needed, readable without opening the code."
           },
           "options": {
             "type": "array",
             "items": {
               "type": "object"
             },
-            "description": "Two to four options as an array of {label."
-          },
-          "topic": {
-            "type": "string",
-            "description": "Optional structured topic or corpus rule id."
+            "description": "For raise: Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown."
           },
           "workspace": {
             "type": "string",
@@ -641,87 +448,7 @@
           }
         },
         "required": [
-          "task_id",
-          "question",
-          "options",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false
-      }
-    },
-    {
-      "name": "orbit_decision_show",
-      "description": "Show one human decision request: its task, gate, allowed answers with their.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "The decision request id, as."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": true
-      }
-    },
-    {
-      "name": "orbit_friction_add",
-      "description": "Append a friction report",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "body": {
-            "type": "string",
-            "description": "Markdown body describing what happened and why."
-          },
-          "title": {
-            "type": "string",
-            "description": "One-line handle identifying the problem, at.",
-            "maxLength": 120
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "automation",
-                "build",
-                "docs",
-                "history-diverged",
-                "lifecycle",
-                "naming",
-                "other",
-                "policy",
-                "skill-guidance",
-                "tooling"
-              ]
-            },
-            "description": "Friction taxonomy tags."
-          },
-          "during_task": {
-            "type": "string",
-            "description": "Optional task ID being worked on when friction."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "body",
+          "action",
           "workspace"
         ],
         "additionalProperties": true
@@ -734,54 +461,53 @@
       }
     },
     {
-      "name": "orbit_friction_update",
-      "description": "Update triage metadata for a friction record.",
+      "name": "orbit_friction",
+      "description": "Record a friction, or update one.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "id": {
+          "action": {
             "type": "string",
-            "description": "Friction record ID, e.g."
+            "description": "Operation to run, with its required fields: add (body); update (id).",
+            "enum": [
+              "add",
+              "update"
+            ]
           },
-          "status": {
+          "body": {
             "type": "string",
-            "description": "Optional status: open, triaged, or resolved"
+            "description": "For add: Markdown body describing what happened and why it caused friction; For update: Optional replacement markdown body."
+          },
+          "title": {
+            "type": "string",
+            "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body."
           },
           "tags": {
             "type": "array",
             "items": {
-              "type": "string",
-              "enum": [
-                "automation",
-                "build",
-                "docs",
-                "history-diverged",
-                "lifecycle",
-                "naming",
-                "other",
-                "policy",
-                "skill-guidance",
-                "tooling"
-              ]
+              "type": "string"
             },
-            "description": "Friction taxonomy tags."
+            "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; For."
           },
-          "body": {
+          "during_task": {
             "type": "string",
-            "description": "Optional replacement markdown body"
+            "description": "For add: Optional task ID being worked on when friction occurred; an ID that names no task is refused."
+          },
+          "id": {
+            "type": "string",
+            "description": "For update: Friction record ID, e.g. FYYYY-MM-NNN."
+          },
+          "status": {
+            "type": "string",
+            "description": "For update: Optional status: open, triaged, or resolved."
           },
           "rehome_to": {
             "type": "string",
-            "description": "Optional registered workspace that owns a."
+            "description": "For update: Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false."
           },
           "move": {
             "type": "boolean",
-            "description": "With `rehome_to`: false records the."
-          },
-          "title": {
-            "type": "string",
-            "description": "Optional replacement one-line title, at most.",
-            "maxLength": 120
+            "description": "For update: With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true."
           },
           "workspace": {
             "type": "string",
@@ -789,7 +515,7 @@
           }
         },
         "required": [
-          "id",
+          "action",
           "workspace"
         ],
         "additionalProperties": true
@@ -952,6 +678,98 @@
         "required": [
           "workspace",
           "action"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "orbit_run",
+      "description": "List, show, observe or resume workflow runs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Operation to run, with its required fields: list; show (id); observe (id); resume (id).",
+            "enum": [
+              "list",
+              "show",
+              "observe",
+              "resume"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "For list: Maximum runs to return (default 25; values above 200 are rejected); For show: Bounded detail page size."
+          },
+          "job_id": {
+            "type": "string",
+            "description": "For list: Optional job ID filter."
+          },
+          "state": {
+            "type": "string",
+            "description": "For list: Optional concrete run-state filter, or `terminal`."
+          },
+          "since": {
+            "type": "string",
+            "description": "For list: Optional RFC 3339 lower bound for run creation time."
+          },
+          "view": {
+            "type": "string",
+            "description": "For list, show: bounded: bounded metadata, explicit workspace, pagination and display truncation."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "For list: Bounded list offset."
+          },
+          "status": {
+            "type": "string",
+            "description": "For list: Bounded run state filter."
+          },
+          "include_catalog": {
+            "type": "boolean",
+            "description": "For list: Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs."
+          },
+          "id": {
+            "type": "string",
+            "description": "For show, observe, resume: Job run ID."
+          },
+          "log_offset": {
+            "type": "integer",
+            "description": "For show: Bounded log record offset."
+          },
+          "claim_token": {
+            "type": "string",
+            "description": "For resume: Token for this workspace's exclusive claim, required when another operator holds one."
+          },
+          "source_repair": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            ],
+            "description": "For resume: Explicit operator recovery of an eligible stopped owner-local publication."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "Workspace selector from orbit_workspace_list."
+          }
+        },
+        "required": [
+          "action",
+          "workspace"
         ],
         "additionalProperties": true
       },
@@ -1247,61 +1065,39 @@
       }
     },
     {
-      "name": "orbit_task_artifact_get",
-      "description": "Read one stored task artifact by owning task ID and artifact path.",
+      "name": "orbit_task_artifact",
+      "description": "Read a task artifact, or attach a local file as one.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "action": {
+            "type": "string",
+            "description": "Operation to run, with its required fields: get (id, path); put (id, source_path).",
+            "enum": [
+              "get",
+              "put"
+            ]
+          },
           "id": {
             "type": "string",
-            "description": "Globally unique task ID that owns the artifact."
+            "description": "For get: Globally unique task ID that owns the artifact; For put: task ID."
           },
           "path": {
             "type": "string",
-            "description": "Artifact path relative to the task artifacts."
+            "description": "For get: Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`; For put: Artifact path relative to the task artifacts directory."
           },
           "workspace": {
             "type": "string",
             "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "id",
-          "path"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_task_artifact_put",
-      "description": "Store a file (any content, up to 1 MiB) as a task artifact.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "task ID"
           },
           "source_path": {
             "type": "string",
-            "description": "Source file to store as a task artifact."
-          },
-          "path": {
-            "type": "string",
-            "description": "Artifact path relative to the task artifacts."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
+            "description": "For put: Source file to store as a task artifact."
           }
         },
         "required": [
-          "id",
-          "source_path"
+          "action",
+          "id"
         ],
         "additionalProperties": false
       },
@@ -1534,217 +1330,107 @@
       }
     },
     {
-      "name": "orbit_task_reconcile_review",
-      "description": "Reconcile the already-merged head of a recovered follower delivery whose pull.",
+      "name": "orbit_task_recover",
+      "description": "Operator recovery for stuck claims, blocked tasks, handoffs and reviews.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          },
           "action": {
             "type": "string",
-            "description": "inspect, submit, status, or accept_baseline"
+            "description": "Operation to run, with its required fields: recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
+            "enum": [
+              "recover_claim",
+              "requeue",
+              "repilot",
+              "retry_handoff",
+              "revoke_handoff",
+              "review_reset",
+              "reconcile_review"
+            ]
           },
-          "id": {
+          "mode": {
             "type": "string",
-            "description": "Task in review whose foreign delivery merged"
+            "description": "For reconcile_review: inspect, submit, status, or accept_baseline."
           },
-          "request_key": {
-            "type": "string",
-            "description": "submit: operator-chosen key; resubmitting it."
-          },
-          "reconciliation_id": {
-            "type": "string",
-            "description": "status, accept_baseline: the reconciliation to."
-          },
-          "command": {
-            "type": "string",
-            "description": "accept_baseline: the required command whose."
-          },
-          "remediation_commit": {
-            "type": "string",
-            "description": "accept_baseline: commit on the landing branch."
-          },
-          "reason": {
-            "type": "string",
-            "description": "accept_baseline: why the baseline failure is."
-          }
-        },
-        "required": [
-          "action",
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_task_recover_claim",
-      "description": "Recover a live execution claim on its owner workspace to blocked or backlog.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
           "workspace": {
             "type": "string",
             "description": "Workspace selector from orbit_workspace_list."
           },
           "claim_id": {
             "type": "string",
-            "description": "Live claim to recover"
+            "description": "For recover_claim: Live claim to recover."
           },
           "expected_phase": {
             "type": "string",
-            "description": "Claim phase you observed; a claim that moved on."
+            "description": "For recover_claim: Claim phase you observed; a claim that moved on is refused."
           },
           "status": {
             "type": "string",
-            "description": "Target status: blocked for diagnosis or backlog."
+            "description": "For recover_claim: Target status: blocked for diagnosis or backlog for retry."
           },
           "reason": {
             "type": "string",
-            "description": "Required operator reason retained durably"
+            "description": "For recover_claim, retry_handoff, revoke_handoff: Required operator reason retained durably; For requeue: Required explanation retained in the task history; For review_reset: Required explanation."
           },
           "request_key": {
             "type": "string",
-            "description": "Durable request key; reuse exactly after a lost."
-          }
-        },
-        "required": [
-          "claim_id",
-          "expected_phase",
-          "status",
-          "reason",
-          "request_key",
-          "workspace"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_task_repilot",
-      "description": "Explicitly request one new pilot assessment for a proposed or backlog task.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
+            "description": "For recover_claim, retry_handoff, revoke_handoff: Durable request key; reuse exactly after a lost reply; For reconcile_review: submit: operator-chosen key; resubmitting it replays the same."
           },
           "id": {
             "type": "string",
-            "description": "Task to assess again"
-          },
-          "full": {
-            "type": "boolean",
-            "description": "Run a full assessment instead of re-checking a."
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false
-      }
-    },
-    {
-      "name": "orbit_task_requeue",
-      "description": "Return a blocked task to the backlog so its next run resumes the candidate and.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          },
-          "id": {
-            "type": "string",
-            "description": "Blocked task to requeue"
-          },
-          "reason": {
-            "type": "string",
-            "description": "Required explanation retained in the task."
+            "description": "For requeue: Blocked task to requeue; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged."
           },
           "discard_candidate": {
             "type": "boolean",
-            "description": "Discard the published or kept candidate, close."
-          }
-        },
-        "required": [
-          "id",
-          "reason"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_task_retry_handoff",
-      "description": "Retry a stopped or uncertain authorized handoff on its explicit owner workspace.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
+            "description": "For requeue: Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh."
+          },
+          "full": {
+            "type": "boolean",
+            "description": "For repilot: Run a full assessment instead of re-checking a held one."
           },
           "handoff_id": {
             "type": "string",
-            "description": "Immutable accepted handoff identity"
+            "description": "For retry_handoff: Immutable accepted handoff identity; For revoke_handoff: Accepted handoff whose authority to revoke."
           },
           "expected_candidate_commit": {
             "type": "string",
-            "description": "Accepted candidate commit the operator observed"
+            "description": "For retry_handoff, revoke_handoff: Accepted candidate commit the operator observed."
           },
           "expected_base_commit": {
             "type": "string",
-            "description": "Accepted base commit the operator observed"
+            "description": "For retry_handoff, revoke_handoff: Accepted base commit the operator observed."
           },
           "expected_latest_attempt": {
             "type": "integer",
-            "description": "Latest landing attempt number the operator."
+            "description": "For retry_handoff: Latest landing attempt number the operator observed."
           },
           "expected_latest_state": {
             "type": "string",
-            "description": "Latest state; dispatched is eligible only with."
+            "description": "For retry_handoff: Latest state; dispatched is eligible only with unresolved intent and no live owner job."
           },
-          "reason": {
+          "lineage_key": {
             "type": "string",
-            "description": "Required operator reason retained durably"
+            "description": "For review_reset: Exact lineage key from the admission refusal or review manifest."
           },
-          "request_key": {
+          "adopt_configured_budget": {
+            "type": "boolean",
+            "description": "For review_reset: Explicitly adopt current configured review limits; default retains the captured limits."
+          },
+          "reconciliation_id": {
             "type": "string",
-            "description": "Durable request key; reuse exactly after a lost."
+            "description": "For reconcile_review: status, accept_baseline: the reconciliation to act on."
+          },
+          "command": {
+            "type": "string",
+            "description": "For reconcile_review: accept_baseline: the required command whose failure reproduced at the base."
+          },
+          "remediation_commit": {
+            "type": "string",
+            "description": "For reconcile_review: accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure."
           }
         },
         "required": [
-          "workspace",
-          "handoff_id",
-          "expected_candidate_commit",
-          "expected_base_commit",
-          "expected_latest_attempt",
-          "expected_latest_state",
-          "reason",
-          "request_key"
+          "action"
         ],
         "additionalProperties": false
       },
@@ -1753,95 +1439,6 @@
         "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_task_review_reset",
-      "description": "Record an operator decision closing the open review attempt and renewing one.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          },
-          "id": {
-            "type": "string",
-            "description": "Task in the selected lineage"
-          },
-          "lineage_key": {
-            "type": "string",
-            "description": "Exact lineage key from the admission refusal or."
-          },
-          "reason": {
-            "type": "string",
-            "description": "Required explanation retained in the decision."
-          },
-          "adopt_configured_budget": {
-            "type": "boolean",
-            "description": "Explicitly adopt current configured review."
-          }
-        },
-        "required": [
-          "id",
-          "lineage_key",
-          "reason"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_task_revoke_handoff",
-      "description": "Revoke a handoff's completion authority on its owner workspace, cancelling its.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          },
-          "handoff_id": {
-            "type": "string",
-            "description": "Accepted handoff whose authority to revoke"
-          },
-          "expected_candidate_commit": {
-            "type": "string",
-            "description": "Accepted candidate commit the operator observed"
-          },
-          "expected_base_commit": {
-            "type": "string",
-            "description": "Accepted base commit the operator observed"
-          },
-          "reason": {
-            "type": "string",
-            "description": "Required operator reason retained durably"
-          },
-          "request_key": {
-            "type": "string",
-            "description": "Durable request key; reuse exactly after a lost."
-          }
-        },
-        "required": [
-          "handoff_id",
-          "expected_candidate_commit",
-          "expected_base_commit",
-          "reason",
-          "request_key",
-          "workspace"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": false
       }
     },
     {
@@ -2212,13 +1809,21 @@
       }
     },
     {
-      "name": "orbit_ui_inspect",
-      "title": "Inspect Orbit task or run",
+      "name": "orbit_ui",
+      "title": "Orbit control center",
       "description": "Open the Orbit control center or a selected task or run panel.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "open",
+              "inspect"
+            ],
+            "description": "open: the control center, or a task or run panel given workspace and id. inspect: a task or run panel (workspace, id required)."
+          },
           "workspace": {
             "type": "string",
             "minLength": 1,
@@ -2239,56 +1844,8 @@
           }
         },
         "required": [
-          "workspace",
-          "id"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false
-      },
-      "_meta": {
-        "ui": {
-          "resourceUri": "ui://orbit/control-center/v1/index.html"
-        },
-        "openai/ui": {
-          "entrypoints": [
-            {
-              "type": "thread"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "name": "orbit_ui_open",
-      "title": "Open Orbit control center",
-      "description": "Open the Orbit control center or a selected task or run panel.",
-      "inputSchema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "workspace": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Workspace selector from orbit_workspace_list."
-          },
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Public task key or run ID."
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "task",
-              "run"
-            ],
-            "default": "task"
-          }
-        },
+          "action"
+        ],
         "dependentRequired": {
           "id": [
             "workspace"
@@ -2313,334 +1870,124 @@
           "entrypoints": [
             {
               "type": "global"
+            },
+            {
+              "type": "thread"
             }
           ]
         }
       }
     },
     {
-      "name": "orbit_workflow_auto",
-      "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions.",
+      "name": "orbit_workflow",
+      "description": "Ship tasks, land one, or observe and control the workspace auto-drain.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
-            "description": "status, start, stop or resize"
+            "description": "Operation to run, with its required fields: auto (mode); ship (task_ids); land (task_id).",
+            "enum": [
+              "auto",
+              "ship",
+              "land"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "description": "For auto: status, start, stop or resize; For ship: Optional ship mode (`pr` or `local`); defaults to workspace configuration."
           },
           "for_seconds": {
             "type": "integer",
-            "description": "Required for start: window length in seconds, 1."
+            "description": "For auto: Required for start: window length in seconds, 1 through 86400 (24 hours)."
           },
           "auto_concurrency": {
             "type": "string",
-            "description": "Start only: off, shadow or enforce for this."
+            "description": "For auto: Start only: off, shadow or enforce for this local drain."
           },
           "concurrency": {
             "type": "integer",
-            "description": "Worker limit, positive u32."
+            "description": "For auto: Worker limit, positive u32."
           },
           "task": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Status only: one task ID or a list to explain."
+            "description": "For auto: Status only: one task ID or a list to explain instead of the bounded backlog."
           },
           "limit": {
             "type": "integer",
-            "description": "Status only: maximum tasks to explain."
+            "description": "For auto: Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)."
           },
           "allow_crew": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Status only: configured crews to evaluate."
+            "description": "For auto: Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any."
           },
           "id": {
             "type": "string",
-            "description": "Resize only: auto- or pull-drain run ID."
+            "description": "For auto: Resize only: auto- or pull-drain run ID."
           },
           "if_revision": {
             "type": "integer",
-            "description": "Resize only: apply only if the run's worker."
+            "description": "For auto: Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten."
           },
           "reason": {
             "type": "string",
-            "description": "Resize only: note recorded with the change"
+            "description": "For auto: Resize only: note recorded with the change."
           },
           "complete": {
             "type": "boolean",
-            "description": "Start only: explicitly authorize automatic."
+            "description": "For auto: Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review."
           },
           "review": {
             "type": "string",
-            "description": "Start only: add this review layer before."
+            "description": "For auto: Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits."
           },
           "approve_proposed": {
             "type": "boolean",
-            "description": "Start only: each pass pilots qualifying."
+            "description": "For auto: Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate."
           },
           "force": {
             "type": "boolean",
-            "description": "Stop only: also cancel each live drain and stop."
+            "description": "For auto: Stop only: also cancel each live drain and stop its in-flight work."
           },
           "claim_token": {
             "type": "string",
-            "description": "Workspace claim token when held by another."
+            "description": "For auto: Workspace claim token when held by another operator; For ship: Token for this workspace's exclusive claim, required when another operator holds one."
           },
           "workspace": {
             "type": "string",
             "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "action",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_workflow_land",
-      "description": "Land a task in review: merge its one open delivery pull request at the head.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "task_id": {
-            "type": "string",
-            "description": "The task in review whose delivery pull request."
           },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "task_id",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_workflow_run_list",
-      "description": "List durable workflow runs newest-first with optional bounded filters.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "limit": {
-            "type": "integer",
-            "description": "Maximum runs to return (default 25; values."
-          },
-          "job_id": {
-            "type": "string",
-            "description": "Optional job ID filter."
-          },
-          "state": {
-            "type": "string",
-            "description": "Optional concrete run-state filter, or."
-          },
-          "since": {
-            "type": "string",
-            "description": "Optional RFC 3339 lower bound for run creation."
-          },
-          "view": {
-            "type": "string",
-            "description": "bounded: bounded metadata, explicit workspace."
-          },
-          "offset": {
-            "type": "integer",
-            "description": "Bounded list offset"
-          },
-          "status": {
-            "type": "string",
-            "description": "Bounded run state filter"
-          },
-          "include_catalog": {
-            "type": "boolean",
-            "description": "Bounded view only: include a paginated no-input."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "additionalProperties": true,
-        "required": [
-          "workspace"
-        ]
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_workflow_run_observe",
-      "description": "Read a stored workflow run without reconciliation or mutation.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Job run ID."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": true
-      }
-    },
-    {
-      "name": "orbit_workflow_run_resume",
-      "description": "Resume a terminal resumable workflow run as a new linked run, or explicitly.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Job run ID."
-          },
-          "claim_token": {
-            "type": "string",
-            "description": "Token for this workspace's exclusive claim."
-          },
-          "source_repair": {
-            "anyOf": [
-              {
-                "type": "object"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "object"
-                }
-              }
-            ],
-            "description": "Explicit operator recovery of an eligible."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": false,
-        "openWorldHint": true
-      }
-    },
-    {
-      "name": "orbit_workflow_run_show",
-      "description": "Fetch one durable workflow run by ID.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Job run ID."
-          },
-          "view": {
-            "type": "string",
-            "description": "bounded: bounded metadata, explicit workspace."
-          },
-          "log_offset": {
-            "type": "integer",
-            "description": "Bounded log record offset"
-          },
-          "limit": {
-            "type": "integer",
-            "description": "Bounded detail page size"
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
-          }
-        },
-        "required": [
-          "id",
-          "workspace"
-        ],
-        "additionalProperties": true
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "orbit_workflow_ship",
-      "description": "Submit explicit tasks to the review-only ship workflow and return its durable.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
           "task_ids": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Explicit task IDs to ship; at least one is."
-          },
-          "mode": {
-            "type": "string",
-            "description": "Optional ship mode (`pr` or `local`); defaults."
+            "description": "For ship: Explicit task IDs to ship; at least one is required."
           },
           "base": {
             "type": "string",
-            "description": "Optional base branch override."
+            "description": "For ship: Optional base branch override."
           },
           "allowed_crews": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Optional configured crews this explicit."
+            "description": "For ship: Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation."
           },
-          "review": {
+          "task_id": {
             "type": "string",
-            "description": "Optional review layer before landing."
-          },
-          "claim_token": {
-            "type": "string",
-            "description": "Token for this workspace's exclusive claim."
-          },
-          "workspace": {
-            "type": "string",
-            "description": "Workspace selector from orbit_workspace_list."
+            "description": "For land: The task in review whose delivery pull request lands."
           }
         },
         "required": [
-          "task_ids",
+          "action",
           "workspace"
         ],
         "additionalProperties": true

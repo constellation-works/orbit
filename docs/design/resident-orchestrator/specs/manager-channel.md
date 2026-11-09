@@ -33,7 +33,7 @@ below are thin, governed wrappers that close exactly those gaps.
 
 | Manager action | Calls |
 |---|---|
-| File a mandate | `orbit.task.add` (assignment, tag `resident`), `orbit.task.artifact.put` (`resident/mandate.json`) |
+| File a mandate | `orbit.task.add` (assignment, tag `resident`), `orbit.task.artifact` action `put` (`resident/mandate.json`) |
 | Grant authority | `orbit.resident.grant` |
 | Relay a decision or direction | `orbit.resident.relay` |
 | Relay an answer to an escalation | The human answers the decision request (`orbit decision answer`, dashboard, email). If the human answered in the manager chat, the manager relays it with `request_id` and the human still confirms the decision request; the relay alone is a direction |

@@ -434,163 +434,88 @@
     "mcp_toolset": "tasks-read"
   },
   {
-    "name": "orbit.auto_task.add",
-    "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
+    "name": "orbit.auto_task",
+    "description": "List, add, update or mint recurring auto-task definitions.",
     "enabled": true,
     "active": true,
     "status": "active",
     "builtin": true,
     "parameters": [
       {
-        "name": "name",
-        "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
+        "name": "action",
+        "description": "Operation to run, with its required fields: list; add (name, schedule, template); update (name); mint (name).",
         "param_type": "string",
         "required": true
       },
-      {
-        "name": "description",
-        "description": "Human description of the recurring chore.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "schedule",
-        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`). Required.",
-        "param_type": "object",
-        "required": true
-      },
-      {
-        "name": "template",
-        "description": "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.",
-        "param_type": "object",
-        "required": true
-      },
-      {
-        "name": "dedupe",
-        "description": "Dedupe policy: `skip_if_open` (default) or `always`.",
-        "param_type": "string",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "automation"
-  },
-  {
-    "name": "orbit.auto_task.list",
-    "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
       {
         "name": "include_inactive_plugins",
-        "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
+        "description": "For list: Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "view",
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "description": "For list: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "offset",
-        "description": "Bounded list offset",
+        "description": "For list: Bounded list offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Bounded page size",
+        "description": "For list: Bounded page size.",
         "param_type": "integer",
         "required": false
-      }
-    ],
-    "mcp_toolset": "automation"
-  },
-  {
-    "name": "orbit.auto_task.mint",
-    "description": "Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "name",
-        "description": "Definition name. Required.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "workspace",
-        "description": "Explicit workspace for acknowledged mint",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "acknowledge_unconditional",
-        "description": "True acknowledges unconditional creation; requires operator authority",
-        "param_type": "boolean",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "automation"
-  },
-  {
-    "name": "orbit.auto_task.update",
-    "description": "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "waive_batch",
-        "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
-        "param_type": "object",
-        "required": false
       },
       {
         "name": "name",
-        "description": "Definition name. Required.",
+        "description": "For add: Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric); For update, mint: Definition name.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "description",
-        "description": "New description.",
+        "description": "For add: Human description of the recurring chore; For update: New description.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "schedule",
-        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
+        "description": "For add: Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`); For update: New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
         "param_type": "object",
         "required": false
       },
       {
         "name": "template",
-        "description": "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
+        "description": "For add: Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task; For update: Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "dedupe",
-        "description": "New dedupe policy: `skip_if_open` or `always`.",
+        "description": "For add: Dedupe policy: `skip_if_open` (default) or `always`; For update: New dedupe policy: `skip_if_open` or `always`.",
         "param_type": "string",
         "required": false
       },
       {
+        "name": "waive_batch",
+        "description": "For update: Explicit settled-batch waiver: { batch_id, reason }.",
+        "param_type": "object",
+        "required": false
+      },
+      {
         "name": "enabled",
-        "description": "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete.",
+        "description": "For update: Enable (`true`) or disable (`false`) the definition.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "expected_enabled",
-        "description": "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits.",
+        "description": "For update: Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches.",
         "param_type": "boolean",
         "required": false
       },
@@ -598,6 +523,12 @@
         "name": "workspace",
         "description": "Explicit workspace, required with `expected_enabled`",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "acknowledge_unconditional",
+        "description": "For mint: True acknowledges unconditional creation; requires operator authority.",
+        "param_type": "boolean",
         "required": false
       }
     ],
@@ -627,147 +558,71 @@
     "mcp_toolset": "automation"
   },
   {
-    "name": "orbit.codebase.analytics",
-    "description": "Rank repository paths across codebase risk measures. Use `orbit_codebase_show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+    "name": "orbit.codebase",
+    "description": "Codebase analytics: ranked rollups, one key's detail, or files changed together.",
     "enabled": true,
     "active": true,
     "status": "active",
     "builtin": true,
     "parameters": [
       {
+        "name": "action",
+        "description": "Operation to run, with its required fields: show (path); related (path); analytics.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "path",
+        "description": "For show: A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/; For related: A repository-relative file path, including a deleted file with landed history.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "window",
-        "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d.",
+        "description": "For show, analytics: Counted period ending now: 7d, 30d, 90d or all; For related: Landed period ending now.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "min_support",
-        "description": "Smallest denominator a ranked row needs, at least 1. Default: 15.",
+        "description": "For show, analytics: Smallest denominator a ranked row needs, at least 1; For related: Minimum shared landed tasks, at least 1.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "rollup",
-        "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+        "description": "For show, analytics: How paths are grouped: file, dir (parent directory) or crate.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "nature",
-        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "description": "For show, analytics: Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "escape",
-        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "description": "For show, analytics: Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "layer",
-        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "description": "For show, analytics: Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "detected_by",
-        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
+        "description": "For show, analytics: Count only regressions found this way, read from the regression task's tags, else its filer.",
         "param_type": "string",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "codebase"
-  },
-  {
-    "name": "orbit.codebase.related",
-    "description": "Rank files by landed co-change Jaccard with a repository-relative file path. Reports conditional rate, shared and individual task support, reservation coupling when present, undeclared landed partners and the tasks behind the counts. Excludes bulk tasks; missing local landed objects are reported as unavailable. Read-only; never fetches Git objects.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "path",
-        "description": "A repository-relative file path, including a deleted file with landed history.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "window",
-        "description": "Landed period ending now. Default: 30d.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "min_support",
-        "description": "Minimum shared landed tasks, at least 1. Default: 15.",
-        "param_type": "integer",
         "required": false
       },
       {
         "name": "top",
-        "description": "Maximum partners, from 1 to 100. Default: 10.",
+        "description": "For related: Maximum partners, from 1 to 100.",
         "param_type": "integer",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "codebase"
-  },
-  {
-    "name": "orbit.codebase.show",
-    "description": "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "path",
-        "description": "A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/. A trailing slash is optional.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "window",
-        "description": "Counted period ending now: 7d, 30d, 90d or all. Default: 90d.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "min_support",
-        "description": "Smallest denominator a ranked row needs, at least 1. Default: 15.",
-        "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "rollup",
-        "description": "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "nature",
-        "description": "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "escape",
-        "description": "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "layer",
-        "description": "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "detected_by",
-        "description": "Count only regressions found this way, read from the regression task's tags, else its filer.",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -809,6 +664,65 @@
     "mcp_toolset": "exec"
   },
   {
+    "name": "orbit.decision",
+    "description": "List, show or raise human decision requests.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "action",
+        "description": "Operation to run, with its required fields: list; show (id); raise (task_id, question, options).",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "gate",
+        "description": "For list: Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "task_id",
+        "description": "For list: Only requests on this task; For raise: The human-crew task the decision is for.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "topic",
+        "description": "For list: Only requests carrying exactly this structured topic; For raise: Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "include_closed",
+        "description": "For list: Include answered, superseded and expired requests beside the open ones.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "id",
+        "description": "For show: The decision request id, as action `list` prints it.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "question",
+        "description": "For raise: One or two plain-language sentences naming the decision needed, readable without opening the code.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "options",
+        "description": "For raise: Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
+        "param_type": "object_array",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "decisions"
+  },
+  {
     "name": "orbit.decision.digest",
     "description": "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
     "enabled": true,
@@ -826,93 +740,6 @@
     "mcp_toolset": "decision-channel"
   },
   {
-    "name": "orbit.decision.list",
-    "description": "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate, task_id or an exact topic. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "gate",
-        "description": "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "task_id",
-        "description": "Only requests on this task.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "topic",
-        "description": "Only requests carrying exactly this structured topic.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "include_closed",
-        "description": "Include answered, superseded and expired requests beside the open ones.",
-        "param_type": "boolean",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "decisions"
-  },
-  {
-    "name": "orbit.decision.raise",
-    "description": "Raise a multiple-choice request on a human-crew task when an operator decision is needed to proceed. Answering and limits: installed Orbit skill `references/tool-surface.md#raising-a-decision`.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "task_id",
-        "description": "The human-crew task the decision is for. The task must be assigned to a human crew and not be done, archived or rejected.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "question",
-        "description": "One or two plain-language sentences naming the decision needed, readable without opening the code.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "options",
-        "description": "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
-        "param_type": "object_array",
-        "required": true
-      },
-      {
-        "name": "topic",
-        "description": "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
-        "param_type": "string",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "decisions"
-  },
-  {
-    "name": "orbit.decision.show",
-    "description": "Show one human decision request: its task, gate, allowed answers with their consequences, the binding it was raised against, its expiry, its effective state, and its resolution when answered. Read-only.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "id",
-        "description": "The decision request id, as `orbit.decision.list` prints it.",
-        "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "decisions"
-  },
-  {
     "name": "orbit.decision.submit",
     "description": "Submit a human's answer to one open decision request through a registered decision channel. Callable only by the plugin the channel is bound to, through its callback session, or by the operator testing the channel, never by an agent session. Core verifies the channel, the request's binding, the answer and the single-use token, and checks a forwarded raw message's DKIM signature itself. A refusal returns its error code and applies nothing. The refusal codes, DKIM rules and retry behaviour are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
     "enabled": true,
@@ -922,7 +749,7 @@
     "parameters": [
       {
         "name": "id",
-        "description": "The decision request id, as `orbit.decision.list` prints it.",
+        "description": "The decision request id, as action `list` prints it.",
         "param_type": "string",
         "required": true
       },
@@ -1616,88 +1443,65 @@
     "mcp_toolset": "experiments"
   },
   {
-    "name": "orbit.friction.add",
-    "description": "Append a friction report",
+    "name": "orbit.friction",
+    "description": "Record a friction, or update one.",
     "enabled": true,
     "active": true,
     "status": "active",
     "builtin": true,
     "parameters": [
       {
-        "name": "body",
-        "description": "Markdown body describing what happened and why it caused friction",
+        "name": "action",
+        "description": "Operation to run, with its required fields: add (body); update (id).",
         "param_type": "string",
         "required": true
       },
       {
+        "name": "body",
+        "description": "For add: Markdown body describing what happened and why it caused friction; For update: Optional replacement markdown body.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "title",
-        "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
+        "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "tags",
-        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other",
+        "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; For update: Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "during_task",
-        "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
+        "description": "For add: Optional task ID being worked on when friction occurred; an ID that names no task is refused.",
         "param_type": "string",
         "required": false
-      }
-    ],
-    "mcp_toolset": "tasks-write"
-  },
-  {
-    "name": "orbit.friction.update",
-    "description": "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
+      },
       {
         "name": "id",
-        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
+        "description": "For update: Friction record ID, e.g. FYYYY-MM-NNN.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "status",
-        "description": "Optional status: open, triaged, or resolved",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "tags",
-        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling",
-        "param_type": "string_list",
-        "required": false
-      },
-      {
-        "name": "body",
-        "description": "Optional replacement markdown body",
+        "description": "For update: Optional status: open, triaged, or resolved.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "rehome_to",
-        "description": "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
+        "description": "For update: Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "move",
-        "description": "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
+        "description": "For update: With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true.",
         "param_type": "boolean",
-        "required": false
-      },
-      {
-        "name": "title",
-        "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
-        "param_type": "string",
         "required": false
       }
     ],
@@ -2488,6 +2292,95 @@
     "mcp_toolset": "automation"
   },
   {
+    "name": "orbit.run",
+    "description": "List, show, observe or resume workflow runs.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "action",
+        "description": "Operation to run, with its required fields: list; show (id); observe (id); resume (id).",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "limit",
+        "description": "For list: Maximum runs to return (default 25; values above 200 are rejected); For show: Bounded detail page size.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "job_id",
+        "description": "For list: Optional job ID filter.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "state",
+        "description": "For list: Optional concrete run-state filter, or `terminal`.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "since",
+        "description": "For list: Optional RFC 3339 lower bound for run creation time.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "view",
+        "description": "For list, show: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "offset",
+        "description": "For list: Bounded list offset.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "status",
+        "description": "For list: Bounded run state filter.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "include_catalog",
+        "description": "For list: Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "id",
+        "description": "For show, observe, resume: Job run ID.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "log_offset",
+        "description": "For show: Bounded log record offset.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "claim_token",
+        "description": "For resume: Token for this workspace's exclusive claim, required when another operator holds one.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "source_repair",
+        "description": "For resume: Explicit operator recovery of an eligible stopped owner-local publication.",
+        "param_type": "object",
+        "required": false
+      }
+    ],
+    "mcp_toolset": "runs"
+  },
+  {
     "name": "orbit.search",
     "description": "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
     "enabled": true,
@@ -2690,62 +2583,45 @@
     "mcp_toolset": "tasks-write"
   },
   {
-    "name": "orbit.task.artifact.get",
-    "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
+    "name": "orbit.task.artifact",
+    "description": "Read a task artifact, or attach a local file as one.",
     "enabled": true,
     "active": true,
     "status": "active",
     "builtin": true,
     "parameters": [
       {
+        "name": "action",
+        "description": "Operation to run, with its required fields: get (id, path); put (id, source_path).",
+        "param_type": "string",
+        "required": true
+      },
+      {
         "name": "id",
-        "description": "Globally unique task ID that owns the artifact.",
+        "description": "For get: Globally unique task ID that owns the artifact; For put: task ID.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "path",
-        "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
+        "description": "For get: Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`; For put: Artifact path relative to the task artifacts directory.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "workspace",
         "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
         "param_type": "string",
         "required": false
-      }
-    ],
-    "mcp_toolset": "tasks-read"
-  },
-  {
-    "name": "orbit.task.artifact.put",
-    "description": "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. Artifact paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Name ordinary supporting evidence with a nonreserved name (for example `examination-checks.json`). See the assigned task's evidence template for automation coverage and review report contracts.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "id",
-        "description": "task ID",
-        "param_type": "string",
-        "required": true
       },
       {
         "name": "source_path",
-        "description": "Source file to store as a task artifact. Resolved against the caller cwd, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "path",
-        "description": "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`).",
+        "description": "For put: Source file to store as a task artifact.",
         "param_type": "string",
         "required": false
       }
     ],
-    "mcp_toolset": "tasks-write"
+    "mcp_toolset": "tasks-read"
   },
   {
     "name": "orbit.task.block_triage",
@@ -3086,72 +2962,25 @@
     "mcp_toolset": "local"
   },
   {
-    "name": "orbit.task.reconcile_review",
-    "description": "Reconcile the already-merged head of a recovered follower delivery whose pull request merged at a head other than the handed-off candidate: run required validation and an independent read-only review of exactly that head and record owner-held evidence the desktop review can complete from. `inspect` shows eligibility, `submit` admits a run (resubmitting the same request_key replays it), `status` reports outcomes and next steps, `accept_baseline` records an operator disposition of a failure the base already had. Requires trusted operator authority; unavailable to managed runs.",
+    "name": "orbit.task.recover",
+    "description": "Operator recovery for stuck claims, blocked tasks, handoffs and reviews.",
     "enabled": true,
     "active": true,
     "status": "active",
     "builtin": true,
     "parameters": [
-      {
-        "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
-        "param_type": "string",
-        "required": false
-      },
       {
         "name": "action",
-        "description": "inspect, submit, status, or accept_baseline",
+        "description": "Operation to run, with its required fields: recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
         "param_type": "string",
         "required": true
       },
       {
-        "name": "id",
-        "description": "Task in review whose foreign delivery merged",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "request_key",
-        "description": "submit: operator-chosen key; resubmitting it replays the same reconciliation",
+        "name": "mode",
+        "description": "For reconcile_review: inspect, submit, status, or accept_baseline.",
         "param_type": "string",
         "required": false
       },
-      {
-        "name": "reconciliation_id",
-        "description": "status, accept_baseline: the reconciliation to act on",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "command",
-        "description": "accept_baseline: the required command whose failure reproduced at the base",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "remediation_commit",
-        "description": "accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "reason",
-        "description": "accept_baseline: why the baseline failure is accepted",
-        "param_type": "string",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.recover_claim",
-    "description": "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
       {
         "name": "workspace",
         "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
@@ -3160,244 +2989,111 @@
       },
       {
         "name": "claim_id",
-        "description": "Live claim to recover",
+        "description": "For recover_claim: Live claim to recover.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "expected_phase",
-        "description": "Claim phase you observed; a claim that moved on is refused",
+        "description": "For recover_claim: Claim phase you observed; a claim that moved on is refused.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "status",
-        "description": "Target status: blocked for diagnosis or backlog for retry",
+        "description": "For recover_claim: Target status: blocked for diagnosis or backlog for retry.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "reason",
-        "description": "Required operator reason retained durably",
+        "description": "For recover_claim, retry_handoff, revoke_handoff: Required operator reason retained durably; For requeue: Required explanation retained in the task history; For review_reset: Required explanation retained in the decision history; For reconcile_review: accept_baseline: why the baseline failure is accepted.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "request_key",
-        "description": "Durable request key; reuse exactly after a lost reply",
-        "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.repilot",
-    "description": "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "description": "For recover_claim, retry_handoff, revoke_handoff: Durable request key; reuse exactly after a lost reply; For reconcile_review: submit: operator-chosen key; resubmitting it replays the same reconciliation.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "id",
-        "description": "Task to assess again",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "full",
-        "description": "Run a full assessment instead of re-checking a held one",
-        "param_type": "boolean",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.requeue",
-    "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the latest candidate a claim of the task kept. A later claim that ended without a candidate does not replace that one. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "description": "For requeue: Blocked task to requeue; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "id",
-        "description": "Blocked task to requeue",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "reason",
-        "description": "Required explanation retained in the task history",
-        "param_type": "string",
-        "required": true
       },
       {
         "name": "discard_candidate",
-        "description": "Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh",
+        "description": "For requeue: Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh.",
         "param_type": "boolean",
         "required": false
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.retry_handoff",
-    "description": "Retry a stopped or uncertain authorized handoff on its explicit owner workspace. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base and latest attempt/state, supply a reason and a durable request_key. Replaying identical input returns the original landing run. The normal landing job reconciles external intent and rechecks all merge gates.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
+      },
       {
-        "name": "workspace",
-        "description": "Explicit owner logical workspace ID or absolute checkout path",
-        "param_type": "string",
-        "required": true
+        "name": "full",
+        "description": "For repilot: Run a full assessment instead of re-checking a held one.",
+        "param_type": "boolean",
+        "required": false
       },
       {
         "name": "handoff_id",
-        "description": "Immutable accepted handoff identity",
+        "description": "For retry_handoff: Immutable accepted handoff identity; For revoke_handoff: Accepted handoff whose authority to revoke.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "expected_candidate_commit",
-        "description": "Accepted candidate commit the operator observed",
+        "description": "For retry_handoff, revoke_handoff: Accepted candidate commit the operator observed.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "expected_base_commit",
-        "description": "Accepted base commit the operator observed",
+        "description": "For retry_handoff, revoke_handoff: Accepted base commit the operator observed.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "expected_latest_attempt",
-        "description": "Latest landing attempt number the operator observed",
+        "description": "For retry_handoff: Latest landing attempt number the operator observed.",
         "param_type": "integer",
-        "required": true
+        "required": false
       },
       {
         "name": "expected_latest_state",
-        "description": "Latest state; dispatched is eligible only with unresolved intent and no live owner job",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "reason",
-        "description": "Required operator reason retained durably",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "request_key",
-        "description": "Durable request key; reuse exactly after a lost reply",
-        "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.review_reset",
-    "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "description": "For retry_handoff: Latest state; dispatched is eligible only with unresolved intent and no live owner job.",
         "param_type": "string",
         "required": false
-      },
-      {
-        "name": "id",
-        "description": "Task in the selected lineage",
-        "param_type": "string",
-        "required": true
       },
       {
         "name": "lineage_key",
-        "description": "Exact lineage key from the admission refusal or review manifest",
+        "description": "For review_reset: Exact lineage key from the admission refusal or review manifest.",
         "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "reason",
-        "description": "Required explanation retained in the decision history",
-        "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "adopt_configured_budget",
-        "description": "Explicitly adopt current configured review limits; default retains the captured limits",
+        "description": "For review_reset: Explicitly adopt current configured review limits; default retains the captured limits.",
         "param_type": "boolean",
         "required": false
-      }
-    ],
-    "mcp_toolset": "task-repair"
-  },
-  {
-    "name": "orbit.task.revoke_handoff",
-    "description": "Revoke a handoff's completion authority on its owner workspace, cancelling its pending landing request while the task stays in review. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base, supply a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original revocation. Refused while an external merge intent is unresolved.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
+      },
       {
-        "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "name": "reconciliation_id",
+        "description": "For reconcile_review: status, accept_baseline: the reconciliation to act on.",
         "param_type": "string",
         "required": false
       },
       {
-        "name": "handoff_id",
-        "description": "Accepted handoff whose authority to revoke",
+        "name": "command",
+        "description": "For reconcile_review: accept_baseline: the required command whose failure reproduced at the base.",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
-        "name": "expected_candidate_commit",
-        "description": "Accepted candidate commit the operator observed",
+        "name": "remediation_commit",
+        "description": "For reconcile_review: accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure.",
         "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "expected_base_commit",
-        "description": "Accepted base commit the operator observed",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "reason",
-        "description": "Required operator reason retained durably",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "request_key",
-        "description": "Durable request key; reuse exactly after a lost reply",
-        "param_type": "string",
-        "required": true
+        "required": false
       }
     ],
     "mcp_toolset": "task-repair"
@@ -3707,8 +3403,8 @@
     "mcp_toolset": "tasks-write"
   },
   {
-    "name": "orbit.workflow.auto",
-    "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers (or, with force, stop those workers too), or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
+    "name": "orbit.workflow",
+    "description": "Ship tasks, land one, or observe and control the workspace auto-drain.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3716,91 +3412,97 @@
     "parameters": [
       {
         "name": "action",
-        "description": "status, start, stop or resize",
+        "description": "Operation to run, with its required fields: auto (mode); ship (task_ids); land (task_id).",
         "param_type": "string",
         "required": true
       },
       {
+        "name": "mode",
+        "description": "For auto: status, start, stop or resize; For ship: Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "name": "for_seconds",
-        "description": "Required for start: window length in seconds, 1 through 86400 (24 hours)",
+        "description": "For auto: Required for start: window length in seconds, 1 through 86400 (24 hours).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "auto_concurrency",
-        "description": "Start only: off, shadow or enforce for this local drain. Omitted captures machine.auto_concurrency.mode. Retained on resume/restart; changes no configuration. Unsupported for pull drains",
+        "description": "For auto: Start only: off, shadow or enforce for this local drain.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "concurrency",
-        "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own",
+        "description": "For auto: Worker limit, positive u32.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "task",
-        "description": "Status only: one task ID or a list to explain instead of the bounded backlog",
+        "description": "For auto: Status only: one task ID or a list to explain instead of the bounded backlog.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)",
+        "description": "For auto: Status only: maximum tasks to explain, including an explicit selection (1-500; default 50).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "allow_crew",
-        "description": "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any",
+        "description": "For auto: Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "id",
-        "description": "Resize only: auto- or pull-drain run ID. Omitted targets the workspace's one live drain; refused when none or several are live",
+        "description": "For auto: Resize only: auto- or pull-drain run ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "if_revision",
-        "description": "Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten",
+        "description": "For auto: Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "reason",
-        "description": "Resize only: note recorded with the change",
+        "description": "For auto: Resize only: note recorded with the change.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "complete",
-        "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
+        "description": "For auto: Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "review",
-        "description": "Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+        "description": "For auto: Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it; For ship: Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "approve_proposed",
-        "description": "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false",
+        "description": "For auto: Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "force",
-        "description": "Stop only: also cancel each live drain and stop its in-flight work. A pull drain's claimed leaves are stopped and their tasks return to the owner's backlog with a comment; a local drain's task runs are cancelled. A leaf that cannot be confirmed stopped keeps its claim and fails the call. Default false stops admissions only",
+        "description": "For auto: Stop only: also cancel each live drain and stop its in-flight work.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "claim_token",
-        "description": "Workspace claim token when held by another operator",
+        "description": "For auto: Workspace claim token when held by another operator; For ship: Token for this workspace's exclusive claim, required when another operator holds one.",
         "param_type": "string",
         "required": false
       },
@@ -3808,209 +3510,29 @@
         "name": "workspace",
         "description": "Exact selector returned by workspace discovery. No implicit destination.",
         "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "dispatch"
-  },
-  {
-    "name": "orbit.workflow.land",
-    "description": "Land a task in review: merge its one open delivery pull request at the head whose required checks were just read, then move the task to done. The forge's branch protection decides: nothing bypasses it, and any refusal answers `task_landing_refused` with the reason and changes nothing. A pull request that already merged settles without another merge, so a call whose reply was lost may be repeated. Requires operator capability or a resident cycle holding the `merge` right.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "task_id",
-        "description": "The task in review whose delivery pull request lands.",
-        "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "dispatch"
-  },
-  {
-    "name": "orbit.workflow.run.list",
-    "description": "List durable workflow runs newest-first with optional bounded filters. Requires operator capability; agent sessions are refused.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "limit",
-        "description": "Maximum runs to return (default 25; values above 200 are rejected).",
-        "param_type": "integer",
         "required": false
       },
-      {
-        "name": "job_id",
-        "description": "Optional job ID filter.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "state",
-        "description": "Optional concrete run-state filter, or `terminal`.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "since",
-        "description": "Optional RFC 3339 lower bound for run creation time.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "view",
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "offset",
-        "description": "Bounded list offset",
-        "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "status",
-        "description": "Bounded run state filter",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "include_catalog",
-        "description": "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
-        "param_type": "boolean",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "runs"
-  },
-  {
-    "name": "orbit.workflow.run.observe",
-    "description": "Read a stored workflow run without reconciliation or mutation. Requires operator capability; agent sessions are refused.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "id",
-        "description": "Job run ID.",
-        "param_type": "string",
-        "required": true
-      }
-    ],
-    "mcp_toolset": "runs"
-  },
-  {
-    "name": "orbit.workflow.run.resume",
-    "description": "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful or stopped inline publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "id",
-        "description": "Job run ID.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "claim_token",
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "source_repair",
-        "description": "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review, policy_digest, immutable reservations and reservation_digests. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful or kept inline publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Select the original publishing run explicitly, including after empty failed successors; inspection authenticates its stopped lineage, unchanged specification and exact PR head. Supply the exact binding object and author a valid execution plan before submission; lifecycle refusal creates no reservation. To recover an existing reservation with no admitted run after correcting only an empty or placeholder plan, use {action: reconcile, task_id, request_key, reservation_digest, binding, diagnosis} with the original key, its inspected reservation_digest, fresh binding and otherwise unchanged evidence/policy. This appends fresh operator authorization while preserving the original reservation and charge; identical replay returns the one admitted run. Other meaning, identity, actor, policy or lease changes refuse reconciliation. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR and preserves historical completion deadlines; grants no completion, merge or auto-fix authority.",
-        "param_type": "object",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "dispatch"
-  },
-  {
-    "name": "orbit.workflow.run.show",
-    "description": "Fetch one durable workflow run by ID. The full response puts agent invocation outcome, failure reason, and any parsed answer under top-level `agent_invocation`; with `view: bounded`, find them at `run.agent_invocation`. The answer contains summary, findings, next steps, and extra result fields; stdout blob references retain the complete provider output. Requires operator capability; agent sessions are refused.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
-      {
-        "name": "id",
-        "description": "Job run ID.",
-        "param_type": "string",
-        "required": true
-      },
-      {
-        "name": "view",
-        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "log_offset",
-        "description": "Bounded log record offset",
-        "param_type": "integer",
-        "required": false
-      },
-      {
-        "name": "limit",
-        "description": "Bounded detail page size",
-        "param_type": "integer",
-        "required": false
-      }
-    ],
-    "mcp_toolset": "runs"
-  },
-  {
-    "name": "orbit.workflow.ship",
-    "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
-    "enabled": true,
-    "active": true,
-    "status": "active",
-    "builtin": true,
-    "parameters": [
       {
         "name": "task_ids",
-        "description": "Explicit task IDs to ship; at least one is required.",
+        "description": "For ship: Explicit task IDs to ship; at least one is required.",
         "param_type": "string_list",
-        "required": true
-      },
-      {
-        "name": "mode",
-        "description": "Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
-        "param_type": "string",
         "required": false
       },
       {
         "name": "base",
-        "description": "Optional base branch override.",
+        "description": "For ship: Optional base branch override.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "allowed_crews",
-        "description": "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
+        "description": "For ship: Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
         "param_type": "string_list",
         "required": false
       },
       {
-        "name": "review",
-        "description": "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "name": "claim_token",
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
+        "name": "task_id",
+        "description": "For land: The task in review whose delivery pull request lands.",
         "param_type": "string",
         "required": false
       }

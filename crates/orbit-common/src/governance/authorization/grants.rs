@@ -1,7 +1,7 @@
 //! Reviewed grant policy beside the governed-operation catalog. Additions and
 //! repeat-safety changes require the same authorization review as catalog rows.
 
-use orbit_types::tool::McpCapability;
+use orbit_types::tool::{McpCapability, tool_policy_operations};
 
 use super::catalog;
 
@@ -58,12 +58,42 @@ const AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS: &[(&str, ToolGrantClassificati
 
 /// Classify a tool grant, defaulting unclassified operations to mutating.
 ///
+/// A grant names a tool, a whole family (`orbit.workflow`) or one family
+/// action (`orbit.workflow:ship`); the rows above key on the operations those
+/// reach. A grant that reaches several operations takes the strictest of
+/// them: it is operator-only if any operation is, and mutating if any is.
+///
 /// The governed catalog always wins over grantability: a row without Agent
 /// capability cannot be granted, even if it is new or classified as grantable.
 /// Callers must separately validate exact canonical registry membership,
 /// agent-facing placement and enablement. A classification confers no authority
 /// and does not change an activity's deny policy or its capability chokepoint.
 pub fn classify_agent_tool_grant(tool_name: &str) -> ToolGrantClassification {
+    let operations = tool_policy_operations(tool_name);
+    let classifications = operations
+        .iter()
+        .map(|operation| classify_operation_grant(operation));
+    ToolGrantClassification {
+        grantability: if classifications
+            .clone()
+            .any(|entry| entry.grantability == ToolGrantability::AlwaysOperatorOnly)
+        {
+            ToolGrantability::AlwaysOperatorOnly
+        } else {
+            ToolGrantability::Grantable
+        },
+        effect: if classifications
+            .clone()
+            .all(|entry| entry.effect == GrantedToolEffect::ReadRepeatSafe)
+        {
+            GrantedToolEffect::ReadRepeatSafe
+        } else {
+            GrantedToolEffect::Mutating
+        },
+    }
+}
+
+fn classify_operation_grant(tool_name: &str) -> ToolGrantClassification {
     let mut classification = AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS
         .iter()
         .find_map(|(name, classification)| (*name == tool_name).then_some(*classification))

@@ -62,7 +62,7 @@ template:
     ranking seasons are recorded, every decision is in `season-0`. Fetch the
     previous completed audit's recovery-fault-audit.json: find done chores
     with `orbit.task.list` (tag auto-task:recovery-fault-audit), exclude
-    this task, and read the newest artifact with `orbit.task.artifact.get`.
+    this task, and read the newest artifact with `orbit.task.artifact` action `get`.
     Missing prior evidence makes this a baseline; record why. Carry its
     per-season judged and disagreed counts and its judged decision ids
     forward, add this sample and report each season's cumulative
@@ -89,7 +89,7 @@ template:
     evidence, `fault_judged_by`, your fault and reason, agree or disagree),
     per-season cumulative counts, rates and suspended flags, the prior
     artifact reference, all judged decision ids and any filed or matched
-    task. Attach it with `orbit.task.artifact.put` (id this chore,
+    task. Attach it with `orbit.task.artifact` action `put` (id this chore,
     source_path the scratch file, path recovery-fault-audit.json). The
     execution summary reports the sample size, per-season rates, suspended
     seasons and gaps. A short sample or a baseline still persists the
@@ -107,8 +107,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

@@ -29,7 +29,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
             "--required-tools",
             "github.run.list",
             "--granted-tools",
-            "orbit.auto_task.update",
+            "orbit.auto_task:update",
             "--json",
         ],
         "create a granted task",
@@ -43,7 +43,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         let output = workspace.run(&args, "list granted task");
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("github.run.list"), "{text}");
-        assert!(text.contains("orbit.auto_task.update"), "{text}");
+        assert!(text.contains("orbit.auto_task:update"), "{text}");
         assert!(text.contains("REQUIRED TOOLS"), "{text}");
         assert!(text.contains("GRANTED TOOLS"), "{text}");
     }
@@ -51,7 +51,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
     let text = String::from_utf8_lossy(&shown.stdout);
     assert!(text.contains("Required Tools: github.run.list"), "{text}");
     assert!(
-        text.contains("Granted Tools: orbit.auto_task.update"),
+        text.contains("Granted Tools: orbit.auto_task:update"),
         "{text}"
     );
     let history = workspace.run(
@@ -70,7 +70,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         text.contains(&grant["at"].as_str().unwrap()[..19]),
         "{text}"
     );
-    assert!(text.contains("orbit.auto_task.update"), "{text}");
+    assert!(text.contains("orbit.auto_task:update"), "{text}");
 
     let mut denied = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -82,14 +82,14 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         .env("USERPROFILE", &workspace.home)
         .env("ORBIT_TASK_ACTOR_KIND", "agent")
         .env("ORBIT_ACTIVITY_TOOL_POLICY", "deny")
-        .env("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.auto_task.update")
+        .env("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.auto_task:update")
         .env("ORBIT_ACTIVITY_NAME", "agent_implement")
         .args([
             "tool",
             "run",
-            "orbit.auto_task.update",
+            "orbit.auto_task",
             "--input",
-            r#"{"name":"never-applied"}"#,
+            r#"{"action":"update","name":"never-applied"}"#,
         ])
         .output()
         .unwrap();
@@ -118,7 +118,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
             "audit",
             "stats",
             "--tool",
-            "orbit.auto_task.update",
+            "orbit.auto_task:update",
             "--json",
         ],
         "count denied call once",

@@ -209,7 +209,7 @@ Consolidation still emits proposal text only; a human merge is the
 curation step.
 
 `auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
-set it, and neither can the precedent actor. When `orbit.decision.raise`
+set it, and neither can the precedent actor. When `orbit.decision` action `raise`
 names a `file/rule` topic, or a rule id that appears in exactly one decision
 file, and that rule is one such current rule whose answer is one of the
 request's options, Orbit answers immediately with that option. Matching a topic

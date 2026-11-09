@@ -28,8 +28,8 @@ impl OrbitRuntime {
                 "the run published its pull request through its own pipeline steps and its \
                  failure handoff kept that pull request, so there is no failure-handoff \
                  publication to repair. Inspect the original publishing run with \
-                 orbit.workflow.run.resume source_repair for explicitly authorized source work, \
-                 or requeue the blocked task (`orbit task requeue`, MCP `orbit.task.requeue`) \
+                 orbit.run action resume with source_repair for explicitly authorized source work, \
+                 or requeue the blocked task (`orbit task requeue`, MCP `orbit.task.recover` action `requeue`) \
                  once every required check has passed on its recorded head",
             ));
         }

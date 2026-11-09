@@ -217,8 +217,9 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
     assert_eq!(listed["requests"][0]["id"], request_id);
     assert_eq!(listed["requests"][0]["state"], "open");
 
-    let tool_input = serde_json::json!({"model": "codex", "task_id": task_id}).to_string();
-    let tool = fixture.json(&["tool", "run", "orbit.decision.list", "--input", &tool_input]);
+    let tool_input =
+        serde_json::json!({"action": "list", "model": "codex", "task_id": task_id}).to_string();
+    let tool = fixture.json(&["tool", "run", "orbit.decision", "--input", &tool_input]);
     assert_eq!(tool["requests"][0]["id"], request_id, "{tool}");
 
     let shown = fixture.json(&["decision", "show", &request_id, "--json"]);
@@ -341,6 +342,7 @@ fn decision_raise_cli_raises_lists_and_completes_on_answer() {
     };
 
     let input = serde_json::json!({
+        "action": "raise",
         "model": "codex",
         "task_id": task_id,
         "question": "Which price do we ship?",
@@ -351,7 +353,7 @@ fn decision_raise_cli_raises_lists_and_completes_on_answer() {
         ],
     })
     .to_string();
-    let raised = fixture.json(&["tool", "run", "orbit.decision.raise", "--input", &input]);
+    let raised = fixture.json(&["tool", "run", "orbit.decision", "--input", &input]);
     assert_eq!(raised["gate"], "agent_request", "{raised}");
     assert_eq!(raised["answers"][0]["label"], "Raise 10%", "{raised}");
     assert_eq!(raised["recommended"], "1", "{raised}");
@@ -1076,7 +1078,8 @@ fn attention_preserves_review_decisions_bound_to_nonempty_requirements() {
         "attention must check effective review decisions against the full requirements, as decision list does: {attention}"
     );
     assert_eq!(attention["items"][0]["refs"]["decision_id"], request_id);
-    assert_eq!(attention["items"][0]["next"]["tool"], "orbit.decision.show");
+    assert_eq!(attention["items"][0]["next"]["tool"], "orbit.decision");
+    assert_eq!(attention["items"][0]["next"]["input"]["action"], "show");
 }
 
 /// An unidentified CLI caller (no TTY, no agent declaration, no override) is

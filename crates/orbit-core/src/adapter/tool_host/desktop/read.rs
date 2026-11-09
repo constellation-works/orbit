@@ -343,8 +343,8 @@ fn bound_agent_answer(invocation: &mut Value, input: &Value, id: &str) -> Result
     invocation.insert(
         "answer_retrieval".into(),
         json!({
-            "tool": "orbit.workflow.run.show",
-            "arguments": {"workspace": input["workspace"], "id": id},
+            "tool": "orbit.run",
+            "arguments": {"action": "show", "workspace": input["workspace"], "id": id},
         }),
     );
     Ok(())

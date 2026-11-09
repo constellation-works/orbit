@@ -104,6 +104,24 @@ passes its own `orchestrator`. This is attribution only: it grants no
 authority and does not choose the crew that executes a task. The same flag
 works with `--mode remote <ssh-host>` and `--mode federated`.
 
+## Tool families
+
+Related operations share one tool, and its required `action` field picks the
+operation: `orbit_task_recover`, `orbit_run`, `orbit_workflow`,
+`orbit_auto_task`, `orbit_decision`, `orbit_codebase`, `orbit_friction`,
+`orbit_task_artifact` and `orbit_ui`. The `action` description lists each
+action's required fields, and a call missing one is refused with an
+`invalid_input` error naming them. `orbit_workflow` action `auto` and
+`orbit_task_recover` action `reconcile_review` take their own sub-command as
+`mode`. The CLI calls a family the same way:
+
+```bash
+orbit tool run orbit.run --input '{"action":"show","id":"<run-id>"}'
+```
+
+Grants, `required_tools` and activity allow and deny lists name a whole
+family (`orbit.run`) or one action as `family:action` (`orbit.run:show`).
+
 ## Toolsets
 
 Every tool schema a server lists costs context in each agent session, so
@@ -111,17 +129,21 @@ every tool belongs to exactly one toolset, and a server lists only the
 toolsets it enables. `orbit tool show <tool>` names a tool's toolset, and
 `orbit tool list --json` reports it as `mcp_toolset`.
 
+Toolsets are assigned per action. A tool family such as `orbit.run` is
+listed when any of its actions is in an enabled toolset, and a call to an
+action whose toolset is off is refused with `toolset_not_enabled`.
+
 | Toolset | Tools |
 |---|---|
 | `core` (always on) | Workspace discovery: `orbit.workspace.list` |
-| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `orbit.task.artifact.get` and `orbit.attention` |
-| `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact.put`, `orbit.friction.add` and `orbit.friction.update` |
-| `task-repair` | The delivery repair verbs: `orbit.task.block_triage`, `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot` |
-| `decisions` | `orbit.decision.list`, `show` and `raise` |
-| `runs` | `orbit.workflow.run.list`, `show` and `observe` |
-| `dispatch` | `orbit.workflow.ship`, `orbit.workflow.land`, `orbit.workflow.auto`, `orbit.workflow.run.resume` and `orbit.pipeline.invoke` |
-| `automation` | `orbit.auto_task.*`, `orbit.routine.control` and `orbit.automation.explain` |
-| `codebase` | `orbit.codebase.*` |
+| `tasks-read` | `orbit.task.show`, `list`, `eligible`, `orbit.task.artifact` action `get` and `orbit.attention` |
+| `tasks-write` | `orbit.task.add`, `update`, `orbit.task.artifact` action `put`, `orbit.friction` action `add` and `orbit.friction` action `update` |
+| `task-repair` | The delivery repair verbs: `orbit.task.block_triage` and every `orbit.task.recover` action (`requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `reconcile_review` and `repilot`) |
+| `decisions` | `orbit.decision` action `list`, `show` and `raise` |
+| `runs` | `orbit.run` action `list`, `show` and `observe` |
+| `dispatch` | `orbit.workflow` action `ship`, `orbit.workflow` action `land`, `orbit.workflow` action `auto`, `orbit.run` action `resume` and `orbit.pipeline.invoke` |
+| `automation` | `orbit.auto_task`, `orbit.routine.control` and `orbit.automation.explain` |
+| `codebase` | `orbit.codebase` |
 | `search` | `orbit.search` |
 | `ui` | None. `orbit.visual.capture` was removed; the name is kept so selections that list `ui` still load |
 | `exec` | `orbit.command.exec` |
@@ -219,14 +241,14 @@ Use the existing guides for the other public families:
 
 | Tools | Guide |
 |---|---|
-| `orbit.task.*`, `orbit.search`, `orbit.friction.*` | [Tasks and lifecycle](../../concepts/tasks/) and [your first task](../../getting-started/first-task/). |
+| `orbit.task.*`, `orbit.search`, `orbit.friction` | [Tasks and lifecycle](../../concepts/tasks/) and [your first task](../../getting-started/first-task/). |
 | `orbit.agents.*` | [Agents and crews](../../concepts/agents/). |
-| `orbit.workflow.ship`, `orbit.workflow.land`, `orbit.workflow.auto`, `orbit.workflow.run.*` | [Delivery workflows](../../getting-started/workflows/) and [delivery windows](../continuous-delivery/). |
+| `orbit.workflow` action `ship`, `orbit.workflow` action `land`, `orbit.workflow` action `auto`, `orbit.run` | [Delivery workflows](../../getting-started/workflows/) and [delivery windows](../continuous-delivery/). |
 | `orbit.pipeline.invoke` | [Activities and jobs](../../concepts/activities-jobs/), [write an activity](../write-activity/), and [Activity and Job YAML](../../reference/activity-job-yaml/). |
-| `orbit.routine.control`, `orbit.auto_task.*` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |
-| `orbit.decision.list`, `orbit.decision.show`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](../decision-channels/) covers read-only inspection, operator registration and authenticated plugin callbacks. Agents cannot answer requests. |
-| `orbit.codebase.*` | [Dashboard views](../dashboard/). |
-| `orbit.ui.open`, `orbit.ui.inspect` | [Open the MCP Apps control center](../mcp-apps/). |
+| `orbit.routine.control`, `orbit.auto_task` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |
+| `orbit.decision` action `list`, `orbit.decision` action `show`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](../decision-channels/) covers read-only inspection, operator registration and authenticated plugin callbacks. Agents cannot answer requests. |
+| `orbit.codebase` | [Dashboard views](../dashboard/). |
+| `orbit.ui` action `open`, `orbit.ui` action `inspect` | [Open the MCP Apps control center](../mcp-apps/). |
 | Plugin tools marked `agent_callable`, once the plugin is granted `agent_tools` | [Install and grant plugins](../plugins/). |
 
 The requests below are illustrative MCP `tools/call` bodies, not setup steps.
@@ -325,8 +347,9 @@ no-input job catalog alongside recent runs:
 
 ```json
 {
-  "name": "orbit_workflow_run_list",
+  "name": "orbit_run",
   "arguments": {
+    "action": "list",
     "workspace": "ws_example",
     "view": "bounded",
     "include_catalog": true,
@@ -357,12 +380,13 @@ this route. Use the delivery tools for task shipping.
 
 ### Observe the run
 
-Keep the returned `run_id` and fetch it with `orbit.workflow.run.show`:
+Keep the returned `run_id` and fetch it with `orbit.run` action `show`:
 
 ```json
 {
-  "name": "orbit_workflow_run_show",
+  "name": "orbit_run",
   "arguments": {
+    "action": "show",
     "workspace": "ws_example",
     "id": "<returned-run-id>",
     "view": "bounded",

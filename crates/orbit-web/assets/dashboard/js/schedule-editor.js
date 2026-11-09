@@ -3,7 +3,7 @@
 // Only when a definition fires is editable here; every other field stays
 // read-only. The form checks the shape it can see before saving, and the
 // server, which runs the same validation as `orbit.routine.control` and
-// `orbit.auto_task.update`, has the last word: its refusal text is shown in
+// `orbit.auto_task` action `update`, has the last word: its refusal text is shown in
 // the form verbatim and the draft is kept.
 //
 // An open editor holds a draft the 30 s refresh must not discard, so the

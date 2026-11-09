@@ -23,9 +23,29 @@ pub struct McpToolRules {
     pub presentation_read: Option<McpPresentationRead>,
     /// Additional input constraints and workspace taxonomy decoration.
     pub input_decoration: McpInputDecoration,
-    /// The `orbit mcp serve` toolset that advertises this tool.
+    /// The `orbit mcp serve` toolset that advertises this tool. For a tool
+    /// family, the toolset of its first action.
     #[serde(default)]
     pub toolset: super::McpToolset,
+    /// A tool family's toolset per action, as `(action, toolset)`. A family
+    /// is advertised when any action's toolset is enabled, and a call is
+    /// served only when its own action's is. Empty for any other tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action_toolsets: Vec<(String, super::McpToolset)>,
+}
+
+impl McpToolRules {
+    /// The toolset serving `action` of a family, else the tool's toolset.
+    pub fn toolset_for_action(&self, action: Option<&str>) -> super::McpToolset {
+        action
+            .and_then(|action| {
+                self.action_toolsets
+                    .iter()
+                    .find(|(name, _)| name == action)
+                    .map(|(_, toolset)| *toolset)
+            })
+            .unwrap_or(self.toolset)
+    }
 }
 
 /// When the adapter must require and echo a workspace selector.

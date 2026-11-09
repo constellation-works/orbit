@@ -167,8 +167,8 @@ fn replica_notice_candidates_merge_with_owner_as_all_clear() {
     // merge carries the owner's single item with no stale duplicate.
     let friction = owner
         .execute_tool_command_dispatch_with_session_context(
-            "orbit.friction.add",
-            json!({"body": "Retained friction body", "model": "codex"}),
+            "orbit.friction",
+            json!({"action": "add", "body": "Retained friction body", "model": "codex"}),
             None,
             None,
             ToolEntryPoint::Mcp,

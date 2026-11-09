@@ -34,7 +34,7 @@ Forward-looking directions for [fleet notices](./1_overview.md). Nothing here is
 4. **Push to running agents.** v1 delivers at prompt safe points. Is there a safe way to reach a
    long-running step mid-flight (for example via the same channel mid-run steering might gain), or is
    "next safe point" the right ceiling?
-5. **Notice-aware filing.** Should `orbit.task.add` and `orbit.friction.add` warn when a new filing
+5. **Notice-aware filing.** Should `orbit.task.add` and `orbit.friction` action `add` warn when a new filing
    matches an open notice's linked task or dedupe key, so duplicates are caught at filing rather than
    in review?
 6. **Acknowledgement.** Delivery is recorded, understanding is not. Would an execution-summary

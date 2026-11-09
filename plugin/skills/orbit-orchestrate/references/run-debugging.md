@@ -5,7 +5,7 @@ Debug an Orbit job run without guessing. A failed run has multiple layers of evi
 ## Quick Triage
 
 Given a run id `<run_id>`, first read it through the owning host's
-`orbit run show`. The authoritative `orbit_workflow_run_show` (`id`,
+`orbit run show`. The authoritative `orbit_run` action `show` (`id`,
 `workspace`) requires operator authority and is denied for agent sessions.
 Record the owner host and workspace before inspecting evidence:
 
@@ -74,10 +74,10 @@ complete.
 
 ### Tell a working agent from an abandoned wrapper
 
-For a run that is still `running`, the operator-only `orbit_workflow_run_show`
+For a run that is still `running`, the operator-only `orbit_run` action `show`
 (operator authority; denied for agent sessions) carries
 `execution_progress`: the activity step that is open and the provider children
-it spawned. Only `show` carries it — `orbit_workflow_run_list` (also
+it spawned. Only `show` carries it — `orbit_run` action `list` (also
 operator-only) pages many runs and does not pay for an audit scan and a
 liveness probe per row. A session with a shell on the owning host reads the
 same liveness with `orbit run show <run_id> --json` (`provider_processes`).
@@ -254,9 +254,9 @@ For the relevant command index, fetch the original candidate log, its base
 comparison log, and the replay log when present:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.json"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json"}'
 ```
 
 The original log's `candidate_rerun` field links to the last path. The replay
@@ -537,8 +537,8 @@ orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["status","op
 ```
 
 An agent session reads the same requests through the registered read-only tools
-`orbit.decision.list` (`gate`, `task_id`, `include_closed`) and
-`orbit.decision.show` (`id`).
+`orbit.decision` action `list` (`gate`, `task_id`, `include_closed`) and
+`orbit.decision` action `show` (`id`).
 
 The dashboard's **Why stuck** card links each blocked or held task to the run or
 finding that stopped it, with one-click requeue, settle-merged and
@@ -722,4 +722,4 @@ Keep the report short unless the human asks for a full forensic trace.
 
 Before finalizing a diagnosis, verify: you matched the right run id and task id(s); you identified the first failed step, not just the last logged error; you checked recovery events when present; you checked stdout/stderr blobs for the failing invocation when available; you checked live process state for runs marked `running`; you separated root cause from downstream fallout; you recorded friction ([friction.md](../../orbit/references/friction.md)) if Orbit diagnostics or recovery behavior were misleading.
 
-Settlement hydration reads follower runs through the operator-only `orbit.workflow.run.observe` route, which reads stored records without reconciliation or mutation. The follower opens that route without stale-run reconciliation, including discovery that precedes the read. A nonterminal leaf is a mismatch. Ordinary run inspection is an operator surface: `orbit.workflow.run.show` requires operator capability and refuses agent sessions. A shell session on the owning host can use `orbit run show <RUN_ID>`; the MCP route requires operator capability. Both reconcile on open. Followers must support the observe route; older followers cannot be hydrated safely.
+Settlement hydration reads follower runs through the operator-only `orbit.run` action `observe` route, which reads stored records without reconciliation or mutation. The follower opens that route without stale-run reconciliation, including discovery that precedes the read. A nonterminal leaf is a mismatch. Ordinary run inspection is an operator surface: `orbit.run` action `show` requires operator capability and refuses agent sessions. A shell session on the owning host can use `orbit run show <RUN_ID>`; the MCP route requires operator capability. Both reconcile on open. Followers must support the observe route; older followers cannot be hydrated safely.

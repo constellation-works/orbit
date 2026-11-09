@@ -1536,6 +1536,7 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
         )
         .unwrap();
     let input = json!({
+        "action": "put",
         "id": routed.remote_task,
         "workspace": "bravo-ws",
         "path": "resident/mandate.json",
@@ -1547,7 +1548,7 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
         let mut args = vec![
             "tool",
             "run",
-            "orbit.task.artifact.put",
+            "orbit.task.artifact",
             "--host",
             "bravo",
             "--input",
@@ -1587,7 +1588,7 @@ fn routed_artifact_put_preserves_disabled_cycle_write_sidecars() {
     let mut client = StdioClient::spawn(&routed.fleet, &["mcp", "serve", "--mode", "federated"]);
     let mut mcp_input: Value = serde_json::from_str(&input).unwrap();
     mcp_input["workspace"] = json!(routed.bravo_selector());
-    let mcp = client.call_ok("orbit_task_artifact_put", mcp_input);
+    let mcp = client.call_ok("orbit_task_artifact", mcp_input);
     assert_eq!(mcp["cycle_routine_disabled"], true, "{mcp}");
     assert!(
         mcp.get("description").is_some(),

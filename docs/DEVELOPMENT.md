@@ -355,7 +355,7 @@ Captured output stays in the task's `validation/<run>/<index>.json` and
 `<index>.baseline.json` artifacts (claimed runs use their claim namespace).
 `orbit run show --json` and Incidents retain these references in the leaf's
 message; follow a parent's recorded `root_cause` to that leaf. Read the logs
-with `orbit.task.artifact.get` using the owning task and artifact path. Recovery
+with `orbit.task.artifact` action `get` using the owning task and artifact path. Recovery
 uses those same artifacts before choosing a repair.
 
 Parent gates echo only the leaf run, task, step and code. Incident codes use
@@ -1062,7 +1062,7 @@ Browser checks need Playwright and Chromium, plus Chromium's shared libraries an
 
 - every theme the view supports (the dashboard is dark-only; the website has light and dark), and a 375px phone width when the layout is responsive;
 - a before shot from the base revision when it is practical and it shows the change;
-- each attached with `orbit.task.artifact.put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
+- each attached with `orbit.task.artifact` action `put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
 - each under the 1 MiB artifact limit (`MAX_TASK_ARTIFACT_CONTENT_BYTES`): prefer a viewport capture to a full-page one, or JPEG or WebP when a PNG is too large.
 
 When the host has no browser kit or the view cannot render, say so in the handoff instead of claiming visual verification. A claimed leaf on another host attaches the same way; the broker forwards the put to the owner.

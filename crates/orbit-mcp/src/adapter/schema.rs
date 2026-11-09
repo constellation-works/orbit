@@ -3,8 +3,8 @@ use std::sync::Arc;
 use orbit_common::governance::friction::{DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS};
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
-    McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam,
-    ToolSchema,
+    McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope,
+    TOOL_ACTION_FIELD, ToolParam, ToolSchema, tool_family,
 };
 use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use serde_json::{Value, json};
@@ -309,8 +309,11 @@ pub(super) fn slim_advertised_property_descriptions(schema: &mut JsonObject, too
         return;
     };
     let hand_authored = HAND_AUTHORED_PROPERTY_TOOLS.contains(&tool_name);
+    // A family's descriptions are already one sentence each, and its
+    // `action` list names every action's required fields, so neither is cut.
+    let family = tool_family(tool_name).is_some();
     for (name, property) in properties.iter_mut() {
-        if name == WORKSPACE_SELECTOR_PARAM {
+        if name == WORKSPACE_SELECTOR_PARAM || (family && name == TOOL_ACTION_FIELD) {
             continue;
         }
         let Some(object) = property.as_object_mut() else {
@@ -319,7 +322,7 @@ pub(super) fn slim_advertised_property_descriptions(schema: &mut JsonObject, too
         let Some(description) = object.get("description").and_then(Value::as_str) else {
             continue;
         };
-        let slim = if hand_authored {
+        let slim = if hand_authored || family {
             cap_description(description, HAND_AUTHORED_PROPERTY_CAP)
         } else {
             advertised_other_property_description(description)

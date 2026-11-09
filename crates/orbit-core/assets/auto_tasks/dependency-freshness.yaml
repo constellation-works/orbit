@@ -20,7 +20,7 @@ template:
       subcommands (they skip agent provenance). Find the previous run with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["dependency-freshness","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       and fetch its inventory with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"dependency-freshness.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"dependency-freshness.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
       (task search matches non-adjacent terms, full matches first: use a
@@ -142,7 +142,7 @@ template:
     delta (newly behind, newly current, removed) in the execution
     summary; absent or unreadable means this is the baseline run, say so.
     Attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/dependency-freshness.json","path":"dependency-freshness.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/dependency-freshness.json","path":"dependency-freshness.json","model":"<agent-family>"}'`.
     The execution summary covers: the ecosystems detected, the tooling
     gaps, the counts behind (major and minor), unused, and duplicate,
     the advisory exclusions, every filed task ID, the overflow, and the
@@ -162,8 +162,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

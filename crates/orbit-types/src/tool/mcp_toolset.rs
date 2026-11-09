@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use super::McpToolRules;
 use super::error::McpToolsetError;
 
 /// The toolset an MCP definition belongs to. Every tool belongs to exactly
@@ -438,8 +439,40 @@ impl McpToolsetSelection {
 
     /// Whether a named definition is included by its toolset or an explicit grant.
     pub fn enables_tool(&self, toolset: McpToolset, name: &str) -> bool {
-        self.enables(toolset)
-            || self.explicit_tools.contains(name)
+        self.enables(toolset) || self.grants_tool(name)
+    }
+
+    /// Whether a definition is advertised: its toolset or any of its
+    /// actions' toolsets is enabled, or a grant names it or one of its
+    /// actions (`tool:orbit.decision:list`).
+    pub fn enables_definition(&self, rules: &McpToolRules, name: &str) -> bool {
+        self.enables_tool(rules.toolset, name)
+            || rules
+                .action_toolsets
+                .iter()
+                .any(|(_, toolset)| self.enables(*toolset))
+            || self.explicit_tools.iter().any(|grant| {
+                grant
+                    .split_once(super::TOOL_ACTION_SEPARATOR)
+                    .is_some_and(|(family, _)| family == name)
+            })
+    }
+
+    /// Whether a call to `name` selecting `action` is served: the action's
+    /// toolset is enabled, or a grant names the tool or that action.
+    pub fn enables_call(&self, rules: &McpToolRules, name: &str, action: Option<&str>) -> bool {
+        if rules.action_toolsets.is_empty() {
+            return self.enables_tool(rules.toolset, name);
+        }
+        self.enables_tool(rules.toolset_for_action(action), name)
+            || action.is_some_and(|action| {
+                self.explicit_tools
+                    .contains(&format!("{name}{}{action}", super::TOOL_ACTION_SEPARATOR))
+            })
+    }
+
+    fn grants_tool(&self, name: &str) -> bool {
+        self.explicit_tools.contains(name)
             || self.explicit_tools.iter().any(|pattern| {
                 pattern
                     .strip_suffix('*')

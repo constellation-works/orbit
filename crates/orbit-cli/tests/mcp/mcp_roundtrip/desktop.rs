@@ -74,8 +74,8 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     }
     assert_eq!(
         client.call_tool_err(
-            "orbit_workflow_run_list",
-            json!({"workspace":selector,"view":"bounded"})
+            "orbit_run",
+            json!({"action": "list", "workspace":selector,"view":"bounded"})
         )["code"],
         "capability_denied"
     );
@@ -195,13 +195,13 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "{reopened}"
     );
     let readiness = client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"status"}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"status"}),
     );
     assert_eq!(readiness["workspace"], selector);
     let catalog = client.call_tool_ok(
-        "orbit_workflow_run_list",
-        json!({"workspace":selector,"view":"bounded","include_catalog":true}),
+        "orbit_run",
+        json!({"action": "list", "workspace":selector,"view":"bounded","include_catalog":true}),
     );
     assert!(
         catalog["catalog"]["items"]
@@ -226,16 +226,16 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "the mixed form is refused before the disabled job is consulted: {mixed}"
     );
     client.call_tool_err(
-        "orbit_workflow_run_resume",
-        json!({"workspace":selector,"id":"jrun-missing"}),
+        "orbit_run",
+        json!({"action": "resume", "workspace":selector,"id":"jrun-missing"}),
     );
     client.call_tool_err(
-        "orbit_workflow_auto",
-        json!({"workspace":selector,"action":"resize","id":"jrun-missing","concurrency":1}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":selector,"mode":"resize","id":"jrun-missing","concurrency":1}),
     );
     let runs = client.call_tool_ok(
-        "orbit_workflow_run_list",
-        json!({"workspace":selector,"view":"bounded"}),
+        "orbit_run",
+        json!({"action": "list", "workspace":selector,"view":"bounded"}),
     );
     assert_eq!(
         runs["total"], 0,
@@ -249,20 +249,20 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
             json!({"workspace":selector,"action":"list"}),
         ),
         (
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"status"}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"status"}),
         ),
         (
             "orbit_pipeline_invoke",
             json!({"workspace":selector,"job_name":"stdio-maintenance","input":{}}),
         ),
         (
-            "orbit_workflow_run_resume",
-            json!({"workspace":selector,"id":"jrun-missing"}),
+            "orbit_run",
+            json!({"action": "resume", "workspace":selector,"id":"jrun-missing"}),
         ),
         (
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"resize","id":"jrun-missing","concurrency":1}),
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"resize","id":"jrun-missing","concurrency":1}),
         ),
     ] {
         assert_eq!(
@@ -354,12 +354,12 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     );
     for (tool, input) in [
         (
-            "orbit_auto_task_mint",
-            json!({"workspace":selector,"name":"qa-sweep","acknowledge_unconditional":true}),
+            "orbit_auto_task",
+            json!({"action": "mint", "workspace":selector,"name":"qa-sweep","acknowledge_unconditional":true}),
         ),
         (
-            "orbit_auto_task_update",
-            json!({"workspace":selector,"name":"qa-sweep","expected_enabled":false,"enabled":true}),
+            "orbit_auto_task",
+            json!({"action": "update", "workspace":selector,"name":"qa-sweep","expected_enabled":false,"enabled":true}),
         ),
         (
             "orbit_task_add",
@@ -652,8 +652,8 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     transaction.commit().expect("commit seed");
 
     let mut client = workspace.serve_with_args(&["--operator"]);
-    let mut input = json!({"workspace":"ws_mcp-roundtrip","view":"bounded","id":RUN_ID,"limit":2});
-    let first = client.call_tool_ok("orbit_workflow_run_show", input.clone());
+    let mut input = json!({"action": "show", "workspace":"ws_mcp-roundtrip","view":"bounded","id":RUN_ID,"limit":2});
+    let first = client.call_tool_ok("orbit_run", input.clone());
 
     let metadata = &first["audit_metadata"];
     let rows_read = metadata["rows_read"].as_u64().expect("rows read");
@@ -762,7 +762,7 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
 
     input["log_offset"] = json!(150);
     input["limit"] = json!(1);
-    let later = client.call_tool_ok("orbit_workflow_run_show", input);
+    let later = client.call_tool_ok("orbit_run", input);
     assert_eq!(later["logs"]["items"][0]["event_id"], "fin-150");
     assert_eq!(later["logs"]["total"], INVOCATIONS - 1);
 
@@ -788,7 +788,7 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     );
 
     // The full-history view still answers from its own complete replay.
-    let full = client.call_tool_ok("orbit_workflow_run_show", json!({"id":RUN_ID}));
+    let full = client.call_tool_ok("orbit_run", json!({"action": "show", "id":RUN_ID}));
     assert_eq!(
         full["execution_progress"]["provider_processes"]["items"],
         progress["provider_processes"]["items"],
@@ -849,7 +849,7 @@ fn drain_status_preserves_readiness_selection_and_shared_metadata() {
         (json!(ids[1]), json!("sol")),
         (json!([ids[1]]), json!(["sol"])),
     ] {
-        let status = client.call_tool_ok("orbit_workflow_auto", json!({"workspace":selector,"action":"status","task":task,"concurrency":7,"limit":500,"allow_crew":crews}));
+        let status = client.call_tool_ok("orbit_workflow", json!({"action": "auto", "workspace":selector,"mode":"status","task":task,"concurrency":7,"limit":500,"allow_crew":crews}));
         assert_eq!(status["tasks"].as_array().unwrap().len(), 1, "{status}");
         assert_eq!(status["tasks"][0]["task_id"], ids[1]);
         assert_eq!(status["capacity"]["max_active_leaf_runs"], 7);
@@ -868,8 +868,8 @@ fn drain_status_preserves_readiness_selection_and_shared_metadata() {
     }
     assert_eq!(
         client.call_tool_err(
-            "orbit_workflow_auto",
-            json!({"workspace":selector,"action":"status","task":ids,"limit":1})
+            "orbit_workflow",
+            json!({"action": "auto", "workspace":selector,"mode":"status","task":ids,"limit":1})
         )["code"],
         "invalid_input",
         "explicit selections larger than the limit are refused"
@@ -877,8 +877,8 @@ fn drain_status_preserves_readiness_selection_and_shared_metadata() {
     for limit in [0, 501] {
         assert_eq!(
             client.call_tool_err(
-                "orbit_workflow_auto",
-                json!({"workspace":selector,"action":"status","limit":limit})
+                "orbit_workflow",
+                json!({"action": "auto", "workspace":selector,"mode":"status","limit":limit})
             )["code"],
             "invalid_input"
         );
@@ -888,17 +888,18 @@ fn drain_status_preserves_readiness_selection_and_shared_metadata() {
         ("limit", json!(50)),
         ("allow_crew", json!(["sol"])),
     ] {
-        let mut input = json!({"workspace":selector,"action":"start","for_seconds":60});
+        let mut input =
+            json!({"action": "auto", "workspace":selector,"mode":"start","for_seconds":60});
         input[field] = value;
         assert_eq!(
-            client.call_tool_err("orbit_workflow_auto", input)["code"],
+            client.call_tool_err("orbit_workflow", input)["code"],
             "invalid_input",
             "readiness selectors must not enable control settings"
         );
     }
     let runs = client.call_tool_ok(
-        "orbit_workflow_run_list",
-        json!({"workspace":selector,"view":"bounded"}),
+        "orbit_run",
+        json!({"action": "list", "workspace":selector,"view":"bounded"}),
     );
     assert_eq!(
         runs["total"], 0,
@@ -907,8 +908,8 @@ fn drain_status_preserves_readiness_selection_and_shared_metadata() {
     let replica = McpWorkspace::init_replica_of("hm_remote_owner");
     let mut replica_client = replica.serve_with_args(&["--operator"]);
     let status = replica_client.call_tool_ok(
-        "orbit_workflow_auto",
-        json!({"workspace":replica.work.to_str().unwrap(),"action":"status"}),
+        "orbit_workflow",
+        json!({"action": "auto", "workspace":replica.work.to_str().unwrap(),"mode":"status"}),
     );
     assert_eq!(status["replica"], true);
     let cli = orbit_ok(

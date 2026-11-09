@@ -113,9 +113,12 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             worker_invocation: self.session_context.worker_invocation.clone(),
             ..Default::default()
         };
+        // The route carries the operation; a family operation is dispatched
+        // as its family call, the only name the dispatcher accepts for it.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         self.runtime
             .execute_tool_command_dispatch_with_session_context(
-                tool,
+                &tool,
                 input,
                 None,
                 None,

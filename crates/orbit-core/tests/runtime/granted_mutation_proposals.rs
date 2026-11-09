@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
 
-const GRANT: &str = "orbit.auto_task.update";
+const GRANT: &str = "orbit.auto_task:update";
+/// A proposal names the family and its action, as a call would.
+const FAMILY: &str = "orbit.auto_task";
 const DEFINITION: &str = "proposal-target";
 const PROPOSAL: &str = "mutation-proposals/describe.json";
 
@@ -55,8 +57,8 @@ fn put(fixture: &Fixture, path: &str, content: &Value) -> Result<Value, orbit_co
 
 fn describe(description: &str) -> Value {
     json!({
-        "tool": GRANT,
-        "input": {"name": DEFINITION, "description": description},
+        "tool": FAMILY,
+        "input": {"action": "update", "name": DEFINITION, "description": description},
         "rationale": "The definition's description is stale.",
     })
 }
@@ -95,7 +97,7 @@ fn admitted_proposal_changes_nothing_live_case() {
 
     let proposal: MutationProposal = artifact(&fixture, PROPOSAL).unwrap();
     assert_eq!(proposal.task_id, fixture.task_id);
-    assert_eq!(proposal.tool, GRANT);
+    assert_eq!(proposal.tool, FAMILY);
     assert_eq!(proposal.input["description"], "revised");
     assert_eq!(proposal.idempotency_key.len(), 64, "{proposal:?}");
     assert_eq!(definition_description(&fixture.runtime), "before");
@@ -106,8 +108,8 @@ fn admitted_proposal_changes_nothing_live_case() {
         &fixture,
         "mutation-proposals/toggle.json",
         &json!({
-            "tool": GRANT,
-            "input": {"name": DEFINITION, "enabled": false, "expected_enabled": true, "workspace": "repo"},
+            "tool": FAMILY,
+            "input": {"action": "update", "name": DEFINITION, "enabled": false, "expected_enabled": true, "workspace": "repo"},
             "rationale": "Disable it.",
         }),
     )
@@ -119,7 +121,7 @@ fn admitted_proposal_changes_nothing_live_case() {
     let error = put(
         &fixture,
         "mutation-proposals/mint.json",
-        &json!({"tool": "orbit.auto_task.add", "input": {"name": "x"}, "rationale": "r"}),
+        &json!({"tool": FAMILY, "input": {"action": "add", "name": "x"}, "rationale": "r"}),
     )
     .expect_err("an ungranted tool cannot be proposed");
     assert!(error.to_string().contains("does not grant"), "{error}");
@@ -179,7 +181,7 @@ fn approved_proposal_applies_once_case() {
 }
 
 fn same_key_paths_apply_once_case() {
-    let mut fixture = Fixture::granted(ReviewTiming::BeforePr, &["orbit.auto_task.mint"]);
+    let mut fixture = Fixture::granted(ReviewTiming::BeforePr, &["orbit.auto_task:mint"]);
     fixture
         .runtime
         .run_tool(
@@ -192,7 +194,7 @@ fn same_key_paths_apply_once_case() {
             }),
         )
         .unwrap();
-    let draft = json!({"tool": "orbit.auto_task.mint", "input": {"name": DEFINITION}, "rationale": "First reason."});
+    let draft = json!({"tool": FAMILY, "input": {"action": "mint", "name": DEFINITION}, "rationale": "First reason."});
     let mut second = draft.clone();
     second["rationale"] = json!("Another reason.");
     put(&fixture, PROPOSAL, &draft).unwrap();
@@ -231,8 +233,8 @@ fn failed_application_is_visible_case() {
         &fixture,
         PROPOSAL,
         &json!({
-            "tool": GRANT,
-            "input": {"name": "no-such-definition", "description": "revised"},
+            "tool": FAMILY,
+            "input": {"action": "update", "name": "no-such-definition", "description": "revised"},
             "rationale": "Targets a definition that does not exist.",
         }),
     )

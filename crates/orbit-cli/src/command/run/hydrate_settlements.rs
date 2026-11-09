@@ -139,7 +139,7 @@ fn outcome_label(outcome: LeafHydrationOutcome) -> String {
 
 /// The operator's own read of a follower's run records: the existing
 /// federated client, opened as the operator, asking the follower for
-/// `orbit.workflow.run.observe` in the workspace the operator named.
+/// `orbit.run` action `observe` in the workspace the operator named.
 struct OperatorRunObserver {
     global_root: PathBuf,
     caller: String,
@@ -174,8 +174,8 @@ impl FollowerRunObserver for OperatorRunObserver {
             }
         };
         client.call_tool(
-            "orbit.workflow.run.observe",
-            json!({ "id": run_id, "workspace": selector }),
+            "orbit.run",
+            json!({ "action": "observe", "id": run_id, "workspace": selector }),
             ToolSessionContext::default(),
         )
     }
