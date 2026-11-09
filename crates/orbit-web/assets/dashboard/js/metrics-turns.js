@@ -226,7 +226,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const isShown = (key) => shown[key] !== false;
   const total = payload.total || {};
 
-  const cards = series.map((entry) => ({
+  const complexityCards = series.map((entry) => ({
     key: entry.key,
     swatch: entry.complexity,
     dashed: entry.cohort === "without",
@@ -239,6 +239,10 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
       ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_incomplete_trace || 0} truncated traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
       : `${tasks(entry.total.n)} measured · ${excludedDescription(entry.total)}`,
   }));
+  // Keep every complexity and tag cohort in one visible summary tile. The
+  // shared responsive card grid changes its column count with the viewport;
+  // one composite tile cannot leave a final complexity tile orphaned.
+  const cards = [{ grouped: true, label: "By complexity", entries: complexityCards }];
 
   if (!total.n) {
     const left = excluded(total);
