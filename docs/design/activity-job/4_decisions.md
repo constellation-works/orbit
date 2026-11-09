@@ -1719,7 +1719,7 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 ### Consequences
 
 - A gate never ends with a live delivery child, and the work done before the deadline is kept for the task's next run instead of being discarded or orphaned.
-- `Cost:` a child that would have finished shortly after the deadline is stopped. Raise `dispatch_timeout_seconds` together with `ttl_seconds`, within the 21600-second wait ceiling, when that is the better trade.
+- `Cost:` a child that would have finished shortly after the deadline is stopped. Raise `dispatch_timeout_seconds` together with `ttl_seconds`, within the 86400-second wait ceiling, when that is the better trade.
 - `Cost:` the stopped step is the first top-level step whose output the child had not recorded. A step skipped by `when:` records nothing either, so it can name an earlier step than the one running; a resume then redoes work rather than skipping it.
 - `Cost:` a cancel that fails leaves the child live, the one case where a terminal gate outlives its child. The parent says so in its error and reports `child_live: true`, and the gate's terminal cleanup still releases its reservation.
 
