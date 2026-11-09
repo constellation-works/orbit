@@ -2,7 +2,7 @@
 title: Orbit MCP — Vision
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-11-05
+last_validated: 2026-11-09
 status: Draft
 feature: mcp-bridge
 doc_role: vision

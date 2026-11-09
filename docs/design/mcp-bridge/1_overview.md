@@ -2,7 +2,7 @@
 title: Orbit MCP — Overview
 owner: codex
 last_updated: 2026-11-05
-last_validated: 2026-11-05
+last_validated: 2026-11-09
 status: Implemented
 stage: shipped
 next: "—"
