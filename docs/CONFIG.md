@@ -2489,13 +2489,18 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   running, or completed without a success (`SKIPPED` or `NEUTRAL`). When the check failed, landing
   recovers or stops as for any failed pull request check: a failure inherited from the base gets a
   branch update, and the owner waits within the landing deadline for a newer passing base, up to three
-  updates per handoff. A transient failure gets one shared rerun. A required
+  updates per handoff. Logged infrastructure/transient failures use the
+  configured per-PR-head `workflow.ci_infrastructure_retry.max_attempts`
+  budget (default 3) and its exponential backoff, when the complete
+  authenticated failed-job set is eligible; a candidate failure in the set
+  vetoes that shared action. Flaky failures and sets transient solely because
+  jobs concluded `cancelled` or `timed_out` retain one shared rerun. A required
   check whose only unsuccessful jobs concluded `cancelled` or `timed_out` is
   transient from that conclusion even when the job log cannot be read. An
   aggregator whose log is only a `ci-await` of those conclusions, or only a
   `ci-await` timeout, counts the same way. A job that concluded `failure`
-  keeps log classification, and a mixed failure is not reduced to transient.
-  When that one rerun is already spent and the jobs are still cancelled or
+  keeps log classification, and a mixed failure is not reduced to this set.
+  When that single rerun is already spent and the jobs are still cancelled or
   timed out, completion records `required CI jobs keep cancelling or timing out`
   with the job names and dispatches no repair agent. For an untouched-path failure, a
   successful same-check push run on the accepted base ancestry authorizes one rerun of the original
