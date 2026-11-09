@@ -342,7 +342,7 @@ const ROOT_OBSERVE: &[GroupedRow] = &[
 ];
 
 const ROOT_ANALYTICS: &[GroupedRow] = &[
-    ("agents", "Score agents by crew and model"),
+    ("agents", "Score agents by model and recorded effort"),
     (
         "codebase",
         "Rank the repository paths that are risky for agents to change",
