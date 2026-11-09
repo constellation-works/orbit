@@ -963,7 +963,6 @@ function initTabsImpl(ctx) {
       const path = `runs/${encodeURIComponent(ctx.getRunId() || "")}` +
         (ctx.getRunSubtab() !== "steps" ? `/${ctx.getRunSubtab()}` : "");
       setActiveTabImpl(ctx, path, { refresh: false });
-      ctx.refreshDashboard();
     });
   }
   for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
@@ -982,7 +981,6 @@ function initTabsImpl(ctx) {
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.addEventListener("click", () => {
       setActiveTabImpl(ctx, `config/${btn.dataset.subtab}`, { refresh: false });
-      ctx.refreshDashboard();
     });
   }
   // Back and Forward fire popstate, then hashchange when the fragment differs.

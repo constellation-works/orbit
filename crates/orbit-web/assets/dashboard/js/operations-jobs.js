@@ -83,7 +83,7 @@ export async function peekJobFailures(read = null) {
     if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges(payload?.failing);
     return true;
   } catch (_) {
-    if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges([]);
+    // Failed read: leave rail pills as they were (unknown, not zero).
     return false;
   }
 }

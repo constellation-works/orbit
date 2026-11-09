@@ -15,6 +15,8 @@ const STATE_LABELS = {
 };
 
 const short = digest => (digest ? String(digest).slice(0, 12) : "-");
+const scriptDiffOpen = new Map();
+const scriptDiffScroll = new Map();
 
 function capabilityText(caps) {
   if (!caps) return "none";
@@ -44,11 +46,15 @@ function diffBlock(script) {
       : line.startsWith("@@") ? "hunk" : "ctx";
     return el("span", { class: `script-diff-${kind}`, text: `${line}\n` });
   });
+  const pre = el("pre", {}, lines);
   const details = el("details", { class: "script-diff" }, [
     el("summary", { text: script.granted_digest ? "Diff since the granted bytes" : "Files to grant" }),
-    el("pre", {}, lines),
+    pre,
   ]);
-  if (script.state !== "granted") details.open = true;
+  details.open = scriptDiffOpen.has(script.name) ? scriptDiffOpen.get(script.name) : script.state !== "granted";
+  details.addEventListener("toggle", () => scriptDiffOpen.set(script.name, details.open));
+  pre.addEventListener("scroll", () => scriptDiffScroll.set(script.name, pre.scrollTop), { passive: true });
+  requestAnimationFrame(() => { const s = scriptDiffScroll.get(script.name); if (s) pre.scrollTop = s; });
   return details;
 }
 

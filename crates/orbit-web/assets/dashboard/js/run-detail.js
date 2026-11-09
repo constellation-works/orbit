@@ -1166,6 +1166,7 @@ export function renderRunGantt() {
         expandedStepIndices.add(step.step_index);
       }
       setRunDetailSubtab("steps");
+      if (activeRunId) setActiveTab(`runs/${encodeURIComponent(activeRunId)}`);
       renderRunSteps();
       const target = document.querySelector(`[data-key="step-${step.step_index}"]`);
       if (target && target.scrollIntoView) {
