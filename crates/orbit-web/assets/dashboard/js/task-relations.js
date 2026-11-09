@@ -168,11 +168,40 @@ export function drainDependencyIds(drain) {
   return new Set(badge.dependencies.map(({ taskId }) => taskId));
 }
 
+// A long relation list collapses after this many targets (STD-07 §R17): the
+// row shows the first few and a "View more (N)" control for the rest. Five
+// keeps a Regression from row to about seven lines with each entry's site
+// disclosure, and the same cap covers the panel's other relation rows.
+export const RELATION_VISIBLE_LIMIT = 5;
+
+// The collapsed row's toggle: "View more (N)" closed, "Show fewer" open. The
+// count names the hidden entries, so the operator knows what expanding shows.
+function buildRelationMoreToggle(hiddenCount, onToggle) {
+  const toggle = el("button", {
+    class: "relation-more",
+    type: "button",
+    text: `View more (${hiddenCount})`,
+    "aria-expanded": "false",
+  });
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onToggle(toggle);
+  });
+  return toggle;
+}
+
+function syncRelationMoreToggle(toggle, hiddenCount, expanded) {
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.textContent = expanded ? "Show fewer" : `View more (${hiddenCount})`;
+}
+
 // One delivery-card relation row: the type's ids sit inline, wrapping as
 // needed, and each id opens its task. The row keeps the `data-relation` key.
 // A `regression_from` row keeps each target's own classification beside its
 // id, with that target's sites listed under it; a row with no classification
 // and no sites keeps the plain inline ids, like every other relation type.
+// A row longer than RELATION_VISIBLE_LIMIT shows the first few and a
+// "View more (N)" control that reveals the rest in place.
 export function buildRelationRow(key, label, targets, context) {
   if (key === "regression_from") {
     const entries = targets.map((entry) =>
@@ -186,6 +215,7 @@ export function buildRelationRow(key, label, targets, context) {
     });
     if (hasDetail) {
       const value = el("span", { class: "value task-delivery-relations regression" });
+      const items = [];
       for (const entry of entries) {
         const item = el("div", { class: "regression-entry" });
         item.appendChild(buildRegressionHead(entry, context));
@@ -201,7 +231,19 @@ export function buildRelationRow(key, label, targets, context) {
           }
           item.appendChild(sitesWrap);
         }
+        items.push(item);
         value.appendChild(item);
+      }
+      if (items.length > RELATION_VISIBLE_LIMIT) {
+        const hiddenCount = items.length - RELATION_VISIBLE_LIMIT;
+        const overflow = items.slice(RELATION_VISIBLE_LIMIT);
+        for (const item of overflow) item.hidden = true;
+        const toggle = buildRelationMoreToggle(hiddenCount, (node) => {
+          const expanded = node.getAttribute("aria-expanded") !== "true";
+          for (const item of overflow) item.hidden = !expanded;
+          syncRelationMoreToggle(node, hiddenCount, expanded);
+        });
+        value.appendChild(toggle);
       }
       const relationRow = el("div", { class: "property-row fact task-delivery-row relation" }, [
         el("span", { class: "label", text: label }),
@@ -213,8 +255,9 @@ export function buildRelationRow(key, label, targets, context) {
     targets = entries.map((entry) => entry.target);
   }
   const value = el("span", { class: "value task-delivery-relations" });
-  targets.forEach((target, index) => {
-    const id = regressionTargetId(target);
+  const ids = targets.map((target) => regressionTargetId(target));
+  const visible = ids.slice(0, RELATION_VISIBLE_LIMIT);
+  visible.forEach((id, index) => {
     if (index > 0) value.append(", ");
     const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
     open.addEventListener("click", (e) => {
@@ -223,6 +266,28 @@ export function buildRelationRow(key, label, targets, context) {
     });
     value.appendChild(open);
   });
+  if (ids.length > RELATION_VISIBLE_LIMIT) {
+    const hiddenCount = ids.length - RELATION_VISIBLE_LIMIT;
+    const overflow = el("span", { class: "relation-overflow" });
+    for (const id of ids.slice(RELATION_VISIBLE_LIMIT)) {
+      overflow.append(", ");
+      const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
+      open.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openVisibleTask(id, context);
+      });
+      overflow.appendChild(open);
+    }
+    overflow.hidden = true;
+    value.appendChild(overflow);
+    value.append(" ");
+    const toggle = buildRelationMoreToggle(hiddenCount, (node) => {
+      const expanded = node.getAttribute("aria-expanded") !== "true";
+      overflow.hidden = !expanded;
+      syncRelationMoreToggle(node, hiddenCount, expanded);
+    });
+    value.appendChild(toggle);
+  }
   const relationRow = el("div", { class: "property-row fact task-delivery-row relation" }, [
     el("span", { class: "label", text: label }),
     value,

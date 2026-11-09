@@ -660,6 +660,25 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* A long relation list shows the first few and a "View more (N)" control
+   for the rest (STD-07 §R17). The stacked Regression from entries keep the
+   toggle on its own line; an inline row keeps it in the text flow. */
+.relation-overflow { display: contents; }
+.relation-overflow[hidden] { display: none; }
+.relation-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.relation-more:hover { color: var(--fg-strong); text-decoration: underline; }
+.relation-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.task-delivery-relations.regression > .relation-more { align-self: flex-start; margin-top: 4px; }
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
