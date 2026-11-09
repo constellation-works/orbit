@@ -76,31 +76,21 @@ fn assessment_evidence_gaps(assessment: &Value) -> Vec<String> {
 /// Findings whose named prerequisites may already be enforced or completed.
 const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
-/// Whether a finding is an unresolved-footprint hold: it carries the
-/// host-written marker, or it is the pilot declaration the apply boundary
-/// stamps — a holding finding that, with `evidence_gaps` present, describes
-/// its source as unread or names a task the gaps also name as that source.
-/// The second form keeps assessments applied before the marker covered
-/// later-finishing predecessors held [ORB-22178]. Wording alone never
-/// counts: a prerequisite that merely mentions the footprint, or a finding
-/// with no evidence gap behind it, stays an ordinary prerequisite.
+/// Whether a finding is an unresolved-footprint hold. The host marker is
+/// this wrapper's fast path and is not part of
+/// [`text_declares_unresolved_footprint`], so apply can strip and restamp
+/// without the marker short-circuiting that pass. Otherwise the finding is
+/// the pilot declaration apply stamps, including on assessments written
+/// before the marker covered later-finishing predecessors [ORB-22178].
 fn declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
     if finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED) {
         return true;
     }
-    if finding.get("holds_promotion").and_then(Value::as_bool) != Some(true) || gaps.is_empty() {
-        return false;
-    }
-    let Some(text) = warning_text(finding) else {
-        return false;
-    };
-    if text.to_ascii_lowercase().contains("unread") {
-        return true;
-    }
-    let gaps_text = gaps.join(" ");
-    finding_task_ids(finding)
-        .iter()
-        .any(|id| gaps_text.contains(id.as_str()))
+    text_declares_unresolved_footprint(
+        finding.get("holds_promotion").and_then(Value::as_bool) == Some(true),
+        warning_text(finding),
+        gaps,
+    )
 }
 
 /// Only surface and utility findings may explicitly be advisory. Legacy
@@ -130,15 +120,51 @@ fn task_id_character(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '-' | '_')
 }
 
-/// Whole task IDs named in one finding's text.
-fn finding_task_ids(finding: &Value) -> Vec<String> {
-    let Some(text) = warning_text(finding) else {
-        return Vec::new();
-    };
+/// Whole task ids named in `text`, under any valid task-id prefix.
+fn named_task_ids(text: &str) -> Vec<String> {
     text.split(|character| !task_id_character(character))
-        .filter(|id| is_valid_orb_task_id(id))
+        .filter(|token| is_valid_orb_task_id(token))
         .map(str::to_string)
         .collect()
+}
+
+/// Whether already-extracted finding text declares an unread footprint
+/// source. `holds_promotion` and non-empty `gaps` are required. The text
+/// then either contains `unread` (ASCII case-insensitive) or names a whole
+/// task id that the joined gaps also contain. "ORB-1 must land before
+/// adjusting the footprint" declares nothing: the word "footprint" alone is
+/// not evidence, and a finding with no gap behind it stays an ordinary
+/// prerequisite.
+///
+/// Callers extract text first. Apply passes `finding.text` only; promotion
+/// passes [`warning_text`], so an evidence-only object keeps that caller's
+/// current handling. The host marker [`FOOTPRINT_UNRESOLVED`] is not read
+/// here.
+pub(super) fn text_declares_unresolved_footprint(
+    holds_promotion: bool,
+    text: Option<&str>,
+    gaps: &[String],
+) -> bool {
+    if !holds_promotion || gaps.is_empty() {
+        return false;
+    }
+    let Some(text) = text else {
+        return false;
+    };
+    if text.to_ascii_lowercase().contains("unread") {
+        return true;
+    }
+    let gaps_text = gaps.join(" ");
+    named_task_ids(text)
+        .iter()
+        .any(|id| gaps_text.contains(id.as_str()))
+}
+
+/// Whole task IDs named in one finding's text.
+fn finding_task_ids(finding: &Value) -> Vec<String> {
+    warning_text(finding)
+        .map(named_task_ids)
+        .unwrap_or_default()
 }
 
 /// Named tasks whose completion promotion checks must read under their locks.
