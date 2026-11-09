@@ -48,6 +48,15 @@ pub struct CrewMemoryProposalRow {
     pub created_at: DateTime<Utc>,
 }
 
+/// A decided proposal: accepted, rejected, or withdrawn on expiry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrewMemoryClosedProposalRow {
+    pub proposal: CrewMemoryProposalRow,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub decision_reason: Option<String>,
+}
+
 /// What [`CrewMemoryStoreBackend::open_crew_memory_proposal`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrewMemoryProposalOutcome {
@@ -117,6 +126,14 @@ pub trait CrewMemoryStoreBackend: Send + Sync {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError>;
+
+    /// Decided proposals, newest decision first, at most `limit`. A read: it
+    /// expires nothing.
+    fn crew_memory_closed_proposals(
+        &self,
+        workspace_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CrewMemoryClosedProposalRow>, OrbitError>;
 
     /// Withdraw open proposals created before `before`, recording each
     /// expiry and its decision fields atomically with its audit event.

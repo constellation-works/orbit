@@ -12,8 +12,9 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    CrewMemoryEventRow, CrewMemoryProposalDecision, CrewMemoryProposalOutcome,
-    CrewMemoryProposalRow, CrewMemoryRevisionRow, CrewMemoryStoreBackend,
+    CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
+    CrewMemoryProposalOutcome, CrewMemoryProposalRow, CrewMemoryRevisionRow,
+    CrewMemoryStoreBackend,
 };
 
 use super::codec::stamp;
@@ -92,6 +93,38 @@ impl CrewMemoryStoreBackend for Store {
     ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError> {
         let conn = self.read()?;
         open_proposals(&conn, workspace_id)
+    }
+
+    fn crew_memory_closed_proposals(
+        &self,
+        workspace_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CrewMemoryClosedProposalRow>, OrbitError> {
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT workspace_id, id, proposing_key, proposing_run_id, text, evidence_json, \
+                 status, created_at, decided_by, decided_at, decision_reason \
+                 FROM crew_memory_proposals WHERE workspace_id = ?1 AND status != 'open' \
+                 ORDER BY decided_at DESC, id DESC LIMIT ?2",
+            )
+            .map_err(sqlite_store_error)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        stmt.query_map(params![workspace_id, limit], |row| {
+            let decided_at = row
+                .get::<_, Option<String>>(9)?
+                .map(|at| crate::parse_timestamp(&at))
+                .transpose()?;
+            Ok(CrewMemoryClosedProposalRow {
+                proposal: hydrate_proposal(row)?,
+                decided_by: row.get(8)?,
+                decided_at,
+                decision_reason: row.get(10)?,
+            })
+        })
+        .map_err(sqlite_store_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
     }
 
     fn expire_crew_memory_proposals(
@@ -264,21 +297,24 @@ fn open_proposals(
         "SELECT workspace_id, id, proposing_key, proposing_run_id, text, evidence_json, status, created_at \
          FROM crew_memory_proposals WHERE workspace_id = ?1 AND status = 'open' ORDER BY created_at, id"
     ).map_err(sqlite_store_error)?;
-    stmt.query_map(params![workspace_id], |row| {
-        Ok(CrewMemoryProposalRow {
-            workspace_id: row.get(0)?,
-            id: row.get(1)?,
-            proposing_key: row.get(2)?,
-            proposing_run_id: row.get(3)?,
-            text: row.get(4)?,
-            evidence_json: row.get(5)?,
-            status: row.get(6)?,
-            created_at: crate::parse_timestamp(&row.get::<_, String>(7)?)?,
-        })
+    stmt.query_map(params![workspace_id], hydrate_proposal)
+        .map_err(sqlite_store_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sqlite_store_error)
+}
+
+/// The first eight columns of a `crew_memory_proposals` row.
+fn hydrate_proposal(row: &Row<'_>) -> rusqlite::Result<CrewMemoryProposalRow> {
+    Ok(CrewMemoryProposalRow {
+        workspace_id: row.get(0)?,
+        id: row.get(1)?,
+        proposing_key: row.get(2)?,
+        proposing_run_id: row.get(3)?,
+        text: row.get(4)?,
+        evidence_json: row.get(5)?,
+        status: row.get(6)?,
+        created_at: crate::parse_timestamp(&row.get::<_, String>(7)?)?,
     })
-    .map_err(sqlite_store_error)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(sqlite_store_error)
 }
 
 fn insert_revision(

@@ -316,6 +316,67 @@ impl OrbitRuntime {
         Ok(view)
     }
 
+    /// Every memory key the dashboard lists, as a read that writes nothing:
+    /// `global` first, then each model with a revision by key, then each
+    /// configured crew's model or proposing key with none yet. Each row carries its current revision's
+    /// usage against the key's caps, its writer and its open proposal count.
+    /// While `crew_memory.enabled` is false the list is empty, as the
+    /// operator CLI reads no proposals then.
+    pub fn crew_memory_spaces(&self) -> Result<Value, OrbitError> {
+        let enabled = self.current_crew_memory_enabled();
+        if !enabled {
+            return Ok(
+                json!({ "enabled": false, "enabled_key": ENABLED_KEY, "count": 0, "keys": [] }),
+            );
+        }
+        let store = self.crew_memory_store()?;
+        let workspace_id = self.workspace_id()?;
+        let current = store.crew_memory_current(&workspace_id)?;
+        let open = self.unexpired_crew_memory_proposals()?;
+        let mut keys: BTreeSet<MemoryKey> = BTreeSet::new();
+        for row in &current {
+            keys.insert(parse_memory_key(&row.memory_key)?);
+        }
+        for crew in self.context.settings().crews().values() {
+            if let Some(key) = super::memory_key(Some(crew.assignment.model.as_str())) {
+                keys.insert(key);
+            }
+        }
+        for proposal in &open {
+            keys.insert(parse_memory_key(&proposal.proposing_key)?);
+        }
+        let global = MemoryKey::global();
+        keys.remove(&global);
+        let (written, empty): (Vec<_>, Vec<_>) = keys
+            .into_iter()
+            .partition(|key| current.iter().any(|row| row.memory_key == key.as_str()));
+        let rows = std::iter::once(global)
+            .chain(written)
+            .chain(empty)
+            .map(|key| {
+                let row = current.iter().find(|row| row.memory_key == key.as_str());
+                let mut view = revision_view(&key, row)?;
+                if let Some(object) = view.as_object_mut() {
+                    object.remove("files");
+                    object.remove("evidence");
+                    object.remove("reason");
+                }
+                view["open_proposals"] = json!(
+                    open.iter()
+                        .filter(|proposal| proposal.proposing_key == key.as_str())
+                        .count()
+                );
+                Ok(view)
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        Ok(json!({
+            "enabled": true,
+            "enabled_key": ENABLED_KEY,
+            "count": rows.len(),
+            "keys": rows,
+        }))
+    }
+
     /// One space's revisions, newest first, and its audit events in order.
     pub fn crew_memory_history(&self, key: &str) -> Result<Value, OrbitError> {
         let key = self.operator_memory_key(key)?;

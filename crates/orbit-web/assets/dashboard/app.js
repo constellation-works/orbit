@@ -35,6 +35,7 @@ import { applyPushedHostResources, fetchAndRenderHostResources, initHostResource
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
+import { fetchAndRenderMemory, memoryRoute, setMemorySelection } from './js/memory.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
@@ -326,6 +327,9 @@ function routerContext() {
     setAgentsRole,
     getKnowledgeSubtab: () => activeKnowledgeSubtab,
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
+    // The memory key on screen is owned by memory.js, which renders it.
+    setMemorySelection,
+    memoryRoute,
     getOperationsSubtab: () => activeOperationsSubtab,
     setOperationsSubtab: (v) => { activeOperationsSubtab = v; },
     // ORB-12724: the Config sub-view is owned by config.js, which needs it to
@@ -766,7 +770,7 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
 
   const body = el("div", { class: "knowledge-detail-body" }, [
     el("aside", { class: "knowledge-side" }, [
-      el("div", { class: "task-delivery-card friction-meta-card" }, rows),
+      el("div", { class: "task-delivery-card knowledge-meta-card" }, rows),
     ]),
     el("div", { class: "knowledge-body" }, [
       markdownPanel(friction.body || friction.title, "friction-detail-body"),
@@ -1678,6 +1682,10 @@ function activeRefreshJobs({ poll = false } = {}) {
   }
 
   if (activeTab === "knowledge") {
+    if (activeKnowledgeSubtab === "memory") {
+      add("Knowledge › Memory", fetchAndRenderMemory());
+      return jobs;
+    }
     add("Knowledge › Frictions", fetchAndRenderFrictions());
     return jobs;
   }

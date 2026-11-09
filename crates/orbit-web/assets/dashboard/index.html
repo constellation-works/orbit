@@ -788,9 +788,10 @@
     <section class="tab-pane" data-tab="knowledge" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
         <section class="panel" id="knowledge-panel">
-          <header><span>Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
+          <header><span id="knowledge-title">Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
           <nav class="subtabs" id="knowledge-subtabs">
             <button class="subtab active" data-subtab="frictions" type="button">Frictions</button>
+            <button class="subtab" data-subtab="memory" type="button">Memory</button>
           </nav>
           <div class="friction-stats" id="friction-stats">
             <div class="tile">
@@ -806,7 +807,7 @@
               <span class="label">resolved this month</span>
             </div>
           </div>
-          <div class="controls">
+          <div class="controls" id="friction-controls">
             <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" aria-label="Search frictions" />
             <label class="friction-filter-control" for="friction-status-filter">
               <span>Show</span>
@@ -824,6 +825,14 @@
               <button type="button" id="frictions-next" title="Show the next friction records">Next</button>
             </nav>
           </div>
+          <!-- Knowledge › Memory: crew memory keys and the global proposals,
+               read-only; the detail panel below shows the selection. -->
+          <div class="body" id="memory-body" style="display: none;">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
           <div class="body scoreboard-table-wrap" id="frictions-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
@@ -838,6 +847,15 @@
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No friction selected.</div>
+            </div>
+          </div>
+        </section>
+        <section class="panel" id="memory-detail-panel" style="display: none;">
+          <header><span id="memory-detail-title">Memory detail</span></header>
+          <div class="body" id="memory-detail">
+            <div class="empty-state">
+              <div class="icon">✧</div>
+              <div class="text">No memory key selected.</div>
             </div>
           </div>
         </section>

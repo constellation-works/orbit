@@ -1,8 +1,8 @@
 ---
 title: Crew Memory — Decisions
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-09
+last_validated: 2026-11-09
 status: Draft
 feature: crew-memory
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: "Why crew memory is experimental until a randomised readout favours it,
 tags: [crew-memory]
 paths: ["crates/orbit-core/src/application/crew_memory/**"]
 related_features: [experiments, project-learnings, agent-scorecards]
-related_artifacts: [ORB-23105, ORB-10736]
+related_artifacts: [ORB-23105, ORB-10736, ORB-23644]
 ---
 
 # Crew Memory — Decisions
@@ -120,10 +120,31 @@ Spaces, revisions and proposals are rows in the owner's store (`~/.orbit/orbit.d
 - Every host's workers see the same memory, and a readout can tie each run to the exact revision it got.
 - Cost: an operator can't fix a note by editing a file. Every change goes through the CLI or MCP and is validated and recorded.
 
+## The dashboard reads memory and proposals but never decides or expires them
+
+**Recorded:** 2026-11 · [ORB-23644]
+**Code anchors:** `crates/orbit-core/src/application/crew_memory/proposals.rs::crew_memory_proposal_board`, `crates/orbit-web/src/api/crew_memory.rs`
+
+### Context
+
+The Knowledge › Memory sub-tab needs the open global proposals and the recently closed ones. The CLI listing is operator-only, refuses while memory is off and expires lapsed proposals before it lists, so a read would write.
+
+### Decision
+
+The dashboard uses a separate read-only board. It lists open proposals, shows those past 4 weeks as `expired` without withdrawing them, and adds the most recent decided ones. Any dashboard session can read it. The space, history and board routes only read; accepting, rejecting and expiring stay in the operator CLI (§8 of the design). The list also shows configured crews' models that have no revision yet, so an empty space is visible.
+
+On a narrow screen the sub-tab uses the Frictions inline accordion instead of the approved mock's separate detail view with a Back button. The task asks for the Frictions list + detail layout and shared components, and STD-07@1 §R30 asks for one component per element kind.
+
+### Consequences
+
+- Viewing the dashboard never changes proposal state or adds history events.
+- Cost: until a CLI list or decision runs, a lapsed proposal shows as expired on the dashboard while its stored status is still open.
+
 ## Task References
 
 - [ORB-23105] — designs crew memory (this folder)
 - [ORB-10736] — retired the native project-learning subsystem
+- [ORB-23644] — adds the read-only Knowledge › Memory dashboard sub-tab
 - [ORB-12718] — kept `.orbit/` untracked, including leftover learnings
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

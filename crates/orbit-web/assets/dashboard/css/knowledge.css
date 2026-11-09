@@ -289,7 +289,8 @@
    instead of being clipped when the detail is taller than the screen. */
 /* The content column scrolls under a fixed 60px top bar, so the pane
    pins just inside the column's padding and fills what is left of it. */
-#friction-detail-panel {
+#friction-detail-panel,
+#memory-detail-panel {
   position: sticky;
   top: 16px;
   align-self: start;
@@ -297,7 +298,8 @@
   display: flex;
   flex-direction: column;
 }
-#friction-detail-panel > .body {
+#friction-detail-panel > .body,
+#memory-detail-panel > .body {
   overflow-y: auto;
   min-height: 0;
 }
@@ -309,7 +311,8 @@
    Tasks interaction pattern: the selected row owns an inline detail
    immediately beneath it, and the separate pane leaves the layout. */
 @media (max-width: 1000px) {
-  #friction-detail-panel {
+  #friction-detail-panel,
+  #memory-detail-panel {
     display: none;
   }
   .friction-row-toggle {
@@ -326,7 +329,8 @@
     overflow-y: visible;
   }
 }
-#friction-detail {
+#friction-detail,
+#memory-detail {
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -414,9 +418,9 @@
   padding: 14px 22px;
   background: var(--bg);
 }
-.friction-meta-card .property-row.fact .value.mono { font-size: 12px; }
-.friction-meta-card .property-row.triage { align-items: start; }
-.friction-meta-card .property-row.triage .label { line-height: 28px; }
+.knowledge-meta-card .property-row.fact .value.mono { font-size: 12px; }
+.knowledge-meta-card .property-row.triage { align-items: start; }
+.knowledge-meta-card .property-row.triage .label { line-height: 28px; }
 .knowledge-link-row {
   width: 100%;
   display: flex;
@@ -435,11 +439,155 @@
 .knowledge-link-row:hover {
   border-color: var(--fg-dim);
 }
-.friction-meta-card .knowledge-link-row {
+.knowledge-meta-card .knowledge-link-row {
   width: auto;
   padding: 0;
   border: 0;
   background: none;
   color: var(--accent);
 }
-.friction-meta-card .knowledge-link-row:hover { text-decoration: underline; }
+.knowledge-meta-card .knowledge-link-row:hover { text-decoration: underline; }
+
+/* Knowledge › Memory. Rows, pills, the detail head, the property card and the
+   one-column accordion are the Frictions components above; these rules only
+   lay out what Frictions has no counterpart for: memory files, the history
+   list, proposals and the "Show all" rows. */
+#memory-body { padding: 0; }
+.memory-row .meta .memory-usage { white-space: nowrap; }
+.memory-detail-wrap { display: flex; flex-direction: column; }
+.knowledge-meta-card .memory-reason summary {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-meta-card .memory-reason p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  color: var(--fg-soft);
+}
+.memory-file + .memory-file { margin-top: 20px; }
+.memory-history .section-title { margin: 0 0 10px; }
+.memory-file-path {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-dim);
+}
+.memory-actions,
+.memory-show-all-row {
+  display: flex;
+  padding: 12px 14px;
+}
+.memory-actions { padding: 0 22px 18px; }
+.memory-history {
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--hair);
+}
+.memory-history .memory-show-all-row { padding: 10px 0 0; }
+.memory-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.memory-event {
+  display: grid;
+  grid-template-columns: minmax(0, 150px) minmax(0, 140px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: var(--fg-soft);
+  align-items: baseline;
+}
+.memory-event time,
+.memory-event-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-history-empty {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.memory-proposals { display: flex; flex-direction: column; }
+.memory-proposal { border-bottom: 1px solid var(--border); }
+.memory-proposal > summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px 22px;
+  cursor: pointer;
+  list-style: none;
+}
+.memory-proposal > summary::-webkit-details-marker { display: none; }
+.memory-proposal > summary:hover { background: rgba(255, 255, 255, 0.02); }
+.memory-proposal[open] > summary { background: rgba(255, 255, 255, 0.03); }
+.memory-proposal-model,
+.memory-proposal-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.memory-proposal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.memory-proposal-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-proposal-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 22px 16px;
+}
+.memory-proposal-body .markdown-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-soft);
+}
+.memory-decision {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--fg-soft);
+}
+.memory-decision .label { color: var(--fg-dim); }
+.memory-proposal-body .knowledge-link-row,
+.knowledge-meta-card .knowledge-link-row {
+  text-decoration: none;
+}
+.memory-proposal-body .knowledge-link-row {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+}
+.memory-proposal-body .knowledge-link-row:hover { text-decoration: underline; }
+.memory-closed > summary {
+  padding: 12px 22px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.memory-closed > .memory-history-empty { padding: 0 22px 14px; }
+@media (max-width: 520px) {
+  .memory-event { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .memory-proposal > summary,
+  .memory-proposal-body,
+  .memory-closed > summary { padding-left: 14px; padding-right: 14px; }
+  .memory-history { padding: 14px; }
+  .memory-actions { padding: 0 14px 14px; }
+}

@@ -1,8 +1,8 @@
 ---
 title: Crew Memory — Design
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-09
+last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory
 doc_role: design
@@ -11,7 +11,7 @@ summary: "Proposed design for crew memory: per-model spaces in the owner store, 
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
-related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-23066, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-23066, ORB-10736, ORB-23644]
 ---
 
 # Crew Memory — Design
@@ -188,7 +188,7 @@ Open proposals older than 4 weeks become `withdrawn`, with `decided_by = system`
 | CLI | `orbit memory show [<key>\|global] [--revision N]`, `orbit memory history <key>`, `orbit memory export [--dir]`, `orbit memory write <key> --file PATH… [--evidence ID…]` (operator seed), `orbit memory proposals`, `orbit memory proposal accept\|reject <id>`, `orbit memory reset <key>`, `orbit memory copy <from> <to>` (model upgrade) | Operator |
 | MCP / `orbit tool run` | `orbit.memory.show` (read, any agent run in a memory arm), `orbit.memory.write`, `orbit.memory.propose` (dreaming tasks only, key-scoped) | Agents |
 | Experiment readout | memory-arm digest/revision per task, revision-week strata, dreaming overhead in cost; in `shadow`, captured (not delivered) digest/revision per task and per-arm captured strata, plus enrolled task ids per arm (§7) | Operator |
-| Dashboard | none in this design; the experiments page shows the arm like any other | — |
+| Dashboard | Knowledge › Memory, read-only ([ORB-23644]): the global memory and every model key with revision, file and byte usage against the caps, writer, last write and open proposals; a key's revision with evidence, its files as Markdown and its history newest first; open global proposals and a collapsed "Recently closed" group. Its `GET /api/memory/spaces`, `/space`, `/history` and `/proposals` routes never write: a proposal past 4 weeks is shown as expired, and the next CLI list withdraws it (§8). Accept and reject stay CLI. The experiments page shows the arm like any other | Any dashboard session (read) |
 
 ## 10. Phasing
 
@@ -219,6 +219,7 @@ Each slice is one task, filed only after this design is accepted:
 - [ORB-23114] — builds slice M2: the `memory` overlay surface, capture, envelope field and readout strata
 - [ORB-23115] — builds slice M3: the `crew_memory_dream` routine, evidence pack, key-scoped agent tools and dreaming cost
 - [ORB-23116] — builds slice M4: operator global-memory proposal review and expiry
+- [ORB-23644] — adds the read-only Knowledge › Memory dashboard sub-tab
 - [ORB-23066] — adds `--until` to the scorecards, used for the settled reviewer window
 - [ORB-10736] — retired the native project-learning subsystem
 
