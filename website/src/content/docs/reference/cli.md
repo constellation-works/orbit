@@ -302,9 +302,9 @@ For channel setup, plugin authentication and token recovery, see
 | `orbit experiment readout <id>` | Show per-arm outcomes computed now, intention-to-treat with forced assignments left out and counted: `n`, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes, crew mix, each arm's difference from control post-stratified by complexity, guardrail status, a sample-ratio chi-square against the weights (verdict withheld below p = 0.001), and overlay-digest drift. A failed sample-ratio check or any treatment arm below a 0.9 delivered rate sets the verdict to `withheld`; the delivery-rate rule applies before the horizon, even when its primary comparison would otherwise be `winner` or `no difference`. With no withhold, the verdict is `collecting` until every arm reaches `--min-sample` or `--max-days` passes, then `winner <arm>`, `no difference`, or `inconclusive`. `--metric <metric>` reports only that metric; the verdict is still read on the primary metric and guardrails. The shape carries `schema_version`. Read-only; agents may call `orbit.experiment.readout`. |
 | `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show`, `orbit.experiment.list`, and `orbit.experiment.readout`. |
 
-### Crew memory (development builds)
+### Crew memory (experimental)
 
-These commands are available in development builds; the 0.47.0 release does not include them.
+The crew memory commands ship in the 0.48.0 release and are always registered in the CLI. The feature itself is experimental and off by default: the commands that change memory are refused until `crew_memory.enabled` is set to `true` (`orbit config set crew_memory.enabled true`). The read commands work either way.
 
 | Command | Purpose |
 |---|---|

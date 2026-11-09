@@ -1670,7 +1670,7 @@ newest first. Select **Global proposals** to see open proposals and a collapsed
 **Recently closed** group.
 
 The dashboard cannot accept or reject proposals or write memory. Use the
-[crew memory CLI commands](../../reference/cli/#crew-memory-development-builds)
+[crew memory CLI commands](../../reference/cli/#crew-memory-experimental)
 to accept or reject a proposal or write memory.
 
 ## Plugins
