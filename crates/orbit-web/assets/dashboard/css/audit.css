@@ -553,18 +553,20 @@ td.codebase-empty { padding: 16px 14px; }
 .health-card .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 6px;
 }
 .health-card .tool-name {
+  flex: 1 1 100%;
+  min-width: 0;
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 12px;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .health-card .status-badge {
   font-family: var(--font-mono);

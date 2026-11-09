@@ -543,7 +543,8 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
     if (onCardClick) {
       card.classList.add("clickable");
-      card.addEventListener("click", () => onCardClick(row));
+      card.setAttribute("aria-label", `Filter unexpected failures by ${row.tool}`);
+      makeToggleRow(card, { onToggle: () => onCardClick(row) });
     }
     grid.appendChild(card);
   }
