@@ -1322,8 +1322,7 @@ Scorecard rows keep their compatible crew/model ranking and include an
 and provider-reported cost. The score itself still describes the whole row. The top-level scorecard
 `effort_breakdown` covers completed workspace invocations in the selected
 window (`effort_population` names that population).
-Orchestrator authorship has no recorded execution effort and stays `unknown`;
-it never borrows an implementer's effort. Experiment arms include the completed invocations
+Experiment arms include the completed invocations
 linked to their enrolled tasks; managed usage buckets break down by actual
 crew, model and effort. Null/default and historical unknown remain separate.
 
