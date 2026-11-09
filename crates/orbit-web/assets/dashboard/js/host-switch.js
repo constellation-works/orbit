@@ -131,10 +131,17 @@ function buildPicker() {
   // select also carries its name directly — the same mechanism as the
   // workspace picker's "Workspace" name, keeping the two pickers labelled
   // consistently at every width.
-  const select = el("select", { class: "workspace-select host-select", title: "Host", "aria-label": "Host" });
-  select.id = "host-select";
   const serving = getServingHost();
-  const servingOption = el("option", { text: `${serving ? serving.name : "This host"} (serving host)` });
+  const servingName = serving ? serving.name : "This host";
+  const current = getHost();
+  const servingHostLabel = `${servingName} (serving host)`;
+  const select = el("select", {
+    class: "workspace-select host-select",
+    title: current || servingHostLabel,
+    "aria-label": current ? "Host" : `Host: ${servingHostLabel}`,
+  });
+  select.id = "host-select";
+  const servingOption = el("option", { text: servingName });
   servingOption.value = "";
   select.appendChild(servingOption);
   for (const row of getRegisteredHosts()) {
@@ -143,7 +150,6 @@ function buildPicker() {
     option.value = row.name;
     select.appendChild(option);
   }
-  const current = getHost();
   if (current && !findRegisteredHost(current)) {
     const option = el("option", { text: `${current} (not registered)` });
     option.value = current;
@@ -153,7 +159,10 @@ function buildPicker() {
   select.addEventListener("change", () => onSelect(select.value || null));
   const label = el("label", { class: "rail-scope-label", text: "Host" });
   label.htmlFor = "host-select";
-  container.replaceChildren(label, select);
+  const control = el("div", { class: "host-picker-control" });
+  control.appendChild(select);
+  if (!current) control.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
+  container.replaceChildren(label, control);
 }
 
 /// Name the selected host on the provider-usage group, the resource dialog
