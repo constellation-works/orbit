@@ -46,8 +46,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.resident.digest"
         | "orbit.resident.list"
         | "orbit.resident.show"
-        | "orbit.orchestrator.scorecard"
-        | "orbit.orchestrator.show"
         | "orbit.search"
         | "orbit.task.artifact.get"
         | "orbit.task.eligible"

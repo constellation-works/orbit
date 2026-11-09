@@ -239,11 +239,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
             assert_eq!(http["row"], detail["row"]);
             assert_eq!(as_f64(&http["row"]["expected"]["review_rejects"]), 10.0);
             // Extra implementer verdicts cannot change the owners' score formula.
-            for role in [
-                AgentRole::Orchestrators,
-                AgentRole::Reviewers,
-                AgentRole::Pilots,
-            ] {
+            for role in [AgentRole::Reviewers, AgentRole::Pilots] {
                 let other = agent_scorecard(&next, role, &query, std::time::Duration::ZERO);
                 for r in other["rows"].as_array().unwrap() {
                     let raw: f64 = other["terms"]

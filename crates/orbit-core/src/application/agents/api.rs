@@ -53,17 +53,6 @@ impl OrbitRuntime {
         ))
     }
 
-    pub(crate) fn agent_role_detail_for_surface(
-        &self,
-        role: AgentRole,
-        query: &AgentQuery,
-        crew: &str,
-        model: Option<&str>,
-        surface: AgentDetailSurface,
-    ) -> Result<Value, OrbitError> {
-        self.agent_role_detail_with_effort(role, query, crew, model, None, surface)
-    }
-
     pub(crate) fn agent_role_detail_with_effort(
         &self,
         role: AgentRole,
@@ -420,7 +409,7 @@ fn agent_detail_for_surface(
 
 /// The window's problems by owning role, plus Not scored by reason, and
 /// each role's problems by row. Its role totals are the problems behind the
-/// four scorecards.
+/// three scorecards.
 pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Duration) -> Value {
     let window = query.bounds(facts);
     let mut payload = attribution::strip(facts, window);
@@ -444,11 +433,6 @@ fn row_effort_breakdown(
     _effort: &super::effort::RecordedEffort,
 ) -> Value {
     let crew = crews.first().map(String::as_str).unwrap_or_default();
-    // Authors are not execution crews. Task creation/orchestration does not
-    // record dispatch effort, so its historical population stays unknown.
-    if role == AgentRole::Orchestrators {
-        return json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "task_authorship"}]);
-    }
     let rows =
         orbit_store::contracts::agent_effort_usage(facts.invocations.iter().filter(|fact| {
             window.admits(fact.ts)
@@ -471,7 +455,6 @@ fn row_effort_breakdown(
                         .activity_id
                         .as_deref()
                         .is_some_and(|id| id.contains("pilot")),
-                    AgentRole::Orchestrators => false,
                 }
         }));
     if rows.is_empty() {

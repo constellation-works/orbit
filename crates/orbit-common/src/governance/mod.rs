@@ -11,7 +11,6 @@ pub mod friction;
 pub mod memory;
 pub mod notice;
 pub mod operation;
-pub mod orchestrator;
 pub mod resident;
 pub mod search;
 pub mod task;

@@ -34,8 +34,7 @@ pub(super) struct AgentScorecardQuery {
     /// Units a row needs before it is ranked (default 10, at least 1).
     #[serde(default)]
     min_support: Option<usize>,
-    /// The row's crew, or for orchestrators the orchestrator; `/detail` only,
-    /// required there.
+    /// The row's crew; `/detail` only, required there.
     #[serde(default)]
     crew: Option<String>,
     /// The row's model, `model unknown` for none; `/detail` only, optional

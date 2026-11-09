@@ -2,10 +2,9 @@
 //!
 //! The verbs call the read-only `orbit.agents.*` tools, so `--json` is the
 //! payload the dashboard's Agents view reads. What is left here is the text
-//! rendering, shared with the deprecated `orbit orchestrator` aliases: one
-//! row per crew and model for `scorecard`, and one row's terms with the tasks
-//! behind every count for `show`, and one row per recorded required-check
-//! failure for `ci-failures`.
+//! rendering: one row per crew and model for `scorecard`, one row's terms
+//! with the tasks behind every count for `show`, and one row per recorded
+//! required-check failure for `ci-failures`.
 //!
 //! `vision-probe` is hand-wired: it launches one canary run per crew and
 //! prints whether each model returned the code. `rank` is hand-wired too:
@@ -177,7 +176,7 @@ impl Execute for AgentsCommand {
 ///
 /// The selection line and the units footer are status, not records, so they
 /// are notices: stderr in every mode, which keeps stdout to the rows alone.
-pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
+fn scorecard_blocks(value: &Value) -> Vec<Block> {
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let computed = value["status"] != "not_computed";
     let empty = if computed {
@@ -401,7 +400,7 @@ fn per_task_blocks(value: &Value) -> Vec<Block> {
 }
 
 /// One row's terms, then the tasks behind each nonzero count.
-pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
+fn show_blocks(value: &Value) -> Vec<Block> {
     let row = &value["row"];
     let standing = if row["unjudged"] == true {
         "unjudged: no unit judged yet".to_string()

@@ -85,9 +85,6 @@ fn facts(work: &[Work<'_>]) -> AgentFacts {
                 id,
                 title: "ranking observation".into(),
                 status: TaskStatus::Done,
-                orchestrator: None,
-                orchestrator_model: None,
-                origin: None,
                 tags: Vec::new(),
                 context_files: Vec::new(),
                 complexity: Some(if index % 2 == 0 {

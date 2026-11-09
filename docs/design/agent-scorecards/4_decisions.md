@@ -33,7 +33,7 @@ Every recorded problem has exactly one owning role, or none (**Not scored**). Th
 ### Consequences
 
 - The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count; since [ORB-21789] they are also scored, except a defect a pre-landing review already charged.
-- An implementer is not charged for a defect review should have seen; the reviewer is. Orchestrator spec regressions narrow to escape `spec_ambiguous`.
+- An implementer is not charged for a defect review should have seen; the reviewer is. Spec regressions narrow to escape `spec_ambiguous`; since [ORB-23582] they are Not scored with the other spec problems.
 - Cost: a problem that really was shared is charged to one role only, so a weak implementer paired with a weak reviewer looks better than either deserves on its own tab. Reading roles together is required to see that.
 
 ## Cost is shown, never scored
@@ -215,6 +215,24 @@ Every scorecard window ended at the scan's now. `--window 7d` meant the last 7 d
 - The human selection line does not gain an until label, so omitting the flag leaves that line unchanged. The JSON payload gains `until` on every response, including the deprecated orchestrator aliases, which do not grow their own flag.
 - Cost: a caller that compared whole JSON bytes of an omitted window must ignore the new `until` field. Parsing accepts the resident-metrics duration grammar, including a trailing `s` and ignored whitespace, and rejects a bare calendar date rather than guessing one.
 
+## Task authorship is not ranked
+
+**Recorded:** 2026-11-09 · [ORB-23582]
+
+### Context
+
+The orchestrators role ranked the orchestrators that file tasks by their tasks' landings, less spec defects and spec-caused rework. In practice nobody chose or tuned an orchestrator from it, so the role, its deprecated `orbit orchestrator` aliases and its routes cost maintenance without informing a decision.
+
+### Decision
+
+No scorecard ranks task authorship. The orchestrators role and every surface that served it (the `orbit orchestrator` command, the `orbit.orchestrator.*` tools, `--role orchestrators`, `/api/agents/orchestrators/*`) are removed with no replacement. Problems the one-owner rule gave orchestrators keep that rule: they are Not scored with reason `spec`, never moved to another role. Tasks keep their `orchestrator` and `orchestrator_model` attribution.
+
+### Consequences
+
+- Spec edits, criteria blocks and escalations, spec-caused rework and `spec_ambiguous` regressions appear in the attribution strip's Not scored bucket and lower no ranking.
+- The one-per-task charge for a confirmed task-pilot scope hold existed only for this role and is no longer produced; pilot warning terms are unchanged.
+- Bringing authorship back needs a new decision, with an owner named for spec problems under the one-owner rule.
+
 ## Task References
 
 - ORB-23066 — optional `until` window end on the agent scorecard CLI, MCP tools and API.
@@ -223,5 +241,6 @@ Every scorecard window ended at the scan's now. `--window 7d` meant the last 7 d
 - ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
 - ORB-19629 — left escaped regressions unscored pending a larger linked sample and another backtest.
 - ORB-21789 — reran the backtest on 662 links with sites and scored escaped regressions against expected change size, counting a defect once across review layers.
+- ORB-23582 — removed the orchestrators role and its surfaces; spec problems became Not scored.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

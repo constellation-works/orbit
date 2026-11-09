@@ -165,12 +165,6 @@ fn execute_admitted(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::Orchestrator(verb) => super::orchestrator_tools::dispatch(
-            runtime,
-            verb,
-            input,
-            agent_detail_surface(session_context),
-        ),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::Drain(verb) => {
             super::drain_tools::dispatch(runtime, session_context, verb, input)

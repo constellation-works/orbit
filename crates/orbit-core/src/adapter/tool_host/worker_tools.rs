@@ -6,7 +6,6 @@ use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
-use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
@@ -53,9 +52,6 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
-        },
-        OrbitBuiltinAction::Orchestrator(verb) => match verb {
-            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
@@ -391,9 +387,6 @@ pub(crate) fn execute(
                     "claimed worker operation requires its lifecycle boundary".into(),
                 ));
             }
-        },
-        OrbitBuiltinAction::Orchestrator(verb) => match verb {
-            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

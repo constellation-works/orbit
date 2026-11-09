@@ -25,7 +25,6 @@ pub mod memory;
 pub mod migrate;
 pub mod notice;
 pub mod operation;
-pub mod orchestrator;
 pub mod resident;
 pub use operation::args as operation_args;
 pub mod plugin;
@@ -227,10 +226,6 @@ pub enum Commands {
     // ── hidden compatibility commands ──
     #[command(hide = true)]
     Skill(skill::SkillCommand),
-    // Deprecated alias of `orbit agents --role orchestrators`, removed in the
-    // next release.
-    #[command(hide = true)]
-    Orchestrator(orchestrator::OrchestratorCommand),
     // Deprecated path of `orbit config browser-kit`, kept for the compatibility
     // window; each use warns on stderr.
     #[command(name = "browser-kit", hide = true)]

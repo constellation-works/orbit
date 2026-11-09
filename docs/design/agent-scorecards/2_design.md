@@ -16,9 +16,9 @@ related_artifacts: []
 
 # Agent Scorecards — Design
 
-This document is the target design for the Agents view under Analytics: one scorecard per agent role, ranked by model and recorded reasoning effort (orchestrators excepted, §2). It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
+This document is the target design for the Agents view under Analytics: one scorecard per agent role, ranked by model and recorded reasoning effort. It is a **Draft** that becomes the description of current behaviour as the delivery tracks in §10 land. It fixes the attribution rules, the shared score, each role's terms, and the API payload first, so that every track builds against a stable contract.
 
-The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Orchestrators, Implementers, Reviewers and Pilots roles (§5.1–5.4), the API (§6), the CLI and MCP (§7) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--agents).
+The core, dashboard and role tracks have landed. Sections marked **Current** describe the code: the destination and layout (§1), the ranking unit (§2), attribution (§3), the shared score (§4), the Implementers, Reviewers and Pilots roles (§5.2–5.4), the API (§6), the CLI and MCP (§7) and the scan and cache (§8). Everything else is the target. The view itself is described in [user-interface 2_design.md §5c](../user-interface/2_design.md#5c-analytics--agents).
 
 ## 1. Destination and Layout
 
@@ -124,7 +124,7 @@ A row is a **model and recorded reasoning effort**, labelled `model @ effort`, f
 
 - An implementation run with no `crew_model` is ranked as `model unknown` under its crew. It is never assigned a model guessed from the crew's configuration, because configuration changes over time and a guess would quietly merge different models into one row. The payload reports, per row, how many of its runs had no model.
 - An attempt that no local job run records, such as one another machine pulled, is charged to the crew and model on the settlement record of the claim its `pulled_by` entry names (`claim_id`), in the effort-unknown population. The follower reports the leaf run's `resolved_crew` and `crew_model` with every settlement, handoff, failure or release, and the owner keeps them on that record. Without a record, or for a field it lacks, the crew falls back to the one task history had assigned when the attempt started, and the model is `model unknown`. The run is the one the `pulled_by` entry names. An attempt with neither a run, a recorded crew nor an assignment is `crew unknown`.
-- **Orchestrators are the exception.** Orchestrator sessions are not job runs and record no dispatch effort, so their row stays keyed by the task's `orchestrator` attribution and its `orchestrator_model`, in the effort-unknown population. That model is recorded once, when the task is created with an orchestrator [ORB-17291]: an explicit `orchestrator_model` input, else the orchestrator crew's configured model snapshotted at that moment (`orchestrator_model_source` is `explicit` or `crew_config`). It is never read from configuration at scan time, so a later crew-config change does not move old tasks between rows. A task without one, including every task filed before the field existed, ranks under `model unknown` (§5.1).
+- Task authorship is not ranked. The orchestrators role was removed [ORB-23582] (§5.1); a task's `orchestrator` and `orchestrator_model` attribution is still recorded on the task, but no scorecard reads it.
 
 ## 3. Attribution: Each Problem Has One Owner
 
@@ -136,15 +136,14 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 
 | Problem | Record | Owner | Charged to |
 |---|---|---|---|
-| Description or criteria edited after the first implementation run started | task-field history naming the document | Orchestrator | the task's orchestrator attribution |
-| Agent blocker whose kind names a criterion, spec, requirement, scope or ambiguity | `task_blocked_by_agent` | Orchestrator | the task's orchestrator attribution |
-| Final-recovery escalation citing the criteria | `final_recovery_escalated` | Orchestrator | the task's orchestrator attribution |
-| Confirmed task-pilot hold with a qualifying scope finding (§5.1), once per task and deduplicated against its confirming event | task-pilot receipt and shared history settlement | Orchestrator | the task's orchestrator attribution |
-| Repeat run, `[BLOCKED]` PR, unmerged delivery PR or operator requeue with cause `spec` | history, failure handoff, PR refs | Orchestrator | the task's orchestrator attribution |
+| Description or criteria edited after the first implementation run started | task-field history naming the document | Not scored (`spec`) | — |
+| Agent blocker whose kind names a criterion, spec, requirement, scope or ambiguity | `task_blocked_by_agent` | Not scored (`spec`) | — |
+| Final-recovery escalation citing the criteria | `final_recovery_escalated` | Not scored (`spec`) | — |
+| Repeat run, `[BLOCKED]` PR, unmerged delivery PR or operator requeue with cause `spec` | history, failure handoff, PR refs | Not scored (`spec`) | — |
 | The same rework with cause `crew` | same records | Implementer | the implementation run that ended the attempt |
 | Review verdict `reject`, unless it is a false reject | review report | Implementer | the implementation run whose candidate was reviewed |
 | Review verdict `accept_with_fixes` | review report | Implementer | the implementation run whose candidate was reviewed |
-| Regression with escape `spec_ambiguous` | `regression_from` classification | Orchestrator | the culprit task's orchestrator attribution |
+| Regression with escape `spec_ambiguous` | `regression_from` classification | Not scored (`spec`) | — |
 | Regression with escape `review_missed` | `regression_from` classification | Reviewer | the review run that accepted the culprit's landed candidate |
 | Regression with escape `no_test` | `regression_from` classification | Implementer | the culprit's final implementation run; scored as escaped regressions (§5.2) unless a pre-landing review already charged the same defect |
 | Regression with escape `test_not_selected`, `platform_only`, `nondeterministic` or `unclassified` | `regression_from` classification | Not scored | — |
@@ -160,7 +159,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 
 A regression's **escape** decides its owner, because the escape records which safeguard failed. Its **nature** takes precedence: `merge_reintroduced` and `contract_drift` go to Not scored regardless of escape. Every other nature follows the escape's owner. Ownership does not by itself make a problem a scored term; `no_test` regressions are scored for Implementers as escaped regressions (§5.2) [ORB-21789]. Two consequences follow:
 
-- Orchestrator spec regressions use escape `spec_ambiguous` only. An incomplete delivery whose escape is not `spec_ambiguous` follows whichever owner its escape names.
+- Spec regressions use escape `spec_ambiguous` only, and are Not scored. An incomplete delivery whose escape is not `spec_ambiguous` follows whichever owner its escape names.
 - An implementer is not charged for a defect review should have seen (`review_missed`). The reviewer is.
 
 ### 3.2 Which run
@@ -174,7 +173,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 
 ### 3.3 The attribution strip
 
-`GET /api/agents/attribution` counts the window's problems by owner: `orchestrators`, `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (model, recorded effort, contributing crews, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators, so a `no_test` escape that §5.2 counts once as a pre-landing review's verdict still adds one to the Implementers strip. The strip explains that ownership counts include unscored context and rankings use only each role's scored terms [ORB-19644].
+`GET /api/agents/attribution` counts the window's problems by owner: `implementers`, `reviewers`, `pilots` and `not_scored`, with `not_scored` broken down by reason. Each problem contributes once to an owner total and, for a role owner, once to that role's charged rows (model, recorded effort, contributing crews, problems), including roles not yet computed. These are ownership counts, not score contributions: rankings use only their role's scored terms, weights and denominators, so a `no_test` escape that §5.2 counts once as a pre-landing review's verdict still adds one to the Implementers strip. The strip explains that ownership counts include unscored context and rankings use only each role's scored terms [ORB-19644].
 
 The Not scored bucket covers problems without a role owner; it is not a total of every unscored stat. An Implementers-owned `no_test` escape is scored for Implementers as escaped regressions (§5.2) — weight −0.5 at severity weight against the same-tier, expected-size reference, counted once when a pre-landing review already charged the defect — not a Not scored reason (unless attribution is unavailable or the attempt is `no-diff-expected`, as below). Ownership counts and score contributions stay distinct: the strip still counts the escape once for Implementers even when §5.2 counts it once as that review's verdict instead.
 
@@ -183,12 +182,12 @@ The Not scored reasons are:
 - `no_cause`: rework with cause `other` or no recorded cause;
 - `test_not_selected`, `platform_only`, `nondeterministic` and `unclassified`: regressions with those escapes;
 - `merge_reintroduced` and `contract_drift`: regressions with those natures, regardless of escape;
-- `unattributed`: an orchestrator problem on a task with no orchestrator attribution;
+- `spec`: a problem the task's specification caused (the spec rows of §3.1): no role scores task authorship [ORB-23582];
 - `no_run`: an implementer problem on a task with no implementation attempt;
 - `no_diff_expected`: an implementer problem on an attempt admitted as `no-diff-expected` work, which is not implementation (§5.2);
 - `no_review`: a reviewer problem with no settled review to charge, or a REJECTED finding whose filing review job is unknown.
 
-A problem falls in the window of its owner's unit of work: the task's creation for orchestrators, the charged attempt's start for implementers, the settlement for reviewers (the filing attempt's start for a review job), and the problem's own time when Not scored. A regression against a task outside the 90-day scan is not counted.
+A problem falls in the window of its owner's unit of work: the charged attempt's start for implementers, the settlement for reviewers (the filing attempt's start for a review job), and the problem's own time when Not scored. A regression against a task outside the 90-day scan is not counted.
 
 ## 4. The Shared Score
 
@@ -228,7 +227,7 @@ A role's **unit** decides window membership (§5). Problems count whenever they 
 
 Dollar cost, tokens and wall time are never terms. Every role shows them under **Shown, not scored**. Implementers previously plotted score against cost in a role panel; that panel was removed as a product decision [ORB-17736], so cost now appears only under **Shown, not scored**. See [Cost is shown, never scored](./4_decisions.md#cost-is-shown-never-scored). An unavailable implementer cost still reports its counted-attempt coverage there (§5.2), so a null is never read as zero spend or as mostly priced work.
 
-Today's per-8-active-hours rate toggle is dropped: active hours mean something only for orchestrators. Orchestrators show active hours under **Shown, not scored**.
+Today's per-8-active-hours rate toggle is dropped.
 
 ### 4.5a Proposed delivery-quality profile (not a score term)
 
@@ -253,41 +252,11 @@ A regression link records `severity_source`: `filer`, `verified`, `operator`, `b
 
 ## 5. Roles
 
-### 5.1 Orchestrators
+### 5.1 Orchestrators (removed)
 
 **Current.**
 
-Unit: **owned tasks**, meaning tasks whose `orchestrator` attribution names the row, created in the window (unchanged).
-
-Rows are keyed by `(orchestrator, orchestrator_model)`: the crew the task names and the model recorded when it was created (§2). A task with no recorded model counts in the orchestrator's `model unknown` row, so an orchestrator whose older tasks predate the field has two rows until those tasks leave the window. Orchestrator problems are charged to the same row as the task they fall on.
-
-| Term | Weight | Definition |
-|---|---|---|
-| Landed | +1 | Landed tasks, one each whatever their complexity. |
-| Spec defects | −1 | Description or criteria edited after the first run started, criteria blocks, criteria escalations, regressions with escape `spec_ambiguous`, and confirmed task-pilot scope holds (deduplicated below). |
-| Spec-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues whose cause is `spec`. |
-
-A confirmed held task-pilot assessment adds one spec-defect charge when its holding findings include `validation_tool_warnings`, `adr_conflicts`, `contract_conflicts`, `surface_warnings` or `utility_warnings`. These identify a specification that cannot be delivered as written: unavailable validation tools or host capabilities, conflicts with current code or contracts, or holding surface and utility findings. `blocked_by` reports prerequisite ordering and never qualifies by itself; advisory findings never hold. The shared pilot settlement (§5.4) decides confirmation. Dismissed, missed, pending, excluded and clean assessments add no orchestrator charge. The pilot terms and their minimum of 10 settled assessments are unchanged; that threshold does not apply to orchestrator charges.
-
-Pilot warnings charge a task at most once, however many assessments or findings are confirmed. If the history event confirming any qualifying warning already counts as a spec edit, criteria block or criteria escalation on that task, retain that existing charge and add no pilot-warning charge. This deduplicates the confirming event, not unrelated defects later on the same task. The occurrence detail names the qualifying finding kinds and full text, the pilot run (or explicitly says it is unknown), and the confirming event; it remains available in the agent detail payload. Like other orchestrator problems, its window follows the task's creation, not the pilot settlement time.
-
-A row's raw score is the percent of its owned tasks that landed, less its spec problems per 100 owned tasks. A spec problem costs as much as a landing earns, so a task whose spec needed fixing earns nothing, and spec defects on a tenth of a row's tasks cost it 10 points on a scale where every row lands most of its work.
-
-Why the credit ignores complexity:
-
-- Complexity is assessed when a task is filed or piloted, so the orchestrator being ranked largely sets it. Weighting landed tasks 1/2/4/8 by complexity made the credit the mean complexity of a row's tasks × 100. On the 30-day `ws_orbit` data of 2026-10-20, that difference in task mix was the whole ranking, and rating more tasks `hard` raised a score with no better orchestration.
-- The spec penalties counted on the same per-100 scale against a credit of about 260, so a row could double its spec problems without changing rank.
-- Landed initiative was dropped. Origin is unknown on nearly every task (40 of 40 for one row), so the term was 0 for every row. Dropped initiative and unknown origin stay under **Shown, not scored**.
-
-Rework with no recorded cause and regressions with escape `unclassified` count against no one (§3). They are not scored here either, because no cause covers base conflicts, manual blocks and blockers on outside dependencies, which are not the orchestrator's, and scoring them would charge problems the attribution strip lists as Not scored. They are shown beside the score as its confidence instead: the `unclassified` stat counts both on the row's owned tasks, the ranking prints `N unclassified` under the score, and the detail gives the rate per 100 owned tasks. A row with many of them is scored on less evidence than it appears.
-
-Changes from the composite before the agent scorecards:
-
-- Crew-caused rework, review rejects and failed reviewer fixes leave this score; §3 gives their owners.
-- Spec regressions no longer count nature `incomplete` by itself.
-- No compatibility column keeps the old composite, because a dashboard score is not an external contract. The how-to page says once where crew rework went.
-
-The role panel shows each orchestrator's rework split into spec (counted), crew (moved to Implementers), infrastructure and no cause (both not scored). The payload's shown-not-scored `stats` carry `unclassified`, those four rework counts, unclassified regressions (`regressions_unclassified`), dropped initiative, unknown origin and active hours.
+The orchestrators role ranked task authorship by the tasks' `orchestrator` attribution: one point per landed task, less spec defects and spec-caused rework per 100 owned tasks. It was removed on 2026-11-09 because it proved of little use [ORB-23582], together with its CLI, MCP and HTTP surfaces (§6, §7). The problems it scored are now Not scored with reason `spec` (§3.3), and the one-per-task charge it added for a confirmed task-pilot scope hold is no longer produced. Tasks still record `orchestrator` and `orchestrator_model`.
 
 ### 5.2 Implementers
 
@@ -382,7 +351,7 @@ Complexity pools choose a crew's tier mix, so the old ranking largely measured
 pool membership; rejects and repairs also grow with difficulty. After a month
 of data, the tier comparison previously shown only as context now supplies the
 scored expectation for **every** term. This extends the unit-landed principle
-introduced for orchestrators by [ORB-17118] without changing other roles.
+introduced for the former orchestrators role by [ORB-17118] without changing other roles.
 See [the decision](./4_decisions.md#compare-implementers-with-the-fleet-on-their-task-mix).
 
 The public runtime scorecard and detail APIs return `status: ok`. Tasks count
@@ -623,7 +592,7 @@ Each assessment counts against the model and recorded effort of the pilot run it
 
 **Pilot modes** [ORB-21124]. The Pilots payload's `pilot_modes` separates full assessments from re-checks (an explicit re-pilot of a held assessment that re-judges only its holding findings). For each of `full` and `recheck` it reports the window's assessments, the distinct pilot runs behind them, their median and total wall seconds, and their total tokens with `runs_with_tokens` (summed from the run's recorded agent invocations). `rechecks_followed_by_full` counts re-checks a later full assessment of the same task replaced, `rechecks_escalated_to_full` counts re-check runs whose pilot returned a full assessment instead (`mode_reason: recheck_escalated`), and `recheck_full_rate` is their sum over all re-check attempts. These are shown, not scored.
 
-The pilot warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner. A confirmed qualifying hold can separately yield the orchestrator spec-defect charge in §5.1, deduplicated against its confirming event.
+The pilot warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner.
 
 Shown, not scored (`stats`): recall, precision and F1 pooled over the row's tasks, the filer's F1, landed files no pilot selector covered, unused selectors, selectors per task, the share of placed tasks assessed within one tier, cost per assessment (null when a pilot run is missing or unpriced), median pilot run duration, `tier_matrix`, warning precision (confirmed ÷ (confirmed + dismissed), null with neither), holds per 100 assessments written in the window, and the settled, excluded-or-pending and missed-scope-block counts.
 
@@ -651,7 +620,7 @@ GET /api/agents/implementers/size-curves?window=&complexity=&execution=&until=
 
 `until` is optional. Set, it is an RFC 3339 instant or a duration ago (`30d`; units `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`, whitespace ignored, a trailing `s` trimmed). A calendar window is then `[until - window, until)`. A count window takes the newest N delivery attempts with `start < until`. A bare calendar date is not accepted, and a future instant is a 400. Omitted, behaviour is unchanged: nothing is excluded for falling at or after now. Reviewer provisional counts and the other lookbacks stay measured against the scan's now, not against `until`, so a window that ends 30 or more days before now reports `provisional: 0` for reviewers.
 
-`{role}` is `orchestrators`, `implementers`, `reviewers` or `pilots`. For orchestrators, `crew` names the orchestrator attribution and `model` the task's recorded `orchestrator_model`; orchestrator rows stay in the effort-unknown population and take no `effort`. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several. `effort` (a wire name, `provider_default` for a null effort, or `unknown`) narrows a crew-and-model selection that names several rows to one model-and-effort row.
+`{role}` is `implementers`, `reviewers` or `pilots`; `orchestrators` is refused as an unknown role since [ORB-23582]. `model` is the literal `model unknown` for an unknown model. It may be omitted when the crew has one row, and is required when it has several. `effort` (a wire name, `provider_default` for a null effort, or `unknown`) narrows a crew-and-model selection that names several rows to one model-and-effort row.
 
 **Scorecard** answers:
 
@@ -671,7 +640,7 @@ Each row carries `crew` (the first contributing crew), `crews`, `model`, `reason
 
 **Size curves** (implementers only, display only) slice the same cached scan into regression rate by landed change size. The cohort is the landed tasks whose final implementation attempt counts for implementers in the window (it started in the window and the task was not `no-diff-expected` work), with a recorded landed diff size and at least 7 days since completion. A task regressed when any `regression_from` link against it, whatever its nature or escape, was observed (its regressing task created) no later than 7 days after completion. Each series is one crew reference as the run dispatched it, so `opus@medium` and `opus@high` are separate. Models recorded under one crew reference pool into that reference's single series and are listed on the series as metadata; a run with no recorded model adds to the crew's curve without adding a model. `complexity` (`low`, `medium`, `hard`, `xhard` or `unassessed`) narrows the cohort to one tier; any other value is a 400. The response carries the selection header plus `role`, `complexity`, `complexities` (each tier's task count before the filter), `follow_up_days` (7), `mature_by`, `min_bucket_tasks` (10), `min_series_tasks` (30), `sparse_outcomes` (5), `excluded` (`immature`, landed too recently; `no_size`, no recorded diff size) and `series`, largest first. Each series carries `crew`, `models`, `tasks`, `regressed`, `default_selected` (at least `min_series_tasks` tasks and a drawn bucket) and `buckets`, each with `bucket` (`floor(log2(1 + lines))`), `lines_from`, `lines_to`, `tasks`, `regressed`, `rate`, the Wilson 95% `low` and `high`, `drawn` (at least `min_bucket_tasks` tasks) and `sparse` (fewer than `sparse_outcomes` regressed tasks).
 
-**Attribution** answers `window`, `requested_window`, `since`, `until`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `orchestrators`, `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew` (the first contributing crew), `crews`, `model`, `reasoning_effort`, `effort_label`, `label` and `problems`.
+**Attribution** answers `window`, `requested_window`, `since`, `until`, `computed_at`, `cache_ttl_seconds`, `total`, `owners` and `charged`. `owners` maps each of `implementers`, `reviewers` and `pilots` to a count, plus `not_scored` as `{count, reasons}`. `charged` maps each role to its rows, each with `crew` (the first contributing crew), `crews`, `model`, `reasoning_effort`, `effort_label`, `label` and `problems`.
 
 Every response carries an `Age` header: the seconds since its scan.
 
@@ -684,19 +653,19 @@ Errors are 400 for:
 - a malformed `until`, or one in the future;
 - a detail request without `crew`, naming a row the window does not contain, or naming several rows without the `model`/`effort` needed to pick one.
 
-The dashboard reads only these routes. The `/api/orchestrators/*` routes were removed with Analytics › Orchestrators.
+The dashboard reads only these routes. The `/api/orchestrators/*` routes were removed with Analytics › Orchestrators, and `/api/agents/orchestrators/*` with the orchestrators role [ORB-23582].
 
 ## 7. CLI and MCP
 
 **Current.**
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--effort <effort>] [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. `--until` is the same optional window end as the API's `until`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), row (`model @ effort`), crews, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support`, `execution`, `until` and, for `show`, `crew`, `row_model` and `row_effort`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models. A crew-and-model selection that still names several rows takes an effort on each surface (`--effort`, `row_effort`, or the dashboard's `effort` query parameter) to narrow it to one model-and-effort row.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--effort <effort>] [--window <w>] [--min-support <n>] [--execution <scope>] [--until <instant-or-duration>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. `--until` is the same optional window end as the API's `until`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), row (`model @ effort`), crews, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support`, `execution`, `until` and, for `show`, `crew`, `row_model` and `row_effort`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the three is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models. A crew-and-model selection that still names several rows takes an effort on each surface (`--effort`, `row_effort`, or the dashboard's `effort` query parameter) to narrow it to one model-and-effort row.
 
 A missing row names only the caller's recovery controls: the CLI scorecard command and `--window`, the MCP `orbit_agents_scorecard` tool and `window` field, the `orbit.agents.scorecard` tool and `window` field for `orbit tool run`, or `/api/agents/<role>/scorecard` and the `window` query parameter for the dashboard API. Every refusal explains that a crew with no work in the window has no row.
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call the runtime's role scorecard and detail methods, which scan and slice like the API without keeping the scan.
 
-`orbit orchestrator scorecard|show` and `orbit.orchestrator.scorecard|show` remain for one release as aliases of `--role orchestrators` (`show <name>` is `--crew <name>`, and `--model` or `row_model` names the row's model as on `orbit agents show`, so a crew with several recorded models stays selectable). They answer the agents payload with a `deprecation` field naming the replacement, and the command prints that note to stderr, so `--json` stays parseable. They are hidden from `orbit --help` and are removed in the following release.
+The deprecated `orbit orchestrator scorecard|show` command and `orbit.orchestrator.scorecard|show` tools were removed with the orchestrators role [ORB-23582], with no replacement; `orbit orchestrator` is now an unknown command.
 
 ## 8. Scan, Cache and Budget
 
@@ -714,7 +683,7 @@ It reads at most 90 days back. `all` is served as 90 days, so the scan stays bou
 
 **Count windows.** `last50`, `last200`, `last500` and `last1000` select by delivery attempts rather than time: the window starts at the start of the `N`th newest implementation attempt in the scan (the oldest when the scan holds fewer, the scan's reach when it holds none) and ends now. With `until` set, those attempts are the newest N whose start is before `until`, and the window ends at `until`. Every role slices its own unit from that start as for a calendar window. Window membership, attribution and the shared score are unchanged. They reach no further than the scan's 90 days, so a workspace idle for longer still shows nothing. The implementers `--by-type --shadow` report reads recorded crew draws rather than the scan and refuses a count window.
 
-The server keeps one scan per workspace runtime for five minutes, single-flight, like the orchestrator scan. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.
+The server keeps one scan per workspace runtime for five minutes, single-flight. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.
 
 Budget: under 2 s for a warm request and under 15 s for a cold scan on the `ws_orbit` workspace. Measured by the core track on 2026-10-19 with a release build on dk-server-2, over about 6,450 tasks: cold scans of 4.8 s and 5.6 s in two runs, and warm requests under 4 ms. No incremental index is needed. The Analytics › Codebase scan already exceeded 40 s on this workspace, which is why the budget was fixed up front.
 
@@ -726,7 +695,6 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
   - Each problem lands in exactly one owner or in Not scored.
   - A multi-crew task charges each crew for its own attempt.
   - Smoothing pulls a row above the fleet average down toward it and never raises one, and of two rows with the same raw score the larger ranks first.
-  - Orchestrator credit does not grow with assessed complexity, spec defects on a tenth of a row's tasks lower its rank, and unclassified regressions are shown, not scored.
   - Below-support rows sort last without a rank.
   - Regressions filed after the window still count.
   - A delivery-review finding lowers the score of an implementer no pre-landing review saw, and a defect both review layers report counts once.
@@ -767,11 +735,8 @@ Each track updates the docs its change makes stale in the same PR. That includes
 ## 11. Concerns & Honest Limitations
 
 - **Reviewer false alarms are proxies.** The review gate records no verdict on whether its own findings were right. `Disposed` findings and the false-reject rule (§5.3) stand in for that. The rule compares file contents, not intent: a cited file the next run changed for an unrelated reason, or that changed on the base between the two candidates, counts as addressed, and a finding fixed in a file it did not cite is not credited. A dedicated record of an implementer disputing a finding would be exact, but would change the review flow to serve a dashboard. It is deferred until the proxies prove noisy.
-- **Open tasks lower an orchestrator's land rate.** A task created in the window earns nothing until it lands, so an orchestrator that filed many tasks recently reads lower until they land. Every row is measured the same way, and a longer window reduces the effect.
-- **Orchestrator credit ignores how hard the work was.** One landing counts the same at every complexity, because the ranked orchestrator sets complexity. A complexity assessed independently of the orchestrator could weigh landings again.
-- **Orchestrator models are recorded, not observed.** Orchestrator sessions are not job runs, so a row's model is what the task recorded at creation: the orchestrator crew's configured model unless the filer passed `orchestrator_model`. A session that runs another model without saying so is ranked under its crew's model. The field is set once, so changing a task's `orchestrator` later keeps the model recorded for the original crew, and a task that gains its orchestrator after creation stays `model unknown`. Tasks filed before the field existed are never backfilled.
 - **The observed tier inherits cost differences between crews.** Work routed to a costlier crew looks harder. Ranking by cost within the window reduces this but does not remove it, so calibration should be read as a comparison between pilots on similar work.
-- **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be an orchestrator spec defect, but nothing records whether the file was in scope.
+- **Footprint misses without a pilot are not charged.** When no pilot assessed a task, a landed file outside the filer's selectors counts against no one in v1. It could be a spec defect, but nothing records whether the file was in scope.
 - **Pilot warnings are graded per assessment, not per finding.** An edit cannot be tied to one finding, so a hold with one right and one wrong warning counts once, as confirmed. History names only body documents in a field-edit note, so a context, dependency or relation fix after a hold is excluded rather than credited. Naming envelope fields in that note would let them count as scope edits. Overridden holds that then blocked are confirmed whatever the block's cause, since the block's cause is not tied to the warning either.
 - **The escape decides the owner.** An implementer whose visible defects pass a weak reviewer is not charged for them; the reviewer is. Reading the Implementers and Reviewers tabs together is part of the design, not an accident.
 - **Weights are judgment.** They are shown with every score and kept in one table per role so they can be changed in one place. Tests check how scores behave, not the weight values.
@@ -802,5 +767,6 @@ Each track updates the docs its change makes stale in the same PR. That includes
 - ORB-20391 — derived managed versus interactive execution per task, so token metrics count managed runs only.
 - ORB-20629 — made final recovery the single decider for blocked tasks and retired blocked-task triage, the only writer of the block-triage markers.
 - ORB-21124 — split pilot modes into full assessments and targeted re-checks, reported under `pilot_modes`.
+- ORB-23582 — removed the orchestrators role and its CLI, MCP and `/api/agents/orchestrators/*` surfaces; spec-caused problems became Not scored (`spec`).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

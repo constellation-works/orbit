@@ -150,7 +150,7 @@ action whose toolset is off is refused with `toolset_not_enabled`.
 | `plugins` | Plugin tools |
 | `leases` | None. The `orbit.lease.*` tools were removed; the name is kept so selections that list `leases` still load |
 | `experiments` | `orbit.experiment.*` |
-| `analytics` | `orbit.agents.*`, `orbit.orchestrator.show` and `orbit.orchestrator.scorecard` |
+| `analytics` | `orbit.agents.*` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
 | `notice` | `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and `orbit.notice.show`: fleet notices, short expiring announcements every agent and operator in their scope should see |
 | `resident` | `orbit.resident.grant`, `orbit.resident.relay`, `orbit.resident.control`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint`, `orbit.resident.metrics`, `orbit.resident.digest`, `orbit.evolution.add`, `orbit.evolution.list` and `orbit.evolution.show`: resident orchestrator mandates, their authority, the live cycle's checkpoint record, widening measures and the evolution capability-gap ledger. Widening a mandate's authority from an MCP session raises a decision request for the human instead of applying; `orbit evolution decline` is operator-only and CLI-only, so it is not listed over MCP |

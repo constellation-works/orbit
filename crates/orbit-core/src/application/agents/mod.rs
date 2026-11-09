@@ -1,6 +1,6 @@
-//! Agent scorecards: one scorecard per agent role (orchestrators,
-//! implementers, reviewers, pilots), ranked by crew and model, where every
-//! problem counts against exactly one role or is Not scored.
+//! Agent scorecards: one scorecard per agent role (implementers, reviewers,
+//! pilots), ranked by crew and model, where every problem counts against
+//! exactly one role or is Not scored.
 //!
 //! [`OrbitRuntime::agent_scan`](crate::OrbitRuntime::agent_scan) reads the
 //! workspace once ([`AgentFacts`]):
@@ -45,8 +45,7 @@ pub(crate) use facts::review_gate_verdicts;
 pub(crate) use facts::task_execution_modes;
 pub use facts::{AgentFacts, ExecutionMode, Problem};
 
-/// The model of a row whose runs, or for orchestrators whose tasks, recorded
-/// none.
+/// The model of a row whose runs recorded none.
 pub(crate) const MODEL_UNKNOWN: &str = "model unknown";
 /// The crew of a row whose attempt no job run records.
 pub(crate) const CREW_UNKNOWN: &str = "crew unknown";
@@ -77,15 +76,13 @@ const WINDOWS: &[(&str, &str, i64)] = &[
 /// An agent role, each with its own scorecard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AgentRole {
-    Orchestrators,
     Implementers,
     Reviewers,
     Pilots,
 }
 
 impl AgentRole {
-    pub const ALL: [AgentRole; 4] = [
-        AgentRole::Orchestrators,
+    pub const ALL: [AgentRole; 3] = [
         AgentRole::Implementers,
         AgentRole::Reviewers,
         AgentRole::Pilots,
@@ -93,7 +90,6 @@ impl AgentRole {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentRole::Orchestrators => "orchestrators",
             AgentRole::Implementers => "implementers",
             AgentRole::Reviewers => "reviewers",
             AgentRole::Pilots => "pilots",
@@ -107,7 +103,7 @@ impl AgentRole {
             .find(|role| role.as_str() == name.trim())
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
-                    "role must be one of orchestrators, implementers, reviewers or pilots; got '{name}'"
+                    "role must be one of implementers, reviewers or pilots; got '{name}'"
                 ))
             })
     }

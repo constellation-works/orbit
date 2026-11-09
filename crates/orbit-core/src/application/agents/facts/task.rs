@@ -246,19 +246,6 @@ pub(super) fn task_facts(
         id: task.id.to_string(),
         title: task.title.clone(),
         status: task.status,
-        orchestrator: task
-            .orchestrator
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string),
-        orchestrator_model: task
-            .orchestrator_model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            .map(str::to_string),
-        origin: task.origin,
         tags: task.tags.clone(),
         context_files: task.context_files.clone(),
         complexity: task.complexity,

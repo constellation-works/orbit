@@ -6,7 +6,7 @@ Options:
       --role <ROLE>
           The agent role to score
           
-          [possible values: orchestrators, implementers, reviewers, pilots]
+          [possible values: implementers, reviewers, pilots]
 
       --window <WINDOW>
           Count work in this period, or over the newest delivery attempts

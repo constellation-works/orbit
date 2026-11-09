@@ -578,10 +578,6 @@ impl Commands {
                     ),
                 }
             }
-            // The deprecated orchestrator aliases are registry-driven too.
-            Commands::Orchestrator(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Orchestrator))
-            }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
                 Some(admin_meta("log", Some("tail"), Some("log_feed"), None)),

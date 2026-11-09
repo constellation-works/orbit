@@ -7,7 +7,6 @@ use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::memory::MemoryVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, Redaction};
-use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
@@ -302,12 +301,6 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
-        OrbitBuiltinAction::Orchestrator(verb) => match verb {
-            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => ActionPolicy {
-                declared: verb.spec().params,
-                ..NO_REDACTION
-            },
-        },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
@@ -375,9 +368,6 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Automation(verb) => match verb {
             AutomationVerb::Explain | AutomationVerb::ClearStall => false,
-        },
-        OrbitBuiltinAction::Orchestrator(verb) => match verb {
-            OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto

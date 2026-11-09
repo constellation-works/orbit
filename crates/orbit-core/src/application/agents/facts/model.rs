@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    DefectSeverity, RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus,
-    is_no_diff_expected,
+    DefectSeverity, RegressionClassification, TaskComplexity, TaskStatus, is_no_diff_expected,
 };
 use orbit_types::workflow::ReviewVerdict;
 
@@ -52,9 +51,6 @@ pub enum Problem {
     CriteriaBlock,
     /// A final-recovery escalation whose diagnosis cites the criteria.
     CriteriaEscalation,
-    /// A confirmed task-pilot hold on an unattainable specification, counted
-    /// once per task unless its confirming event already has a spec charge.
-    PilotWarning,
     /// An implementation run after the task's first.
     RepeatRun,
     /// A `[BLOCKED]` PR a failure handoff published.
@@ -96,7 +92,6 @@ impl Problem {
             Problem::SpecEdit => "spec_edit",
             Problem::CriteriaBlock => "criteria_block",
             Problem::CriteriaEscalation => "criteria_escalation",
-            Problem::PilotWarning => "pilot_warning",
             Problem::RepeatRun => "repeat_run",
             Problem::BlockedPr => "blocked_pr",
             Problem::UnmergedPr => "unmerged_pr",
@@ -318,11 +313,6 @@ pub(in crate::application::agents) struct TaskFacts {
     pub(in crate::application::agents) id: String,
     pub(in crate::application::agents) title: String,
     pub(in crate::application::agents) status: TaskStatus,
-    /// The task's orchestrator attribution, when it names one.
-    pub(in crate::application::agents) orchestrator: Option<String>,
-    /// The orchestrator's model recorded when the task was created.
-    pub(in crate::application::agents) orchestrator_model: Option<String>,
-    pub(in crate::application::agents) origin: Option<TaskOrigin>,
     /// The task's tags, for task-type classification.
     pub(in crate::application::agents) tags: Vec<String>,
     /// The task's context-file selectors, for task-type classification.

@@ -13,7 +13,6 @@ use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::notice::NoticeVerb;
-use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::resident::ResidentVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -129,8 +128,6 @@ pub enum OrbitBuiltinAction {
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
-    /// The deprecated orchestrator scorecard aliases of [`Self::Agents`].
-    Orchestrator(OrchestratorVerb),
     PipelineInvoke,
     PipelineWait,
     /// Shared lexical search operation.
@@ -179,12 +176,6 @@ impl From<AutomationVerb> for OrbitBuiltinAction {
 impl From<AgentsVerb> for OrbitBuiltinAction {
     fn from(verb: AgentsVerb) -> Self {
         Self::Agents(verb)
-    }
-}
-
-impl From<OrchestratorVerb> for OrbitBuiltinAction {
-    fn from(verb: OrchestratorVerb) -> Self {
-        Self::Orchestrator(verb)
     }
 }
 

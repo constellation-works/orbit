@@ -96,8 +96,6 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.notice.list",
             "orbit.notice.post",
             "orbit.notice.show",
-            "orbit.orchestrator.scorecard",
-            "orbit.orchestrator.show",
             "orbit.pipeline.invoke",
             "orbit.resident.checkpoint",
             "orbit.resident.control",
