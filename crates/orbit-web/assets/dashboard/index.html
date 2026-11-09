@@ -890,11 +890,7 @@
             </span>
             <span class="notices-head-actions" id="notices-post-slot"></span>
           </header>
-          <div class="band-tabs notices-tabs" id="notices-tabs" role="tablist" aria-label="Notices by status">
-            <button class="band-tab active" id="notices-tab-open" type="button" role="tab" aria-selected="true" aria-controls="notices-body" data-list="open">Open <span class="band-tab-count" id="notices-count">-</span></button>
-            <button class="band-tab" id="notices-tab-recent" type="button" role="tab" aria-selected="false" aria-controls="notices-body" tabindex="-1" data-list="recent">Recently closed <span class="band-tab-count" id="notices-recent-count"></span></button>
-          </div>
-          <div class="body" id="notices-body" role="tabpanel" aria-labelledby="notices-tab-open">
+          <div class="body" id="notices-body" role="region" aria-label="Notices">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
               <div class="skeleton skeleton-row" style="width: 80%"></div>
