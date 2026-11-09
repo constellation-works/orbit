@@ -1076,12 +1076,15 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
                 120_000,
             );
             // The gate settlement on the review job's own candidate: its
-            // reviewer is vega, judged by the gate invocation above.
+            // reviewer is vega, judged by the gate invocation above. A
+            // settlement follows the invocation that produced it, and the
+            // invocations above are stamped at insert time, so the gate
+            // settles after them.
             settle(
                 &fixture,
                 &review_job,
                 "rv-gate-1",
-                now - hours(2),
+                Utc::now(),
                 "accept",
                 "vega",
                 &[],
