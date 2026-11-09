@@ -451,16 +451,16 @@ enabling a sweep does not approve them for you.
 `host-health` is a shipped auto-task that reads a machine's health and files
 tasks for what it finds. New workspaces seed it enabled on the workspace owner.
 From your registered owner checkout, you can turn it off or on and set its
-schedule (the default is daily at 07:10, host-local time):
+schedule (the default is weekly on Monday at 07:10, host-local time):
 
 ```bash
 # Pause scheduled passes:
 orbit auto-task toggle host-health off
 # Resume scheduled passes:
 orbit auto-task toggle host-health on
-orbit auto-task update host-health --cron '10 7 * * *'
+orbit auto-task update host-health --cron '10 7 * * 1'
 # Or run on an interval instead:
-orbit auto-task update host-health --every-minutes 1440
+orbit auto-task update host-health --every-minutes 10080
 ```
 
 You can also toggle it from the dashboard's Automation view. Scheduled passes
@@ -493,7 +493,7 @@ service units, launch agent plists or environment values.
   report stays a coverage gap.
 
 A log signature qualifies only after three distinct events across two completed
-collection windows on the same host within seven days. A single error does not
+collection windows on the same host within 14 days. A single error does not
 file a task.
 
 Missing service managers, unreadable logs, rotation gaps and a failed doctor
@@ -524,7 +524,7 @@ pass never runs these steps; you do.
 
 Each pass task attaches `host-health-report.json`, which lists findings by
 signature, their routes, and any coverage gaps, and `host-health-cursor.json`,
-which holds the log positions and seven-day counts the next pass continues from.
+which holds the log positions and 14-day counts the next pass continues from.
 Empty passes attach both too. Open them in the [dashboard](../dashboard/), or
 find the pass tasks and the filings that need you with:
 
@@ -548,13 +548,13 @@ add a collector on the owner. Do not add it on the replica.
      recognize it;
    - in its instructions, the follower's machine ID and the `collector-only`
      role, so the collector is pinned to that machine;
-   - a daily cron earlier than the owner's pass, such as `40 6 * * *`.
+   - a weekly cron earlier than the owner's pass, such as `40 6 * * 1`.
    The [scheduling YAML reference](../../reference/scheduling-yaml/) describes
    the file's fields. The follower must already pull work from the owner.
 
 A collector files nothing. It returns its two artifacts with its own task, and
 the owner imports each host and window once. A follower whose latest report is
-older than 36 hours, or that has no report, shows as a coverage gap, not as a
+older than 8 days, or that has no report, shows as a coverage gap, not as a
 healthy host. Collector definitions are yours to maintain: when a later release
 changes the collection contract, copy the change into your collector yourself.
 
