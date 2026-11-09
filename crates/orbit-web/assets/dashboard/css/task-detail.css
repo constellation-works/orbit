@@ -1919,9 +1919,12 @@ input.field-editor-input {
   overflow-wrap: anywhere;
 }
 
+/* Findings start at the panel's text edge, like the paragraph above them;
+   each opens with its bold kind, so they need no bullet. */
 .pilot-warning-findings {
   margin: 10px 0 0;
-  padding-left: 18px;
+  padding-left: 0;
+  list-style: none;
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
