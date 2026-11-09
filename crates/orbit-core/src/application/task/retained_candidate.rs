@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration as StdDuration;
 
+use orbit_common::process::output_capture::OUTPUT_TRUNCATED_MARKER;
 use orbit_common::process::run_bounded_capped;
 use orbit_engine::run_worktree_paths;
 use orbit_types::task::Task;
@@ -22,6 +23,22 @@ const MAX_CANDIDATE_PATHS: usize = 20;
 const CANDIDATE_STATUS_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const CANDIDATE_STATUS_LIMIT: usize = 256 * 1024;
 
+// A test cap smaller than a fixture's porcelain, so truncation does not
+// need a worktree large enough to fill 256 KiB.
+#[cfg(test)]
+thread_local! {
+    pub(super) static CANDIDATE_STATUS_LIMIT_OVERRIDE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn candidate_status_limit() -> usize {
+    #[cfg(test)]
+    if let Some(limit) = CANDIDATE_STATUS_LIMIT_OVERRIDE.with(|limit| limit.get()) {
+        return limit;
+    }
+    CANDIDATE_STATUS_LIMIT
+}
+
 /// The failed run's own worktree, where its unfinished candidate stays after
 /// the run ends. The backstop reads it; it never writes or copies it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,8 +50,13 @@ pub(crate) enum RetainedCandidate {
         /// Changed and untracked paths relative to the worktree, at most
         /// [`MAX_CANDIDATE_PATHS`]; `Err` when Git could not list them.
         changed_paths: Result<Vec<String>, String>,
-        /// Changed paths beyond the listed ones.
+        /// Changed paths beyond the listed ones. A lower bound when
+        /// `changed_paths_truncated` is set: the status listing was cut
+        /// before every path was read.
         omitted_paths: usize,
+        /// `git status` output exceeded the capture limit, so `omitted_paths`
+        /// counts only the retained prefix.
+        changed_paths_truncated: bool,
     },
     /// No worktree to point at, and why.
     Absent {
@@ -51,12 +73,16 @@ impl RetainedCandidate {
                 path,
                 changed_paths,
                 omitted_paths,
+                changed_paths_truncated,
             } => {
                 let mut value = json!({
                     "status": "present",
                     "path": path.to_string_lossy(),
                     "changed_paths_omitted": omitted_paths,
                 });
+                if *changed_paths_truncated {
+                    value["changed_paths_truncated"] = json!(true);
+                }
                 match changed_paths {
                     Ok(paths) => value["changed_paths"] = json!(paths),
                     Err(error) => value["changed_paths_error"] = json!(error),
@@ -74,9 +100,20 @@ impl RetainedCandidate {
                 path,
                 changed_paths,
                 omitted_paths,
+                changed_paths_truncated,
             } => {
                 let changes = match changed_paths {
+                    Ok(paths) if paths.is_empty() && *changed_paths_truncated => {
+                        "changed paths truncated before a complete record".to_string()
+                    }
                     Ok(paths) if paths.is_empty() => "no uncommitted changes".to_string(),
+                    Ok(paths) if *changed_paths_truncated && *omitted_paths > 0 => format!(
+                        "changed: {} (+{omitted_paths} more, listing truncated)",
+                        paths.join(", ")
+                    ),
+                    Ok(paths) if *changed_paths_truncated => {
+                        format!("changed: {} (listing truncated)", paths.join(", "))
+                    }
                     Ok(paths) if *omitted_paths > 0 => {
                         format!("changed: {} (+{omitted_paths} more)", paths.join(", "))
                     }
@@ -128,8 +165,11 @@ impl OrbitRuntime {
             return absent(format!("run {run_id}'s worktree no longer exists"));
         };
         let mut omitted_paths = 0;
-        let changed_paths = changed_paths(&path).map(|mut paths| {
-            omitted_paths = paths.len().saturating_sub(MAX_CANDIDATE_PATHS);
+        let mut changed_paths_truncated = false;
+        let changed_paths = changed_paths(&path).map(|listing| {
+            changed_paths_truncated = listing.truncated;
+            omitted_paths = listing.paths.len().saturating_sub(MAX_CANDIDATE_PATHS);
+            let mut paths = listing.paths;
             paths.truncate(MAX_CANDIDATE_PATHS);
             paths
         });
@@ -137,8 +177,15 @@ impl OrbitRuntime {
             path,
             changed_paths,
             omitted_paths,
+            changed_paths_truncated,
         }
     }
+}
+
+/// Paths `git status` kept, and whether the capture stopped early.
+struct CandidatePathListing {
+    paths: Vec<String>,
+    truncated: bool,
 }
 
 /// Paths `git status` reports in a worktree — staged, unstaged or untracked —
@@ -146,7 +193,7 @@ impl OrbitRuntime {
 /// index lock nor refreshes the index, and no fsmonitor program runs. Status
 /// never recurses into a gitlink's checkout, whose own config could run a
 /// filter command on the host.
-fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
+fn changed_paths(worktree: &Path) -> Result<CandidatePathListing, String> {
     let mut command = Command::new("git");
     command
         .current_dir(worktree)
@@ -165,7 +212,7 @@ fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
     let output = run_bounded_capped(
         &mut command,
         CANDIDATE_STATUS_TIMEOUT,
-        CANDIDATE_STATUS_LIMIT,
+        candidate_status_limit(),
     )
     .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -175,18 +222,34 @@ fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut records = stdout.split('\0').filter(|record| !record.is_empty());
+    let truncated = output.stdout.ends_with(OUTPUT_TRUNCATED_MARKER);
+    let retained = if truncated {
+        &output.stdout[..output.stdout.len() - OUTPUT_TRUNCATED_MARKER.len()]
+    } else {
+        &output.stdout
+    };
+    // A cut that lands inside a record leaves a prefix that is not a path.
+    let partial_tail = truncated && !retained.is_empty() && !retained.ends_with(b"\0");
+    let stdout = String::from_utf8_lossy(retained);
+    let mut segments: Vec<&str> = stdout
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .collect();
+    if partial_tail {
+        segments.pop();
+    }
+    let mut records = segments.into_iter();
     let mut paths = Vec::new();
     while let Some(record) = records.next() {
         let (Some(status), Some(path)) = (record.get(..2), record.get(3..)) else {
             continue;
         };
-        // A rename or copy is followed by the path it came from.
-        if status.contains(['R', 'C']) {
-            records.next();
+        // A rename or copy is followed by the path it came from. A truncated
+        // listing that lost that path cannot name the rename.
+        if status.contains(['R', 'C']) && records.next().is_none() && truncated {
+            break;
         }
         paths.push(path.to_string());
     }
-    Ok(paths)
+    Ok(CandidatePathListing { paths, truncated })
 }

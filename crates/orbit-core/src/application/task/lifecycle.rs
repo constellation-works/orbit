@@ -93,12 +93,15 @@ pub(crate) fn live_local_run_owning(
 /// The shape mirrors the diagram agents are given in the `orbit` skill:
 ///
 /// ```text
-/// proposed → backlog → in-progress → review → done
-///          ↘ rejected
-/// someday  → in-progress ; blocked → backlog | in-progress
-/// review   → backlog | in-progress | rejected
-/// rejected → backlog | in-progress   (reconsider)
-/// *        → blocked | archived      (from any open status)
+/// proposed    → backlog | someday | in-progress | rejected
+/// backlog     → proposed | someday | in-progress | rejected
+/// someday     → backlog | in-progress | rejected
+/// in-progress → backlog | someday | review | rejected
+/// review      → backlog | in-progress | done | rejected
+/// rejected    → backlog | in-progress          (reconsider)
+/// blocked     → backlog | in-progress
+/// *           → blocked | archived             (from any open status)
+/// done and archived are terminal
 /// ```
 ///
 /// Two rules carry the governance weight. `done` is reachable only from

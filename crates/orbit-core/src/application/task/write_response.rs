@@ -408,7 +408,13 @@ pub fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
 pub fn active_task_triage_map(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, Value>, OrbitError> {
-    let workspace = runtime.paths().repo_root.canonicalize()?;
+    let workspace = match runtime.paths().repo_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "task triage: workspace path unreadable");
+            return Ok(BTreeMap::new());
+        }
+    };
     let mut by_task = BTreeMap::<String, BTreeMap<String, Value>>::new();
     let mut runs = Vec::new();
     for status in [
@@ -416,16 +422,20 @@ pub fn active_task_triage_map(
         JobRunState::Running,
         JobRunState::Retrying,
     ] {
-        runs.extend(
-            runtime
-                .stores()
-                .jobs()
-                .list_job_runs_filtered(&JobRunQuery {
-                    state: Some(status),
-                    include_steps: false,
-                    ..Default::default()
-                })?,
-        );
+        match runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                state: Some(status),
+                include_steps: false,
+                ..Default::default()
+            }) {
+            Ok(found) => runs.extend(found),
+            Err(error) => {
+                tracing::warn!(%error, "task triage: active runs unreadable");
+                return Ok(BTreeMap::new());
+            }
+        }
     }
     let run_ids = runs
         .iter()
