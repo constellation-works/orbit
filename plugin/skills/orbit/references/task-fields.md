@@ -509,7 +509,7 @@ new review; it must not be used to repeat an unknown outcome.
 
 ## Validation your lane can actually run
 
-A criterion that names a tool is a promise about the lane that will run it, and
+A criterion that asks the implementer to call a tool is a promise about the lane that will run it, and
 `required_tools` records that requirement — which is why it
 has to be right at creation. Task-pilot preparation reads each criterion
 against the registered tool surface, the canonical MCP tool list, the
@@ -553,8 +553,11 @@ another OS (see [Native host evidence](#native-host-evidence)).
   the `task_artifacts` handoff even without that tool. A criterion that only
   requires those screenshots is feasible; task-pilot does not warn that
   artifact attachment is unavailable because `required_tools` is empty. A
-  criterion that names a tool the lane does not grant, and that
-  `required_tools` does not declare, is still reported.
+  criterion that asks the implementer to call a tool the lane does not grant,
+  and that `required_tools` does not declare, is reported. A criterion that
+  names an ungranted tool only as the subject of the change — its behaviour,
+  schema or documentation, proven by the task's own tests or doc check rather
+  than by calling it — is not reported by the deterministic allowlist check.
 - **Operator capability.** Governed operations — workflow run observation and
   resume, `orbit.command.exec`,
   and the other destructive surfaces — are reserved for an operator.
