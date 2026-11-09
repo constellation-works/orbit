@@ -220,6 +220,100 @@ pub(super) struct DrainAdmissionTask<'a> {
     pub(super) is_done: &'a dyn Fn(&str) -> bool,
 }
 
+/// The first promotion condition a task fails. Fresh apply records
+/// `classification` and `evidence`; certified reuse records `classification`
+/// and `detail` (footprint holds only).
+struct PromotionHold {
+    classification: &'static str,
+    evidence: Value,
+    detail: Option<String>,
+}
+
+/// Classify one task under the drain promotion policy, in the single priority
+/// order fresh apply and certified reuse share. `None` means it promotes.
+///
+/// The inputs come from each caller's own source: readiness reads `snapshot`,
+/// the opt-out and status read `current`, and `selectors` and `complexity` are
+/// the assessed values. Certified reuse passes a snapshot built from the task
+/// it certifies, so its readiness and no-diff reads match the task's.
+fn classify_promotion(
+    snapshot: &PreparedTaskSnapshot,
+    current: &Task,
+    assessment: &Value,
+    findings: &PromotionFindings<'_>,
+    selectors: &[String],
+    complexity: Option<TaskComplexity>,
+) -> Option<PromotionHold> {
+    let hold = |classification: &'static str, evidence: Value| {
+        Some(PromotionHold {
+            classification,
+            evidence,
+            detail: None,
+        })
+    };
+    let disposition = assessment
+        .get("disposition")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let no_diff = snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+    if current.status != TaskStatus::Proposed {
+        return hold("not_proposed", json!(format!("task is {}", current.status)));
+    }
+    // Apply rejects the task once the pilot write lands; never approve it.
+    if let Some(finding) = assessment
+        .get(super::FINDING_INVALID)
+        .filter(|finding| !finding.is_null())
+    {
+        return hold(super::FINDING_INVALID, finding.clone());
+    }
+    if auto_approval_opted_out(&current.tags) {
+        return hold(
+            auto_approval_hold_classification(&current.tags),
+            Value::Null,
+        );
+    }
+    if !no_diff && let Some(finding) = VerifiedNoDiff::from_assessment(assessment) {
+        return hold(PILOT_VERIFIED_NO_DIFF, finding.to_json());
+    }
+    if let Some(reason) =
+        approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
+    {
+        return hold(reason, Value::Null);
+    }
+    if !findings.already_landed.is_null() {
+        return hold("already_landed", findings.already_landed.clone());
+    }
+    if !findings.duplicate_of.is_null() {
+        return hold("duplicate", findings.duplicate_of.clone());
+    }
+    if let Some(finding) = assessment
+        .get("release_action_required")
+        .filter(|finding| !finding.is_null())
+    {
+        return hold("release_action_required", finding.clone());
+    }
+    if let Some(finding) = footprint_hold(assessment) {
+        return Some(PromotionHold {
+            classification: FOOTPRINT_UNRESOLVED,
+            evidence: finding.clone(),
+            detail: warning_text(finding).map(str::to_string),
+        });
+    }
+    if !findings.warnings.is_empty() {
+        return hold("warnings", json!(findings.warnings));
+    }
+    if !no_diff && (disposition != "selectors" || selectors.is_empty()) {
+        return hold(
+            "no_actionable_selectors",
+            assessment.get("evidence").cloned().unwrap_or(Value::Null),
+        );
+    }
+    if !no_diff && !complexity.is_some_and(TaskComplexity::is_assessed) {
+        return hold("unassessed_complexity", Value::Null);
+    }
+    None
+}
+
 /// Decide one task under drain authority. Pilot output that is malformed
 /// fails the task; every well-formed finding becomes a classified hold.
 pub(super) fn assess_drain_admission(
@@ -237,101 +331,27 @@ pub(super) fn assess_drain_admission(
         dependencies,
         is_done,
     } = task;
-    let disposition = assessment
-        .get("disposition")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let PromotionFindings {
-        duplicate_of,
-        already_landed,
-        warnings,
-    } = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
-    let release_action = assessment
-        .get("release_action_required")
-        .filter(|finding| !finding.is_null());
-    let finding_invalid = assessment
-        .get(super::FINDING_INVALID)
-        .filter(|finding| !finding.is_null());
-    let no_diff = snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
-    let verified_no_diff = (!no_diff)
-        .then(|| VerifiedNoDiff::from_assessment(assessment))
-        .flatten();
-
-    let (decision, classification, evidence) = if current.status != TaskStatus::Proposed {
-        (
+    let findings = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
+    let (decision, classification, evidence) = match classify_promotion(
+        snapshot,
+        current,
+        assessment,
+        &findings,
+        selectors,
+        Some(complexity),
+    ) {
+        Some(hold) => (
             PromotionDecision::Withhold,
-            "not_proposed",
-            json!(format!("task is {}", current.status)),
-        )
-    } else if let Some(finding) = finding_invalid {
-        // Apply rejects the task once the pilot write lands; never approve it.
-        (
-            PromotionDecision::Withhold,
-            super::FINDING_INVALID,
-            finding.clone(),
-        )
-    } else if auto_approval_opted_out(&current.tags) {
-        (
-            PromotionDecision::Withhold,
-            auto_approval_hold_classification(&current.tags),
-            Value::Null,
-        )
-    } else if let Some(finding) = &verified_no_diff {
-        (
-            PromotionDecision::Withhold,
-            PILOT_VERIFIED_NO_DIFF,
-            finding.to_json(),
-        )
-    } else if let Some(reason) =
-        approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
-    {
-        (PromotionDecision::Withhold, reason, Value::Null)
-    } else if !already_landed.is_null() {
-        (
-            PromotionDecision::Withhold,
-            "already_landed",
-            already_landed.clone(),
-        )
-    } else if !duplicate_of.is_null() {
-        (
-            PromotionDecision::Withhold,
-            "duplicate",
-            duplicate_of.clone(),
-        )
-    } else if let Some(finding) = release_action {
-        (
-            PromotionDecision::Withhold,
-            "release_action_required",
-            finding.clone(),
-        )
-    } else if let Some(finding) = footprint_hold(assessment) {
-        (
-            PromotionDecision::Withhold,
-            FOOTPRINT_UNRESOLVED,
-            finding.clone(),
-        )
-    } else if !warnings.is_empty() {
-        (PromotionDecision::Withhold, "warnings", json!(warnings))
-    } else if !no_diff && (disposition != "selectors" || selectors.is_empty()) {
-        (
-            PromotionDecision::Withhold,
-            "no_actionable_selectors",
-            assessment.get("evidence").cloned().unwrap_or(Value::Null),
-        )
-    } else if !no_diff && !complexity.is_assessed() {
-        (
-            PromotionDecision::Withhold,
-            "unassessed_complexity",
-            Value::Null,
-        )
-    } else {
-        (
+            hold.classification,
+            hold.evidence,
+        ),
+        None => (
             PromotionDecision::Promote,
             "verified_ready",
             json!(
                 "pilot validated the task with no duplicate, already-landed, conflict, or warning finding"
             ),
-        )
+        ),
     };
     Ok(Box::new(DrainAdmissionDecision {
         task_id: task_id.to_string(),
@@ -735,7 +755,7 @@ fn classify_reuse(
             detail: Some(format!("{reason}: {detail}")),
         });
     }
-    promotable_reuse(runtime, task, assessment, operation_id)
+    promotable_reuse(runtime, task, &snapshot, assessment, operation_id)
 }
 
 fn reusable_pilot_trigger(kind: JobRunTriggerKind) -> bool {
@@ -799,13 +819,10 @@ fn certified_validated_task(
 fn promotable_reuse(
     runtime: &OrbitRuntime,
     task: &Task,
+    snapshot: &PreparedTaskSnapshot,
     assessment: &Value,
     operation_id: &str,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
-    let malformed = |detail: &str| ExplicitAssessmentReuse::Hold {
-        reason: "pilot_output_malformed",
-        detail: Some(detail.to_string()),
-    };
     let dependencies = task.dependencies();
     let findings = match promotion_findings(
         "select_proposed_approvals",
@@ -815,67 +832,31 @@ fn promotable_reuse(
         &|id| runtime.warning_prerequisite_is_done(id),
     ) {
         Ok(findings) => findings,
-        Err(error) => return Ok(malformed(&error.to_string())),
+        Err(error) => {
+            return Ok(ExplicitAssessmentReuse::Hold {
+                reason: "pilot_output_malformed",
+                detail: Some(error.to_string()),
+            });
+        }
     };
-    let disposition = assessment
-        .get("disposition")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
-    let hold = |reason: &'static str| ExplicitAssessmentReuse::Hold {
-        reason,
-        detail: None,
-    };
-    if task.status != TaskStatus::Proposed {
-        return Ok(hold("not_proposed"));
-    }
-    if assessment
-        .get(super::FINDING_INVALID)
-        .is_some_and(|finding| !finding.is_null())
-    {
-        return Ok(hold(super::FINDING_INVALID));
-    }
-    if auto_approval_opted_out(&task.tags) {
-        return Ok(hold(auto_approval_hold_classification(&task.tags)));
-    }
-    if VerifiedNoDiff::from_assessment(assessment).is_some() && !no_diff {
-        return Ok(hold(PILOT_VERIFIED_NO_DIFF));
-    }
-    if let Some(reason) =
-        approval_disqualification(&task.tags, &task.context_files, task.complexity)
-    {
-        return Ok(hold(reason));
-    }
-    if !findings.already_landed.is_null() {
-        return Ok(hold("already_landed"));
-    }
-    if !findings.duplicate_of.is_null() {
-        return Ok(hold("duplicate"));
-    }
-    if assessment
-        .get("release_action_required")
-        .is_some_and(|finding| !finding.is_null())
-    {
-        return Ok(hold("release_action_required"));
-    }
-    if let Some(finding) = footprint_hold(assessment) {
-        return Ok(ExplicitAssessmentReuse::Hold {
-            reason: FOOTPRINT_UNRESOLVED,
-            detail: warning_text(finding).map(str::to_string),
-        });
-    }
-    if !findings.warnings.is_empty() {
-        return Ok(hold("warnings"));
-    }
-    if !no_diff && (disposition != "selectors" || task.context_files.is_empty()) {
-        return Ok(hold("no_actionable_selectors"));
-    }
-    if !no_diff && !task.complexity.is_some_and(TaskComplexity::is_assessed) {
-        return Ok(hold("unassessed_complexity"));
-    }
-    Ok(ExplicitAssessmentReuse::Promote {
-        operation_id: operation_id.to_string(),
-    })
+    Ok(
+        match classify_promotion(
+            snapshot,
+            task,
+            assessment,
+            &findings,
+            &task.context_files,
+            task.complexity,
+        ) {
+            Some(hold) => ExplicitAssessmentReuse::Hold {
+                reason: hold.classification,
+                detail: hold.detail,
+            },
+            None => ExplicitAssessmentReuse::Promote {
+                operation_id: operation_id.to_string(),
+            },
+        },
+    )
 }
 
 /// A test seam just before the drain's approval takes its locks, standing in
