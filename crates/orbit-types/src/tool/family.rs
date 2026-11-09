@@ -184,6 +184,34 @@ pub fn tool_requirement_name(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// A stored tool list with every pre-family operation name rewritten to its
+/// family action, sorted and deduplicated as a stored list is. `None` when the
+/// list names no pre-family operation, so a caller writes only what changed.
+/// The stored-data migration and its self-heal [ORB-23552] converge records
+/// written before tool families [ORB-23280] through this one mapping.
+pub fn family_action_tool_names(names: &[String]) -> Option<Vec<String>> {
+    if !names.iter().any(|name| is_tool_family_operation(name)) {
+        return None;
+    }
+    Some(crate::task::normalize_required_tools(
+        names
+            .iter()
+            .map(|name| tool_requirement_name(name).into_owned())
+            .collect(),
+    ))
+}
+
+/// The inverse of [`tool_requirement_name`]: the operation a `family:action`
+/// name was stored as before tool families, such as `orbit.task.artifact.put`
+/// for `orbit.task.artifact:put`. Any other name is returned unchanged. A body
+/// fingerprinted before tool families is recognized through this form.
+pub fn pre_family_tool_name(name: &str) -> &str {
+    if !name.contains(TOOL_ACTION_SEPARATOR) {
+        return name;
+    }
+    tool_family_action(name).map_or(name, |(_, action)| action.operation)
+}
+
 /// Whether `name` is an internal family operation rather than a tool.
 pub fn is_tool_family_operation(name: &str) -> bool {
     tool_family_of_operation(name).is_some()

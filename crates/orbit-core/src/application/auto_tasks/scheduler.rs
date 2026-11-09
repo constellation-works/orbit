@@ -422,6 +422,11 @@ pub(crate) fn run_auto_task_scheduler_with_cache(
     options: SchedulerOptions,
     cache: &SourceCache,
 ) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
+    // Definitions that still name pre-family tools are rewritten before the
+    // pass loads them [ORB-23552].
+    if !options.dry_run {
+        runtime.heal_local_auto_task_tool_names_best_effort();
+    }
     orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(
         &CachedDispatch { runtime, cache },
         now,

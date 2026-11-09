@@ -397,6 +397,11 @@ fn build_runtime(
     if reconcile_stale_runs && !write_free && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();
     }
+    if !write_free && !read_only && !managed_run_context_from_env() {
+        // Records an earlier release wrote with pre-family tool names
+        // converge once per root, with no manual step [ORB-23552].
+        runtime.migrate_pre_family_tool_names_on_open();
+    }
     Ok(runtime)
 }
 

@@ -177,6 +177,78 @@ impl TaskV2Store {
         })
     }
 
+    /// Rewrite the task's stored pre-family tool names (`required_tools`,
+    /// `granted_tools`) to family actions [ORB-23552], recording one
+    /// `tool_names_migrated` history event. The rewrite names the same
+    /// operations, so it is a migration rather than an edit: `updated_at`, the
+    /// creation grant and every other field stay as they were. Returns whether
+    /// anything changed; a task already holding family actions is untouched.
+    pub(crate) fn migrate_task_tool_names(
+        &self,
+        id: &str,
+        actor: &str,
+    ) -> Result<bool, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if actor.trim().is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "task actor must not be empty".to_string(),
+            ));
+        }
+        self.with_task_lock(id, || {
+            let mut bundle = self.read_existing_bundle(id)?;
+            let required =
+                orbit_types::tool::family_action_tool_names(&bundle.envelope.required_tools);
+            let granted =
+                orbit_types::tool::family_action_tool_names(&bundle.envelope.granted_tools);
+            if required.is_none() && granted.is_none() {
+                return Ok(false);
+            }
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut changes = Vec::new();
+            if let Some(after) = &required {
+                changes.push((
+                    "required_tools",
+                    bundle.envelope.required_tools.as_slice(),
+                    after.as_slice(),
+                ));
+            }
+            if let Some(after) = &granted {
+                changes.push((
+                    "granted_tools",
+                    bundle.envelope.granted_tools.as_slice(),
+                    after.as_slice(),
+                ));
+            }
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&bundle.events),
+                at: Utc::now(),
+                by: actor.to_string(),
+                event_type: orbit_types::task::TOOL_NAMES_MIGRATED_EVENT.to_string(),
+                note: Some(orbit_types::task::tool_names_migrated_note(&changes)),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            };
+            self.bundle_store.append_event(id, &event)?;
+            bundle.events.push(event);
+            if let Some(after) = required {
+                bundle.envelope.required_tools = after;
+            }
+            if let Some(after) = granted {
+                bundle.envelope.granted_tools = after;
+            }
+            self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+            pending.finish();
+            self.publish_task_index_and_lease_notices(
+                &bundle.envelope,
+                "task tool names migration",
+            )?;
+            Ok(true)
+        })
+    }
+
     pub(crate) fn update_task_document(
         &self,
         id: &str,
