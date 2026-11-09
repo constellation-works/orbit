@@ -25,7 +25,11 @@ export const AGENT_ROLES = ["rank", "implementers", "reviewers", "pilots"];
 // The attribution strip and the scorecard counts. Rank is a view of the
 // implementer board, not an owner of problems.
 const SCORECARD_ROLES = ["implementers", "reviewers", "pilots"];
+// Every owner the attribution total counts. Orchestrators has no tab (its
+// links open Rank), so the strip names it without a link.
+const STRIP_OWNERS = ["orchestrators", ...SCORECARD_ROLES];
 const ROLE_LABELS = {
+  orchestrators: "Orchestrators",
   implementers: "Implementers",
   reviewers: "Reviewers",
   pilots: "Pilots",
@@ -786,13 +790,15 @@ function stateNode(key, heading, text) {
 
 // Who each problem counts against, a collapsed disclosure under the ranking:
 // one bar across the window's problems by owning role plus Not scored, the
-// current role highlighted, each legend entry linking to its role.
+// current role highlighted, each role's legend entry linking to its tab. The
+// retired Orchestrators owner is counted in the total, so it gets a segment
+// and a legend entry too, but no link.
 function stripNode() {
   const owners = (attribution && attribution.owners) || {};
   const notScored = owners.not_scored || { count: 0, reasons: {} };
   const total = attribution && typeof attribution.total === "number" ? attribution.total : 0;
   const segments = [
-    ...SCORECARD_ROLES.map((each) => ({ key: each, label: ROLE_LABELS[each], count: owners[each] || 0 })),
+    ...STRIP_OWNERS.map((each) => ({ key: each, label: ROLE_LABELS[each], count: owners[each] || 0 })),
     { key: "not_scored", label: "Not scored", count: notScored.count || 0 },
   ];
   const bar = el("div", { class: "agents-strip-bar", role: "img" });
@@ -822,6 +828,8 @@ function stripNode() {
         ...label,
         ...(reasons.length ? [el("span", { class: "visually-hidden", text: reasons.join(" · ") })] : []),
       ]);
+    } else if (segment.key === "orchestrators") {
+      entry = el("span", { class: "agents-strip-entry" }, label);
     } else {
       entry = el("a", { class: "agents-strip-entry" }, label);
       entry.href = roleHref(segment.key);

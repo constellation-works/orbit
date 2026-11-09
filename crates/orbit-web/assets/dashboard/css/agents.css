@@ -86,6 +86,7 @@
 .agents-scan-stale { color: var(--warn-fg); font-weight: 600; }
 
 /* Owners share one palette across the strip, its legend and the panels. */
+.agents-owner-orchestrators { --owner: var(--status-proposed); }
 .agents-owner-implementers { --owner: var(--status-in-progress); }
 .agents-owner-reviewers { --owner: var(--status-review); }
 .agents-owner-pilots { --owner: var(--status-done); }
