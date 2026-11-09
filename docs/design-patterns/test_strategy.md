@@ -1555,3 +1555,14 @@ The step error is the refusal's `Display`, which prefixes the settlement with th
 refused action (`deterministic action \`review_gate_settle\` refused: review_abandoned: ...`).
 The verdict parse anchors the marker after that prefix, so the abandoned settlement
 reports `abandoned`; anchoring on the bare settlement text alone misread it as `incomplete`.
+
+`crates/orbit-engine/src/activity_job/workspace/tests/boundary_guard.rs::stationary_primary_generation_records_are_benign`
+(criterion 1, policy matching) guards ORB-23736: a stationary primary whose
+only dirt is Orbit's own generation records (`.generation-compat.json`,
+`.generation-image-digest.json`, a `.generation-participants/` record) is
+benign, while a stationary source path outside those records and outside
+`.orbit/` still fails as `primary_checkout_drift`. It drives the production
+`WorktreeBoundaryGuard::verify` entry point over two disposable Git checkouts
+with real fingerprints, proving both the benign and the still-drift rows plus
+that the guard stages, commits, resets, or cleans nothing. A full pipeline
+with linked worktrees and a provider run cannot prove this guard cheaply.

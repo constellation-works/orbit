@@ -425,6 +425,7 @@
         "activity_job/cli_runner/tests/stdout_preview.rs::stdout_text_preview_redacts_a_secret_that_straddles_the_window_cap_after_shrinkage",
         "activity_job/cli_runner/tests/stdout_preview.rs::tail_preview_hides_boundary_secret_with_mixed_redaction_lengths",
         "activity_job/job_executor/tests/step.rs::compute_backoff_ms_respects_initial_max_and_zero_attempt_boundary",
+        "activity_job/workspace/tests/boundary_guard.rs::stationary_primary_generation_records_are_benign",
         "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
         "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
         "executor/automation/ci/tests/collect.rs::checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound",
