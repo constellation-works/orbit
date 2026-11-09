@@ -26,7 +26,10 @@
 //!   same set. That set keeps one shared rerun. Logged transient
 //!   failures use the configured bounded infrastructure budget and exponential
 //!   backoff, then resume landing. Spending that budget records the class
-//!   and count. When the single rerun is already spent and the set is still
+//!   and count and the run fails. A transient failure the rerun planner will
+//!   not run again, worded as failed again after its one rerun, holds the run
+//!   as `delivery_check_evidence_inconclusive` and dispatches no repair.
+//!   When the single rerun is already spent and the set is still
 //!   only those conclusions or a `ci-await` timeout, it records `required CI
 //!   jobs keep cancelling or timing out` and the job names, and dispatches
 //!   no repair. A job that concluded
@@ -70,15 +73,16 @@
 //!   named, and it does not void a decision the readable jobs already make,
 //!   such as every readable job carrying the same inherited or candidate
 //!   signature. The landing stays unclassified, and spends nothing, only
-//!   when no readable job decides. A missing log of a `cancelled` or
+//!   when no readable job decides; that stay holds the run as
+//!   `delivery_check_evidence_inconclusive`. A missing log of a `cancelled` or
 //!   `timed_out` job is not this case: that conclusion is transient without
 //!   the log.
 //! - **inconclusive**: a log was read and still does not decide: it names no
 //!   diagnostic, so its signature is only the failed step's name, or a read
 //!   the classification rests on (the base's jobs, a base log) failed. A
 //!   failed read is not a successful empty answer, and neither proves the
-//!   base or the candidate at fault, so the landing stops in review and
-//!   spends nothing.
+//!   base or the candidate at fault, so the landing holds the run in review
+//!   as `delivery_check_evidence_inconclusive` and spends nothing.
 //!
 //! [ORB-16185] A required check that no failed job answers, such as a
 //! provider app's aggregate result beside passing analysis jobs, is not
