@@ -5,7 +5,7 @@
 // `/api/memory/*`, which calls the operations `orbit memory` uses and writes
 // nothing; accepting, rejecting and writing memory stay on the operator CLI.
 
-import { bindTaskLink, el, enableRovingRows, fetchJson, formatAge, formatDate, formatDateTime, isAggregateView, makeRowDisclosure, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { bindTaskLink, el, enableRovingRows, fetchJson, formatAge, formatDate, formatDateTime, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 import { setActiveTab } from './router.js';
 
@@ -21,8 +21,43 @@ const accordionMedia = window.matchMedia(ACCORDION_QUERY);
 let selected = null;
 let spaces = null;
 let proposals = null;
-let detail = { key: null, space: null, history: null, error: null };
+// The visit (`getWorkspaceRevision`) these payloads were read for. A host
+// change bumps that revision too. The memory key is often `global` in every
+// workspace, so a key match alone cannot tell one visit's files from another's.
+let listRevision = null;
+let detail = { key: null, space: null, history: null, error: null, revision: null };
 const expanded = { keys: false, history: false, proposals: false };
+
+function emptyDetail() {
+  return { key: null, space: null, history: null, error: null, revision: null };
+}
+
+function clearMemoryDom() {
+  for (const id of ["memory-body", "memory-detail"]) {
+    const node = document.getElementById(id);
+    if (node) node.replaceChildren();
+  }
+}
+
+// Drop every cached payload at the scope boundary, before a repaint can read
+// it. The list panel is reset by the shared panel scope listener; the detail
+// panel is not, when the open selection has no detail request of its own
+// (global proposals). Clear both so a repaint cannot keep the previous visit.
+// A later read of the same visit may keep its detail until the refresh lands.
+function retireMemoryCache() {
+  spaces = null;
+  proposals = null;
+  listRevision = null;
+  detail = emptyDetail();
+  clearMemoryDom();
+}
+
+onWorkspaceChange(retireMemoryCache);
+
+function detailInVisit(key) {
+  if (detail.revision !== getWorkspaceRevision() || detail.key !== key) return null;
+  return detail;
+}
 
 const EVENT_LABELS = {
   dream_minted: "Dream minted",
@@ -83,12 +118,15 @@ export function fetchAndRenderMemory() {
     renderPanelPlaceholder("memory-detail");
     return Promise.resolve();
   }
+  const revision = getWorkspaceRevision();
   return requestPanel("memory-body", "memory", () => Promise.all([
     fetchJson("/api/memory/spaces"),
     fetchJson("/api/memory/proposals"),
   ]), ([spacesPayload, proposalsPayload]) => {
+    if (revision !== getWorkspaceRevision()) return;
     spaces = spacesPayload;
     proposals = proposalsPayload;
+    listRevision = revision;
     paint();
     return fetchDetail();
   });
@@ -96,16 +134,19 @@ export function fetchAndRenderMemory() {
 
 function fetchDetail() {
   const key = shownSelection();
-  if (!spaces?.enabled || !key || key === MEMORY_PROPOSALS) return Promise.resolve();
+  const revision = getWorkspaceRevision();
+  if (!spaces?.enabled || !key || key === MEMORY_PROPOSALS || listRevision !== revision) return Promise.resolve();
   const query = `key=${encodeURIComponent(key)}`;
   return requestPanel("memory-detail", `memory:${key}`, () => Promise.all([
     fetchJson(`/api/memory/space?${query}`),
     fetchJson(`/api/memory/history?${query}`),
   ]), ([space, history]) => {
-    detail = { key, space, history, error: null };
+    if (revision !== getWorkspaceRevision()) return;
+    detail = { key, space, history, error: null, revision };
     paint();
   }).catch((error) => {
-    detail = { key, space: null, history: null, error: error.message || String(error) };
+    if (revision !== getWorkspaceRevision()) return;
+    detail = { key, space: null, history: null, error: error.message || String(error), revision };
     paint();
   });
 }
@@ -114,7 +155,7 @@ function fetchDetail() {
 
 function paint() {
   const body = document.getElementById("memory-body");
-  if (!body || !spaces) return;
+  if (!body || !spaces || listRevision !== getWorkspaceRevision()) return;
   enableRovingRows(body);
   const count = document.getElementById("knowledge-count");
   if (!spaces.enabled) {
@@ -242,15 +283,16 @@ function paintDetailPanel(key) {
 
 function detailHash(key) {
   return key === MEMORY_PROPOSALS
-    ? { key, proposals, all: expanded.proposals }
-    : { key, detail: detail.key === key ? detail : null, all: expanded.history };
+    ? { key, proposals, revision: listRevision, all: expanded.proposals }
+    : { key, detail: detailInVisit(key), all: expanded.history };
 }
 
 function detailNodes(key) {
   if (key === MEMORY_PROPOSALS) return proposalNodes();
-  if (detail.key !== key) return [emptyState("Loading…")];
-  if (detail.error) return [emptyState(detail.error)];
-  const space = detail.space || {};
+  const current = detailInVisit(key);
+  if (!current) return [emptyState("Loading…")];
+  if (current.error) return [emptyState(current.error)];
+  const space = current.space || {};
   const nodes = [];
   if (space.revision == null) {
     const text = key === "global" ? "Global memory has no revision yet." : "This model has no revision yet.";
@@ -271,7 +313,7 @@ function detailNodes(key) {
       el("div", { class: "knowledge-body memory-files" }, (space.files || []).map(memoryFile)),
     ]));
   }
-  nodes.push(historySection(detail.history));
+  nodes.push(historySection(current.history));
   return nodes;
 }
 
@@ -390,6 +432,7 @@ function eventNote(event) {
 // ---- proposals ----------------------------------------------------------------
 
 function proposalNodes() {
+  if (listRevision !== getWorkspaceRevision()) return [emptyState("Loading…")];
   const open = Array.isArray(proposals?.open) ? proposals.open : [];
   const closed = Array.isArray(proposals?.recently_closed) ? proposals.recently_closed : [];
   const nodes = [detailHead("global", [`${open.length} open`])];
