@@ -129,7 +129,7 @@ pub enum Block {
     /// mode (descriptions wrap aligned to their column). Plain and
     /// machine-readable modes keep the text whole, so no information is lost
     /// outside terminal fitting.
-    ConfigShow(String),
+    ConfigShow(ConfigShow),
     /// Human prose, word-wrapped to the sink width in terminal table mode.
     /// Explicit line breaks survive; pipes and plain mode keep the text whole.
     Prose(String),
@@ -157,10 +157,9 @@ impl Block {
 
     /// A `config show` block. Like [`Block::text`], one trailing newline is
     /// dropped because the renderer adds its own when it prints the block.
-    pub fn config_show(text: impl Into<String>) -> Self {
-        let mut text = text.into();
-        if text.ends_with('\n') {
-            text.pop();
+    pub fn config_show(mut text: ConfigShow) -> Self {
+        if text.text.ends_with('\n') {
+            text.text.pop();
         }
         Self::ConfigShow(text)
     }
@@ -192,6 +191,36 @@ impl Block {
     /// A grid block.
     pub fn table(table: Table) -> Self {
         Self::Table(Box::new(table))
+    }
+}
+
+/// Aligned configuration text with trailing-prose boundaries supplied by its producer.
+/// Offsets refer to UTF-8 line starts; columns count characters, as the formatter does.
+#[derive(Debug, Default)]
+pub struct ConfigShow {
+    pub(crate) text: String,
+    pub(crate) trailing_columns: std::collections::BTreeMap<usize, usize>,
+}
+
+impl ConfigShow {
+    /// Append verbatim text without changing previously recorded boundaries.
+    pub(crate) fn push_str(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    /// Mark the current position as this line's trailing prose column.
+    /// Call after writing all padded cells and their final gutter.
+    pub(crate) fn mark_trailing_column(&mut self) {
+        let line_start = self.text.rfind('\n').map_or(0, |index| index + 1);
+        let column = self.text[line_start..].chars().count();
+        self.trailing_columns.insert(line_start, column);
+    }
+}
+
+impl std::fmt::Write for ConfigShow {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.push_str(text);
+        Ok(())
     }
 }
 

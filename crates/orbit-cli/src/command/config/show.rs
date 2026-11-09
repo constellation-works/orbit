@@ -4,6 +4,7 @@ use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::output::payload::ConfigShow;
 
 use super::render;
 use super::support::{
@@ -204,7 +205,7 @@ pub(super) fn effective_text(
     runtime: &OrbitRuntime,
     values: &[EffectiveConfigValue],
     all: bool,
-) -> String {
+) -> ConfigShow {
     render::effective_text(runtime, values, all)
 }
 
@@ -257,6 +258,6 @@ pub(super) fn scoped_text(
     snapshot: &orbit_config::ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
     all: bool,
-) -> String {
+) -> ConfigShow {
     render::scoped_text(runtime, store, snapshot, settings, all)
 }

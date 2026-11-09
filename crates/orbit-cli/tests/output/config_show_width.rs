@@ -4,29 +4,33 @@
 
 const DESCRIPTION: &str = "The crew dispatched when a task names no crew of its own, chosen from the configured crews and falling back only when that crew is empty or unset [allowed: any configured crew name]";
 
-fn sample_text() -> String {
-    let mut text = String::new();
+fn sample_text() -> crate::output::payload::ConfigShow {
+    let mut text = crate::output::payload::ConfigShow::default();
     text.push_str("orbit config — effective\n\n");
     text.push_str(&format!(
         "{:<28} how tasks are shipped, reviewed and landed by the delivery pipeline on this machine\n",
         "Delivery (workflow.*)"
     ));
     text.push_str(&format!(
-        "  {:<24}  {:<12}  {:<9}  {DESCRIPTION}\n",
+        "  {:<24}  {:<12}  {:<9}  ",
         "default_crew", "golden", "workspace"
     ));
+    text.mark_trailing_column();
+    text.push_str(&format!("{DESCRIPTION}\n"));
     text.push_str(&format!(
         "{:<28} 1 defined, all from workspace\n",
         "Crews (crews.*)"
     ));
     text.push_str(&format!(
-        "  {:<10}  {:<7}  {:<9}  {:<8}  {:<12}  {:<6}  {:<4}  {DESCRIPTION}\n",
+        "  {:<10}  {:<7}  {:<9}  {:<8}  {:<12}  {:<6}  {:<4}  ",
         "golden", "true", "workspace", "codex", "global-model", "high", "cli"
     ));
+    text.mark_trailing_column();
+    text.push_str(&format!("{DESCRIPTION}\n"));
     text.push_str("\nPaths\n");
-    text.push_str(
-        "  global root  /home/operator/.orbit/workspaces/a-very-long-workspace-name/config.toml\n",
-    );
+    text.push_str("  global root  ");
+    text.mark_trailing_column();
+    text.push_str("/home/operator/.orbit/workspaces/a-very-long-workspace-name/config.toml\n");
     text
 }
 
@@ -130,5 +134,101 @@ fn config_show_text_fits_terminal_widths() {
 #[test]
 fn config_show_text_plain_keeps_every_line_whole() {
     let body = render_fixture("plain");
-    assert_eq!(body, sample_text());
+    assert_eq!(body, sample_text().text);
+}
+
+/// Multi-word cells must not be mistaken for extra columns in terminal output.
+#[cfg(unix)]
+#[test]
+fn config_show_preserves_multi_word_columns() {
+    use super::table_rendering::run_cli_on_terminal_at_width;
+    use crate::task_workspace::{TaskSeed, TestWorkspace};
+
+    let workspace = TestWorkspace::new("config-columns", TaskSeed::new(""));
+    let path = workspace.work.join(".orbit/config.toml");
+    let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    config["execution"]["env"]["pass"] = toml::Value::try_from(["cargo", "make"]).unwrap();
+    config.as_table_mut().unwrap().insert("crews".into(), toml::toml! {
+        [golden]
+        provider = "codex"
+        model = "global-model"
+        effort = "high"
+        tags = ["cli", "rust"]
+        description = "A crew description long enough to wrap across several lines while keeping every tag in its cell and every continuation beneath the description column"
+    }.into());
+    std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+
+    let plain = workspace.run(
+        &["config", "show", "--all", "--format", "plain"],
+        "plain config",
+    );
+    let plain = String::from_utf8(plain.stdout).unwrap();
+    let ansi = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    let terminal = run_cli_on_terminal_at_width(&workspace, &["config", "show", "--all"], "120");
+    let terminal = String::from_utf8(terminal.stdout).unwrap();
+    let terminal = ansi.replace_all(&terminal, "");
+    for (label, cell, state) in [
+        ("env.pass", "cargo, make", "workspace"),
+        ("golden", "cli, rust", ""),
+    ] {
+        let original = plain
+            .lines()
+            .find(|line| line.trim_start().starts_with(label))
+            .unwrap();
+        let cell_end = original.find(cell).unwrap() + cell.len();
+        let prefix_end = if state.is_empty() {
+            cell_end
+        } else {
+            original[cell_end..].find(state).unwrap() + cell_end + state.len()
+        };
+        let description_start = prefix_end
+            + original[prefix_end..]
+                .chars()
+                .take_while(|c| *c == ' ')
+                .count();
+        let prefix = &original[..description_start];
+        if state.is_empty() {
+            let header = plain
+                .lines()
+                .find(|line| line.trim_start().starts_with("NAME "))
+                .unwrap();
+            assert_eq!(
+                description_start,
+                header.find("DESCRIPTION").unwrap(),
+                "crew description follows the complete TAGS column"
+            );
+        }
+        let lines = terminal.lines().collect::<Vec<_>>();
+        let row = lines
+            .iter()
+            .position(|line| line.starts_with(prefix))
+            .unwrap_or_else(|| panic!("{label} lost column padding: {terminal}"));
+        assert!(original.chars().count() > 120, "fixture must wrap {label}");
+        assert!(
+            description_start + 24 <= 120,
+            "fixture must leave room for aligned prose"
+        );
+        let continuation = lines[row + 1];
+        assert_eq!(
+            continuation.chars().take_while(|c| *c == ' ').count(),
+            prefix.chars().count(),
+            "{label} description alignment: {terminal}"
+        );
+        let mut rendered = lines[row][prefix.len()..].to_string();
+        let mut next = row + 1;
+        while next < lines.len() && lines[next].starts_with(&" ".repeat(prefix.chars().count())) {
+            rendered.push(' ');
+            rendered.push_str(lines[next].trim());
+            next += 1;
+        }
+        assert_eq!(
+            rendered,
+            original[description_start..]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            "{label} retains its full description"
+        );
+    }
+    assert!(terminal.lines().all(|line| line.chars().count() <= 120));
 }

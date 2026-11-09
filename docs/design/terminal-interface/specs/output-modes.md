@@ -27,7 +27,15 @@ The sink is resolved once at startup and answers every environment question. Not
 
 `width == 0` disables truncation rather than assuming 80. Assuming a width for a sink that has none produces silently truncated data in a file, which is worse than a long line.
 
-Diagnostic summary prose and table notices word-wrap to this width in terminal `table` mode, preserving explicit line breaks and indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit. Verbatim text blocks and table rows retain their existing layout. Pipes, explicit `plain`, and machine-readable modes retain unwrapped prose and notice bytes.
+Diagnostic summary prose and table notices word-wrap to this width in terminal `table` mode, preserving explicit line breaks and indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit.
+
+`config show` carries each row's trailing-prose column alongside its text, so
+values and tags containing spaces retain their padded cells when descriptions
+wrap. Continuations align with the description column when it leaves at least
+24 columns; narrower terminals use a shallow hanging indent. When even the
+cells do not fit, the whole row wraps. Plain output keeps the complete rows.
+
+Verbatim text blocks and table rows retain their existing layout. Pipes, explicit `plain`, and machine-readable modes retain unwrapped prose and notice bytes.
 
 ## 2. Mode Resolution
 
