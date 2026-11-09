@@ -129,6 +129,20 @@ function rowKey(row) {
   return `${row.model}\0${row.reasoning_effort ?? "provider_default"}\0${row.crew || ""}`;
 }
 
+// The tier the ranking uses: the chosen one while tier scores are loaded, else
+// all tiers. The choice itself survives a failed read so the next good poll
+// restores it.
+function activeTier() {
+  return role === "implementers" && implementerMatrix ? implementerTier : "";
+}
+
+// Implementer rows and tier cells are both keyed by model and effort; their
+// crew fields are summaries over different task sets, so the tier join never
+// compares them.
+function implementerTierKey(row) {
+  return `${row.model}\0${row.reasoning_effort ?? "provider_default"}`;
+}
+
 function rowLabel(row) {
   if (row.label) return row.label;
   const effort = row.effort_label || (row.reasoning_effort === null ? "provider default" : row.reasoning_effort === "unknown" || row.reasoning_effort == null ? "effort unknown" : row.reasoning_effort);
@@ -340,7 +354,7 @@ function syncTierControl() {
   if (control) control.hidden = role !== "implementers" || isAggregateView();
   const select = $("agents-tier");
   if (select) {
-    select.value = implementerTier;
+    select.value = activeTier();
     select.disabled = !implementerMatrix;
   }
   const unavailable = $("agents-tier-unavailable");
@@ -348,7 +362,7 @@ function syncTierControl() {
   if (tierHint) {
     tierHint.firstChild.textContent = !implementerMatrix
       ? "Tier scores are unavailable. Reload the page to retry."
-      : implementerTier ? "Ranks by tier crew score and support; the detail column's evidence covers all tiers."
+      : activeTier() ? "Ranks by tier crew score and support; the detail column's evidence covers all tiers."
         : "All tiers compares each row with the fleet on its own tier mix. A tier ranks by that tier's crew score.";
   }
 }
@@ -410,8 +424,10 @@ export function fetchAndRenderAgents() {
     }
     scorecard = payload;
     attribution = strip;
-    implementerMatrix = matrix?.requested_window === selectedWindow && (matrix.execution ?? "managed") === activeExecution && Array.isArray(matrix.cells) ? matrix : null;
-    if (!implementerMatrix) implementerTier = "";
+    const freshMatrix = matrix?.requested_window === selectedWindow && (matrix.execution ?? "managed") === activeExecution && Array.isArray(matrix.cells) ? matrix : null;
+    // A failed tier read keeps the matrix this scope already showed (resetView
+    // clears it on a scope change); the chosen tier is never discarded.
+    if (freshMatrix || activeRole !== "implementers") implementerMatrix = freshMatrix;
     setRoleCount(activeRole, payload);
     syncSelection();
     render();
@@ -456,17 +472,18 @@ function setRoleCount(forRole, payload) {
 
 function rows() {
   const all = Array.isArray(scorecard && scorecard.rows) ? scorecard.rows : [];
-  if (role !== "implementers" || !implementerTier || !implementerMatrix) return all;
+  const chosen = activeTier();
+  if (!chosen) return all;
   const tiers = new Map();
   for (const cell of implementerMatrix.cells) {
-    if (cell.tier !== implementerTier) continue;
-    const key = rowKey(cell);
+    if (cell.tier !== chosen) continue;
+    const key = implementerTierKey(cell);
     const tier = tiers.get(key) || { units: 0, score: cell.crew_mean };
     tier.units += cell.n;
     tiers.set(key, tier);
   }
   const ranking = all.flatMap((row) => {
-    const tier = tiers.get(rowKey(row));
+    const tier = tiers.get(implementerTierKey(row));
     return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score,
       below_support: tier.units < scorecard.min_support, rank: null }] : [];
   });
@@ -695,7 +712,7 @@ function render() {
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} in ${windowShortLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
+      ? `${units} ${scorecard.unit} in ${windowShortLabel()} · fleet average ${number(activeTier() ? 100 : scorecard.fleet_average)}`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
     if (scorecard.status === "ok") {
       const notes = [
@@ -719,7 +736,7 @@ function render() {
     nodes.push(stateNode("empty", scorecard.window_attempts
       ? `No ${scorecard.unit} in ${windowLabel()}`
       : `No ${scorecard.unit} in the ${windowLabel()} window`,
-      role === "implementers" && implementerTier ? "Choose another tier or widen the window to find work." : "Widen the window to rank this role."));
+      activeTier() ? "Choose another tier or widen the window to find work." : "Widen the window to rank this role."));
   } else {
     nodes.push(rankingNode(ranking));
     const row = selectedRow();
@@ -884,7 +901,7 @@ const SCORE_HINT = "One row per model and recorded reasoning effort (crews that 
 // no reviewed deliveries anywhere) has nothing to show, so it leaves the
 // table; `hidden` lists those terms for the one note that says why.
 function rankingColumns(ranking) {
-  const all = role === "implementers" && implementerTier ? [] : terms();
+  const all = activeTier() ? [] : terms();
   if (!ranking.length) return { shown: all, hidden: [] };
   const hidden = all.filter((term) => ranking.every((row) => noReviewedDeliveries(term, row)));
   return { shown: all.filter((term) => !hidden.includes(term)), hidden };
@@ -983,7 +1000,7 @@ function rankingNode(ranking) {
   });
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [...(columns.hidden.length ? [hiddenColumnsNote(columns.hidden)] : []), wrap]);
   node.dataset.key = "ranking";
-  node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, implementerTier]);
+  node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, activeTier()]);
   return node;
 }
 
@@ -1238,7 +1255,7 @@ function detailNode(rankedRow) {
     ]),
     el("div", { class: "agents-detail-score" }, [
       el("strong", { text: number(rankedRow.score) }),
-      el("span", { text: rankedRow.unjudged ? "no score until a unit is judged" : tierView ? `${implementerTier} tier crew score` : "score" }),
+      el("span", { text: rankedRow.unjudged ? "no score until a unit is judged" : tierView ? `${activeTier()} tier crew score` : "score" }),
     ]),
     ...(tierView ? [el("p", { class: "agents-detail-note" }, [
       `${rankedRow.units} tasks in this tier · all tiers score ${number(row.score)}`,
@@ -1256,7 +1273,7 @@ function detailNode(rankedRow) {
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${rowLabel(row)}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([role, rankedRow, implementerTier, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
+  node.dataset.hash = JSON.stringify([role, rankedRow, activeTier(), scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
   return node;
 }
 

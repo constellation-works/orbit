@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
+import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatDateTime, runHref, bindTaskLink, makeCopyButton, pinnedInfoHint } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -544,7 +544,7 @@ function selectWindow(value) {
 
 function headNode() {
   const node = el("div", { class: "incident-head-bar" }, [
-    el("p", { class: "incident-intro", text: "Failed audit events, rolled up by signature across runs and grouped by the cause they share." }),
+    pinnedInfoHint("Failed audit events, rolled up by signature across runs and grouped by the cause they share."),
     windowSegmentsNode(),
   ]);
   node.dataset.key = "incident-head";

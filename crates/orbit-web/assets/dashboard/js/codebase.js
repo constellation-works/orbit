@@ -107,6 +107,13 @@ let related = { key: null, selection: null, data: null, error: null, loading: fa
 let pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: 0 };
 let requestHashChange = () => {};
 
+// A changed selection retires the payload on hand: it answers the old window,
+// support or filters, so nothing repaints it until the new read lands.
+function dropQueryData() {
+  lastData = null;
+  lastPayloadKey = null;
+}
+
 function resetRelated() {
   related = { key: null, selection: null, data: null, error: null, loading: false, request: related.request + 1 };
   pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
@@ -160,6 +167,7 @@ function applyCodebaseHashQuery(query, viewName = null) {
     ...Object.fromEntries(REGRESSION_DIMENSIONS.map(({ key }) => [key, query.get(key)])),
   });
   const sameQuery = JSON.stringify(next) === JSON.stringify(codebaseQuery);
+  if (!sameQuery) dropQueryData();
   codebaseQuery = next;
   setRoute(normalizedRoute(viewName, query.get("path")));
   syncCodebaseControls();
@@ -252,6 +260,7 @@ function updateQuery(update) {
     syncCodebaseControls();
     return;
   }
+  dropQueryData();
   codebaseQuery = next;
   syncCodebaseControls();
   requestHashChange();

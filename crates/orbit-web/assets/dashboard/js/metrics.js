@@ -19,7 +19,7 @@ import {
   el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
   notifyScopeChange, wireWindowSelector, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock, getClockZone,
-  bindTaskLink, DASHBOARD_WINDOWS,
+  bindTaskLink, DASHBOARD_WINDOWS, pinnedInfoHint,
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokenSpendModel, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
@@ -332,6 +332,8 @@ function previousLabel(windowKeyValue) {
 // a count where higher is worse.
 function delta(current, previous, mode) {
   if (current == null) return null;
+  // Nothing then and nothing now is no change, not a new series.
+  if (!current && !previous) return null;
   if (previous == null || !previous) return { text: "new", cls: "flat" };
   const ratio = (current - previous) / previous * 100;
   const abs = Math.abs(ratio);
@@ -527,7 +529,7 @@ function trendSection() {
   const isTurns = view.trend === "turns";
   const isDiff = view.trend === "diff";
   const isFriction = view.trend === "friction";
-  const model = isDuration ? durationModel()
+  const buildModel = () => isDuration ? durationModel()
     : isDefects ? defectsModel(count.mode)
       : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
         : isTokenSpend ? tokenSpendModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown["tokens-total"], countView: count.mode, bucketTitle, bucketWidthLabel })
@@ -535,6 +537,15 @@ function trendSection() {
           : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], countView: count.mode, bucketTitle, bucketWidthLabel })
             : isFriction ? frictionModel(lastPayload.friction, { windowKey: lastPayload.windowKey, shown: view.shown.friction, bucketTitle, bucketWidthLabel })
               : completedModel(count && count.mode);
+  let model = buildModel();
+  // The chart always keeps one series. A switch of count view, grouping or
+  // family can leave every remaining card hidden (each card's guard sees only
+  // the cards on screen), so show them all again rather than draw nothing.
+  const toggles = (model.cards || []).flatMap((card) => card.grouped ? card.entries : card.static ? [] : [card]);
+  if (toggles.length && !toggles.some((card) => card.on)) {
+    view.shown[shownKey()] = { ...view.shown[shownKey()], ...Object.fromEntries(toggles.map((card) => [card.key, true])) };
+    model = buildModel();
+  }
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -551,14 +562,17 @@ function trendSection() {
     ...(isFriction ? frictionTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.friction, rerender: () => { view.hover = null; rerender(); }, onChange: applyFriction }) : []),
     count ? segGroup("Count view", availableCountViews(count.seconds), count.mode, pickCountView) : null,
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
+    // What the trend counts sits behind an info icon, not in the working view.
+    pinnedInfoHint([
+      model.blurb,
+      isDuration ? (view.outcome === "succeeded"
+        ? "Counted: final implementation attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
+        : "Counted: all implementation attempts, including failed, cancelled, no-diff and unknown outcomes.") : null,
+    ].filter(Boolean).join("\n")),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [
-    el("p", { class: "mx-blurb", text: model.blurb }),
     seriesCards(model.cards),
     model.empty ? emptyTrend(model.empty) : (view.mode === "table" ? trendTable(model.table) : trendChart(model.chart)),
-    isDuration ? el("p", { class: "mx-notes", text: view.outcome === "succeeded"
-      ? "Counted: final implementation attempts in successful runs with a committed candidate. Failed, cancelled, no-diff and unknown outcomes are excluded."
-      : "Counted: all implementation attempts, including failed, cancelled, no-diff and unknown outcomes." }) : null,
   ]);
   return el("section", { class: "mx-card mx-trends", "aria-label": "Trends" }, [
     el("div", { class: "mx-trend-head" }, [trendTabs(), tools]),

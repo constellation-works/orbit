@@ -175,10 +175,19 @@ function workspaceRow(row, selectScope) {
   return item;
 }
 
-// The host heading says the host is unavailable; the row carries why.
+// A row the host could not answer: the host itself (its heading says it is
+// unavailable), or one of its workspaces that is inactive or whose readiness
+// failed, named so the reader knows which.
 function unavailableRow(row) {
   const item = el('li', { class: 'fleet-row fleet-unavailable' });
   item.setAttribute('data-phase', row.phase || 'unavailable');
+  const name = row.workspace_name || row.workspace_id;
+  if (name) {
+    item.append(el('div', { class: 'fleet-line' }, [
+      el('span', { class: 'drain-dot fleet-dot-down', 'aria-hidden': 'true' }),
+      el('span', { class: 'fleet-workspace', text: name, title: name }),
+    ]));
+  }
   item.append(field('error', 'Error', row.error || 'Host unavailable', 'fleet-error'));
   return item;
 }
@@ -252,13 +261,19 @@ function rememberHost(host) {
 
 const isLive = row => Number(LIVE_PHASES.includes(row.phase));
 
+// A host that answered with workspace rows is reachable, even when every one
+// of its workspaces is unavailable; only a host-level error row reads as down.
 function hostSummary(rows) {
-  const known = rows.filter(row => row.workspace_id && !row.error && !row.pending);
+  const reached = rows.filter(row => row.workspace_id && !row.pending);
+  const known = reached.filter(row => !row.error);
+  const failed = reached.length - known.length;
   const loading = rows.some(row => row.pending);
   const live = known.filter(isLive);
-  const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live.length ? ` · ${live.length} live` : ''}${loading ? ' · loading' : ''}` : loading ? 'loading' : 'unavailable';
-  const state = loading ? 'loading' : known.length ? 'ready' : 'unavailable';
-  return { known, loading, live, count, state };
+  const count = reached.length
+    ? `${reached.length} workspace${reached.length === 1 ? '' : 's'}${live.length ? ` · ${live.length} live` : ''}${failed ? ` · ${failed} unavailable` : ''}${loading ? ' · loading' : ''}`
+    : loading ? 'loading' : 'unavailable';
+  const state = loading ? 'loading' : reached.length ? 'ready' : 'unavailable';
+  return { known, reached, loading, live, count, state };
 }
 
 // Show one host's section and mark its tab, in place: no repaint, so a
@@ -294,7 +309,9 @@ function hostTabs(root, groups, selected) {
   list.addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const index = hosts.indexOf(rememberedHost());
+    // Move from the tab on screen: the remembered host is shared by every
+    // dashboard tab, so another tab may have changed it.
+    const index = hosts.indexOf(list.querySelector('.fleet-host-tab.on')?.getAttribute('data-host'));
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? hosts.length - 1
       : (Math.max(index, 0) + (event.key === 'ArrowLeft' ? -1 : 1) + hosts.length) % hosts.length;
     rememberHost(hosts[next]);
@@ -310,7 +327,6 @@ function hostTabs(root, groups, selected) {
 // stable). Idle rows show a muted dot and slots only.
 export function renderFleetDrains(payload, selectScope) {
   const root = el('div', { class: 'fleet-drains' });
-  root.append(el('p', { class: 'fleet-hint', text: 'Select a workspace to inspect or control its drain' }));
   const groups = new Map();
   for (const row of payload.items || []) {
     if (!groups.has(row.host)) groups.set(row.host, []);
@@ -325,12 +341,12 @@ export function renderFleetDrains(payload, selectScope) {
   }
   for (const [host, rows] of groups) {
     const ranked = [...rows].sort((a, b) => isLive(b) - isLive(a));
-    const { known, loading, count, state } = hostSummary(rows);
+    const { reached, loading, count, state } = hostSummary(rows);
     const section = el('section', { class: 'fleet-host' });
     section.setAttribute('data-host', host);
     section.setAttribute('data-host-state', state);
     if (tabbed && host !== selected) section.hidden = true;
-    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : loading ? 'fleet-host-count fleet-host-loading' : 'fleet-host-count fleet-host-down', text: count })]));
+    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: reached.length ? 'fleet-host-count' : loading ? 'fleet-host-count fleet-host-loading' : 'fleet-host-count fleet-host-down', text: count })]));
     const list = el('ul', { class: 'fleet-rows' });
     for (const row of ranked) list.append(row.pending ? loadingRow(row) : row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
     section.append(list);

@@ -49,7 +49,8 @@ export function forecastCard(title, meta, children, className = "") {
   return el("section", { class: `mx-card ${className}`.trim(), "aria-label": title }, [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title", text: title }),
-      meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
+      // A string is a meta line; a node (such as an info hint) goes in as is.
+      typeof meta === "string" ? el("span", { class: "mx-card-meta", text: meta }) : meta || null,
     ]),
     ...children,
   ]);

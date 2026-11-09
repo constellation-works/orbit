@@ -202,7 +202,7 @@ function complexityHits(calibration) {
   const rows = (calibration.task_level_by_complexity || []).filter((row) => row.hours?.n || row.usd?.n || row.tokens?.n);
   if (!rows.length) return null;
   return forecastTable("Task calibration by complexity", [["Complexity"], ["Task hours", true], ["Task cost", true], ["Task tokens", true]], rows.map((row) => el("tr", {}, [
-    el("th", { scope: "row", text: row.complexity }),
+    el("th", { scope: "row", text: COMPLEXITY_LABELS[row.complexity] || row.complexity }),
     el("td", { class: "num", text: versionHits(row.hours) }),
     el("td", { class: "num", text: versionHits(row.usd) }),
     el("td", { class: "num", text: versionHits(row.tokens) }),

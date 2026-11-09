@@ -56,7 +56,9 @@ function loadCurves(selectedWindow, execution) {
     if (request !== curvesRequest || curvesScope !== scope) return;
     curves = payload && payload.requested_window === selectedWindow && Array.isArray(payload.series) ? payload : null;
   }, () => {
-    if (request === curvesRequest && curvesScope === scope) curves = { failed: true };
+    // A failed poll keeps curves this scope already showed; only a scope with
+    // nothing loaded reports the read as unavailable.
+    if (request === curvesRequest && curvesScope === scope && (!curves || curves.failed)) curves = { failed: true };
   });
 }
 

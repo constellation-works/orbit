@@ -1070,9 +1070,17 @@ function crewEditor(crew, payload, isNew) {
       continue;
     }
     if (field === "env") {
-      // Global config only: an unchanged list is omitted so saving another
-      // field to the workspace file never writes an `env` key it would refuse.
+      // Global config only: `[crews.X].env` is refused as a workspace setting,
+      // so an editor writing the workspace file shows it read-only.
       const was = Array.isArray(current) ? current : [];
+      if (writeScope() !== "global") {
+        rows.push(fieldRow(field, el("span", {
+          class: "config-note mono",
+          text: `${was.length ? was.join(", ") : EMPTY_ARRAY} · set in the global config`,
+        })));
+        continue;
+      }
+      // An unchanged list is omitted so saving another field never rewrites it.
       const list = chipListInput(was, draft, field);
       rows.push(fieldRow(field, list.node));
       fields[field] = () => {

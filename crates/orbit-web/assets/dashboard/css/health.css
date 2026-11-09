@@ -109,7 +109,6 @@ td .rel-rate { font-size: 12px; }
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
   gap: 10px 16px; padding: 14px 16px 0;
 }
-.incident-intro { margin: 0; color: var(--fg-dim); font: 13px/1.45 var(--font-sans); }
 .incident-windows {
   display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px;
   background: var(--bg-sunk); border: 1px solid var(--border); border-radius: 10px;
