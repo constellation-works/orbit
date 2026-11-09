@@ -8,6 +8,8 @@ use orbit_automation::auto_tasks::settings::{
 };
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::task::normalize_required_tools;
+use orbit_types::tool::pre_family_tool_name;
 use orbit_types::workflow::AutoTaskDefinition;
 use serde::Deserialize;
 
@@ -92,8 +94,23 @@ pub(super) fn historical_overrides(
         return Ok(None);
     };
     let digest = body_digest(definition, base_branch)?;
+    // A body shipped before tool families was fingerprinted with operation
+    // names; a definition rewritten to family actions [ORB-23552] still
+    // matches it under the names it was shipped with.
+    let pre_family_digest = {
+        let mut pre_family = definition.clone();
+        pre_family.template.required_tools = normalize_required_tools(
+            pre_family
+                .template
+                .required_tools
+                .iter()
+                .map(|name| pre_family_tool_name(name).to_string())
+                .collect(),
+        );
+        body_digest(&pre_family, base_branch)?
+    };
     for version in versions {
-        if version.digest != digest
+        if (version.digest != digest && version.digest != pre_family_digest)
             || raw.lines().map(str::trim).any(|line| {
                 line.starts_with('#') && !version.comments.iter().any(|comment| comment == line)
             })

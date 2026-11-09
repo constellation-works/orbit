@@ -98,6 +98,7 @@ mod muse_state_grant;
 #[cfg(unix)]
 mod origin_fetch_hold;
 mod pilot_warning_cards;
+mod pre_family_tool_names;
 mod promotion_commit;
 mod rebase_recovery_attempts;
 mod recovery_fixture;

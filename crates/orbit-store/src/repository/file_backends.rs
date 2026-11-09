@@ -497,6 +497,10 @@ impl TaskDocumentStoreBackend for TaskV2Store {
     ) -> Result<(), OrbitError> {
         self.update_task_document(id, &params)
     }
+
+    fn migrate_task_tool_names(&self, id: &str, actor: &str) -> Result<bool, OrbitError> {
+        self.migrate_task_tool_names(id, actor)
+    }
 }
 
 impl TaskHistoryStoreBackend for TaskV2Store {

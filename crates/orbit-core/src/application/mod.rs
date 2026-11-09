@@ -52,6 +52,7 @@ pub(crate) mod tag_instructions;
 pub mod task;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod tool_name_migration;
 pub mod vision_probe;
 pub(crate) mod workflow;
 mod workspace;

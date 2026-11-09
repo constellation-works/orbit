@@ -176,11 +176,15 @@ fn load_tasks(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Vec<Task>, 
     task_ids
         .iter()
         .map(|task_id| {
-            runtime.get_task(task_id).map_err(|error| {
+            let task = runtime.get_task(task_id).map_err(|error| {
                 DispatchError::CliInvocationFailed(format!(
                     "load task `{task_id}` tool requirements: {error}"
                 ))
-            })
+            })?;
+            // A task that still stores pre-family tool names is rewritten on
+            // detection; admission below reads either form [ORB-23552].
+            runtime.heal_task_tool_names(&task);
+            Ok(task)
         })
         .collect()
 }

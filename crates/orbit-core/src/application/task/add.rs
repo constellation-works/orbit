@@ -185,6 +185,14 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        // A requirement from a definition written before tool families is
+        // stored as its family action, so the new task never holds an old
+        // name [ORB-23552].
+        if let Some(required_tools) =
+            orbit_types::tool::family_action_tool_names(&params.required_tools)
+        {
+            params.required_tools = required_tools;
+        }
         let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
         self.validate_granted_tools(&params.granted_tools)?;
 
