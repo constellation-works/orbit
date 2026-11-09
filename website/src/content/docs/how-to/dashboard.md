@@ -175,7 +175,7 @@ prove that a particular task or run succeeded.
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Rank**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, **Scripts**, and **Residents**. |
 | **[Notices](#notices)** | Open and recently closed or expired fleet notices. |
-| **Knowledge** | Friction records. |
+| **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory and global proposals). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **Settings** | Workflow, Execution, Review, Crews, Machine, Hosts, and All keys. |
 
@@ -1654,6 +1654,24 @@ Nothing here files a task or moves a record to another workspace. When a
 record earns work, file the task and link it in the task's summary; when a
 record sits in the wrong workspace, rehome it from the terminal. Both
 workflows are in [Report and triage friction](../friction/).
+
+## Knowledge › Memory
+
+**Memory** (`#knowledge/memory`) shows crew memory for the selected workspace.
+Pick one workspace first; **All workspaces** shows a workspace-selection
+placeholder because memory is scoped to each workspace. This view is
+read-only. `crew_memory.enabled` defaults to `false`; while it is false, the
+panel says that Memory is off for this workspace. See [workspace settings](../../reference/config/#settable-keys).
+
+The list shows global memory and model keys with their current revision, file
+and byte usage, writer, last write, and count of open global proposals. Select
+a key to read its current revision, evidence, Markdown files, and history,
+newest first. Select **Global proposals** to see open proposals and a collapsed
+**Recently closed** group.
+
+The dashboard cannot accept or reject proposals or write memory. Use the
+[crew memory CLI commands](../../reference/cli/#crew-memory-development-builds)
+to accept or reject a proposal or write memory.
 
 ## Plugins
 
