@@ -72,7 +72,7 @@ fn automatic_batch_stops_hydrating_once_max_tasks_are_selected() {
 
     assert_eq!(output["task_ids"], json!([older]));
     assert_eq!(
-        output["excluded_by_reason"]["deferred_by_max_tasks"],
+        output["excluded_by_reason"]["unexamined_after_max_tasks"],
         json!(1)
     );
     assert_eq!(output["mode"], json!("automatic"));

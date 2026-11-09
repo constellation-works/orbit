@@ -8,7 +8,7 @@
 use chrono::Utc;
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::RuntimeHost;
-use orbit_types::workflow::{ActivityCrewDraw, PipelineState};
+use orbit_types::workflow::{ActivityCrewDraw, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::recovery_fixture::{Fixture, fixture_with_config};
@@ -239,6 +239,82 @@ fn partitions_stay_crew_homogeneous_with_at_most_five_tasks_each() {
     assert!(sizes.iter().all(|size| *size <= 5), "{sizes:?}");
 }
 
+fn a_capped_automatic_pass_reports_its_tail_as_unexamined() {
+    let fx = triage_fixture("");
+    let selected = held_pilot_warning(&fx, None);
+    let qualifying_tail = held_pilot_warning(&fx, None);
+    let not_held = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "A proposed task without a pilot hold",
+                "description": "This task is not a triage candidate.",
+                "acceptance_criteria": ["Not counted as qualifying work."],
+                "complexity": "low",
+                "type": "chore",
+                "workspace": fx.repo.to_string_lossy(),
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let already_triaging = held_pilot_warning(&fx, None);
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run("escalation_triage_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    let mut state = PipelineState::new(
+        run.run_id.clone(),
+        "escalation_triage_pipeline".into(),
+        json!({}),
+    );
+    state.step_states.insert(0, JobRunState::Success);
+    state.step_outputs.insert(
+        0,
+        json!({
+            "mode": "automatic", "workspace_path": fx.repo,
+            "task_ids": [already_triaging], "tasks": [], "partitions": [],
+        }),
+    );
+    fx.runtime.write_run_state(&run.run_id, &state).unwrap();
+
+    let prepare_automatic = |max_tasks| {
+        fx.runtime
+            .run_deterministic(
+                "prepare_escalation_triage",
+                &json!({}),
+                &json!({
+                    "subject": "pilot_warning", "max_tasks": max_tasks,
+                    "workspace_path": fx.repo, "base_branch": "main",
+                }),
+                orbit_tools::ToolContext::default(),
+            )
+            .unwrap()
+    };
+    // Without the cap, the tail has one qualifier, one silent non-candidate
+    // and one task rejected because another live run already holds it.
+    let uncapped = prepare_automatic(4);
+    assert_eq!(uncapped["task_ids"], json!([selected, qualifying_tail]));
+    assert_eq!(
+        uncapped["excluded_by_reason"],
+        json!({"already_triaging": 1})
+    );
+    assert_eq!(fx.status(&not_held), "proposed");
+
+    let capped = prepare_automatic(1);
+    assert_eq!(capped["task_ids"], json!([selected]));
+    assert_eq!(
+        capped["excluded_by_reason"],
+        json!({"unexamined_after_max_tasks": 3}),
+        "the unexamined tail must not claim that rejected tasks qualify: {capped}"
+    );
+}
+
 fn a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another() {
     // The author holds almost every ticket, so a draw that did not pass it
     // over would all but always pick it.
@@ -270,6 +346,7 @@ crate::scenario_table!(
     a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier,
     the_retired_block_subject_is_refused_and_points_at_final_recovery,
     partitions_stay_crew_homogeneous_with_at_most_five_tasks_each,
+    a_capped_automatic_pass_reports_its_tail_as_unexamined,
     a_pilot_warning_passes_over_the_assessments_author_while_the_pool_has_another,
     a_pilot_warning_draws_its_author_when_the_pool_offers_no_other_member,
 );

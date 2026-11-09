@@ -13,8 +13,12 @@ spec:
     tasks are decided by final recovery) is refused with a migration message.
     With task_ids it triages those tasks; a named task that does not qualify, or
     that another live triage run holds, settles superseded with its reason.
-    Without task_ids it selects every qualifying task, oldest first, up to
-    max_tasks, and counts the rest in `excluded_by_reason`. A state claim
+    Without task_ids it examines proposed tasks oldest first until max_tasks
+    qualify. Examined rejections are counted by reason in `excluded_by_reason`,
+    except `not_held` tasks, which are omitted. After the cap is filled,
+    remaining proposed tasks are not loaded or qualified and are counted as
+    `unexamined_after_max_tasks`; this tail may include non-candidates and tasks
+    another live triage run holds. A state claim
     must be of the `pilot_warnings_held` trigger kind. It pins one
     landing-branch revision without changing the primary HEAD, index or
     working files; outside a Git work tree it pins none and reports a null

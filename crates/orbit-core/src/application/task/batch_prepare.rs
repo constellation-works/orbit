@@ -195,8 +195,8 @@ pub(crate) fn prepare_batch<T>(
             .map_err(&failed)?
             .items;
         // Oldest first, so a capped pass makes progress through them.
-        // Full bodies stop once `max_tasks` are selected: the tail is counted
-        // deferred and never hydrated.
+        // Full bodies stop once `max_tasks` are selected: the tail is never
+        // hydrated or qualified, so it may include non-candidates.
         envelopes.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
@@ -206,7 +206,7 @@ pub(crate) fn prepare_batch<T>(
             if prepared.selected.len() >= max_tasks {
                 *prepared
                     .excluded
-                    .entry("deferred_by_max_tasks")
+                    .entry("unexamined_after_max_tasks")
                     .or_default() += 1;
                 continue;
             }
