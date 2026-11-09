@@ -275,6 +275,7 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
           install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
+          docs/standards/* | AGENTS.md | CLAUDE.md | \
           plugin/* | npm/* | .agents/* | .claude-plugin/*)
           run_self_tests=true
           break
