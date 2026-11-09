@@ -27,9 +27,12 @@ impl OrbitRuntime {
     /// The dashboard's read of the proposals, which writes nothing: the open
     /// ones as [`Self::crew_memory_proposals`] lists them, and the most
     /// recently closed ones with their decisions. An open proposal past its
-    /// four weeks is shown closed as `expired`; only an operator's list or
-    /// decision records its withdrawal. While `crew_memory.enabled` is false
-    /// both lists are empty, as the operator CLI reads no proposals then.
+    /// four weeks is shown closed as `expired` at its `expires_at`; a
+    /// decision is closed at `decided_at`. Those close times are one list,
+    /// newest first, with the proposal id descending when they tie, and only
+    /// the twenty most recent remain. Only an operator's list or decision
+    /// records a withdrawal. While `crew_memory.enabled` is false both lists
+    /// are empty, as the operator CLI reads no proposals then.
     pub fn crew_memory_proposal_board(&self) -> Result<Value, OrbitError> {
         if !self.current_crew_memory_enabled() {
             return Ok(json!({
@@ -48,14 +51,17 @@ impl OrbitRuntime {
             .partition(|row| !proposal_lapsed(row, now));
         let mut closed = lapsed
             .iter()
-            .rev()
             .map(|row| {
                 let mut view = proposal_view(row)?;
                 view["status"] = json!("expired");
                 view["decided_by"] = Value::Null;
                 view["decided_at"] = Value::Null;
                 view["decision_reason"] = json!("expired after 4 weeks");
-                Ok(view)
+                Ok(ClosedBoardEntry {
+                    closed_at: Some(row.created_at + Duration::weeks(PROPOSAL_OPEN_WEEKS)),
+                    id: row.id.clone(),
+                    view,
+                })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
         for row in store.crew_memory_closed_proposals(&workspace_id, RECENTLY_CLOSED_LIMIT)? {
@@ -63,9 +69,15 @@ impl OrbitRuntime {
             view["decided_by"] = json!(row.decided_by);
             view["decided_at"] = json!(row.decided_at);
             view["decision_reason"] = json!(row.decision_reason);
-            closed.push(view);
+            closed.push(ClosedBoardEntry {
+                closed_at: row.decided_at,
+                id: row.proposal.id.clone(),
+                view,
+            });
         }
+        closed.sort_by(recently_closed_order);
         closed.truncate(RECENTLY_CLOSED_LIMIT);
+        let closed: Vec<Value> = closed.into_iter().map(|entry| entry.view).collect();
         Ok(json!({
             "enabled": true,
             "enabled_key": operations::ENABLED_KEY,
@@ -225,8 +237,28 @@ impl OrbitRuntime {
     }
 }
 
-/// How many decided proposals the dashboard's read returns.
+/// How many closed proposals the dashboard's read returns after merging
+/// virtual expiries and decisions by effective close time.
 const RECENTLY_CLOSED_LIMIT: usize = 20;
+
+/// One recently closed board row before the limit is applied.
+struct ClosedBoardEntry {
+    /// `expires_at` for a still-open lapsed proposal, `decided_at` for a
+    /// decision. A missing decision time sorts after every timestamp.
+    closed_at: Option<chrono::DateTime<Utc>>,
+    id: String,
+    view: Value,
+}
+
+/// Newest effective close first. A missing decision time sorts last because
+/// `None` is less than `Some`. Id descending matches the store's
+/// `ORDER BY decided_at DESC, id DESC`.
+fn recently_closed_order(left: &ClosedBoardEntry, right: &ClosedBoardEntry) -> std::cmp::Ordering {
+    right
+        .closed_at
+        .cmp(&left.closed_at)
+        .then_with(|| right.id.cmp(&left.id))
+}
 
 /// The weeks a proposal stays open before it expires.
 const PROPOSAL_OPEN_WEEKS: i64 = 4;

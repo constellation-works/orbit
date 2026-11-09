@@ -131,7 +131,7 @@ The Knowledge › Memory sub-tab needs the open global proposals and the recentl
 
 ### Decision
 
-The dashboard uses a separate read-only board. It lists open proposals, shows those past 4 weeks as `expired` without withdrawing them, and adds the most recent decided ones. Any dashboard session can read it. The space, history and board routes only read; accepting, rejecting and expiring stay in the operator CLI (§8 of the design). The list also shows configured crews' models that have no revision yet, so an empty space is visible.
+The dashboard uses a separate read-only board. It lists open proposals still inside four weeks, and shows those past four weeks as `expired` without withdrawing them. The recently closed group merges those virtual expiries (effective close `expires_at`, which is `created_at` plus four weeks) with decided proposals (effective close `decided_at`), newest close first, proposal id descending when the times tie, and keeps the twenty most recent. A decision therefore stays ahead of older expiries even when twenty or more open proposals have already lapsed ([ORB-23687]). Any dashboard session can read it. The space, history and board routes only read; accepting, rejecting and expiring stay in the operator CLI (§8 of the design). The list also shows configured crews' models that have no revision yet, so an empty space is visible.
 
 On a narrow screen the sub-tab uses the Frictions inline accordion instead of the approved mock's separate detail view with a Back button. The task asks for the Frictions list + detail layout and shared components, and STD-07@1 §R30 asks for one component per element kind.
 
