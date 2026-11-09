@@ -1112,7 +1112,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | --- | --- |
 | `delivery_head_changed` | The PR reports a head different from the one this run published. |
 | `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. |
-| `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because the job lacked `step_failure_recovery`. If a repair is running, let it finish. If none ran, configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. |
+| `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because the job lacked `step_failure_recovery`, and an in-budget check repair whose `step_failure_recovery` ran but returned an unsuccessful outcome or admitted no retry. If a repair is running, let it finish. If none ran, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
 | `delivery_pr_draft` | The PR is still a draft. |
 | `delivery_pr_closed` | The PR closed without merging. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. |

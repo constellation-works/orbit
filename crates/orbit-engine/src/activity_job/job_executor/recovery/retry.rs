@@ -217,6 +217,13 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             max_attempts,
         ) {
             RecoveryAdmission::Retry(model) => model,
+            // The watcher admitted this in-budget repair and the recovery ran,
+            // but it did not repair the head or admit a retry. Recording the
+            // handoff as the terminal step failure would fail a run still
+            // inside its repair budget, so it holds instead.
+            RecoveryAdmission::Original if check_repair => {
+                return hold_unrepaired_check_repair(failure);
+            }
             RecoveryAdmission::Original => return failure.into_result(),
             RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
         };
@@ -298,15 +305,9 @@ fn check_repair_route(
 /// The original handoff stays in the message, including its attempt counter,
 /// so a reader can see the repair was still inside its budget.
 fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, DispatchError> {
-    let action = match &failure {
-        StepFailure::Error(DispatchError::DeterministicActionFailed { action, .. }) => {
-            action.clone()
-        }
-        _ => "pr_complete".to_string(),
-    };
     let diagnostic = failure.diagnostic();
     Err(DispatchError::DeliveryRefused {
-        action,
+        action: check_repair_hold_action(&failure),
         refusal: orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
         message: format!(
             "admitted check repair has no step_failure_recovery on this job; the run holds \
@@ -317,6 +318,36 @@ fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, Dispatc
              Further repairs require remaining per-PR budget. {diagnostic}"
         ),
     })
+}
+
+/// Hold an admitted check repair whose recovery ran and did not repair.
+///
+/// The recovery activity returned an unsuccessful outcome (or its decision
+/// admitted no retry), so the head is unrepaired. The admission stays recorded
+/// as a dispatched repair for the head and the run is still inside its budget;
+/// the original handoff, with its attempt counter, stays in the message.
+fn hold_unrepaired_check_repair(failure: StepFailure) -> Result<StepOutcome, DispatchError> {
+    let diagnostic = failure.diagnostic();
+    Err(DispatchError::DeliveryRefused {
+        action: check_repair_hold_action(&failure),
+        refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+        message: format!(
+            "admitted check repair ran step_failure_recovery and it did not repair the head; \
+             the run holds. The admission remains recorded and spends one repair attempt; \
+             retrying the same head holds again as delivery_repair_dispatched. Inspect the \
+             recovery attempt, repair and publish a new head, then start a new delivery \
+             attempt. Further repairs require remaining per-PR budget. {diagnostic}"
+        ),
+    })
+}
+
+fn check_repair_hold_action(failure: &StepFailure) -> String {
+    match failure {
+        StepFailure::Error(DispatchError::DeterministicActionFailed { action, .. }) => {
+            action.clone()
+        }
+        _ => "pr_complete".to_string(),
+    }
 }
 
 /// How the post-recovery attempt of a failed step ended.
