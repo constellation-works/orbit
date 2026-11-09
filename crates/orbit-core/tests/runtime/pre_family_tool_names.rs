@@ -403,3 +403,79 @@ fn admission_and_mint_rewrite_pre_family_names_they_meet() {
         std::fs::read_to_string(fixture.workspace.join("state").join(MIGRATION_LEDGER)).unwrap();
     assert!(ledger.contains("\"name\":\"perf-review\""), "{ledger}");
 }
+
+#[test]
+fn workspace_sync_rewrites_pre_family_names_in_a_forked_managed_definition() {
+    if !super::dispatch_admission::isolated(
+        "pre_family_tool_names::workspace_sync_rewrites_pre_family_names_in_a_forked_managed_definition",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let runtime = fixture.open();
+    reconcile_workspace_managed_artifacts(&fixture.global, &fixture.workspace, None, "main", false)
+        .unwrap();
+
+    // A fork written after the upgrade pass ran, so only sync can find it.
+    let forked = fixture.auto_task("qa-full-sweep");
+    let shipped = std::fs::read_to_string(&forked).unwrap();
+    let old = pre_family(&shipped);
+    assert_ne!(old, shipped, "qa-full-sweep requires a family action");
+    std::fs::write(&forked, format!("# operator note\n{old}")).unwrap();
+    let manifest_before =
+        std::fs::read(fixture.workspace.join("auto_tasks").join(MANAGED_MANIFEST)).unwrap();
+    let forked_fields_before = runtime
+        .auto_task_layering("qa-full-sweep")
+        .unwrap()
+        .forked_fields;
+    drop(runtime);
+
+    let check = reconcile_workspace_managed_artifacts(
+        &fixture.global,
+        &fixture.workspace,
+        None,
+        "main",
+        true,
+    )
+    .unwrap();
+    assert!(
+        check
+            .actions
+            .iter()
+            .any(|action| action.name == "qa-full-sweep"
+                && action
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("pre-family"))),
+        "--check lists the pending rewrite: {check:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&forked).unwrap(),
+        format!("# operator note\n{old}"),
+        "--check writes nothing"
+    );
+
+    reconcile_workspace_managed_artifacts(&fixture.global, &fixture.workspace, None, "main", false)
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&forked).unwrap(),
+        format!("# operator note\n{shipped}"),
+        "sync rewrites the list items and keeps the operator's edit"
+    );
+    assert_eq!(
+        std::fs::read(fixture.workspace.join("auto_tasks").join(MANAGED_MANIFEST)).unwrap(),
+        manifest_before,
+        "the manifest still records Orbit's bytes, so the file stays a fork"
+    );
+    let runtime = fixture.open();
+    let layering = runtime.auto_task_layering("qa-full-sweep").unwrap();
+    assert_eq!(layering.body, AutoTaskBody::Forked);
+    assert!(
+        layering
+            .forked_fields
+            .iter()
+            .all(|field| forked_fields_before.contains(field)),
+        "the rename adds no forked field: {forked_fields_before:?} then {:?}",
+        layering.forked_fields
+    );
+}
