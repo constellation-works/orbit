@@ -19,6 +19,7 @@ mod task_workspace;
 mod output;
 
 mod browser_kit;
+mod config_show_width;
 #[cfg(unix)]
 mod detail_recovery;
 #[cfg(unix)]

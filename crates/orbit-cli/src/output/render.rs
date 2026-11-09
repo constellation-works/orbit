@@ -75,7 +75,11 @@ fn table_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Table(table) => Some(table.trailing_notices()),
-            Block::Text(_) | Block::Prose(_) | Block::Notice(_) | Block::DoctorFindings(_) => None,
+            Block::Text(_)
+            | Block::ConfigShow(_)
+            | Block::Prose(_)
+            | Block::Notice(_)
+            | Block::DoctorFindings(_) => None,
         })
         .flatten()
         .map(String::as_str)
@@ -93,7 +97,11 @@ fn block_notices(view: &View) -> Vec<&str> {
         .iter()
         .filter_map(|block| match block {
             Block::Notice(text) => Some(text.as_str()),
-            Block::Text(_) | Block::Prose(_) | Block::Table(_) | Block::DoctorFindings(_) => None,
+            Block::Text(_)
+            | Block::ConfigShow(_)
+            | Block::Prose(_)
+            | Block::Table(_)
+            | Block::DoctorFindings(_) => None,
         })
         .collect()
 }
@@ -144,6 +152,13 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
             for block in blocks {
                 match block {
                     Block::Text(text) => println!("{text}"),
+                    Block::ConfigShow(text) => {
+                        if sink.mode() == OutputMode::Table {
+                            println!("{}", config_show_text(&text, sink.width()));
+                        } else {
+                            println!("{text}");
+                        }
+                    }
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
                     Block::Notice(text) => eprintln!("{}", sink.wrap_prose(&text)),
                     Block::Table(table) => truncated |= table.emit(sink),
@@ -315,4 +330,231 @@ fn wrap_message(message: &str, width: u16) -> String {
         .map(|line| line.trim_end().to_string())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Row states in `config show` text (layer labels and three-way states), used
+/// to locate the description column of a key row.
+const CONFIG_SHOW_STATES: &[&str] = &[
+    "workspace",
+    "global",
+    "environment",
+    "built-in",
+    "default",
+    "unset",
+    "derived",
+    "identity",
+    "set",
+];
+
+/// Minimum columns a description column must leave before aligned wrapping
+/// gives way to a shallower hanging indent.
+const CONFIG_SHOW_MIN_TRAILING: usize = 24;
+
+/// Fit `config show` text to `width` columns. Lines that fit are left exactly
+/// as written, so aligned columns survive. A longer line wraps its trailing
+/// prose at word boundaries with continuations aligned to that prose's
+/// column: the blurb column of a heading (after the padded title), the
+/// description column of a key row (after label/value/state), the trailing
+/// column of a crew row, or the value column of a Paths row. When that column
+/// would leave too little room — narrow terminals where the aligned columns
+/// themselves approach the width — the whole line wraps with a shallow
+/// hanging indent instead, so no line exceeds the width. Width `0` (no
+/// terminal width) leaves the text whole.
+fn config_show_text(text: &str, width: u16) -> String {
+    if width == 0 {
+        return text.to_string();
+    }
+    let width = usize::from(width);
+    let mut in_crews = false;
+    let mut in_paths = false;
+    text.split('\n')
+        .map(|line| {
+            if !line.starts_with(' ') && !line.is_empty() {
+                in_crews = line.starts_with("Crews (");
+                in_paths = line == "Paths";
+            }
+            fit_config_show_line(line, width, in_crews, in_paths)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn fit_config_show_line(line: &str, width: usize, in_crews: bool, in_paths: bool) -> String {
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    // (prefix kept on the first line, trailing prose to wrap, its column)
+    let aligned = if line.starts_with("  ") {
+        let tokens = token_offsets(line);
+        if in_paths {
+            tokens.get(1).map(|(start, _)| {
+                (
+                    line[..byte_at(line, *start)].to_string(),
+                    line[byte_at(line, *start)..].to_string(),
+                    *start,
+                )
+            })
+        } else if in_crews {
+            tokens.get(7).map(|(start, _)| {
+                (
+                    line[..byte_at(line, *start)].to_string(),
+                    line[byte_at(line, *start)..].to_string(),
+                    *start,
+                )
+            })
+        } else if tokens.len() >= 4 && CONFIG_SHOW_STATES.contains(&tokens[2].1) {
+            let start = tokens[3].0;
+            Some((
+                line[..byte_at(line, start)].to_string(),
+                line[byte_at(line, start)..].to_string(),
+                start,
+            ))
+        } else {
+            None
+        }
+    } else {
+        // Heading/banner: the blurb starts after the padded title's run of
+        // two or more spaces.
+        find_blurb_start(line).map(|start| {
+            (
+                line[..byte_at(line, start)].to_string(),
+                line[byte_at(line, start)..].to_string(),
+                start,
+            )
+        })
+    };
+    if let Some((prefix, trailing, column)) = aligned
+        && prefix.chars().count() + 8 <= width
+    {
+        // Keep the row's columns on the first line. Continuations align to
+        // the trailing column when it leaves room; on a narrow terminal
+        // they fall back to a shallow indent so the prose gets full width.
+        let indent = if column + CONFIG_SHOW_MIN_TRAILING <= width {
+            column
+        } else {
+            4.min(width.saturating_sub(1))
+        };
+        return wrap_trailing(&prefix, &trailing, indent, width);
+    }
+    // Fallback: wrap the whole line with a hanging indent two columns deeper
+    // than its own indent (column 0 for headings).
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    let indent = if lead > 0 { lead + 2 } else { 0 };
+    let indent = if indent + 1 >= width {
+        lead.min(width.saturating_sub(1))
+    } else {
+        indent
+    };
+    let lead = lead.min(width.saturating_sub(1));
+    wrap_trailing(
+        &" ".repeat(lead),
+        line.trim_start_matches(' '),
+        indent,
+        width,
+    )
+}
+
+/// Whitespace-separated tokens of `line` as (char offset, token) pairs.
+fn token_offsets(line: &str) -> Vec<(usize, &str)> {
+    let mut tokens = Vec::new();
+    let mut token_start: Option<(usize, usize)> = None; // (char, byte)
+    for (char_index, (byte, ch)) in line.char_indices().enumerate() {
+        if ch.is_whitespace() {
+            if let Some((start_char, start_byte)) = token_start.take() {
+                tokens.push((start_char, &line[start_byte..byte]));
+            }
+        } else if token_start.is_none() {
+            token_start = Some((char_index, byte));
+        }
+    }
+    if let Some((start_char, start_byte)) = token_start {
+        tokens.push((start_char, &line[start_byte..]));
+    }
+    tokens
+}
+
+/// Byte index of the `char_offset`-th char of `line` (its length when beyond).
+fn byte_at(line: &str, char_offset: usize) -> usize {
+    line.char_indices()
+        .nth(char_offset)
+        .map_or(line.len(), |(byte, _)| byte)
+}
+
+/// Char offset where a heading's blurb starts: the end of the first run of
+/// two or more spaces, when any text follows it.
+fn find_blurb_start(line: &str) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut run = 0;
+    for (index, ch) in chars.iter().enumerate() {
+        if *ch == ' ' {
+            run += 1;
+            if run >= 2 {
+                // End of this run.
+                let mut end = index + 1;
+                while end < chars.len() && chars[end] == ' ' {
+                    end += 1;
+                }
+                if end < chars.len() {
+                    return Some(end);
+                }
+                return None;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    None
+}
+
+/// Wrap `trailing` at word boundaries into lines of at most `width` chars:
+/// the first follows `prefix`, continuations sit at `indent`. A word longer
+/// than the available width is split so it still fits.
+fn wrap_trailing(prefix: &str, trailing: &str, indent: usize, width: usize) -> String {
+    let available_first = width.saturating_sub(prefix.chars().count()).max(1);
+    let available_rest = width.saturating_sub(indent).max(1);
+    let mut wrapped: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut available = available_first;
+    let push_word =
+        |current: &mut String, wrapped: &mut Vec<String>, available: &mut usize, word: &str| {
+            let mut rest = word;
+            loop {
+                let room = available.saturating_sub(current.chars().count());
+                if current.is_empty() {
+                    if rest.chars().count() <= *available {
+                        current.push_str(rest);
+                        return;
+                    }
+                    // Split a word wider than a whole line.
+                    let take = *available;
+                    let split = byte_at(rest, take);
+                    current.push_str(&rest[..split]);
+                    wrapped.push(std::mem::take(current));
+                    *available = available_rest;
+                    rest = &rest[split..];
+                } else if rest.chars().count() < room {
+                    current.push(' ');
+                    current.push_str(rest);
+                    return;
+                } else {
+                    wrapped.push(std::mem::take(current));
+                    *available = available_rest;
+                }
+            }
+        };
+    for word in trailing.split_whitespace() {
+        push_word(&mut current, &mut wrapped, &mut available, word);
+    }
+    wrapped.push(current);
+    let mut out = String::new();
+    for (index, chunk) in wrapped.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+        } else {
+            out.push_str(prefix);
+        }
+        out.push_str(chunk);
+    }
+    out
 }
