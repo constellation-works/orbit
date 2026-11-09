@@ -693,6 +693,84 @@ fn missing_assessment_artifact_degrades_only_its_own_readout() {
     );
 }
 
+fn unreadable_assessment_degrades_show_and_refuses_admission() {
+    for oversized in [false, true] {
+        let workspace = workspace(None);
+        let task = add_task(&workspace.runtime, "unreadable audit", TaskStatus::Proposed);
+        let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+        assert_eq!(output["status"], "succeeded", "{output}");
+        let comment = workspace
+            .runtime
+            .get_task_comments(&task.id)
+            .expect("comments")
+            .into_iter()
+            .rev()
+            .find(|comment| comment.by == "task-pilot")
+            .expect("pilot receipt");
+        let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+        let path = reference["assessment_artifact"]
+            .as_str()
+            .expect("artifact path");
+        let blob = crate::artifact_tools::find_artifact_blob(
+            &workspace.runtime.global_root(),
+            &task.id,
+            path,
+        );
+        if oversized {
+            let content =
+                vec![b'x'; orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES as usize + 1];
+            std::fs::write(&blob, &content).expect("oversize blob");
+            let manifest_path = blob
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("manifest.yaml");
+            let mut manifest: orbit_types::task::ArtifactManifestV2 =
+                serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).expect("manifest"))
+                    .expect("parse manifest");
+            let entry = manifest
+                .files
+                .iter_mut()
+                .find(|entry| entry.path == path)
+                .expect("entry");
+            entry.size_bytes = content.len() as u64;
+            entry.sha256 = orbit_common::security::release::sha256_hex(&content);
+            std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap())
+                .expect("write manifest");
+        } else {
+            std::fs::remove_file(&blob).expect("remove blob");
+            std::fs::create_dir(&blob).expect("replace blob with directory");
+        }
+        let error = workspace
+            .runtime
+            .has_resolvable_pilot_admission_hold(&task.id)
+            .expect_err("admission must fail closed on unreadable evidence");
+        if oversized {
+            assert!(
+                matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error, orbit_common::OrbitError::Io(_)),
+                "{error:?}"
+            );
+        }
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .expect("show must survive unreadable pilot evidence");
+        let warnings = shown["pilot_warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "{shown}");
+        assert_eq!(
+            warnings[0]["kind"], "pilot_assessment_unavailable",
+            "{shown}"
+        );
+        assert_eq!(shown["resolvable_pilot_admission_hold"], false, "{shown}");
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     meaning_edits_name_the_drifted_component_and_write_nothing_scenarios,
@@ -703,5 +781,6 @@ crate::scenario_table!(
     malformed_component_map_fails_apply_without_writing,
     configured_crew_and_dependency_meaning_drift_are_named,
     dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit,
-    missing_assessment_artifact_degrades_only_its_own_readout
+    missing_assessment_artifact_degrades_only_its_own_readout,
+    unreadable_assessment_degrades_show_and_refuses_admission
 );

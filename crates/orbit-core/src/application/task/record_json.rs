@@ -73,13 +73,14 @@ pub fn task_record_json(
             {
                 false
             }
-            // A referenced assessment artifact that is absent (for example
-            // after a snapshot restore without attachments) is the same
-            // unresolvable evidence, not a failed record.
+            // Missing, unreadable or invalid assessment evidence cannot
+            // resolve a hold in this read projection. Admission stays strict.
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Artifact,
                 ..
-            }) => false,
+            })
+            | Err(OrbitError::Io(_))
+            | Err(OrbitError::InvalidInput(_)) => false,
             Err(error) => return Err(error),
         }
     };
