@@ -56,6 +56,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 - Do manual QA through the real CLI, MCP, API or UI, including failure paths, when it can reveal defects, and record steps, expected and actual results and evidence. Docs-only, mechanical or already covered changes may skip it with a reason. Run a candidate build (any CLI command or `web serve`) only under a disposable home with its own workspace, never the real home or the live checkout: opening state migrates it past the installed binary ([Manual QA from a managed lane](docs/DEVELOPMENT.md#manual-qa-from-a-managed-lane)).
 - A diff that changes something users see (dashboard, web pages, docs site, desktop UI) attaches screenshots of each changed view with `orbit.task.artifact` action `put`, at paths like `screenshots/<view>-<theme>-<width>.png`, captured under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). Cover every supported theme (the dashboard is dark-only), 375px width for responsive layouts, and a base-revision before shot when practical. Stay under the 1 MiB artifact limit (viewport captures, or JPEG/WebP). List the paths at handoff; if the host has no browser kit or the view can't render, say so. Reviewers treat unexplained missing screenshots as missing evidence. These task artifacts are review evidence; an empty optional PR `## Screenshots` section never blocks PR opening.
 - Dashboard implementers start from the [dashboard map](docs/agents/dashboard-map.md).
+- When developing, reviewing or QA-ing a UI feature (dashboard, web pages, docs site, desktop UI), go through the UI/UX rules in [STD-07](docs/standards/STD-07-ui-ux/STD-07.md) first, check every changed view against them, and cite a violation as `STD-07 §Rn`.
 
 ## Local Rust CodeQL
 
@@ -64,3 +65,21 @@ Hosted CodeQL (`.github/workflows/codeql.yml`) analyses every `agent-main` push 
 - Extraction checks are required evidence; results from incomplete extraction can't confirm a repair.
 - Run once per delivery against the final candidate, in the foreground with a timeout of at least 45 minutes, and read that run's `results.sarif`. An interrupted run starts over.
 - Only Linux extracts every module. Elsewhere the script exits 3, and the check is owed by a Linux run recorded as `codeql` external evidence.
+
+<!-- constellation-standards:begin -->
+<!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
+## Constellation standards
+
+This repository adopts these constellation standards, vendored read-only in `docs/standards/` (each a directory: `STD-nn.md` holds the rules, `why.md` and `checks.md` the reasons and gates):
+
+- `STD-01@2` — [docs/standards/STD-01-cli-surface/STD-01.md](docs/standards/STD-01-cli-surface/STD-01.md)
+- `STD-02@4` — [docs/standards/STD-02-rust-architecture-and-errors/STD-02.md](docs/standards/STD-02-rust-architecture-and-errors/STD-02.md)
+- `STD-03@2` — [docs/standards/STD-03-concurrency-and-process-safety/STD-03.md](docs/standards/STD-03-concurrency-and-process-safety/STD-03.md)
+- `STD-04@2` — [docs/standards/STD-04-testing-and-verification/STD-04.md](docs/standards/STD-04-testing-and-verification/STD-04.md)
+- `STD-05@1` — [docs/standards/STD-05-security-boundaries/STD-05.md](docs/standards/STD-05-security-boundaries/STD-05.md)
+- `STD-06@1` — [docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md](docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md)
+- `STD-07@1` — [docs/standards/STD-07-ui-ux/STD-07.md](docs/standards/STD-07-ui-ux/STD-07.md)
+
+Follow them; they are normative. To deviate from a rule, record a decision in `docs/design/<feature>/4_decisions.md` citing `STD-nn@<version> §Rn`; never edit `docs/standards/` (`sh docs/standards/check.sh` enforces this).
+Reviewers check every change against the adopted standards and report violations as `STD-nn §Rn` with file:line evidence.
+<!-- constellation-standards:end -->
