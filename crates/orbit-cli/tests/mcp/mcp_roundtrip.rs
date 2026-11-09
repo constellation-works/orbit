@@ -3883,6 +3883,66 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
     client
 }
 
+#[test]
+fn federated_attention_reads_a_replica_only_host_without_a_workspace() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::federated_attention_reads_a_replica_only_host_without_a_workspace",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
+    let (machine_id, _) = machine_identity(&workspace.home);
+    let mut client = federated_client(&workspace);
+    let listing = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let selector = listing["workspaces"][0]["selector"].as_str().unwrap();
+
+    // A named workspace already succeeds on this replica. Omitting it must
+    // read the same checkout, rather than requiring control-plane authority.
+    let scoped = client.call_tool_ok(
+        "orbit_attention",
+        json!({"workspace": selector, "kind": "notice_open"}),
+    );
+    let unbound = client.call_tool_ok("orbit_attention", json!({"kind": "notice_open"}));
+    for response in [&scoped, &unbound] {
+        assert_eq!(response["hosts"].as_array().unwrap().len(), 1, "{response}");
+        assert_eq!(response["hosts"][0]["machine_id"], machine_id, "{response}");
+        assert_eq!(
+            response["hosts"][0]["reachability"], "reachable",
+            "{response}"
+        );
+        assert_eq!(response["items"], json!([]), "{response}");
+        assert!(
+            response["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| {
+                    entry["code"] == "source_unavailable"
+                        && entry["scope"] == "host:hm_remote_owner"
+                }),
+            "only the unconfigured owner may be unread: {response}"
+        );
+    }
+    assert_eq!(
+        unbound["filters"]["workspace"],
+        scoped["filters"]["workspace"]
+    );
+    let bare = client.call_tool_ok("orbit_attention", json!({}));
+    assert_eq!(bare["hosts"][0]["reachability"], "reachable", "{bare}");
+    assert_eq!(bare["filters"]["workspace"], scoped["filters"]["workspace"]);
+
+    // The ordinary bound server still answers this checkout and refuses a
+    // request to widen its scope.
+    let mut bound = workspace.serve();
+    let response = bound.call_tool_ok("orbit_attention", json!({"kind": "notice_open"}));
+    assert_eq!(response["items"], json!([]), "{response}");
+    bound.assert_tool_error(
+        "orbit_attention",
+        json!({"all": true}),
+        "scope_not_permitted",
+    );
+}
+
 fn machine_identity(home: &Path) -> (String, String) {
     let parsed: toml::Value = toml::from_str(
         &std::fs::read_to_string(home.join(".orbit").join("config.toml"))

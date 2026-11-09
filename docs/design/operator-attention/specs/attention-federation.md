@@ -61,6 +61,11 @@ beyond the folding rule inside one host.
    once, after this merge, not once per workspace.
 3. **All hosts.** The caller-side aggregator described next.
 
+An unbound destination may borrow any active local checkout to open the attention
+reader, including a replica when it owns no workspace. The checkout lends the
+registry; each source still enforces the authority above. Attention does not
+require a control-plane owner checkout merely to answer for that host.
+
 ## Fan-out across hosts
 
 A federated caller (the CLI with registered hosts, or `orbit mcp serve --mode federated`) that
@@ -250,14 +255,17 @@ the aggregator because the destination cannot report on itself:
 |---|---|
 | `host` | the destination (`machine_id` from the pinned host entry, `name`) |
 | `workspace` | `{id: null, name: null}` |
-| `reason` | `<name> unreachable: <first line of the transport's error>` |
-| `detail.cause` | the federated routing identity: `unreachable_destination` (no answer, timeout, identity mismatch with the pin) or `tool_not_on_this_host` (reachable, but a binary without `orbit.attention`) |
+| `reason` | `<name> unreachable: <first line of the transport's error>`; for an input refusal, `<name> attention read refused: <first line of the error>` |
+| `detail.cause` | `unreachable_destination` (no answer, timeout, identity mismatch with the pin), `tool_not_on_this_host` (reachable, but a binary without `orbit.attention`), or `attention_read_refused` (reachable, but the destination refused the read's input, such as a workspace selector refusal) |
 | `since` | `null` (the aggregator keeps no history of onset) |
 | `severity` | `critical` when the host is the owner of any in-scope workspace, as the local replica checkouts name it (`owner_machine_id`); otherwise `high` |
 | `next` | `orbit host show <name>`; `also`: `orbit host list` for a live re-probe, and for `tool_not_on_this_host` the binary-update runbook |
 
-Each such failure is *also* a `degraded` entry on the envelope (code `unreachable_destination`
-or `tool_not_on_this_host`, scope `host:<name>`). The item is filterable (`--kind`,
+Each such failure is *also* a `degraded` entry on the envelope (code `unreachable_destination`,
+`tool_not_on_this_host`, or `attention_read_refused`, scope `host:<name>`). A destination
+that refused the input still has `hosts[].reachability = reachable`; the refusal code
+in the item and degraded entry distinguishes it from a transport failure.
+The item is filterable (`--kind`,
 `--exclude-kind host_unhealthy`), but `degraded` is not: an operator who excludes the kind
 still sees that part of the fleet was blind, and the empty-result message stays `No items
 found; N sources could not be read`, followed by the hosts and workspaces actually read.
