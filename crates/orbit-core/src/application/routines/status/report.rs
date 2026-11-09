@@ -99,16 +99,9 @@ pub fn routine_statuses_with_providers(
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineStatusReport, OrbitError> {
     let started = std::time::Instant::now();
-    let database =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
-    // Existing status reads do not need migration/preflight writes. Preserve
-    // first-use initialization on a host that has no scheduler database yet.
-    let store: std::sync::Arc<dyn orbit_store::contracts::RoutineStoreBackend> =
-        if database.exists() {
-            std::sync::Arc::new(orbit_store::Store::open_read_only(&database)?)
-        } else {
-            super::super::open_routine_store(global_root)?
-        };
+    // Status is observation: it opens the existing store read-only and fails
+    // with the setup remedy when the store is absent (STD-01 R31).
+    let store = super::super::open_existing_routine_store(global_root)?;
     tracing::debug!(
         elapsed_ms = started.elapsed().as_millis(),
         "routine status store opened"

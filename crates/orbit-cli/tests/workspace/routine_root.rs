@@ -934,6 +934,139 @@ fn plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_n
     assert_home_empty(&fixture.home);
 }
 
+/// STD-01 R31: a read-only routine command must not create the scheduler
+/// database on a host whose store is absent. It fails with the setup remedy
+/// and leaves the root tree unchanged, including when the root is unwritable.
+#[test]
+fn routine_status_reads_fail_without_creating_missing_scheduler_database() {
+    if crate::isolated_test::run_in_child(
+        "routine_root::routine_status_reads_fail_without_creating_missing_scheduler_database",
+    ) {
+        return;
+    }
+    let fixture = Fixture::initialized();
+    let root = fixture.root.to_str().expect("root path");
+    let database = fixture.root.join("orbit.db");
+    assert!(
+        database.exists(),
+        "init must create the scheduler database this regression removes"
+    );
+    fs::remove_file(&database).expect("remove scheduler database to model a missing store");
+    let before = tree_entries(&fixture.root);
+
+    for args in [
+        vec!["--root", root, "routine", "list", "--format", "json"],
+        vec![
+            "--root",
+            root,
+            "routine",
+            "show",
+            fixture.routine_name.as_str(),
+        ],
+    ] {
+        let stderr = run_failure(&fixture.repo, &fixture.home, &args, None);
+        assert!(
+            stderr.contains("orbit init"),
+            "`orbit {}` must name the setup remedy for a missing store: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            !database.exists(),
+            "`orbit {}` created the scheduler database during observation",
+            args.join(" ")
+        );
+        assert_eq!(
+            tree_entries(&fixture.root),
+            before,
+            "`orbit {}` changed the root tree",
+            args.join(" ")
+        );
+        assert_home_empty(&fixture.home);
+    }
+
+    #[cfg(unix)]
+    assert_unwritable_root_read_fails_without_writes(&fixture, &database, &before);
+}
+
+/// Unwritable storage must fail the same way: the read reports the setup
+/// requirement instead of attempting a write.
+#[cfg(unix)]
+fn assert_unwritable_root_read_fails_without_writes(
+    fixture: &Fixture,
+    database: &Path,
+    before: &[String],
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = fixture.root.to_str().expect("root path");
+    let mut permissions = fs::metadata(&fixture.root)
+        .expect("root metadata")
+        .permissions();
+    let writable = permissions.clone();
+    permissions.set_mode(0o555);
+    fs::set_permissions(&fixture.root, permissions).expect("make root unwritable");
+    let stderr = run_failure(
+        &fixture.repo,
+        &fixture.home,
+        &["--root", root, "routine", "list", "--format", "json"],
+        None,
+    );
+    fs::set_permissions(&fixture.root, writable).expect("restore root permissions");
+    assert!(
+        stderr.contains("orbit init"),
+        "unwritable missing-store list must name the setup remedy: {stderr}"
+    );
+    assert!(
+        !database.exists(),
+        "unwritable list created the scheduler database"
+    );
+    assert_eq!(tree_entries(&fixture.root), before);
+}
+
+/// The durable entries under `root`. `.generation-participants/` is excluded:
+/// every CLI process records a process-admission entry there, and one that
+/// exits through an error path leaves it behind. It holds no routine state.
+fn tree_entries(root: &Path) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read directory") {
+            let entry = entry.expect("directory entry");
+            let path = entry.path();
+            if path
+                .file_name()
+                .is_some_and(|name| name == ".generation-participants")
+            {
+                continue;
+            }
+            let is_dir = entry.file_type().expect("entry type").is_dir();
+            let relative = path.strip_prefix(root).expect("relative path");
+            entries.push(format!("{} dir={is_dir}", relative.display()));
+            if is_dir {
+                pending.push(path);
+            }
+        }
+    }
+    entries.sort();
+    entries
+}
+
+fn run_failure(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -> String {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    if let Some(root) = orbit_root {
+        command.env("ORBIT_ROOT", root);
+    }
+    let output = command.args(args).assert().failure().get_output().clone();
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
 #[test]
 fn routine_command_contracts_0() {
     for (name, check) in [
