@@ -72,9 +72,5 @@ impl Execute for RunSettlementsArgs {
 
 /// A wire enum's JSON name, or `-` when absent.
 fn doc_label<T: serde::Serialize>(value: &Option<T>) -> String {
-    value
-        .as_ref()
-        .and_then(|value| serde_json::to_value(value).ok())
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| "-".to_string())
+    orbit_common::protocol::serde_string_label(value).unwrap_or_else(|| "-".to_string())
 }

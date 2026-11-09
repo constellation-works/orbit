@@ -500,11 +500,7 @@ pub(crate) fn unavailable_variable(scope: ConditionScope, name: &str) -> Option<
 pub(crate) fn status_names() -> Vec<String> {
     TaskStatus::ALL
         .iter()
-        .filter_map(|status| {
-            serde_json::to_value(status)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-        })
+        .filter_map(orbit_common::protocol::serde_string_label)
         .collect()
 }
 

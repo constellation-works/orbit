@@ -343,8 +343,5 @@ pub(super) fn phase_guidance(
 }
 
 pub(super) fn phase_name(phase: LocalPullPhase) -> String {
-    serde_json::to_value(phase)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| "unknown".to_string())
+    orbit_common::protocol::serde_string_label(&phase).unwrap_or_else(|| "unknown".to_string())
 }
