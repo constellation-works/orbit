@@ -20,12 +20,12 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_common::governance::attention::{
     ATTENTION_AGGREGATOR_CLIENT, attention_candidate_read_refusal, cursor,
     filter::{AttentionFilter, attention_strings},
     page::{AttentionPageCursor, AttentionPageInput, attention_public_page},
 };
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::tool::{
     AttentionDegraded, AttentionEnvelope, AttentionHost, AttentionHostStatus, AttentionItem,
     AttentionKind, AttentionNext, AttentionSeverity, AttentionWorkspace, ToolSessionContext,
@@ -44,6 +44,8 @@ const ATTENTION_TOOL: &str = "orbit.attention";
 const UNREACHABLE: &str = "unreachable_destination";
 /// Routing identity of a reachable destination whose binary lacks the tool.
 const TOOL_MISSING: &str = "tool_not_on_this_host";
+/// A destination answered, but refused the read's input (including its scope).
+const READ_REFUSED: &str = "attention_read_refused";
 
 /// Seconds the cross-host attention fan-out waits for every hop.
 ///
@@ -205,7 +207,14 @@ impl FederatedMcpHost {
                     snapshot,
                 } => {
                     every_destination_answered = false;
-                    hosts.push(host_status(&host, cause));
+                    hosts.push(host_status(
+                        &host,
+                        if cause == READ_REFUSED {
+                            "reachable"
+                        } else {
+                            cause
+                        },
+                    ));
                     degraded.push(AttentionDegraded {
                         scope: format!("host:{}", host.name),
                         kind: AttentionKind::HostUnhealthy.as_str().into(),
@@ -550,6 +559,13 @@ fn read_destination(
         Err(error @ OrbitError::ToolNotOnThisHost(_)) => {
             failed(TOOL_MISSING, &error, Some(snapshot))
         }
+        Err(
+            error @ (OrbitError::InvalidInput(_)
+            | OrbitError::RemoteTool {
+                code: RemoteToolCode::InvalidInput,
+                ..
+            }),
+        ) => failed(READ_REFUSED, &error, Some(snapshot)),
         Err(error) => failed(UNREACHABLE, &error, Some(snapshot)),
     }
 }
@@ -773,10 +789,15 @@ fn unhealthy_item(host: &AttentionHost, cause: &str, message: &str, owns: bool) 
             format!("orbit host show '{}'", host.name),
         ));
     }
+    let failure = if cause == READ_REFUSED {
+        "attention read refused"
+    } else {
+        "unreachable"
+    };
     host_item(
         host,
         cause,
-        format!("{} unreachable: {first_line}", host.name),
+        format!("{} {failure}: {first_line}", host.name),
         json!({"cause": cause, "message": attention_line(message)}),
         severity(owns),
         also,

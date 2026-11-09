@@ -415,7 +415,7 @@ impl ServerMcpHost {
             );
         }
         if self.workspace_optional_aggregate(name, input, context) {
-            return self.owner_local_selection(name);
+            return self.local_aggregate_selection(name, federated::McpToolClass::ControlPlane);
         }
         Err(self.workspace_required(name))
     }
@@ -441,24 +441,27 @@ impl ServerMcpHost {
                 .is_ok_and(|definition| definition.rules.workspace_optional)
     }
 
-    /// Any active owner checkout on this host: its runtime answers the
-    /// owner-local aggregate from the host-wide store, so which workspace
-    /// lends the runtime does not change the answer.
-    fn owner_local_selection(&self, name: &str) -> Result<ResolvedWorkspaceSelection, OrbitError> {
+    /// An active local checkout that can lend the aggregate its runtime.
+    /// Coordination-store aggregates require an owner; attention can borrow
+    /// a replica because its sources enforce authority for each checkout.
+    fn local_aggregate_selection(
+        &self,
+        name: &str,
+        class: federated::McpToolClass,
+    ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_validated_registry_from(
             &registry_path,
             orbit_registry::workspace_registry::WorkspaceValidationMode::InMemory,
         )?;
-        let owner = orbit_registry::workspace_registry::local_workspaces(&registry)
+        let local = orbit_registry::workspace_registry::local_workspaces(&registry)
             .find(|(workspace, checkout)| {
                 workspace.status == orbit_types::workspace::WorkspaceStatus::Active
-                    && federated::CapabilityClasses::for_checkout(workspace, checkout)
-                        .holds(federated::McpToolClass::ControlPlane)
+                    && federated::CapabilityClasses::for_checkout(workspace, checkout).holds(class)
             })
             .map(|(workspace, _)| workspace.id.clone());
-        let Some(workspace_id) = owner else {
+        let Some(workspace_id) = local else {
             return Err(self.workspace_required(name));
         };
         RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, &workspace_id)
@@ -640,7 +643,10 @@ impl ServerMcpHost {
                 RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, selector)?
             } else {
                 input["all"] = Value::Bool(true);
-                self.owner_local_selection("orbit.attention")?
+                self.local_aggregate_selection(
+                    "orbit.attention",
+                    federated::McpToolClass::Unclassified,
+                )?
             }
         };
         let runtime = self.open_observation_runtime(&selected)?;

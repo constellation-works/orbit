@@ -248,7 +248,7 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   (per kind and workspace), `response_truncated` (a destination body the aggregator could not
   take as a complete candidate read;
   [attention-federation](./attention-federation.md#completeness)), or
-  `unreachable_destination`, `tool_not_on_this_host` (per host, the federated routing
+  `unreachable_destination`, `tool_not_on_this_host`, `attention_read_refused` (per host, the federated routing
   identities of [attention-federation](./attention-federation.md)).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
   hosts and workspaces actually read (`hosts read: …`, `workspaces read: …`). When neither
