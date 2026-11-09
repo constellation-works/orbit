@@ -72,6 +72,10 @@ function autoTaskMatchesFilter(definition, query) {
   return haystack.includes(query);
 }
 
+function autoTaskDraftOpen() {
+  return editingIn("auto-task") || autoTaskDeleteOpen.size > 0;
+}
+
 function autoTaskFilterBar(payload, total, matched, visible) {
   const query = autoTaskFilterQuery.trim();
   const input = el("input", {
@@ -80,6 +84,7 @@ function autoTaskFilterBar(payload, total, matched, visible) {
     "aria-label": "Filter auto-task definitions by name",
   });
   input.id = "auto-tasks-filter-input";
+  if (autoTaskDraftOpen()) { input.disabled = true; input.title = "Close the open editor or confirmation to filter"; }
   input.value = autoTaskFilterQuery;
   input.placeholder = "Filter definitions by name…";
   input.addEventListener("input", () => {
@@ -98,6 +103,7 @@ function autoTaskFilterBar(payload, total, matched, visible) {
   if (query) {
     const clear = el("button", { class: "operation-button secondary", text: "Clear filter" });
     clear.type = "button";
+    if (autoTaskDraftOpen()) clear.disabled = true;
     clear.addEventListener("click", () => {
       autoTaskFilterQuery = "";
       renderAutoTasks(payload);
@@ -123,6 +129,7 @@ function autoTaskGroupReveal(payload, title, matchedCount, visibleCount) {
       : `Show all ${matchedCount} ${title} definitions (${matchedCount - visibleCount} more)`,
   });
   button.type = "button";
+  if (autoTaskDraftOpen()) button.disabled = true;
   button.setAttribute("aria-expanded", revealed ? "true" : "false");
   button.addEventListener("click", () => {
     if (revealed) autoTaskRevealedGroups.delete(title);
@@ -463,8 +470,8 @@ function autoTaskRow(payload, definition, workspaceId) {
       ].filter(Boolean)),
       el("span", { class: `operation-cell-sub${held ? " warn" : ""}`, text: definition.open_duplicate
         ? (held ? "still open · scheduler will skip" : on ? "still open · next due slot mints another" : "still open · paused, no scheduled mint")
-        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
-      title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
+        : mintSource === "manual mint" ? mintSource : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
+      title: mintSource === "manual mint" ? "" : definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
   const schedule = definition.schedule || {};
@@ -536,7 +543,7 @@ function autoTaskRow(payload, definition, workspaceId) {
   if (confirm) {
     card.insertBefore(confirm, card.lastChild);
     const field = confirm.querySelector("textarea");
-    if (field && document.activeElement !== field) field.focus({ preventScroll: true });
+    if (field) requestAnimationFrame(() => { if (field.isConnected && document.activeElement !== field) field.focus({ preventScroll: true }); });
   }
   return card;
 }

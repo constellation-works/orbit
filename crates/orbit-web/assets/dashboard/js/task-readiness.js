@@ -8,6 +8,14 @@ import * as taskDecision from './task-decision.js';
 
 const OPERATOR_RECORD_REFUSAL_MS = 20000;
 
+function scheduleOperatorRecordRefusalExpiry(key, message, context) {
+  setTimeout(() => {
+    if (taskShared.taskState.operatorRecordRefusals.get(key) !== message) return;
+    taskShared.taskState.operatorRecordRefusals.delete(key);
+    taskShared.rerender(context);
+  }, OPERATOR_RECORD_REFUSAL_MS);
+}
+
 export function readinessOf(task) {
   const readiness = task && task.readiness;
   return readiness && typeof readiness === "object" ? readiness : null;
@@ -309,6 +317,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
       const message = "[pilot_admission_evidence_required] pilot admission needs evidence; it is recorded with the decision";
       taskShared.taskState.operatorRecordRefusals.set(key, message);
       taskShared.rerender(context);
+      scheduleOperatorRecordRefusalExpiry(key, message, context);
       return;
     }
     suffix = "/pilot-admission";
@@ -326,6 +335,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
       const message = "[post_deploy_evidence_required] post-deploy record needs evidence; it is recorded with the measurement";
       taskShared.taskState.operatorRecordRefusals.set(key, message);
       taskShared.rerender(context);
+      scheduleOperatorRecordRefusalExpiry(key, message, context);
       return;
     }
     suffix = "/post-deploy";
@@ -348,11 +358,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
     const message = `[${code}] ${error.message || String(error)}`;
     taskShared.taskState.operatorRecordRefusals.set(key, message);
     taskShared.rerender(context);
-    setTimeout(() => {
-      if (taskShared.taskState.operatorRecordRefusals.get(key) !== message) return;
-      taskShared.taskState.operatorRecordRefusals.delete(key);
-      taskShared.rerender(context);
-    }, OPERATOR_RECORD_REFUSAL_MS);
+    scheduleOperatorRecordRefusalExpiry(key, message, context);
     return;
   }
   // A retained detail keeps only the settled record's controls disabled:
@@ -477,8 +483,10 @@ async function runSkipPilot(task, button, context) {
     button.disabled = false;
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "skip_pilot_refused";
-    taskShared.taskState.operatorRecordRefusals.set(key, `[${code}] ${error.message || String(error)}`);
+    const message = `[${code}] ${error.message || String(error)}`;
+    taskShared.taskState.operatorRecordRefusals.set(key, message);
     taskShared.rerender(context);
+    scheduleOperatorRecordRefusalExpiry(key, message, context);
     return;
   }
   if (!visit.isCurrent()) return;

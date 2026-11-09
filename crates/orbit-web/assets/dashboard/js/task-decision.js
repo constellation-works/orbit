@@ -130,13 +130,15 @@ export function buildAnsweredDecisions(task, context) {
   const visit = captureWorkspaceVisit();
   const path = taskShared.taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}&include_closed=true`);
   const load = () => {
+    const pendingBlock = wrap.closest(".field-block"); if (pendingBlock) pendingBlock.hidden = true;
     wrap.replaceChildren(el("p", { class: "field-empty", text: "Loading decision history…", role: "status" }));
     return fetchJson(path).then((payload) => {
       if (!visit.isCurrent()) return;
       wrap.replaceChildren();
       const items = Array.isArray(payload?.items) ? payload.items : [];
       const answered = items.filter((r) => r && r.resolution && (r.state === "answered" || r.resolution.answer_id));
-      if (!answered.length) { const block = wrap.closest(".field-block"); if (block) block.remove(); return; }
+      if (!answered.length) { const block = wrap.closest(".field-block"); const container = block?.parentElement; if (block) block.remove(); if (container && !container.children.length) container.remove(); return; }
+      const shownBlock = wrap.closest(".field-block"); if (shownBlock) shownBlock.hidden = false;
       for (const request of answered) {
         const res = request.resolution;
         const picked = (Array.isArray(request.answers) ? request.answers : []).find((a) => String(a.id) === String(res.answer_id));
@@ -150,6 +152,7 @@ export function buildAnsweredDecisions(task, context) {
       }
     }).catch((error) => {
       if (!visit.isCurrent()) return;
+      const errorBlock = wrap.closest(".field-block"); if (errorBlock) errorBlock.hidden = false;
       const retry = el("button", { class: "action", type: "button", text: "Retry" });
       retry.addEventListener("click", (event) => { event.stopPropagation(); load(); });
       wrap.replaceChildren(

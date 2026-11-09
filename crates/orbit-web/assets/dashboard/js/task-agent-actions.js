@@ -347,6 +347,11 @@ async function runRecovery(task, detail, btnNode, context, kind) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
       recoveryRefusals.set(key, message);
       rerender(context);
+      setTimeout(() => {
+        if (recoveryRefusals.get(key) !== message) return;
+        recoveryRefusals.delete(key);
+        rerender(context);
+      }, RECOVERY_REFUSAL_MS);
       return;
     }
     suffix = "/requeue";

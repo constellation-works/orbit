@@ -8,7 +8,7 @@
 // Two display rules are load-bearing and apply to every rate on this view:
 //
 //   1. A percentage is never shown without its denominator and its window.
-//      `fmtRate` renders "12.5% (n=48)" and the panel header states the
+//      `describeRate` renders "12.5% (n=48)" and the panel header states the
 //      window, so a number can't be read out of context.
 //   2. A rate whose denominator is below the server's confidence threshold
 //      (`low_sample`, set in orbit-core) is withheld — the cell shows the raw

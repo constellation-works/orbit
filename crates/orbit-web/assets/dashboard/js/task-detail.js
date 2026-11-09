@@ -271,7 +271,8 @@ export function buildTaskDetail(task, context, drain = null) {
     });
   }
   // Answered state (picked option, by whom, when) for any task.
-  addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task, context), true, true);
+  const decisionHistoryBlock = addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task, context), true, true);
+  decisionHistoryBlock.hidden = true;
 
   // The rendered Markdown is the disclosure's whole body, so it sits in the
   // disclosure card with no card of its own (the description keeps its card).
