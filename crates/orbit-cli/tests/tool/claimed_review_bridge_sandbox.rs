@@ -332,8 +332,11 @@ puts = set()
 def forward():
     for line in sys.stdin.buffer:
         message = json.loads(line)
-        name = str(message.get('params', {{}}).get('name', ''))
-        if message.get('method') == 'tools/call' and 'artifact' in name and 'put' in name:
+        params = message.get('params', {{}})
+        name = str(params.get('name', ''))
+        # A family call names its operation in the `action` argument [ORB-23280].
+        action = str((params.get('arguments') or {{}}).get('action', ''))
+        if message.get('method') == 'tools/call' and 'artifact' in name and ('put' in name or action == 'put'):
             puts.add(message.get('id'))
         child.stdin.write(line)
         child.stdin.flush()

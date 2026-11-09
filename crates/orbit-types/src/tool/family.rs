@@ -172,6 +172,18 @@ pub fn tool_family_of_operation(
     })
 }
 
+/// A task requirement or grant as a tool list names it. A name stored before
+/// tool families [ORB-23280] (a minted task, a workspace's auto-task
+/// definition) names the operation behind a family action, such as
+/// `orbit.task.artifact.put`; it reads as that family action,
+/// `orbit.task.artifact:put`. Any other name is returned unchanged.
+pub fn tool_requirement_name(name: &str) -> std::borrow::Cow<'_, str> {
+    match tool_family_of_operation(name) {
+        Some((family, action)) => std::borrow::Cow::Owned(family.qualified_action(action.action)),
+        None => std::borrow::Cow::Borrowed(name),
+    }
+}
+
 /// Whether `name` is an internal family operation rather than a tool.
 pub fn is_tool_family_operation(name: &str) -> bool {
     tool_family_of_operation(name).is_some()
