@@ -145,7 +145,7 @@ pub(super) fn not_scored(facts: &AgentFacts, window: WindowBounds) -> Value {
 /// reasoning effort.
 fn effort_split(facts: &AgentFacts, window: WindowBounds, model: &str) -> Value {
     json!(orbit_store::contracts::agent_effort_usage(
-        facts.invocations.iter().filter(|fact| {
+        facts.invocations.iter_invocations().filter(|fact| {
             window.admits(fact.ts)
                 && fact.model.as_deref() == Some(model)
                 && matches!(

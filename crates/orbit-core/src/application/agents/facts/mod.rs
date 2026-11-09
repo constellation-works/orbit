@@ -9,6 +9,7 @@
 //! counts against, and the roles only slice the result by window.
 
 mod attempts;
+mod invocations;
 mod model;
 mod review;
 mod scan;

@@ -682,6 +682,15 @@ One `AgentFacts` scan per workspace serves all three roles and the attribution s
 
 It reads at most 90 days back. `all` is served as 90 days, so the scan stays bounded however old the workspace gets.
 
+The scan keeps its invocation accounting records immutable, with an in-memory
+index by job run. A unit's effort lookup visits only that run's records, then
+applies the same activity, model, task-link and settlement-time filters and
+duration/end-time/id tie-break. Aggregate readers retain the store's original
+record order. The index belongs to this scan, so refreshing the scan replaces
+both records and index; it introduces no additional cache or freshness window.
+This also bounds the repeated effort lookups made while rendering each model's
+weekly crew-memory evidence pack.
+
 **Count windows.** `last50`, `last200`, `last500` and `last1000` select by delivery attempts rather than time: the window starts at the start of the `N`th newest implementation attempt in the scan (the oldest when the scan holds fewer, the scan's reach when it holds none) and ends now. With `until` set, those attempts are the newest N whose start is before `until`, and the window ends at `until`. Every role slices its own unit from that start as for a calendar window. Window membership, attribution and the shared score are unchanged. They reach no further than the scan's 90 days, so a workspace idle for longer still shows nothing. The implementers `--by-type --shadow` report reads recorded crew draws rather than the scan and refuses a count window.
 
 The server keeps one scan per workspace runtime for five minutes, single-flight. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.

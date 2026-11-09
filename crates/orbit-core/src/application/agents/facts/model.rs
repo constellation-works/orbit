@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
@@ -11,6 +10,7 @@ use super::super::attribution::{Charge, Credit};
 use super::super::records::Cause;
 use super::super::roles::pilot_warnings::Warnings;
 use super::super::roles::pilots::Graded;
+use super::invocations::AgentInvocationFacts;
 use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
@@ -366,18 +366,10 @@ pub(in crate::application::agents) fn filing_attempt<'a>(
     Some((filer, filer.attempt_at(task.created_at)?))
 }
 
-/// Positions in an [`AgentFacts`] invocation list, grouped by job run id and
-/// kept in scan order. Built on the first lookup and then reused for the
-/// scan's life, since a scan never changes its invocations.
-#[derive(Debug, Default)]
-pub(in crate::application::agents) struct InvocationsByRun(OnceLock<HashMap<String, Vec<usize>>>);
-
 /// One scan of a workspace: every role and the attribution strip slice it.
 #[derive(Debug)]
 pub struct AgentFacts {
-    pub(in crate::application::agents) invocations:
-        Vec<orbit_store::contracts::InvocationAccountingFact>,
-    pub(in crate::application::agents) invocations_by_run: InvocationsByRun,
+    pub(in crate::application::agents) invocations: AgentInvocationFacts,
     pub(in crate::application::agents) computed_at: DateTime<Utc>,
     pub(in crate::application::agents) tasks_scanned: usize,
     pub(in crate::application::agents) tasks: Vec<TaskFacts>,
@@ -405,31 +397,6 @@ impl AgentFacts {
     /// Landed credit, each to the implementation run whose candidate landed.
     pub fn credits(&self) -> &[Credit] {
         &self.credits
-    }
-
-    /// The invocations recorded for one job run, in scan order. Looked up
-    /// through the run index, so a lookup costs its run's invocations rather
-    /// than a pass over the whole scan.
-    pub(in crate::application::agents) fn run_invocations<'a>(
-        &'a self,
-        run_id: &str,
-    ) -> impl Iterator<Item = &'a orbit_store::contracts::InvocationAccountingFact> + Clone + 'a
-    {
-        let index = self.invocations_by_run.0.get_or_init(|| {
-            let mut by_run: HashMap<String, Vec<usize>> = HashMap::new();
-            for (position, fact) in self.invocations.iter().enumerate() {
-                by_run
-                    .entry(fact.job_run_id.clone())
-                    .or_default()
-                    .push(position);
-            }
-            by_run
-        });
-        index
-            .get(run_id)
-            .into_iter()
-            .flatten()
-            .map(move |&position| &self.invocations[position])
     }
 }
 
