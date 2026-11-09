@@ -624,6 +624,75 @@ fn dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit() {
     );
 }
 
+/// A proposed task whose pilot assessment artifact has gone missing (the
+/// state a restore without attachments leaves behind) must hold only its own
+/// readout. List and show keep serving every task, and the broken task reports
+/// its audit as unavailable instead of failing the page.
+fn missing_assessment_artifact_degrades_only_its_own_readout() {
+    let workspace = workspace(None);
+    let broken = add_task(&workspace.runtime, "broken audit", TaskStatus::Proposed);
+    let healthy = add_task(&workspace.runtime, "healthy", TaskStatus::Proposed);
+    let output = apply(&workspace, &prepare(&workspace, &broken.id)).expect("apply");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    let comment = workspace
+        .runtime
+        .get_task_comments(&broken.id)
+        .expect("comments")
+        .into_iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .expect("pilot receipt");
+    let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("assessment artifact path")
+        .to_string();
+    crate::artifact_tools::drop_artifact_manifest_entry(
+        &workspace.runtime.global_root(),
+        &broken.id,
+        &path,
+    );
+    assert!(
+        workspace
+            .runtime
+            .get_task_artifact(&broken.id, &path)
+            .expect("artifact read")
+            .is_none(),
+        "the assessment artifact must now be missing"
+    );
+
+    let listed = workspace
+        .runtime
+        .run_tool("orbit.task.list", json!({"status": "proposed"}))
+        .expect("list must survive one unreadable pilot audit");
+    let rows = listed["tasks"].as_array().expect("task rows");
+    let row = |id: &str| {
+        rows.iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("{id} missing from list: {listed}"))
+    };
+    assert_eq!(row(&healthy.id)["pilot_warnings"], json!([]), "{listed}");
+    assert_eq!(
+        row(&broken.id)["pilot_warnings"][0]["kind"],
+        "pilot_assessment_unavailable",
+        "{listed}"
+    );
+
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": broken.id}))
+        .expect("show must survive one unreadable pilot audit");
+    assert_eq!(
+        shown["pilot_warnings"][0]["kind"], "pilot_assessment_unavailable",
+        "{shown}"
+    );
+    assert_eq!(
+        shown["resolvable_pilot_admission_hold"],
+        json!(false),
+        "{shown}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     meaning_edits_name_the_drifted_component_and_write_nothing_scenarios,
@@ -633,5 +702,6 @@ crate::scenario_table!(
     proposed_to_backlog_still_applies,
     malformed_component_map_fails_apply_without_writing,
     configured_crew_and_dependency_meaning_drift_are_named,
-    dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit
+    dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit,
+    missing_assessment_artifact_degrades_only_its_own_readout
 );

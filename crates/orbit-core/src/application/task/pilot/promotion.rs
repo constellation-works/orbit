@@ -327,24 +327,38 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
     }
 }
 
+/// `kind` of the readout finding for a proposed task whose pilot audit cannot
+/// be resolved.
+const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";
+
 impl crate::OrbitRuntime {
     /// Holding pilot findings for a task, resolving assessment artifacts as
     /// well as historical inline audits before classifying its latest receipt.
+    /// An audit that cannot be resolved (missing artifact, digest mismatch,
+    /// undecodable evidence) is reported as one unavailable finding for this
+    /// task alone, so list and show readers keep serving every other task.
+    /// Drain admission still fails closed on the same resolution.
     pub fn task_pilot_warning_findings(
         &self,
         task: &orbit_types::task::Task,
         comments: &[TaskComment],
         is_done: &dyn Fn(&str) -> bool,
-    ) -> Result<Vec<DrainHoldFinding>, orbit_common::OrbitError> {
+    ) -> Vec<DrainHoldFinding> {
         if task.status != TaskStatus::Proposed {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        Ok(task_pilot_warnings(
-            task.status,
-            &self.resolve_task_pilot_comments(&task.id, comments)?,
-            &task.dependencies(),
-            is_done,
-        ))
+        match self.resolve_task_pilot_comments(&task.id, comments) {
+            Ok(resolved) => task_pilot_warnings(
+                task.status,
+                &resolved,
+                &task.dependencies(),
+                is_done,
+            ),
+            Err(_) => vec![DrainHoldFinding {
+                kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
+                text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),
+            }],
+        }
     }
 }
 

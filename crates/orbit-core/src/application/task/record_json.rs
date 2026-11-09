@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     Task, TaskStatus, serialize_task_artifacts, task_artifact_manifest_json, task_base_json,
     task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
@@ -73,6 +73,13 @@ pub fn task_record_json(
             {
                 false
             }
+            // A referenced assessment artifact that is absent (for example
+            // after a snapshot restore without attachments) is the same
+            // unresolvable evidence, not a failed record.
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Artifact,
+                ..
+            }) => false,
             Err(error) => return Err(error),
         }
     };
@@ -82,11 +89,13 @@ pub fn task_record_json(
     );
     object.insert(
         "pilot_warnings".into(),
-        serde_json::json!(runtime.task_pilot_warning_findings(
-            task,
-            &row.comments,
-            &|id: &str| task_is_done(runtime, Some(status_by_id), id),
-        )?),
+        serde_json::json!(
+            runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| task_is_done(
+                runtime,
+                Some(status_by_id),
+                id
+            ),)
+        ),
     );
     object.insert(
         "comments".to_string(),
@@ -217,7 +226,7 @@ pub fn task_show_field_json(
             task,
             &runtime.get_task_comments(&task.id)?,
             &|id: &str| task_is_done(runtime, status_by_id, id),
-        )?)),
+        ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
         "placement_wait" => Ok(TaskOsReadout::new(runtime)?
             .placement_wait(task)

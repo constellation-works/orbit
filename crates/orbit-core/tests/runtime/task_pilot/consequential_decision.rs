@@ -421,5 +421,4 @@ fn public_warnings(
     workspace
         .runtime
         .task_pilot_warning_findings(task, &comments, &|_| false)
-        .unwrap()
 }

@@ -950,7 +950,7 @@ fn refuse_bulk_artifact_symlink() {
 }
 
 #[cfg(unix)]
-fn find_artifact_blob(
+pub(super) fn find_artifact_blob(
     root: &std::path::Path,
     task_id: &str,
     logical_path: &str,
@@ -972,6 +972,46 @@ fn find_artifact_blob(
         }
     }
     panic!("artifact blob for {logical_path} on task {task_id}");
+}
+
+/// Remove one logical file from its task's artifact manifest and leave its
+/// blob in place. A restore without attachments rebuilds a task this way: the
+/// receipt still names the path, and the artifact read finds nothing.
+pub(super) fn drop_artifact_manifest_entry(
+    root: &std::path::Path,
+    task_id: &str,
+    logical_path: &str,
+) {
+    let workspaces = root.join("tasks/workspaces");
+    for workspace in std::fs::read_dir(&workspaces)
+        .expect("task workspaces")
+        .flatten()
+    {
+        let manifest_path = workspace
+            .path()
+            .join(task_id)
+            .join(TASK_ARTIFACTS_DIR_NAME)
+            .join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let mut manifest: ArtifactManifestV2 =
+            serde_yaml::from_str(&raw).expect("parse artifact manifest");
+        let before = manifest.files.len();
+        manifest.files.retain(|file| file.path != logical_path);
+        assert_eq!(
+            manifest.files.len() + 1,
+            before,
+            "manifest must name {logical_path} on task {task_id}"
+        );
+        std::fs::write(
+            &manifest_path,
+            serde_yaml::to_string(&manifest).expect("serialize artifact manifest"),
+        )
+        .expect("write artifact manifest");
+        return;
+    }
+    panic!("artifact manifest for {logical_path} on task {task_id}");
 }
 
 crate::scenario_table!(
