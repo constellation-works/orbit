@@ -23,18 +23,19 @@ use crate::runtime::run_input::singular_task_id_from_input;
 ///
 /// Comments are unbounded in principle (an orchestrator can post any number of
 /// refinements), but the envelope is a single JSON payload handed to an agent
-/// invocation. The newest comments are the ones that can supersede the
-/// description (see [ORB-11327]), so truncation must drop the oldest entries
-/// first and say so rather than silently dropping the entries that matter.
+/// invocation. Under either budget, the projection preserves non-pilot
+/// comments ahead of pilot assessments: it keeps the newest non-pilot
+/// comments and the latest pilot assessment's summary before omitting
+/// superseded pilot assessments ([ORB-23676]).
 const MAX_TASK_COMMENTS: usize = 20;
 
 /// Ceiling on the total size, in bytes, of the retained comment bodies.
 ///
-/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based cut: a handful
-/// of very long comments could still blow out the envelope even under the
-/// count cap. Comment creation accepts any non-empty message, so the last
-/// retained comment can exceed this on its own; the projection then cuts the
-/// body itself rather than shipping it whole (see [ORB-11338]).
+/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based budget. The
+/// projection fills it with newest non-pilot comments first, then the latest
+/// pilot assessment's summary; superseded pilot assessments are omitted rather
+/// than pushing those comments out. If the newest non-pilot comment alone
+/// exceeds the budget, its body is cut to fit (see [ORB-11338]).
 const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
 
 /// Marker appended to a comment body cut down to fit
@@ -492,6 +493,7 @@ fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
     let mut kept: Vec<(usize, TaskComment)> = Vec::new();
     let mut used_bytes = 0usize;
     let mut body_truncated = false;
+    let mut pilot_body_replaced = false;
     // Whether `comment` fits beside what is kept. The first kept comment is
     // always admitted, cut down when it alone exceeds the byte budget.
     let mut admit = |index: usize, mut comment: TaskComment, kept: &mut Vec<_>| -> bool {
@@ -522,17 +524,22 @@ fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
         .rposition(TaskComment::is_task_pilot_comment)
     {
         let mut pilot = comments[index].clone();
-        if let Some(summary) = pilot.pilot_assessment_summary() {
+        let summary_replaced = if let Some(summary) = pilot.pilot_assessment_summary()
+            && pilot.message != summary
+        {
             pilot.message = summary;
-        }
-        admit(index, pilot, &mut kept);
+            true
+        } else {
+            false
+        };
+        pilot_body_replaced = admit(index, pilot, &mut kept) && summary_replaced;
     }
     kept.sort_by_key(|(index, _)| *index);
 
     BoundedTaskComments {
         omitted_count: comments.len() - kept.len(),
         comments: kept.into_iter().map(|(_, comment)| comment).collect(),
-        body_truncated,
+        body_truncated: body_truncated || pilot_body_replaced,
     }
 }
 
