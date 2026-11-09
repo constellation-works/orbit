@@ -203,11 +203,12 @@ View URLs keep older section names: `#diagnostics/…` is Health,
 
 ## Notices
 
-**Notices** has two tabs: **Open** fleet notices in the selected workspaces,
-and **Recently closed** (closed or expired in the last 24 hours). Select a row
-to read its body. With an [operator session](#authorization), **Post** opens a
-form for the title, kind, body, scope, an optional linked task and expiry, and
-**Close** on a row asks for a reason. Neither is available in **All
+**Notices** shows one list: open fleet notices in the selected workspaces
+first, followed by recently closed notices (closed or expired in the last
+24 hours) under a **Recently closed (N)** heading when any are present. Select
+a row to read its body. With an [operator session](#authorization), **Post**
+opens a form for the title, kind, body, scope, an optional linked task and
+expiry, and **Close** on a row asks for a reason. Neither is available in **All
 workspaces**. A banner also shows open
 incident and maintenance notices, with each notice's kind, title, scope, age,
 and expiry. Its **Notices** link opens this view. The banner hides when no open

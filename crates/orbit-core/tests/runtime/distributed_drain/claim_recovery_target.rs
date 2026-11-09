@@ -129,9 +129,70 @@ fn a_handed_off_claim_recovers_to_done_with_its_completion_evidence() {
     assert_eq!(pair.owner_claim(&claim)["claim"]["phase"], "revoked");
 }
 
+/// A failed claim can outlive a requeue and a newer claim. The owner console
+/// must withhold recovery from that historical attempt while preserving it
+/// for the current attempt, including when that attempt also fails.
+fn a_historical_failed_claim_has_no_recovery_targets_after_a_new_pull() {
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let first = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&first);
+    let historical = claim_id(&pair, &first);
+    pair.leaf_fails_with(&first, "candidate implementation failed");
+    pair.pass(&drain);
+    assert_eq!(pair.owner_status(&task), "blocked");
+    assert_eq!(pair.owner_claim(&historical)["claim"]["phase"], "failed");
+    let failed_targets = console_targets(&pair, &historical);
+    assert!(
+        !failed_targets.is_empty(),
+        "the current failed claim offers recovery"
+    );
+
+    pair.wire
+        .owner
+        .requeue_blocked_task(&task, "retry the stopped candidate", false)
+        .unwrap();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task);
+    let current = claim_id(&pair, &next);
+    assert_ne!(historical, current);
+    assert!(
+        console_targets(&pair, &historical).is_empty(),
+        "a historical failed claim must never offer recovery against the newer claim's task"
+    );
+    assert!(!console_targets(&pair, &current).is_empty());
+    let console = pair.wire.owner.distributed_claim_console().unwrap();
+    for (id, expected_current) in [(&historical, false), (&current, true)] {
+        let row = console["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["claim_id"] == *id)
+            .unwrap();
+        assert_eq!(row["current"], expected_current, "{row:#}");
+    }
+
+    pair.leaf_fails_with(&next, "candidate implementation failed again");
+    pair.pass(&drain);
+    assert_eq!(console_targets(&pair, &current), failed_targets);
+    assert!(console_targets(&pair, &historical).is_empty());
+    let recovered = recover(
+        &pair,
+        &current,
+        "failed",
+        TaskStatus::Archived,
+        "archive-failed",
+    )
+    .unwrap();
+    assert_eq!(recovered["phase"], "revoked");
+    assert_eq!(pair.owner_status(&task), "archived");
+    assert_eq!(pair.owner_claim(&historical)["claim"]["phase"], "failed");
+}
+
 crate::scenario_table!(
     claim_recovery_target_scenarios,
     a_running_claim_recovers_to_a_lifecycle_valid_status_beyond_blocked_or_backlog,
     a_recovery_target_the_lifecycle_does_not_allow_is_refused_with_its_rule,
     a_handed_off_claim_recovers_to_done_with_its_completion_evidence,
+    a_historical_failed_claim_has_no_recovery_targets_after_a_new_pull,
 );

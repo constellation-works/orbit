@@ -40,6 +40,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
@@ -51,6 +52,10 @@ use orbit_types::workflow::{
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use super::helpers::{self, SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::requeue::CandidateRequeue;
+use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
+use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// Transient authentication errors one block may take before it waits for an
@@ -60,10 +65,15 @@ const MAX_DEFERRALS: usize = 5;
 /// Minutes the cleared-infra requeue waits after a transient authentication
 /// error before it tries the same block again.
 const DEFERRAL_BACKOFF_MINUTES: i64 = 10;
-use super::helpers::{self, SYSTEM_ACTOR_LABEL, is_automation_actor};
-use super::requeue::CandidateRequeue;
-use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
-use crate::OrbitRuntime;
+
+// One authentication error the next cleared-infra requeue records instead of
+// calling the forge. The real refusal is a remote round trip; this only
+// supplies the error text the deferral persists.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PRESERVATION_FAULT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// A blocked task whose block is transient Orbit infrastructure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,7 +290,7 @@ impl OrbitRuntime {
         let task = self.get_task(&scanned.task_id)?;
         // Authenticate first, outside the lock: it asks the remote and forge.
         let preserved = match &scanned.pull_request {
-            Some(_) => match self.failure_handoff_preservation(&task) {
+            Some(_) => match self.failure_handoff_for_requeue(&task) {
                 Ok((entry, _)) => Some(entry),
                 // Only the authentication's own refusal is final; a remote,
                 // forge or store error says nothing about the publication.
@@ -387,6 +397,25 @@ impl OrbitRuntime {
         self.record_transient_infra_attempt(scanned, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, reason)
     }
 
+    /// The failure-handoff preservation record, or the test fault standing in
+    /// for an unreadable forge response.
+    fn failure_handoff_for_requeue(
+        &self,
+        task: &orbit_types::task::Task,
+    ) -> Result<
+        (
+            orbit_types::task::TaskHistoryEntry,
+            orbit_types::workflow::SourceRepairBinding,
+        ),
+        OrbitError,
+    > {
+        #[cfg(test)]
+        if let Some(message) = PRESERVATION_FAULT.with(|fault| fault.borrow_mut().take()) {
+            return Err(OrbitError::Execution(message));
+        }
+        self.failure_handoff_preservation(task)
+    }
+
     /// Append `event` (a refusal or a deferral) to `scanned`'s block, while
     /// it is still the block that was scanned and nothing holds it.
     fn record_transient_infra_attempt(
@@ -395,6 +424,10 @@ impl OrbitRuntime {
         event: &'static str,
         reason: &str,
     ) -> Result<(), OrbitError> {
+        // Sibling writers (`requeue_blocked_task_as`, `resolves_history_entry`)
+        // redact error text before it becomes a durable note. Forge and git
+        // errors can carry a remote URL with credentials.
+        let reason = redact_all(reason.trim());
         tracing::warn!(
             target: "orbit.core.transient_infra",
             task_id = %scanned.task_id,

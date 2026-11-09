@@ -11,11 +11,11 @@
 //! selectors, including valid ones whose target no longer exists. A
 //! contention picture admission does not share is not worth reading.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::lock_mode::FootprintLockModes;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::TaskStatus;
 
 use crate::OrbitRuntime;
 use crate::runtime::task::locks::lock_context_files_for_task;
@@ -76,22 +76,18 @@ impl LockContentionReport {
 impl OrbitRuntime {
     /// Lock contention across every task whose status appears in `statuses`.
     ///
-    /// The whole task table is loaded regardless of `statuses`, because
-    /// parent-chain reads span tasks at any status. Only the selected tasks
-    /// are expanded.
+    /// Reads envelope metadata only: the expansion uses each task's own
+    /// context files, and a parent does not inherit a child's footprint, so
+    /// bodies and tasks outside `statuses` are not loaded.
     pub fn task_lock_contention(
         &self,
         statuses: &[TaskStatus],
     ) -> Result<LockContentionReport, OrbitError> {
-        let lookup: BTreeMap<String, Task> = self
-            .list_tasks()?
-            .into_iter()
-            .map(|task| (task.id.clone(), task))
-            .collect();
+        let tasks = self.list_task_metadata()?;
         let repo_root = self.paths().repo_root.as_path();
         let unlocked = self.unlocked_context_paths();
-        let surfaces: Vec<LockSurface> = lookup
-            .values()
+        let surfaces: Vec<LockSurface> = tasks
+            .iter()
             .filter(|task| statuses.contains(&task.status))
             .map(|task| LockSurface {
                 task_id: task.id.clone(),

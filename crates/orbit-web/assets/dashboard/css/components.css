@@ -675,6 +675,8 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+.pinned-hint-trigger:hover > .info-hint-text,
+.pinned-hint-trigger:focus > .info-hint-text,
 .info-hint:hover > .info-hint-text,
 .info-hint:focus > .info-hint-text {
   left: var(--hint-left, 0);
@@ -708,8 +710,41 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
   box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
   width: 14px; height: 14px; border: 1px solid currentColor; border-radius: 50%;
 }
-.info-hint.info-hint-pinned:hover > .info-hint-text,
-.info-hint.info-hint-pinned:focus > .info-hint-text {
+.info-hint-pinned:hover > .info-hint-text,
+.info-hint-pinned:focus > .info-hint-text {
   position: fixed; left: var(--hint-tip-left, 12px); right: auto; top: var(--hint-tip-top, 0);
   width: var(--hint-tip-width, 280px); z-index: 30;
 }
+
+/* One strip for lifecycle, run stages and claim delivery; view classes never
+   change its geometry. Hints stay outside the clipped, single-line label. */
+.progress-strip {
+  list-style: none;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+.progress-strip-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.progress-strip-bar { height: 3px; flex: none; border-radius: 2px; background: var(--border); }
+.progress-strip-hint {
+  display: block;
+  min-width: 0;
+  color: var(--fg-mute);
+  font: 400 11px/1.5 var(--font-sans);
+  text-decoration: none;
+}
+.progress-strip-label { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-strip-hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; }
+.progress-strip-step[data-state="done"] .progress-strip-bar { background: var(--state-success); }
+.progress-strip-step[data-state="active"] .progress-strip-bar { background: var(--state-running); }
+.progress-strip-step:is([aria-current="step"], [data-state="failed"], [data-state="cancelled"]) .progress-strip-hint { color: var(--fg-strong); font-weight: 600; }
+.progress-strip-step[data-state="failed"] { --strip-tone: var(--state-failed); }
+.progress-strip-step[data-state="cancelled"] { --strip-tone: var(--state-cancelled); }
+.progress-strip-step[data-state="awaiting"] { --strip-tone: var(--warn-fg); }
+.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-bar { background: var(--strip-tone); }
+.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-hint { color: var(--strip-tone); }

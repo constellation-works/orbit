@@ -11,6 +11,7 @@ import { buildCrewUpdateControl, buildStatusUpdateControl } from './task-status-
 import { buildRelationRow, drainDependencyIds, relationTargets } from './task-relations.js';
 import * as taskFields from './task-fields.js';
 import * as taskReadiness from './task-readiness.js';
+import * as progressStrip from './progress-strip.js';
 
 // Who made and carried the task, recorded by the pipeline and so read-only.
 const TASK_PEOPLE_FIELDS = [
@@ -77,27 +78,14 @@ const TASK_LIFECYCLE = [
 function buildLifecycleStrip(status) {
   const at = TASK_LIFECYCLE.findIndex(([key]) => key === status);
   if (at < 0) return null;
-  const list = el("ol", { class: "task-lifecycle", "aria-label": "Lifecycle" });
-  TASK_LIFECYCLE.forEach(([key, label], index) => {
-    const state = index < at ? "past" : index === at ? "current" : "future";
-    const step = el("li", { class: `task-lifecycle-step ${state}` }, [
-      el("span", { class: "task-lifecycle-bar" }),
-      el("span", { class: "task-lifecycle-label", text: label }),
-    ]);
-    if (state === "current") {
-      step.dataset.status = key;
-      step.setAttribute("aria-current", "step");
-    }
-    list.appendChild(step);
-  });
-  return list;
+  return progressStrip.buildProgressStrip(TASK_LIFECYCLE.map(([, label], index) => ({
+    label,
+    state: index < at || status === "done" ? "done" : index === at ? "active" : "pending",
+    current: index === at,
+  })), { className: "task-lifecycle", label: "Lifecycle" });
 }
-// The delivery stage the task's run is on, as a thinner second strip in the
-// lifecycle strip's past/current/future language. The detail API derives
-// `job_run_stage` from durable run and step state; a task with no readable
-// run carries none and shows no strip. Rendered full-width at the end of the
-// shared band, just above the tabs; at 375px a one-column strip cannot keep
-// the current stage readable.
+// The detail API derives the run's delivery stage from durable run and step
+// state. It uses the same presentation as lifecycle and delivery progress.
 const RUN_ENDED_STATES = ["failed", "cancelled", "timeout", "interrupted"];
 
 export function buildStageStrip(task) {
@@ -115,16 +103,11 @@ export function buildStageStrip(task) {
     if (!label) return null;
     stages = [{ id: info.stage || info.step_id, label, state: "current" }];
   }
-  const classes = ["task-stage"];
-  if (ended) classes.push("ended");
-  if (awaiting) classes.push("awaiting");
-  const list = el("ol", { class: classes.join(" "), "aria-label": "Delivery stage" });
-  list.dataset.runState = info.run_state || "";
   const tooltip = [
     info.step_id,
     info.step_index != null && info.step_count != null ? `step ${info.step_index} of ${info.step_count}` : "",
   ].filter(Boolean).join(" · ");
-  for (const stage of stages) {
+  const steps = stages.map((stage) => {
     let text = stage.label;
     if (stage.state === "current" && !awaiting) {
       if (ended) {
@@ -135,22 +118,18 @@ export function buildStageStrip(task) {
         if (elapsed) text = `${stage.label} · ${elapsed}`;
       }
     }
-    let label = el("span", { class: "task-stage-label", text });
-    if (stage.state === "current" && ended && task.job_run_id && task.job_run_navigable !== false) {
-      const link = el("a", { class: "task-stage-label task-stage-link", text });
-      link.href = taskRunHref(task, String(task.job_run_id));
-      label = link;
-    }
-    const step = el("li", { class: `task-stage-step ${stage.state}` }, [
-      el("span", { class: "task-stage-bar" }),
-      label,
-    ]);
-    if (stage.state === "current") {
-      step.setAttribute("aria-current", "step");
-      if (tooltip) step.title = tooltip;
-    }
-    list.appendChild(step);
-  }
+    const current = stage.state === "current";
+    const state = stage.state === "past" ? "done" : !current ? "pending"
+      : awaiting ? "awaiting" : ended ? (info.run_state === "cancelled" ? "cancelled" : "failed") : "active";
+    return {
+      label: text, state, current,
+      hint: current ? tooltip : null,
+      href: current && ended && task.job_run_id && task.job_run_navigable !== false
+        ? taskRunHref(task, String(task.job_run_id)) : null,
+    };
+  });
+  const list = progressStrip.buildProgressStrip(steps, { className: "task-stage", label: "Delivery stage" });
+  list.dataset.runState = info.run_state || "";
   return list;
 }
 // The verb each recorded hand did. The stored fields keep today's order:

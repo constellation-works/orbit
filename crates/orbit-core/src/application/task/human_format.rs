@@ -42,6 +42,11 @@ pub(crate) fn human_task_format_warnings(description: &str) -> Vec<String> {
         }
         if is_verify_heading(trimmed) {
             verify_pending = true;
+        } else if verify_pending && !trimmed.is_empty() {
+            // A later step fence is not the verify command. Only a fence
+            // that follows the heading, with nothing but blank lines between
+            // them, counts.
+            verify_pending = false;
         }
     }
 
@@ -82,9 +87,9 @@ fn is_numbered_step(line: &str) -> bool {
 }
 
 /// A line that opens the verify section: `Verify`, `Verify:`, `## Verify`,
-/// `**Verify:**`.
+/// `**Verify:**`. A sentence that merely starts with the word does not.
 fn is_verify_heading(line: &str) -> bool {
     let text = line.trim_start_matches(['#', '*', ' ']);
-    text.get(..6)
-        .is_some_and(|head| head.eq_ignore_ascii_case("verify"))
+    let text = text.trim_end_matches(['*', ':', ' ']);
+    text.eq_ignore_ascii_case("verify")
 }

@@ -26,6 +26,8 @@
 
 import { captureWorkspaceVisit, clockStamp, el, fetchJson, formatDateTime, infoHint, postJson, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
 
+import * as progressStrip from './progress-strip.js';
+
 const CONSOLE_PATH = "/api/distributed/claims";
 
 // One task-scoped read per short window, shared by however many panels show
@@ -262,22 +264,9 @@ export function deliverySteps(claims) {
   ];
 }
 
-/// The thin five-segment strip above the detail's tabs.
+/// Delivery progress uses the same strip as lifecycle and run stages.
 export function buildDeliveryProgress(steps) {
-  if (!Array.isArray(steps) || steps.length === 0) return null;
-  const list = el("ol", { class: "delivery-progress", "aria-label": "Delivery progress" });
-  for (const { label, state } of steps) {
-    const item = el("li", { class: `delivery-step ${state}` }, [
-      el("span", { class: "delivery-step-bar" }),
-      el("span", { class: "delivery-step-label", text: label }),
-    ]);
-    item.dataset.state = state;
-    if (state === "active") item.setAttribute("aria-current", "step");
-    // The colour is never the only signal: a reader hears the state too.
-    item.title = `${label}: ${STEP_STATE_WORDS[state] || state}`;
-    list.appendChild(item);
-  }
-  return list;
+  return progressStrip.buildProgressStrip(steps, { className: "delivery-progress", label: "Delivery progress" });
 }
 
 // Server text reads as a sentence here: a capital first letter and a stop.
@@ -295,8 +284,6 @@ function firstLine(text) {
   if (!value) return null;
   return value.length > 240 ? `${value.slice(0, 239)}…` : value;
 }
-
-const STEP_STATE_WORDS = { done: "done", failed: "failed", active: "in progress", pending: "not yet" };
 
 /// The callout at the top of the detail. `options.pullRequest` is the task's
 /// `{number, url}` when it has one; `options.onRetry(claim)` takes the
@@ -900,7 +887,9 @@ function buildClaimActions(claim, capabilities, handlers) {
       },
     });
   }
-  if (claim.unsettled || claim.phase === "failed") {
+  // Only the owner can prove currency: a failed claim can survive a later
+  // pull, and creation-time ordering does not grant it recovery authority.
+  if (claim.current === true && (claim.unsettled || claim.phase === "failed")) {
     const targets = recoverTargets(claim);
     offers.push({
       key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",

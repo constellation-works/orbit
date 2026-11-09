@@ -198,13 +198,15 @@ than `orbit.task.artifact:put`) are upgraded automatically. On the first open
 after an upgrade, Orbit rewrites them in every stored auto-task definition
 (managed, forked or workspace-local), in tasks' `required_tools` and
 `granted_tools`, and in installed plugins' `permissions.orbit_tools`. It
-rewrites again whenever a mint, scheduler tick, dispatch or
-`orbit workspace sync` finds an old name. A rewrite changes only the list
-items, keeping comments and the definition's managed or forked state. Each
+rewrites again whenever a mint, scheduler tick or dispatch finds an old name.
+`orbit workspace sync` rewrites old names in managed and workspace-local
+definitions, and `orbit workspace sync --check` lists those pending rewrites as
+`migrated`. Sync preserves a forked definition as written, so a fork's old names
+wait for the next mint, scheduler tick or dispatch. A rewrite changes only the
+list items, keeping comments and the definition's managed or forked state. Each
 rewrite is logged to `.orbit/state/tool-name-migrations.jsonl` (plugin
 rewrites to `~/.orbit/state/`), and a task gets a
-`tool_names_migrated` history entry. `orbit workspace sync --check` lists
-pending rewrites as `migrated`.
+`tool_names_migrated` history entry.
 
 The dashboard's **Automation › Auto-tasks** row has an **edit** link on the
 trigger that changes only the schedule (cron, a fixed interval or

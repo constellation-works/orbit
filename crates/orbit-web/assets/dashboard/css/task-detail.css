@@ -204,35 +204,6 @@
 .why-stuck-check[data-state="passed"] .why-stuck-state { color: var(--state-success); }
 .why-stuck-check[data-state="pending"] .why-stuck-state { color: var(--warn-fg); }
 
-/* Implemented → Handed off → Approved → Landing → Done, from the claim. */
-.delivery-progress {
-  list-style: none;
-  margin: 2px 0 0;
-  padding: 0;
-  display: flex;
-  gap: 4px;
-}
-/* Equal segments, except that a failed or current stage keeps its whole
-   label ("Landing stopped") and the others give way. */
-.delivery-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.delivery-step.failed,
-.delivery-step.active { min-width: max-content; }
-.delivery-step-bar { height: 4px; border-radius: 2px; background: var(--border-strong); }
-.delivery-step.done .delivery-step-bar { background: var(--state-success); }
-.delivery-step.failed .delivery-step-bar { background: var(--state-failed); }
-.delivery-step.active .delivery-step-bar { background: var(--state-running); }
-.delivery-step-label {
-  font-size: 12px;
-  color: var(--fg-mute);
-  /* Keeps a widened label ("Landing stopped") clear of the next one. */
-  padding-right: 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delivery-step.done .delivery-step-label { color: var(--fg-soft); }
-.delivery-step.active .delivery-step-label { color: var(--fg); }
-.delivery-step.failed .delivery-step-label { color: var(--danger-fg); font-weight: 600; }
 .row-detail > .action-error {
   grid-column: 1 / -1;
 }
@@ -256,7 +227,7 @@
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  margin: 2px -20px 0;
+  margin: 0 -20px;
   /* The 1px bottom padding is the band's edge: it is drawn here, inside the
      strip's overflow clip, so the active tab can overlap it. */
   padding: 0 12px 1px;
@@ -446,7 +417,7 @@
 .task-meta-block {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 .task-levers {
   position: relative;
@@ -604,68 +575,6 @@
 }
 .task-levers .detail-tag-row .chip.os-chip { color: var(--accent); border-color: var(--accent-line); }
 .task-levers .field-empty { font-style: normal; }
-
-/* Where the status sits on the way to done. */
-.task-lifecycle,
-.task-stage {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.task-lifecycle { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
-.task-lifecycle-step.past .task-lifecycle-bar { background: var(--state-success); }
-.task-lifecycle-step.current .task-lifecycle-bar { background: var(--dot); }
-.task-lifecycle-label {
-  font-size: 11px;
-  color: var(--fg-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
-
-/* The delivery stage closes the detail band above the tabs, using the same
-   past/current/future language and spacing as the lifecycle strip, but thinner. */
-.task-stage {
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-}
-.task-stage-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
-.task-stage-step.past .task-stage-bar { background: var(--state-success); }
-.task-stage-step.current .task-stage-bar { background: var(--state-running); }
-.task-stage-label {
-  font-size: 11px;
-  color: var(--fg-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.task-stage-step.current .task-stage-label {
-  color: var(--fg-strong);
-  font-weight: 600;
-  /* The current stage wraps instead of ellipsizing, so it stays readable
-     at 375px where every other segment is cut. The word itself must break
-     inside its equal-width cell, otherwise its painted range overflows the
-     4px gap into the next segment. */
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-}
-.task-stage.ended .task-stage-step.current .task-stage-bar { background: var(--state-failed); }
-.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-bar { background: var(--state-cancelled); }
-.task-stage.ended .task-stage-step.current .task-stage-label { color: var(--state-failed); }
-.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-label { color: var(--state-cancelled); }
-.task-stage-link { text-decoration: none; }
-.task-stage-link:hover { text-decoration: underline; }
-.task-stage.awaiting .task-stage-step.current .task-stage-bar { background: var(--warn-fg); }
-.task-stage.awaiting .task-stage-step.current .task-stage-label { color: var(--warn-fg); }
 
 /* The pull request, the run, who carried the task and its readiness. */
 .task-delivery-card {
@@ -1241,30 +1150,35 @@ input.field-editor-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
 }
-.detail-disclosures > .field-block > .task-markdown-panel {
-  margin: 0 14px 14px;
-  padding: 16px;
-}
-.task-markdown-panel .markdown-body {
+/* A disclosure's Markdown is its whole body: it takes the description's
+   typography but no card of its own, so the disclosure card is the only
+   container. Code blocks, quoted logs and tables keep their own styling. */
+.task-markdown-panel .markdown-body,
+.task-markdown-disclosure > .markdown-body {
   width: 100%;
   min-width: 0;
   color: var(--fg-soft);
   line-height: 1.7;
   overflow-x: auto;
 }
-.task-markdown-panel .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+.task-markdown-panel .markdown-body :is(h1, h2, h3, h4, h5, h6),
+.task-markdown-disclosure > .markdown-body :is(h1, h2, h3, h4, h5, h6) {
   display: block;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--fg-soft);
   cursor: auto;
 }
-.task-markdown-panel .markdown-body > :first-child { margin-top: 0; }
-.task-markdown-panel .markdown-body h4::after { content: none; }
-.task-detail .task-markdown-panel .markdown-body :not(pre) > code {
+.task-markdown-panel .markdown-body > :first-child,
+.task-markdown-disclosure > .markdown-body > :first-child { margin-top: 0; }
+.task-markdown-panel .markdown-body h4::after,
+.task-markdown-disclosure > .markdown-body h4::after { content: none; }
+.task-detail .task-markdown-panel .markdown-body :not(pre) > code,
+.task-detail .task-markdown-disclosure > .markdown-body :not(pre) > code {
   background: var(--bg-well);
 }
-.task-markdown-panel .markdown-body th { background: var(--bg-well); }
+.task-markdown-panel .markdown-body th,
+.task-markdown-disclosure > .markdown-body th { background: var(--bg-well); }
 
 /* Long description or acceptance criteria open clamped behind a fade, with a toggle below. */
 .task-detail .markdown-body :not(pre) > code,

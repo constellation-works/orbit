@@ -1344,6 +1344,11 @@ claim for it, and a replica says the owner holds that state.
   revocation or death; `review` awaits authority, not a passed code review; merged means into the
   landing branch, not deployed; a remote run names the host to inspect; absent provenance is
   *unknown*.
+- Detailed claim rows include `current`, derived from the task's latest `pulled_by`
+  claim identity, and `recover_targets` is empty for a non-current claim. The Delivery
+  tab offers **Recover claim** and its status picker only on the current unsettled
+  or failed claim; a historical failed attempt retains its facts without recovery
+  controls. These fields are advisory: recovery still rechecks authority atomically.
 - **Act:** `approve_task_handoff`, `revoke_task_handoff` and `ClaimMutation::Recover` remain
   available through the operator-only dashboard governed rows `handoff.approve`,
   `handoff.revoke`, `claim.recover`. Recovery and revocation also have operator-only CLI commands
