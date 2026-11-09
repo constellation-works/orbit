@@ -109,13 +109,13 @@ fn invalid_wait_deadline_does_not_submit_work() {
         let mut command = fixture.orbit();
         let output = command
             .args(&args)
-            .args(["--wait", "--timeout-seconds", "21601", "--json"])
+            .args(["--wait", "--timeout-seconds", "86401", "--json"])
             .assert()
             .failure()
             .get_output()
             .clone();
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert!(error.to_string().contains("must be <= 21600"), "{error}");
+        assert!(error.to_string().contains("must be <= 86400"), "{error}");
         fixture
             .orbit()
             .args(&args)

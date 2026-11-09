@@ -710,3 +710,23 @@ fn resolve_optional_non_empty_raw(
         other => Ok(other),
     }
 }
+
+/// Admit exact activity names with finite, positive wall-clock budgets.
+pub(super) fn resolve_activity_timeouts(
+    raw: Option<BTreeMap<String, u64>>,
+) -> Result<BTreeMap<String, u64>, OrbitError> {
+    let timeouts = raw.unwrap_or_default();
+    for (activity, seconds) in &timeouts {
+        if activity.is_empty() || activity.chars().any(char::is_whitespace) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.activity_timeouts: activity name '{activity}' must be non-empty and contain no whitespace"
+            )));
+        }
+        if !(1..=43200).contains(seconds) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.activity_timeouts.{activity} must be between 1 and 43200 seconds (12 hours), got {seconds}"
+            )));
+        }
+    }
+    Ok(timeouts)
+}

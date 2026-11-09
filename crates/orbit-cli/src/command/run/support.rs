@@ -21,7 +21,7 @@ pub(super) struct WaitArgs {
     /// wait_timeout=true with the actual run state and leaves the run active.
     #[arg(long)]
     wait: bool,
-    /// Wait deadline in seconds (0..=21600); requires --wait.
+    /// Wait deadline in seconds (0..=86400); requires --wait.
     #[arg(long, requires = "wait")]
     timeout_seconds: Option<u64>,
 }

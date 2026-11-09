@@ -1915,7 +1915,7 @@
       },
       {
         "name": "timeout_seconds",
-        "description": "Optional timeout in seconds (default 3600, max 7200).",
+        "description": "Optional timeout in seconds (default 3600, max 86400).",
         "param_type": "number",
         "required": false
       },

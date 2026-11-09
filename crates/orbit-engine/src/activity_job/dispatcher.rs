@@ -560,7 +560,7 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
 /// Dispatch a v2 activity by type. Emits §7 activity.started/finished
 /// events around the per-type runner and nests the runner's events beneath.
 pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, None, true)
+    dispatch_v2_activity_inner(input, None, true, None)
 }
 
 /// Dispatch a pipeline step whose id may differ from the catalog activity it
@@ -571,24 +571,27 @@ pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcom
 /// loop's tool policy, `ORBIT_ACTIVITY_NAME`, tool denials and plugin broker
 /// identity are keyed by it, so a step `review` targeting
 /// `agent_review_repair` is authorized as the reviewer. `None` (an inline
-/// spec, which has no catalog name) falls back to the step id.
+/// spec, which has no catalog name) falls back to the step id. An admitted
+/// review's `wall_clock_bound` takes precedence over workspace activity policy.
 pub(crate) fn dispatch_v2_target_activity(
     input: V2DispatchInput<'_>,
     target_activity: Option<&str>,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, target_activity, true)
+    dispatch_v2_activity_inner(input, target_activity, true, wall_clock_bound)
 }
 
 pub(crate) fn dispatch_v2_activity_without_run_id_injection(
     input: V2DispatchInput<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, None, false)
+    dispatch_v2_activity_inner(input, None, false, None)
 }
 
 fn dispatch_v2_activity_inner(
     input: V2DispatchInput<'_>,
     target_activity: Option<&str>,
     inject_run_id_into_input: bool,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
     let activity_input = if inject_run_id_into_input {
         inject_run_id(&input.input, input.run_id)
@@ -623,6 +626,7 @@ fn dispatch_v2_activity_inner(
                 input.audit.clone(),
                 &activity_input,
                 input.fs_profile,
+                wall_clock_bound,
             ),
             None => Err(DispatchError::HostRequired("agent_loop")),
         },
@@ -839,6 +843,7 @@ fn run_agent_loop_activity(
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
     run_cli_backend_for_step(
         host,
@@ -849,6 +854,7 @@ fn run_agent_loop_activity(
         audit,
         input,
         fs_profile,
+        wall_clock_bound,
     )
     .map(|outcome| label_failure_with_step(step_id, outcome))
 }

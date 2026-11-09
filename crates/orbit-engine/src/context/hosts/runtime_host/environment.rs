@@ -84,6 +84,9 @@ macro_rules! environment_methods {
         /// before its step fails as stalled. `None` disables the check and leaves
         /// only the wall-clock deadline. Hosts answer [`AGENT_STALL_MINUTES`](crate::AGENT_STALL_MINUTES).
         fn agent_stall_window(&self) -> Option<std::time::Duration>;
+        /// Workspace override for this exact activity's CLI wall-clock budget.
+        /// `None` keeps the activity declaration (or the runner default).
+        fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64>;
         /// The complete environment an agent subprocess is launched with.
         ///
         /// Launchers clear the child environment and apply exactly what this

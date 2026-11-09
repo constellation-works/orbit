@@ -3,6 +3,15 @@ macro_rules! with_workflow_keys {
     ([$($head:tt)*] $($tail:tt)*) => {
         define_config_settings! {
             $($head)*
+    workflow_activity_timeouts: BTreeMap<String, u64> => BTreeMap<String, u64> {
+        key: "workflow.activity_timeouts", value_type: "table<string,integer>",
+        description: "Wall-clock timeout in seconds for each named CLI agent activity.",
+        section: ConfigSection::Delivery, order: 118,
+        tier: ConfigKeyTier::Advanced,
+        allowed: format("activity name = seconds (1..43200)"),
+        detail: "An entry overrides the activity declaration. Unmapped activities keep their declared timeout; continuations share the resolved budget.",
+        resolve: resolve::resolve_activity_timeouts,
+    },
     workflow_auto_effort_bands: BTreeMap<String, Vec<AutoEffortBand>> => BTreeMap<String, Vec<AutoEffortBand>> {
         key: "workflow.auto_effort.bands", value_type: "table<string,array<table>>",
         description: "Per crew, the ordered effort bands a `<crew>@auto` pool entry resolves through.",

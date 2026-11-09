@@ -559,7 +559,7 @@ fn renew_release_and_expiry_end_leases_and_are_audited() {
     );
     let message = invalid_input_message(lease::renew(
         &runtime,
-        json!({"lease_id": lease_id, "ttl_seconds": 14401}),
+        json!({"lease_id": lease_id, "ttl_seconds": 86401}),
     ));
     assert!(message.contains("ttl_seconds"), "{message}");
 

@@ -675,9 +675,9 @@ spec:
     - docker
     - podman
   on_denial: terminate
-  wall_clock_timeout_seconds: 10800
+  wall_clock_timeout_seconds: 21600
   # An `implementation_incomplete` declaration gets at most two
-  # fresh sessions, each only while 15 minutes of the 3-hour budget remain.
+  # fresh sessions, each only while 15 minutes of the resolved activity budget remain.
   incomplete_continuation:
     max_rounds: 2
     min_remaining_seconds: 900

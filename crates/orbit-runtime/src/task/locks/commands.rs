@@ -86,7 +86,7 @@ impl ReservationOutcome {
 
 /// A reservation's or lease's lifetime when the request names none.
 const DEFAULT_TASK_RESERVATION_TTL_SECONDS: u32 = 1800;
-const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
+const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 86400;
 
 /// `ttl_seconds` from tool input, defaulted and held to the reservation
 /// bounds that reservations and leases share.

@@ -91,6 +91,8 @@ pub struct OrbitRuntimeSettings {
     unlocked_path_validation_commands: Vec<String>,
     /// `workflow.generated_paths`: path glob to regenerate command.
     generated_paths: std::collections::BTreeMap<String, String>,
+    /// `workflow.activity_timeouts`: exact activity name to wall-clock seconds.
+    activity_timeouts: std::collections::BTreeMap<String, u64>,
     /// `workflow.light_delivery_paths`: the paths a `skip-review` or
     /// `skip-validation` candidate may change [ORB-16855].
     light_delivery_paths: Vec<String>,
@@ -155,6 +157,7 @@ impl OrbitRuntimeSettings {
         footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
+        activity_timeouts: std::collections::BTreeMap<String, u64>,
         light_delivery_paths: Vec<String>,
         completion_hold: Vec<orbit_types::workflow::CompletionHoldRule>,
         diff_path_filters: (
@@ -208,6 +211,7 @@ impl OrbitRuntimeSettings {
             footprint_lock_modes,
             unlocked_path_validation_commands,
             generated_paths,
+            activity_timeouts,
             light_delivery_paths,
             completion_hold,
             diff_test_paths: diff_path_filters.0,
@@ -267,6 +271,11 @@ impl OrbitRuntimeSettings {
 
     pub fn unlocked_path_validation_commands(&self) -> &[String] {
         &self.unlocked_path_validation_commands
+    }
+
+    /// Workspace override for the exact activity's wall-clock budget, in seconds.
+    pub fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
+        self.activity_timeouts.get(activity_name).copied()
     }
 
     pub fn generated_paths(&self) -> &std::collections::BTreeMap<String, String> {

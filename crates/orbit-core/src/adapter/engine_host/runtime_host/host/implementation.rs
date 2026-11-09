@@ -503,6 +503,12 @@ impl RuntimeHost for OrbitRuntime {
         orbit_types::workflow::EvidenceHostOs::current()
     }
 
+    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
+        self.context
+            .settings()
+            .activity_wall_clock_timeout_seconds(activity_name)
+    }
+
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
         Some(std::time::Duration::from_secs(
             orbit_engine::AGENT_STALL_MINUTES * 60,
