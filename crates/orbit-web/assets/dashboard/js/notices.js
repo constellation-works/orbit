@@ -7,10 +7,10 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 //
-// The page is one list with an Open / Recently closed switch. A row scans as
-// severity, title, scope and age or expiry; its body opens from the row, and
-// Close asks for its reason only once chosen. Posting is a modal dialog with
-// title, severity and body up front.
+// The page is one list: open notices first, then recently closed ones under
+// a "Recently closed" heading. A row scans as severity, title, scope and age
+// or expiry; its body opens from the row, and Close asks for its reason only
+// once chosen. Posting is a modal dialog with title, severity and body up front.
 
 import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, infoHint, isAggregateView, makeRowDisclosure, onWorkspaceChange, relativeTime, requestJson, requestPanel, syncNodes } from './common.js';
 
@@ -151,11 +151,9 @@ const PAGE_HINT = `Fleet notices in the shown workspaces: open ones, and those c
 const SEVERITY_ORDER = ["incident", "maintenance", "info"];
 
 // What the operator has done on this page. Rows are rebuilt from the last
-// payload, so opening a row, choosing Close or switching the list needs no read
-// and a refresh keeps them, a half-typed close reason included. A scope switch
-// starts over.
+// payload, so opening a row or choosing Close needs no read and a refresh
+// keeps them, a half-typed close reason included. A scope switch starts over.
 let lastPayload = null;
-let shownList = "open";
 const openedNotices = new Set();
 // The row asking for its reason: { id, draft, error, pending, visit }. The object
 // is the close session. A write's completion touches the page only while the
@@ -166,13 +164,10 @@ let closing = null;
 
 onWorkspaceChange(() => {
   lastPayload = null;
-  shownList = "open";
   openedNotices.clear();
   closing = null;
   const dialog = $("notices-post-dialog");
   if (dialog?.open) dialog.close();
-  const recentCount = $("notices-recent-count");
-  if (recentCount) recentCount.textContent = "";
 });
 
 const noticesOf = (payload, list) => (Array.isArray(payload?.[list]) ? payload[list] : []);
@@ -312,7 +307,7 @@ async function closeChosenNotice(session) {
   }
   if (!session.visit.isCurrent() || closing || !restoreCloseFocus) return;
   // The closed row took the operator's focus with it.
-  (document.querySelector("#notices-body .notice-row-toggle") || $(`notices-tab-${shownList}`))?.focus();
+  document.querySelector("#notices-body .notice-row-toggle")?.focus();
 }
 
 // A failed re-read after a successful write leaves its error in the panel's
@@ -408,57 +403,38 @@ function noticeRow(notice, canWrite, now) {
   return row;
 }
 
-function syncListSwitch() {
-  for (const list of ["open", "recent"]) {
-    const tab = $(`notices-tab-${list}`);
-    if (!tab) continue;
-    const on = list === shownList;
-    tab.classList.toggle("active", on);
-    tab.setAttribute("aria-selected", String(on));
-    tab.tabIndex = on ? 0 : -1;
-  }
-  $("notices-body")?.setAttribute("aria-labelledby", `notices-tab-${shownList}`);
-}
-
 function paintNoticeList(payload) {
   const body = $("notices-body");
   if (!body) return;
-  syncListSwitch();
   const canWrite = canWriteNotices(payload);
   const now = Date.now();
-  const rows = bySeverity(noticesOf(payload, shownList)).map((notice) => noticeRow(notice, canWrite, now));
-  if (!rows.length) {
-    const note = el("div", { class: "panel-placeholder", text: shownList === "open" ? "No open notices." : "Nothing closed in the last 24 hours." });
-    note.dataset.key = `notices-empty-${shownList}`;
-    note.dataset.hash = "empty";
-    rows.push(note);
+  const open = bySeverity(noticesOf(payload, "open"));
+  const recent = bySeverity(noticesOf(payload, "recent"));
+  const nodes = open.map((notice) => noticeRow(notice, canWrite, now));
+  if (!open.length) {
+    if (!recent.length) {
+      const note = el("div", { class: "panel-placeholder", text: "No notices." });
+      note.dataset.key = "notices-empty";
+      note.dataset.hash = "empty";
+      nodes.push(note);
+    } else {
+      const note = el("div", { class: "notice-open-empty", text: "No open notices." });
+      note.dataset.key = "notices-empty-open";
+      note.dataset.hash = "empty-open";
+      nodes.push(note);
+    }
   }
-  syncNodes(body, rows);
+  if (recent.length) {
+    const heading = el("h3", {
+      class: `notice-group-heading${open.length ? "" : " notice-group-first"}`,
+      text: `Recently closed (${recent.length})`,
+    });
+    heading.dataset.key = "notices-recent-heading";
+    heading.dataset.hash = `recent-${recent.length}`;
+    nodes.push(heading, ...recent.map((notice) => noticeRow(notice, canWrite, now)));
+  }
+  syncNodes(body, nodes);
   enableRovingRows(body);
-}
-
-function showList(list) {
-  if (list === shownList) return;
-  shownList = list;
-  repaintNoticeList();
-}
-
-function wireListSwitch() {
-  const strip = $("notices-tabs");
-  if (!strip) return;
-  strip.addEventListener("click", (event) => {
-    const list = event.target?.closest?.("[data-list]")?.dataset.list;
-    if (list) showList(list);
-  });
-  strip.addEventListener("keydown", (event) => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    event.preventDefault();
-    const next = event.key === "Home" ? "open"
-      : event.key === "End" ? "recent"
-      : shownList === "open" ? "recent" : "open";
-    showList(next);
-    $(`notices-tab-${next}`)?.focus();
-  });
 }
 
 function postOptionsSummary() {
@@ -547,7 +523,6 @@ function wirePostDialog() {
     if (isCurrentSession()) {
       resetDraft();
       dialog.close();
-      shownList = "open";
       await refreshNoticesAfterWrite();
       return;
     }
@@ -558,9 +533,9 @@ function wirePostDialog() {
   });
 }
 
-// The heading's info hint, the Post control, the list switch and the dialog are
-// static page furniture: wired once, before the first read so they answer even
-// when that read fails. Later renders only update the Post control's state.
+// The heading's info hint, the Post control and the dialog are static page
+// furniture: wired once, before the first read so they answer even when that
+// read fails. Later renders only update the Post control's state.
 let noticesPageWired = false;
 
 function wireNoticesPage() {
@@ -571,7 +546,6 @@ function wireNoticesPage() {
   button.setAttribute("aria-haspopup", "dialog");
   button.disabled = true;
   $("notices-post-slot")?.append(button);
-  wireListSwitch();
   wirePostDialog();
 }
 
@@ -597,7 +571,6 @@ export async function fetchAndRenderNotices({ shareRecent = false } = {}) {
     `notices:${revision}:${isAggregateView() ? "all" : "one"}`,
     () => fetchNotices({ shareRecent }),
     (payload) => renderNotices(payload),
-    "notices-count",
   );
 }
 
@@ -606,10 +579,6 @@ function renderNotices(payload) {
   lastPayload = payload;
   renderNoticeBanner(payload);
   const open = noticesOf(payload, "open");
-  const count = $("notices-count");
-  if (count) count.textContent = String(open.length);
-  const recentCount = $("notices-recent-count");
-  if (recentCount) recentCount.textContent = String(noticesOf(payload, "recent").length);
   syncPostControl(payload, canWriteNotices(payload));
   // A row asking for its reason that has since ended has nothing left to close.
   if (closing && !closing.pending && !open.some((notice) => text(notice.id) === closing.id)) closing = null;

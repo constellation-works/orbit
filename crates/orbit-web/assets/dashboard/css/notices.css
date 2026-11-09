@@ -38,9 +38,23 @@
 .notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
 .notice-post-toggle { min-height: 32px; }
-/* The list switch sits on the panel's 16px inset. */
-.band-tabs.notices-tabs { margin: 0; padding: 0 16px 1px; }
-.notices-tabs .band-tab { min-height: 36px; }
+/* The closed group follows the open rows under its own heading. */
+.notice-group-heading {
+  margin: 0;
+  padding: 12px 16px 6px;
+  border-top: 1px solid var(--hair);
+  color: var(--fg-mute);
+  font: 600 11px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.notice-group-heading.notice-group-first { border-top: 0; padding-top: 4px; }
+.notice-open-empty {
+  padding: 10px 16px 2px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-style: italic;
+}
 
 /* The list: flat rows split by a hairline, on the panel's own edges. */
 #notices-panel > .body { padding: 0; }
@@ -212,6 +226,6 @@
   .notice-title { white-space: normal; overflow-wrap: anywhere; }
   .notice-row.is-open .notice-title { padding: 0; }
   .notice-close-open { min-width: 44px; min-height: 36px; }
-  .band-tabs.notices-tabs { padding-inline: 12px; }
+  .notice-group-heading, .notice-open-empty { padding-inline: 12px; }
   .notice-detail { padding: 2px 12px 14px; }
 }
