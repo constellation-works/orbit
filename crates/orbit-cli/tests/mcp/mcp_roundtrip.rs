@@ -5791,6 +5791,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
 mod desktop;
 #[cfg(unix)]
 mod routine_outputs;
+mod workflow_ship_mode;
 
 mod roles;
 mod root_selection;
