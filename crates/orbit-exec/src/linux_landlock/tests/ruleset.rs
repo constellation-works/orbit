@@ -9,9 +9,29 @@ use super::super::grants::{LandlockGrant, LandlockPathGrant};
 use super::super::probe::RulesetScope;
 use super::super::ruleset::{Ruleset, abi_version};
 
+/// Set to `1` in CI so a kernel without the required Landlock ABI fails
+/// these regressions instead of skipping them (STD-04 §R8).
+const REQUIRE_LANDLOCK_RULESET_ENV: &str = "ORBIT_REQUIRE_LANDLOCK_RULESET";
+
 fn ruleset() -> Option<Ruleset> {
     let abi = abi_version();
     if abi < super::super::probe::MINIMUM_LANDLOCK_ABI {
+        let detail = format!(
+            "Landlock ABI {abi} is below the required ABI {}; Landlock is \
+             unavailable or disabled on this kernel",
+            super::super::probe::MINIMUM_LANDLOCK_ABI
+        );
+        if std::env::var(REQUIRE_LANDLOCK_RULESET_ENV).as_deref() == Ok("1") {
+            panic!("{REQUIRE_LANDLOCK_RULESET_ENV}=1: {detail}");
+        }
+        // Write past the test harness capture, as the bwrap and Seatbelt
+        // guards do, so the skip is visible in any run's output.
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "SKIP: landlock ruleset regression: {detail}; set \
+             {REQUIRE_LANDLOCK_RULESET_ENV}=1 to fail instead of skipping"
+        );
         return None;
     }
     Some(Ruleset::create(RulesetScope::default(), abi).expect("create ruleset"))
