@@ -231,20 +231,29 @@ pub(crate) fn sentence_requires_tool_invocation(sentence: &str, tool: &str) -> b
         {
             return true;
         }
+        // A closing backtick leaves an empty word before the verb, so drop
+        // the words that normalize to nothing.
         let after_words: Vec<&str> = lowered[index + tool.len()..]
             .split_whitespace()
             .map(normalize_cue_word)
+            .filter(|word| !word.is_empty())
             .collect();
+        // Where the participle sits: directly after the auxiliary, as in
+        // `` `tool` is invoked to validate … ``, or after a modal and its
+        // `be`, as in `` `tool` must be invoked to validate … ``. A modal
+        // is only a passive auxiliary with that `be`.
+        let participle_at = match after_words.first().copied() {
+            Some("must" | "shall" | "should") if after_words.get(1).copied() == Some("be") => 2,
+            Some("is" | "are" | "was" | "were" | "must" | "shall" | "should" | "be" | "been") => 1,
+            _ => return false,
+        };
         // `` `tool` is invoked to validate … ``, but not `` `tool` is
         // called with … ``: the latter describes a call a user makes,
         // whose behaviour the task may be fixing.
-        matches!(
-            after_words.first().copied(),
-            Some("is" | "are" | "was" | "were" | "must" | "shall" | "should" | "be" | "been")
-        ) && after_words
-            .get(1)
+        after_words
+            .get(participle_at)
             .is_some_and(|word| INVOKED_VERBS.contains(word))
-            && after_words.get(2).copied() == Some("to")
+            && after_words.get(participle_at + 1).copied() == Some("to")
     })
 }
 
