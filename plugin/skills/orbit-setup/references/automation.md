@@ -788,7 +788,13 @@ A job whose log has a line starting with an entry of
 `workflow.ci_infrastructure_signatures` is listed under `infrastructure`, not
 filed, and on a pull request it gets a CI rerun rather than a repair agent. The
 sweep itself reruns nothing, so a failed landing-branch run stays red until a
-rerun or a newer push.
+rerun or a newer push. That rerun is bounded by
+[CI infrastructure reruns](configuration.md#ci-infrastructure-reruns):
+`workflow.ci_infrastructure_retry.max_attempts` (default `3`, `0`..`10`;
+`0` disables the recovery) caps reruns per pull-request head, and
+`workflow.ci_infrastructure_retry.backoff_seconds` (default `60`,
+`1`..`3600` seconds) sets the initial delay before doubling waits. Reading
+the sweep output or this policy grants no repair or merge authority.
 Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows
 a rejected exact-key task's inbound `Supersedes` relation to its covering owner,
 preferring a still-open owner and then the lowest task ID if several supersede
