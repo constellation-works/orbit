@@ -184,16 +184,16 @@ function gapsSentence() {
   return `The totals stand, with ${open} coverage check${open === 1 ? "" : "s"} reporting gaps.`;
 }
 
+// One card of open gaps; a group with none renders nothing.
 function gapGroup(title, items) {
+  if (!items.length) return null;
   const rows = [...items]
     .sort((a, b) => num(b[2]) - num(a[2]))
     .map(([key, label, value, hint]) => el("div", { class: key === "regression_history_missing" ? "fc-gap fc-gap-key" : "fc-gap" }, [
       el("dt", {}, [label, pinnedInfoHint(hint)]),
       el("dd", { class: "fc-gap-count", text: String(value) }),
     ]));
-  return forecastCard(title, null, [rows.length
-    ? el("dl", { class: "fc-gaps" }, rows)
-    : el("div", { class: "mx-empty-note", text: "No gaps." })], "fc-gap-group");
+  return forecastCard(title, null, [el("dl", { class: "fc-gaps" }, rows)], "fc-gap-group");
 }
 
 /// The Data gaps tab.

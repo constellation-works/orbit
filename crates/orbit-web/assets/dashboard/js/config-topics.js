@@ -19,7 +19,8 @@ const ALL_KEYS_PAGE_SIZE = 25;
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
-let notice = null;
+let notice = null; // {text, failed}: the last bulk removal's outcome
+const NOTICE_MS = 10000;
 
 export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
 
@@ -29,13 +30,22 @@ export function flatten(payload) {
 function byKey(payload) { const m = new Map(); for (const r of flatten(payload)) m.set(r.key, r); return m; }
 export function display(v) {
   if (v == null) return '–';
-  if (Array.isArray(v)) return v.length ? v.join(' ') : '—';
+  if (Array.isArray(v)) return v.length ? v.map(listEntryText).join(v.some(isObject) ? '; ' : ' ') : '—';
   if (typeof v === 'string') return v === '' ? '""' : v;
   if (typeof v === 'object') {
     const leaves = tableLeaves(v);
     return leaves.length ? leaves.map(([path, leaf]) => `${path}: ${display(leaf)}`).join('; ') : '—';
   }
   return String(v);
+}
+function isObject(v) {
+  return Boolean(v) && typeof v === 'object';
+}
+// One list entry: a string or number as itself, a table such as a
+// completion.hold rule as `{name: x; paths: a b}`.
+function listEntryText(v) {
+  if (Array.isArray(v)) return `[${display(v)}]`;
+  return isObject(v) ? `{${display(v)}}` : String(v);
 }
 // A table value's leaves as [dotted path, value], so a nested table such as
 // workflow.type_complexity_crews reads `ui.hard: opus` rather than an object.
@@ -47,6 +57,16 @@ function tableLeaves(table, prefix = '') {
 }
 function isTable(row) {
   return (row.value_type || '').startsWith('table<');
+}
+// A list of tables (completion.hold, workflow.task_types, workflow.lock_modes):
+// edited as a JSON array, like a table is edited as a JSON object.
+function isTableList(row) {
+  return (row.value_type || '').startsWith('array<table')
+    || (Array.isArray(row.value) && row.value.some(isObject));
+}
+// Keys whose drawer text is JSON rather than one entry per line.
+function isStructured(row) {
+  return isTable(row) || isTableList(row);
 }
 // TOML inline-table text for a JSON table, as `orbit config set` reads it.
 function tomlInline(v) {
@@ -84,7 +104,7 @@ const WORKFLOW_SECTIONS = [
 function openDrawer(row, context, lockGlobal) {
   if (!context.canEdit || row.settable === false) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
-    text: isTable(row) ? JSON.stringify(row.value ?? {}, null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
+    text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
     error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
 }
@@ -115,7 +135,7 @@ export function parseDraft(row, text) {
     return inAllowedRange(row, n);
   }
   const choices = row.allowed?.kind === 'enum' ? row.allowed.values : null;
-  if (choices && !isTable(row) && !Array.isArray(row.value)) {
+  if (choices && !isStructured(row) && !Array.isArray(row.value)) {
     const trimmed = text.trim();
     if (!choices.includes(trimmed)) {
       throw new Error(`${row.key} takes one of: ${choices.join(', ')}`);
@@ -126,6 +146,12 @@ export function parseDraft(row, text) {
     let parsed;
     try { parsed = JSON.parse(text.trim() || '{}'); } catch { throw new Error(`${row.key} takes a JSON object`); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${row.key} takes a JSON object`);
+    return parsed;
+  }
+  if (isTableList(row)) {
+    let parsed;
+    try { parsed = JSON.parse(text.trim() || '[]'); } catch { throw new Error(`${row.key} takes a JSON array of objects`); }
+    if (!Array.isArray(parsed) || !parsed.every((entry) => isObject(entry) && !Array.isArray(entry))) throw new Error(`${row.key} takes a JSON array of objects`);
     return parsed;
   }
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -161,10 +187,14 @@ export function cliCmd(row, scope, text) {
     let parsed = null;
     try { parsed = JSON.parse(text.trim() || '{}'); } catch { parsed = null; }
     v = shellQuote(parsed && typeof parsed === 'object' ? tomlInline(parsed) : text);
+  } else if (isTableList(row)) {
+    let parsed = null;
+    try { parsed = JSON.parse(text.trim() || '[]'); } catch { parsed = null; }
+    v = shellQuote(Array.isArray(parsed) ? tomlInline(parsed) : text);
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
-  } else if (row.allowed?.kind === 'enum' && !isTable(row) && !Array.isArray(row.value)) {
+  } else if (row.allowed?.kind === 'enum' && !isStructured(row) && !Array.isArray(row.value)) {
     const trimmed = text.trim();
     if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(trimmed) || trimmed === '') {
       v = shellQuote(JSON.stringify(trimmed));
@@ -330,7 +360,7 @@ function drawerNode(payload, context) {
     field.value = session.text;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   } else {
-    field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = Array.isArray(row.value) ? 4 : 2;
+    field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = isTableList(row) ? 8 : Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   }
   panel.appendChild(field);
@@ -360,9 +390,23 @@ function drawerNode(payload, context) {
   actions.append(remove, close); panel.appendChild(actions);
   return panel;
 }
+// The bulk-removal outcome. A clean removal expires on its own; one that names
+// failures stays until dismissed, since the operator acts on it.
+function noticeNode(context) {
+  if (!notice) return null;
+  const shown = notice;
+  const dismiss = el('button', { class: 'config-action ghost', text: 'Dismiss', title: 'Dismiss this notice' }); dismiss.type = 'button';
+  dismiss.addEventListener('click', () => { if (notice === shown) { notice = null; context.rerender?.(); } });
+  return el('div', { class: 'config-note', role: 'status' }, [el('span', { text: shown.text }), ' ', dismiss]);
+}
+function showNotice(next, context) {
+  notice = next;
+  if (next.failed) return;
+  setTimeout(() => { if (notice === next) { notice = null; context.rerender?.(); } }, NOTICE_MS);
+}
 function finish(body, payload, context, nodes) {
   const wrap = el('div', { class: 'topic-page' });
-  if (notice) wrap.appendChild(el('div', { class: 'config-note', text: notice }));
+  const note = noticeNode(context); if (note) wrap.appendChild(note);
   for (const n of nodes) if (n) wrap.appendChild(n);
   const d = drawerNode(payload, context); if (d) wrap.appendChild(d);
   body.appendChild(wrap);
@@ -617,7 +661,7 @@ export function renderAllKeys(body, payload, context) {
             failures.push(`${r.key}: ${error.message}`);
           }
         }
-        notice = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
+        showNotice({ text: `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`, failed: failures.length > 0 }, context);
         await context.reload();
       } finally {
         if (ownsRemoval()) { bulkRemoval = null; context.rerender?.(); }

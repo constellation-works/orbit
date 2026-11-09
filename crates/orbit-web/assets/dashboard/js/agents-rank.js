@@ -7,7 +7,7 @@
 // (js/agents-rank-frontier.js). Everything is derived from the payload; HTML
 // uses `el()`.
 
-import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint } from './common.js';
+import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint, formatDateTime } from './common.js';
 import * as rankFormat from './agents-rank-format.js';
 import { rankFrontierNode } from './agents-rank-frontier.js';
 
@@ -32,8 +32,10 @@ const NOT_SCORED_REASONS = {
   unclassified: "unclassified regressions",
 };
 
-// Reader state that survives polls: which breakdowns are open.
+// Reader state that survives polls: which breakdowns are open, and whether the
+// reader collapsed the "Not ranked" section.
 const openModels = new Set();
+let pendingOpen = true;
 
 export function fetchAndRenderRank({ window: selectedWindow, execution, live, onCount }) {
   const body = document.getElementById(BODY_ID);
@@ -117,11 +119,11 @@ function metaText(payload) {
 function metaHint(payload) {
   const lines = [
     "Score starts at 100. A higher score is better. Cost orders a band and is never part of the score.",
-    `Counting ${payload.execution || "managed"} tasks. The execution split below still counts every mode.`,
+    `Counting ${payload.execution || "managed"} tasks.`,
   ];
   if (payload.settle_lag) lines.push(`Settled boards end ${payload.settle_lag} before the requested instant.`);
   if (typeof payload.tasks_scanned === "number") lines.push(`${rankFormat.num(payload.tasks_scanned, 0)} tasks scanned.`);
-  if (payload.computed_at) lines.push(`Computed ${payload.computed_at}.`);
+  if (payload.computed_at) lines.push(`Computed ${formatDateTime(payload.computed_at)}.`);
   return lines.join("\n");
 }
 
@@ -456,7 +458,8 @@ function pendingNode(payload, pending) {
     list,
     el("p", { class: "agents-rank-note", text: "Scores here are unshrunk previews and carry no band." }),
   ]);
-  node.open = true;
+  node.open = pendingOpen;
+  node.addEventListener("toggle", () => { pendingOpen = node.open; });
   node.dataset.key = "notranked";
   node.dataset.hash = JSON.stringify(pending);
   return node;

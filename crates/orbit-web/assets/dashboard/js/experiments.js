@@ -681,13 +681,23 @@ async function submitConclude(experiment, select, reason, button, status, state)
       arm: select.value.trim() || null,
       reason: why,
     });
-    if (draft !== state) return;
-    state.pending = false;
-    await fetchAndRenderExperiments();
   } catch (error) {
     if (draft !== state) return;
     state.status = error && error.message ? error.message : "Conclude failed.";
     state.pending = false;
+    renderExperiments();
+    return;
+  }
+  if (draft !== state) return;
+  // The conclusion landed. A failed re-read is not a refused conclude: keep
+  // the form disabled (a retry would be refused) and say the page is stale
+  // until the next poll reads the concluded experiment.
+  state.status = "Concluded.";
+  try {
+    await fetchAndRenderExperiments();
+  } catch (_) {
+    if (draft !== state) return;
+    state.status = "Concluded. Reloading the experiment failed; it updates on the next refresh.";
     renderExperiments();
   }
 }

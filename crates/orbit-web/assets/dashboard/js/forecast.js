@@ -852,7 +852,7 @@ function forecastPanelNodes(scenario) {
   return [
     el("div", { class: "fc-scenario-row" }, [scenarioSwitch(), pinnedInfoHint(arrivalsText())]),
     ...totalsNodes(scenario),
-    scope.lines.length ? forecastCard("Outside this drain", "Time to drain covers startable work. These tasks retain their own work, token and cost estimates; their regression follow-up is outside this drain.", scope.lines.map((line) => el("p", { class: "mx-blurb", text: line }))) : null,
+    scope.lines.length ? forecastCard("Outside this drain", pinnedInfoHint("Time to drain covers startable work. These tasks retain their own work, token and cost estimates; their regression follow-up is outside this drain."), scope.lines.map((line) => el("p", { class: "mx-blurb", text: line }))) : null,
     tasksCard(scenario),
     el("div", { class: "fc-more-list" }, [waitsSection(scenario)]),
   ];

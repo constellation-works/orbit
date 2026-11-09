@@ -311,7 +311,6 @@
    live drains lead their group in full colour. Wide cards flow into columns. */
 #auto-drain-panel { container: drain-card / inline-size; }
 .fleet-drains { display: grid; gap: 12px; font-size: 12px; }
-.fleet-hint { margin: 0; color: var(--fg-mute); }
 .fleet-host { min-width: 0; }
 /* More than one host: a tab per host, one host's section at a time. The
    section heading keeps the host name for assistive tech and shows its count. */
@@ -358,6 +357,7 @@
 .fleet-holds { color: var(--warn-fg); }
 .fleet-pilot-warning { margin: 2px 0 0; padding-left: 15px; color: var(--warn-fg); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .fleet-unavailable { color: var(--fg-mute); grid-column: 1 / -1; }
+.fleet-row.fleet-unavailable .fleet-workspace { color: inherit; }
 .fleet-loading { color: var(--fg-mute); }
 .fleet-row[data-phase="loading"] .fleet-phase { color: var(--fg-mute); font-style: italic; }
 .fleet-host-loading { color: var(--fg-mute); font-style: italic; }

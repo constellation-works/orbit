@@ -138,11 +138,13 @@ function errorColumnHasData(rows, key) {
   });
 }
 
+// More errors may exist when a source stopped short of the window start, or
+// when the feed filled its row cap (which leaves `coverage_since` at `since`).
 function loadMoreErrorsLink(payload, ctx) {
-  if (!errorsCoverageLabel(payload)) return null;
   const url = new URL(window.location.href);
   const configured = Number.parseInt(url.searchParams.get("diag") || "50", 10);
   const current = Number.isInteger(configured) && configured > 0 ? configured : 50;
+  if (!errorsCoverageLabel(payload) && listItems(payload).length < current) return null;
   const next = Math.min(current + 50, 200);
   if (next <= current) return null;
   url.searchParams.set("diag", String(next));
