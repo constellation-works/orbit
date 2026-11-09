@@ -1,7 +1,7 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 last_validated: 2026-11-03
 status: Implemented
 stage: shipped
@@ -185,5 +185,7 @@ fragmentation this feature exists to end.
 - [ORB-21249] added the seeded disabled weekly `evolution_pass` routine and manager digest.
 - [ORB-22802] seeded `worktree_gc` and `task_pilot` enabled in newly initialized workspaces.
 - [ORB-22844] retired the `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` routines.
+- [ORB-22688] split the clock into its own `orbit-clock` crate to cut serial `orbit-core` compile work.
+- [ORB-23115] added the seeded `crew_memory_dream` routine, which mints nothing until `crew_memory.enabled` is set.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

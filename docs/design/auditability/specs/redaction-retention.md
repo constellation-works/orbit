@@ -140,6 +140,7 @@ Last revised by codex / gpt-5.5 for [T20260427-0023].
 ## Task References
 
 - **[ORB-10591]** — Document the artifact-write redaction boundary, add structural SSH identifier coverage, and return field-level redaction details.
+- [ORB-22808] — Hardcoded unset tuning keys as named constants, fixing the applied task-commit journal window at 14 days.
 - [T20260427-0023] — project policy denials and friction task submissions into the global tracing feed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
