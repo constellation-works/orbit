@@ -182,7 +182,7 @@ fn reconcile_managed_artifacts(
             &global_root.join("skills"),
             "skill",
             ManagedAssetLayout::RelativePath,
-            &DEFAULT_SKILL_FILES,
+            DEFAULT_SKILL_FILES,
             false,
             mode,
             |_, content| {
