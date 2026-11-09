@@ -927,6 +927,86 @@ fn update_with_uninitialized_root_still_requires_a_workspace() {
     }
 }
 
+/// A command spawned with the checkout as its root (`--root <checkout>`,
+/// `ORBIT_ROOT=<checkout>`, or `--root ..` from inside `.orbit/`) opens the
+/// checkout's `.orbit/` store, so it must also join that store's generation
+/// authority. Pinning the checkout itself left `.generation-*` files in the
+/// working tree and registered the command where the real participants never
+/// look. A git checkout with no Orbit workspace is refused before anything is
+/// written there.
+fn checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused() {
+    let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::init(&work);
+    let orbit_dir = work.join(".orbit");
+    initialize_registered_root(&work, &home, &orbit_dir);
+    fs::remove_file(orbit_dir.join(".generation.lock")).expect("reset the workspace record");
+
+    let checkout = work.to_str().expect("UTF-8 checkout");
+    let spellings: [(&str, &Path, Option<&str>, Option<&str>); 3] = [
+        ("--root <checkout>", &work, Some(checkout), None),
+        ("ORBIT_ROOT=<checkout>", &work, None, Some(checkout)),
+        ("--root .. from .orbit/", &orbit_dir, Some(".."), None),
+    ];
+    for (label, cwd, flag, env) in spellings {
+        let mut command = orbit(cwd, &home);
+        if let Some(root) = flag {
+            command.args(["--root", root]);
+        }
+        if let Some(root) = env {
+            command.env("ORBIT_ROOT", root);
+        }
+        let output = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("task list");
+        assert!(output.status.success(), "{label}: {output:?}");
+        assert_eq!(
+            stray_generation_entries(&work),
+            Vec::<String>::new(),
+            "{label}"
+        );
+    }
+    assert_generation_record(&orbit_dir);
+
+    let bare = temp.path().join("bare");
+    crate::git_repo::init(&bare);
+    let bare_arg = bare.to_str().expect("UTF-8 bare checkout");
+    for use_flag in [true, false] {
+        let mut command = orbit(&work, &home);
+        if use_flag {
+            command.args(["--root", bare_arg]);
+        } else {
+            command.env("ORBIT_ROOT", bare_arg);
+        }
+        let output = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("task list");
+        assert!(!output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("is a git working tree"), "{stderr}");
+        assert!(
+            stderr.contains(&bare.join(".orbit").display().to_string()),
+            "the refusal must name the Orbit root to use: {stderr}"
+        );
+        assert_eq!(stray_generation_entries(&bare), Vec::<String>::new());
+    }
+}
+
+fn stray_generation_entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("read checkout")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".generation"))
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
 fn generation_admission_contracts_0() {
     for (name, check) in [
@@ -1038,6 +1118,10 @@ fn generation_admission_contracts_4() {
         (
             "update_with_uninitialized_root_still_requires_a_workspace",
             update_with_uninitialized_root_still_requires_a_workspace as fn(),
+        ),
+        (
+            "checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused",
+            checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

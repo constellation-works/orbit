@@ -181,7 +181,13 @@ authority; identical copies trivially do.
 
 The generation authority is chosen from `--root`, `ORBIT_ROOT` or the home directory
 (`~/.orbit`), while the workspace `.orbit` is discovered from the working directory.
-The two can disagree. A process with a fresh home, run from an uninitialized directory
+An explicit root resolves the way the runtime opens it: a directory whose `.orbit/` is
+an initialized workspace (`--root <checkout>`, or `--root ..` from inside `.orbit/`)
+joins that `.orbit/` authority, not the directory itself. An explicit root that is a
+git working tree but neither an Orbit root nor the parent of one is refused before
+anything is written there, naming the `<checkout>/.orbit` to pass instead; any other
+uninitialized directory stays its own authority so `orbit init --root <new>` can create
+it. The two can still disagree. A process with a fresh home, run from an uninitialized directory
 inside a live checkout, joins an empty authority but discovers that checkout. So can a
 process whose `--root` names the workspace data directory itself, or one whose home
 merely registered the same checkout. The workspace layout is the one part of a
