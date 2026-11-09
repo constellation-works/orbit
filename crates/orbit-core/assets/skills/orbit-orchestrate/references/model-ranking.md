@@ -69,10 +69,12 @@ settled evidence, and never calibrate from it.
 
 Every measure compares a model's actual count with what the fleet
 achieves on the same task tiers, divides by the season's noise scale,
-weights the result, and shrinks it toward the other eligible models
-(`K = 30`). The score is `100 + 10 ×` that composite; measure columns
-and JSON `contribution` values are score points before shrinkage, and
-they sum to the row's `raw_score`.
+and weights the result. The weighted composite is shrunk toward the
+other eligible models (`K = 30`) for `score`. The unshrunk `raw_score`
+is 100 plus the sum of the measured per-measure contributions, subject
+to rounding. Measure columns and JSON `contribution` values are points
+before shrinkage; `score` is the shrunk value and can differ from
+`raw_score`.
 
 | Measure | Weight | Units | Reading |
 |---|---|---|---|
