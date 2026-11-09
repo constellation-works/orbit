@@ -1191,8 +1191,8 @@ on.
 
 - **Who each problem counts against** splits the window's problems by the role
   they count against. Every problem counts against one role, or is not scored
-  (for example, rework caused by infrastructure). Select a legend entry to open
-  that role.
+  (for example, rework caused by infrastructure). Select a role's legend entry
+  to open that role; the Not scored entry does not link.
 - **The ranking** lists one row per model and recorded reasoning effort, labelled `model @ effort`
   with the crews that contributed its units as secondary detail, with a rate per 100 units
   of work for each term and the score. A rendered effort shows its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
