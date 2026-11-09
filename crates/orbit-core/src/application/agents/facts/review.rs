@@ -61,14 +61,22 @@ pub(crate) fn review_gate_verdicts(comments: &[TaskComment]) -> Vec<ReviewVerdic
 /// commits it names, its runtime and its findings.
 pub(in crate::application::agents) fn settlement(comment: &TaskComment) -> Option<Review> {
     let message = comment.message.trim_start();
-    let rest = SETTLEMENT_LEADS
-        .iter()
-        .find_map(|lead| message.strip_prefix(lead))?;
+    // The lead names the gate, and the gate names the producing review
+    // step as invocations record it.
+    let (activity_id, rest) = SETTLEMENT_LEADS.iter().find_map(|lead| {
+        let rest = message.strip_prefix(lead)?;
+        let activity_id = match *lead {
+            lead if lead.starts_with("before-landing") => Some("landing_review"),
+            _ => Some("review"),
+        };
+        Some((activity_id, rest))
+    })?;
     let (attempt_id, rest) = rest.split_once('`')?;
     let verdict = rest.strip_prefix(": verdict **")?.split_once("**")?.0;
     let verdict: ReviewVerdict = serde_json::from_value(Value::from(verdict)).ok()?;
     let mut review = Review {
         attempt_id: attempt_id.to_string(),
+        activity_id: activity_id.map(str::to_string),
         at: comment.at,
         verdict,
         reviewer: Runner::default(),

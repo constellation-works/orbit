@@ -241,6 +241,10 @@ pub(in crate::application::agents) enum RejectOutcome {
 #[derive(Debug, Clone)]
 pub(in crate::application::agents) struct Review {
     pub(in crate::application::agents) attempt_id: String,
+    /// The review step that produced the settlement, as invocations
+    /// record it (`review`, `landing_review`); `None` when the
+    /// settlement names no known gate.
+    pub(in crate::application::agents) activity_id: Option<String>,
     pub(in crate::application::agents) at: DateTime<Utc>,
     pub(in crate::application::agents) verdict: ReviewVerdict,
     /// The reviewer's crew and model as the settlement names them.

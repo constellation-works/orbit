@@ -39,7 +39,7 @@ use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Map, Value, json};
 
 use crate::application::agents::effort::{
-    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::records::spec_documents;
 use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
@@ -107,9 +107,14 @@ impl Assessment {
         let run = self.run.as_ref();
         let effort = main_invocation_effort(
             facts,
-            self.run_id().as_deref(),
-            MainActivity::Pilot,
-            Some(task_id),
+            MainInvocationUnit {
+                run_id: self.run_id().as_deref(),
+                activity: MainActivity::Pilot,
+                task_id: Some(task_id),
+                model: run.and_then(|run| run.model.as_deref()),
+                activity_id: run.and_then(|run| run.activity_id.as_deref()),
+                after: None,
+            },
         );
         model_effort_key(run.and_then(|run| run.model.as_deref()), effort)
     }

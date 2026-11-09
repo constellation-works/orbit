@@ -42,6 +42,10 @@ pub(in crate::application) struct PilotRun {
     pub(in crate::application) run_id: String,
     pub(in crate::application) crew: Option<String>,
     pub(in crate::application) model: Option<String>,
+    /// The worker step that produced the receipt (`pilot`,
+    /// `repair_pilot`, …), as invocations record it; `None` when the
+    /// producing round cannot be identified.
+    pub(in crate::application) activity_id: Option<String>,
     /// Start to finish; `None` while it runs or when either is unrecorded.
     pub(in crate::application) seconds: Option<f64>,
     /// Total tokens the run's recorded invocations spent; `None` when it
@@ -96,13 +100,16 @@ impl RunRecord {
         }
     }
 
-    fn model_for_pilot_receipt(
+    /// The producing worker and its recorded model for one receipt:
+    /// `(activity_id, model)`, either `None` when the round or its model
+    /// cannot be identified.
+    fn invocation_for_pilot_receipt(
         &self,
         runtime: &OrbitRuntime,
         steps: &[(String, String)],
         producing: &[usize],
         task_id: &str,
-    ) -> Option<String> {
+    ) -> (Option<String>, Option<String>) {
         let invocations = self.invocations(runtime);
         let workers: Vec<_> = steps
             .iter()
@@ -121,7 +128,7 @@ impl RunRecord {
             })
             .collect();
         let [worker] = workers.as_slice() else {
-            return None;
+            return (None, None);
         };
         let recorded: Vec<_> = invocations
             .iter()
@@ -129,17 +136,19 @@ impl RunRecord {
             .collect();
         // Records are newest first. A task-linked retry supersedes its
         // previous invocation, even when its model is unrecorded.
-        if let Some(invocation) = recorded
+        let model = if let Some(invocation) = recorded
             .iter()
             .find(|invocation| invocation.task_ids.iter().any(|id| id == task_id))
         {
-            return invocation.model.clone();
-        }
-        // Legacy unlinked evidence is usable only when unique.
-        match recorded.as_slice() {
-            [invocation] if invocation.task_ids.is_empty() => invocation.model.clone(),
-            _ => None,
-        }
+            invocation.model.clone()
+        } else {
+            // Legacy unlinked evidence is usable only when unique.
+            match recorded.as_slice() {
+                [invocation] if invocation.task_ids.is_empty() => invocation.model.clone(),
+                _ => None,
+            }
+        };
+        (Some((*worker).clone()), model)
     }
 }
 
@@ -208,6 +217,7 @@ impl PilotRuns {
                     run_id: run.run_id.to_string(),
                     crew: crews.crews(&run, None).into_iter().next(),
                     model: None,
+                    activity_id: None,
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
                         (end - start).num_milliseconds().max(0) as f64 / 1000.0
                     }),
@@ -273,7 +283,8 @@ impl PilotRuns {
             }) {
                 run.crew = Some(crew);
             }
-            run.model = record.model_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
+            (run.activity_id, run.model) =
+                record.invocation_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
             run.tokens = record.pilot_run_tokens(runtime);
             Some(run)
         });

@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use super::RoleSpec;
 use crate::application::agents::attribution::Owner;
 use crate::application::agents::effort::{
-    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
@@ -221,9 +221,19 @@ fn rows(
                 .and_then(|index| task.attempts[index].runner.run_id.clone());
             let effort = main_invocation_effort(
                 facts,
-                run_id.as_deref(),
-                MainActivity::Review,
-                Some(&task.id),
+                MainInvocationUnit {
+                    run_id: run_id.as_deref(),
+                    activity: MainActivity::Review,
+                    task_id: Some(&task.id),
+                    model: runner.model.as_deref(),
+                    activity_id: review.activity_id.as_deref(),
+                    after: task
+                        .reviews
+                        .iter()
+                        .filter(|earlier| earlier.at < review.at)
+                        .map(|earlier| earlier.at)
+                        .max(),
+                },
             );
             let row = rows
                 .entry(model_effort_key(runner.model.as_deref(), effort))
@@ -296,9 +306,14 @@ fn rows(
         // the same run is an independent reviewer's work.
         let effort = main_invocation_effort(
             facts,
-            runner.run_id.as_deref(),
-            MainActivity::ReviewJob,
-            Some(filer),
+            MainInvocationUnit {
+                run_id: runner.run_id.as_deref(),
+                activity: MainActivity::ReviewJob,
+                task_id: Some(filer),
+                model: runner.model.as_deref(),
+                activity_id: None,
+                after: None,
+            },
         );
         let row = rows
             .entry(model_effort_key(runner.model.as_deref(), effort))
@@ -382,9 +397,14 @@ fn rows(
         };
         let effort = main_invocation_effort(
             facts,
-            charge.run_id.as_deref(),
-            activity,
-            Some(&charge.task_id),
+            MainInvocationUnit {
+                run_id: charge.run_id.as_deref(),
+                activity,
+                task_id: Some(&charge.task_id),
+                model: charge.model.as_deref(),
+                activity_id: charge.activity_id.as_deref(),
+                after: None,
+            },
         );
         let row = rows
             .entry(model_effort_key(charge.model.as_deref(), effort))

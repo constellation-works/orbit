@@ -9,17 +9,25 @@
 //!
 //! Effort is attributed per unit of work from that unit's own invocations:
 //! the invocations of the unit's job run whose activity matches the role
-//! (implementing, reviewing or piloting). A review job is the exception:
-//! the task that files findings itself runs as a task executor
+//! (implementing, reviewing or piloting), narrowed to the unit itself by
+//! the model it recorded and, when the producing step or worker is known
+//! (a pilot receipt's worker, a review settlement's gate), by that exact
+//! activity id. A run that carried several rounds — an initial and a
+//! repair pilot, a before-PR and a before-landing review — therefore
+//! never lends one round's effort to another round's model. A unit with
+//! no recorded run has no invocation evidence of its own and is
+//! `unknown`; it never borrows a same-task invocation from another
+//! attempt or run. A review job is the exception on activity: the task
+//! that files findings itself runs as a task executor
 //! (`implement_one` / `agent_implement`), so its filing units count under
 //! that executor invocation, never under an independent gate review in
 //! the same run; gate settlements keep their own reviewer invocation.
-//! When those invocations ran at more than one effort, the unit counts
-//! under the effort of its main
-//! invocation — the matching invocation with the longest recorded
-//! duration, ties broken by the latest end time then the highest
-//! invocation id. A unit with no matching invocation is `unknown` and is
-//! never folded into a known effort.
+//! When the unit's invocations ran at more than one effort, the unit
+//! counts under the effort of its main invocation — the matching
+//! invocation with the longest recorded duration, ties broken by the
+//! latest end time then the highest invocation id. A unit with no
+//! matching invocation is `unknown` and is never folded into a known
+//! effort.
 
 use orbit_store::contracts::InvocationAccountingFact;
 
@@ -101,22 +109,49 @@ pub(super) fn model_effort_key(model: Option<&str>, effort: RecordedEffort) -> M
     (model.unwrap_or(MODEL_UNKNOWN).to_string(), effort)
 }
 
-/// The effort of a unit's main invocation: among the invocations of
-/// `run_id` (or, without a run, of `task_id`) whose activity matches
-/// `activity`, preferring those linked to `task_id`, the one with the
-/// longest recorded duration. `unknown` when none matches.
+/// One unit of work whose main invocation's effort is wanted. `model`
+/// and `activity_id` bind the match to the unit's own round: an
+/// invocation recorded for another model, or under another producing
+/// step or worker, in the same run is another unit's evidence. Either
+/// is `None` when the unit recorded none, and then it does not narrow
+/// the match. `after` is the previous round's settlement on the same
+/// task, when there is one: an invocation that had already ended by
+/// then produced that earlier round, not this one.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MainInvocationUnit<'a> {
+    pub(super) run_id: Option<&'a str>,
+    pub(super) activity: MainActivity,
+    pub(super) task_id: Option<&'a str>,
+    pub(super) model: Option<&'a str>,
+    pub(super) activity_id: Option<&'a str>,
+    pub(super) after: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The effort of a unit's main invocation: among the unit's own
+/// invocations in its job run, preferring those linked to its task, the
+/// one with the longest recorded duration. `unknown` when the unit
+/// recorded no run or no invocation of its own matches.
 pub(super) fn main_invocation_effort(
     facts: &AgentFacts,
-    run_id: Option<&str>,
-    activity: MainActivity,
-    task_id: Option<&str>,
+    unit: MainInvocationUnit<'_>,
 ) -> RecordedEffort {
+    let MainInvocationUnit {
+        run_id: Some(run_id),
+        activity,
+        task_id,
+        model,
+        activity_id,
+        after,
+    } = unit
+    else {
+        return Some(EFFORT_UNKNOWN.to_string());
+    };
     let candidates = facts.invocations.iter().filter(|fact| {
-        activity.matches(fact.activity_id.as_deref())
-            && match run_id {
-                Some(run_id) => fact.job_run_id == run_id,
-                None => task_id.is_some_and(|task| fact.task_ids.iter().any(|id| id == task)),
-            }
+        fact.job_run_id == run_id
+            && activity.matches(fact.activity_id.as_deref())
+            && activity_id.is_none_or(|id| fact.activity_id.as_deref() == Some(id))
+            && model.is_none_or(|model| fact.model.as_deref() == Some(model))
+            && after.is_none_or(|after| fact.ts > after)
     });
     let linked: Vec<_> = match task_id {
         Some(task) => {

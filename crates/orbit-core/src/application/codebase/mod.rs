@@ -51,8 +51,11 @@ pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
+// `PilotAssessment` is named only by scorecard test fixtures.
+#[allow(unused_imports)]
 pub(in crate::application) use pilot::{
-    Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns, pilot_evidence,
+    Assessment as PilotAssessment, Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns,
+    pilot_evidence,
 };
 pub use regression::RegressionFilter;
 pub use riskiness::{

@@ -220,16 +220,47 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                     now - Duration::minutes(60),
                     now - Duration::minutes(60 - minutes),
                 );
-                for (activity, model) in
-                    [("pilot", "initial-model"), ("repair_pilot", "repair-model")]
-                {
+                for (activity, model, effort, duration_ms) in [
+                    (
+                        "pilot",
+                        "initial-model",
+                        orbit_types::identity::ReasoningEffort::High,
+                        10_000,
+                    ),
+                    (
+                        "repair_pilot",
+                        "repair-model",
+                        orbit_types::identity::ReasoningEffort::Medium,
+                        60_000,
+                    ),
+                ] {
                     if index == 0 && activity == "repair_pilot" {
                         continue;
                     }
                     fixture
                         .runtime
                         .insert_invocation_trace_record(&InvocationInsertParams {
-                            agent_execution_id: None,
+                            // Each round ran at its own effort; the repair
+                            // round ran longest, so a run-wide longest
+                            // pick would label the initial model medium.
+                            agent_execution_id: Some(
+                                fixture
+                                    .runtime
+                                    .sqlite_store()
+                                    .unwrap()
+                                    .begin_agent_execution(
+                                        fixture.runtime.stores().jobs().workspace_id(),
+                                        &run,
+                                        activity,
+                                        "fixture",
+                                        Some(model),
+                                        &orbit_types::telemetry::AgentExecutionIdentity {
+                                            crew: Some(crew.into()),
+                                            reasoning_effort: Some(effort),
+                                        },
+                                    )
+                                    .unwrap(),
+                            ),
                             job_run_id: run.clone(),
                             account: None,
                             activity_id: activity.into(),
@@ -238,6 +269,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             model: Some(model.into()),
                             task_ids: vec![],
                             trace: InvocationTrace {
+                                duration_ms,
                                 provider_cost_usd: Some(cost),
                                 ..Default::default()
                             },
@@ -346,6 +378,19 @@ fn pilots_attribute_assessments_to_recorded_activity() {
             ] {
                 let attributed = row(&card, crew, model);
                 assert_eq!(attributed["units"], units);
+                // Each round keeps its own recorded effort: the initial
+                // pilot ran high, the (longer) repair pilot medium.
+                assert_eq!(
+                    attributed["label"],
+                    format!(
+                        "{model} @ {}",
+                        if model == "initial-model" {
+                            "high"
+                        } else {
+                            "medium"
+                        }
+                    )
+                );
                 assert_eq!(attributed["runs_without_model"], 0);
                 assert_eq!(stat(attributed, "cost_per_assessment"), cost);
                 assert_eq!(stat(attributed, "median_run_seconds"), seconds);
