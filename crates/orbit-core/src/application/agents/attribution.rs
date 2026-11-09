@@ -61,6 +61,9 @@ pub struct Charge {
     /// record it, when the unit identifies one (a pilot receipt's worker,
     /// a review settlement's gate).
     pub(super) activity_id: Option<String>,
+    /// The previous settlement on the task, for a review settlement's
+    /// charge: an invocation that ended by then produced the earlier round.
+    pub(super) after: Option<DateTime<Utc>>,
     /// The rework cause, for rework.
     pub(super) cause: Option<Cause>,
     /// The regression link's severity, for a regression.
@@ -274,6 +277,7 @@ impl Draft<'_> {
             anchor,
             detail: self.detail,
             activity_id: None,
+            after: None,
             cause: self.cause,
             severity: self.severity,
             sites: Vec::new(),
@@ -352,6 +356,13 @@ impl Draft<'_> {
             .task
             .attempt_at(review.at)
             .and_then(|index| self.task.attempts[index].runner.run_id.clone());
+        let after = self
+            .task
+            .reviews
+            .iter()
+            .filter(|earlier| earlier.at < review.at)
+            .map(|earlier| earlier.at)
+            .max();
         let mut charge = self.charge(
             Owner::Role(AgentRole::Reviewers),
             review.reviewer.crew.clone(),
@@ -360,6 +371,7 @@ impl Draft<'_> {
             review.at,
         );
         charge.activity_id.clone_from(&review.activity_id);
+        charge.after = after;
         charge
     }
 }
@@ -514,6 +526,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             anchor: graded.at,
             detail,
             activity_id: run.and_then(|run| run.activity_id.clone()),
+            after: None,
             cause: None,
             severity: None,
             sites: Vec::new(),
@@ -576,7 +589,14 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
                                 task_id: Some(&charge.task_id),
                                 model: charge.model.as_deref(),
                                 activity_id: charge.activity_id.as_deref(),
-                                after: None,
+                                after: charge.after,
+                                until: charge
+                                    .activity_id
+                                    .as_ref()
+                                    .filter(|_| {
+                                        matches!(activity, super::effort::MainActivity::Review)
+                                    })
+                                    .map(|_| charge.anchor),
                             },
                         )
                     },
