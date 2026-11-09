@@ -1327,6 +1327,33 @@ Store schema v43 adds an index over v2 audit event type and timestamp for window
 the policy-denial summary. It is index-only, so older binaries keep reading and writing and it
 waits for nothing.
 
+## Crew memory and audit session model (schemas v87-v88)
+
+Store schemas v87 (`crew_memory`) and v88 (`audit_session_model`) raise the store schema from 86
+to 88 in the v0.48.0 release. Both migrations are classified Additive in the migration registry
+(`crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`): v87 adds new crew-memory
+tables no existing row depends on, and v88 adds a nullable MCP session-model column that leaves
+existing rows NULL and is not part of `role`. An older binary that supports schema 86 therefore
+opens schema-88 state for reads *and* writes through the forward-compatibility record
+(`migration.compat`): when every migration above its supported version is Additive,
+`evaluate_newer_database` (`crates/orbit-store/src/driver/sqlite/migration/ledger/compatibility.rs`)
+returns a writable forward-compatible open, and the older binary applies no migration to the newer
+state (see [Additive-newer: reads and writes](#additive-newer-reads-and-writes)). Upgrading the
+store to 88 alone does not force older binaries to refuse it.
+
+The separate, real incompatibility in the same release is the optional `memory` capture on
+`CapturedExperiment` (`crates/orbit-types/src/workflow/experiments.rs`). The struct uses
+`deny_unknown_fields`, and `memory` is `Option<...>` omitted from the wire when `None`
+(`skip_serializing_if`); an older consumer therefore keeps accepting tasks and receipts without
+the field but rejects one carrying a populated memory block. The field need not exist in every
+task or receipt, so memory-free traffic stays compatible across versions.
+
+Keep fleet hosts aligned when memory experiments are in use — that remains sound operational
+advice — but its rationale is the populated-capture rejection above, not an unconditional
+database refusal at schema 88. The frozen v0.48.0 changelog entry overstates the database
+refusal; per the RELEASING.md fix-forward policy it is left untouched, and this runbook is the
+maintained correction.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when
