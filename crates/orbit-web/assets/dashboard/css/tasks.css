@@ -1043,7 +1043,7 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 16px 20px 14px;
+  padding: 16px 20px 16px;
   /* The head is the top of the detail's darker band; the edge keeps the
      head's height and shows only where the band's colour ends. */
   border-bottom: 1px solid var(--bg);
