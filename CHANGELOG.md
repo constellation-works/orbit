@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.48.0 — 2026-11-09
+
+### Breaking Changes
+
+- **MCP tool families consolidated**: Related tools now share one tool with an `action` field, cutting the surface from 43 to about 21 tools, and stored pre-family tool names migrate on upgrade. ([ORB-23280])
+  `orbit_friction_add`/`_update`, `orbit_task_artifact_get`/`_put` and similar removed → call the family tool with `action`
+- **MCP core and operator profiles**: `orbit mcp serve` advertises a core profile of tasks, artifacts, friction, search, attention and workspace discovery by default. Auto-task, automation, codebase and decision tools need a role or the operator profile. ([ORB-23279])
+  Operator tools no longer listed by default → use `orbit mcp serve --operator` or `orbit mcp init --operator`
+- **MCP task schemas slimmed**: Task add, update and list take arrays only, and the nested relation and verdict schemas are gone from the tool descriptions. ([ORB-23278])
+  String-or-array fields removed → send arrays
+- **MCP model provenance and aliases dropped**: The per-call `model` input, the `orbit_task_list` `agent` alias and the `context` alias on task add and update are removed. ([ORB-23277])
+  Per-call `model` and aliases removed → use session crew config or MCP clientInfo, and `context_files`
+- **Orchestrator scorecard removed**: `orbit orchestrator`, `--role orchestrators` on `orbit agents scorecard` and `show`, its MCP tool and `/api/agents/orchestrators` are gone, and the dashboard Orchestrators tab is replaced by Rank. ([ORB-23582])
+  Orchestrator scorecard removed → no replacement
+- **State schema 88**: Crew memory and the MCP provenance removal raise the SQLite schema from 86 to 88, and captured experiments gain a `memory` field, so older binaries and follower hosts refuse the new state. ([ORB-23113])
+  Older binaries refuse upgraded state → upgrade every host in lockstep
+
+### Highlights
+
+- **Crew memory**: Per-model memory spaces with write rules, an `orbit memory` CLI, a weekly `crew_memory_dream` reflection routine operator-reviewed global-memory proposals and a read-only dashboard Knowledge › Memory tab, behind `crew_memory.enabled` and a shadow experiment. ([ORB-23113])
+- **Holistic model ranking**: `orbit agents rank` and the dashboard Agents › Rank tab rank implementer models by escaped regressions, review outcome and rework against size-adjusted expectations, with tie bands and a per-tier score-versus-cost chart. Models working a single tier are ranked and flagged. ([ORB-23302])
+- **Longer implement budget**: The `agent_implement` wall-clock timeout defaults to 6 hours and is configurable per workspace through `workflow.activity_timeouts`. ([ORB-23544])
+- **Host-health updates**: The host-health auto-task runs weekly by default and reports available Orbit updates and pending migrations. ([ORB-23373])
+- **Claim recovery**: Recover claim lets the operator choose any valid target status, and the dashboard offers it for failed claims and confirms forced status changes and deletes. ([ORB-23540])
+
 ## 0.47.0 — 2026-11-08
 
 ### Breaking Changes
