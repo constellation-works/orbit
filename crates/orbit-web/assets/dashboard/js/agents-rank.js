@@ -1,11 +1,11 @@
 // Analytics › Agents › Rank. Reads GET /api/agents/rank and draws, top to
-// bottom: summary cards; the band ladder (one group per shared rank, each row
-// with an interval whisker on one shared score axis, its per-measure
-// contributions, cost against the fleet, tier mix and units, and a Breakdown
-// under it); the models below the evidence gate with their progress toward
-// it; the tasks no one was scored on; and one score-against-cost chart with a
-// tier switch (js/agents-rank-frontier.js). Everything is derived from the
-// payload; HTML uses `el()`.
+// bottom: a summary strip; the refined rank table (one row per model, grouped
+// by band, with a p10–p90 whisker on one shared score axis, cost per task,
+// a tier-mix bar and landed rate, and a breakdown under each row); the models
+// below the evidence gate in a collapsible Not ranked section; the tasks no
+// one was scored on; and one score-against-cost chart with a tier switch
+// (js/agents-rank-frontier.js). Everything is derived from the payload; HTML
+// uses `el()`.
 
 import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint } from './common.js';
 import * as rankFormat from './agents-rank-format.js';
@@ -14,11 +14,8 @@ import { rankFrontierNode } from './agents-rank-frontier.js';
 const BODY_ID = "agents-body";
 const COUNT_ID = "agents-count";
 const TIER_SHORT = { low: "L", medium: "M", hard: "H", xhard: "X", unassessed: "U" };
-// The cost bar fills at 2^±1.5, about 0.35× and 2.8× the fleet.
-const COST_LOG_SPAN = 1.5;
-// A contribution smaller than this reads as neutral.
-const NEUTRAL_POINTS = 0.5;
-const MEASURE_SHORT = { escaped_regressions: "Regr.", review_outcome: "Review", crew_rework: "Rework" };
+// A contribution bar fills half its track at this many points.
+const CONTRIB_SCALE = 25;
 const NOT_SCORED_REASONS = {
   infrastructure: "rework caused by infrastructure",
   no_cause: "rework with no recorded cause",
@@ -89,7 +86,7 @@ function renderRank(payload, onCount) {
   const nodes = [];
   if (payload.provisional || payload.live) nodes.push(bannerNode("provisional", "Live view, provisional. Escaped regressions have not had time to arrive. This board is not a settled result."));
   if (!payload.qualified) nodes.push(bannerNode("unqualified", "This board is not qualified (fewer than 3 eligible models), so it shows scores without bands or ranks."));
-  if (payload.scales_source === "window_estimate") nodes.push(bannerNode("scales", "Noise scales are estimated from this window. They are not a calibrated season."));
+  if (payload.scales_source === "window_estimate") nodes.push(bannerNode("scales", "Noise scales are estimated from this window, not a calibrated season. Treat close bands as provisional."));
   if (payload.status !== "ok") {
     nodes.push(stateNode("not-ok", "Ranking is unavailable", "The ranking did not return a board for this window."));
   } else if (!rows.length) {
@@ -98,7 +95,8 @@ function renderRank(payload, onCount) {
     const ladder = ladderModel(payload, rows);
     nodes.push(summaryNode(payload, rows, ladder));
     nodes.push(ladderNode(payload, ladder));
-    nodes.push(asideNode(payload, rows));
+    if (ladder.pending.length) nodes.push(pendingNode(payload, ladder.pending));
+    nodes.push(notScoredNode(payload));
     nodes.push(rankFrontierNode(payload, rows));
   }
   nodes.push(howNode(payload));
@@ -144,7 +142,7 @@ function stateNode(key, heading, text) {
   return node;
 }
 
-// --- the ladder's model: bands, their notes and the shared score axis ---
+// --- the table's model: bands and the shared score axis ---
 
 function ladderModel(payload, rows) {
   const ranked = rows.filter((row) => row.eligible);
@@ -160,47 +158,7 @@ function ladderModel(payload, rows) {
   } else if (ranked.length) {
     bands.push({ label: "", rows: [...ranked].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)) });
   }
-  const pairs = payload.paired_probabilities || {};
-  bands.forEach((band, index) => {
-    band.name = payload.qualified ? `Band ${index + 1}` : "Scores, no bands";
-    band.note = inBandNote(band.rows, pairs);
-    const next = bands[index + 1];
-    band.edge = next ? minAcross(band.rows, next.rows, pairs) : null;
-    band.nextName = next ? `band ${index + 2}` : "";
-  });
   return { ranked, pending, bands, axis: scoreAxis(ranked) };
-}
-
-function probability(pairs, a, b) {
-  const row = pairs[a];
-  return row && typeof row[b] === "number" ? row[b] : null;
-}
-
-function inBandNote(rows, pairs) {
-  if (rows.length < 2) return "";
-  const ordered = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  const parts = [];
-  for (let i = 0; i < ordered.length; i += 1) {
-    for (let j = i + 1; j < ordered.length; j += 1) {
-      const p = probability(pairs, ordered[i].model, ordered[j].model);
-      if (p != null) parts.push(`${ordered[i].model} vs ${ordered[j].model} ${rankFormat.num(p, 2)}`);
-    }
-  }
-  if (!parts.length) return "";
-  const shown = parts.slice(0, 6);
-  if (parts.length > shown.length) shown.push(`${parts.length - shown.length} more pairs`);
-  return shown.join(" · ");
-}
-
-function minAcross(upper, lower, pairs) {
-  let min = null;
-  for (const a of upper) {
-    for (const b of lower) {
-      const p = probability(pairs, a.model, b.model);
-      if (p != null && (min == null || p < min)) min = p;
-    }
-  }
-  return min;
 }
 
 function scoreAxis(rows) {
@@ -222,158 +180,144 @@ function scoreAxis(rows) {
   return { lo, hi, ticks, pos: (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100)) };
 }
 
-// --- summary cards ---
+// --- summary strip ---
 
 function summaryNode(payload, rows, ladder) {
-  const cards = [leaderCard(payload, ladder), valueCard(ladder), rankedCard(payload, rows, ladder), coverageCard(payload)];
-  const node = el("section", { class: "agents-rank-summary", "aria-label": "Board summary" }, cards);
+  const measures = Array.isArray(payload.measures) ? payload.measures : [];
+  const liveWeight = measures.filter((m) => m.status === "measured").reduce((sum, m) => sum + (m.weight || 0), 0);
+  const totalWeight = typeof payload.weights_total === "number" ? payload.weights_total : measures.reduce((sum, m) => sum + (m.weight || 0), 0);
+  const missing = measures.filter((m) => m.status !== "measured").map((m) => m.label || m.key);
+  const tasksScored = ladder.ranked.reduce((sum, row) => sum + (row.units || 0), 0);
+  const notScored = payload.not_scored || {};
+  const unattributed = payload.unattributed || {};
+  const stats = [
+    stat("Ranked", String(ladder.ranked.length), `of ${rankFormat.plural(rows.length, "model")}`),
+    stat("Tasks scored", rankFormat.num(tasksScored, 0), ""),
+    stat("Not scored", rankFormat.num(notScored.count || 0, 0), unattributed.tasks ? `${rankFormat.num(unattributed.tasks, 0)} unattributed` : ""),
+    stat("Measures live", rankFormat.num(liveWeight, 0), `of ${rankFormat.num(totalWeight, 0)} weight${missing.length ? ` · unmeasured: ${missing.join(", ")}` : ""}`),
+  ];
+  const node = el("section", { class: "agents-rank-summary", "aria-label": "Board summary" }, stats);
   node.dataset.key = "summary";
-  node.dataset.hash = JSON.stringify(cards.map((card) => card.textContent));
+  node.dataset.hash = JSON.stringify(stats.map((card) => card.textContent));
   return node;
 }
 
-function card(label, value, valueRest, sub) {
-  return el("div", { class: "agents-rank-card" }, [
-    el("span", { class: "agents-rank-card-label", text: label }),
-    el("span", { class: "agents-rank-card-value" }, [value, valueRest ? el("span", { class: "agents-rank-card-rest", text: ` ${valueRest}` }) : null]),
-    el("span", { class: "agents-rank-card-sub", text: sub }),
+function stat(label, value, rest) {
+  return el("div", { class: "agents-rank-stat" }, [
+    el("span", { class: "agents-rank-stat-label", text: label }),
+    el("span", { class: "agents-rank-stat-value" }, [value, rest ? el("span", { class: "agents-rank-stat-rest", text: ` ${rest}` }) : null]),
   ]);
 }
 
-function leaderCard(payload, ladder) {
-  const top = ladder.bands[0];
-  if (!top) return card("Leader", "—", "", "No model has passed the evidence gate.");
-  if (!payload.qualified) {
-    return card("Leader", top.rows[0].model || "—", "", "Highest score; this board has no bands.");
-  }
-  const names = top.rows.map((row) => row.model).join(", ");
-  const edge = top.edge == null ? "" : ` · ${rankFormat.num(top.edge, 2)} ahead of band 2`;
-  const sub = top.rows.length === 1 ? `Alone in band 1${edge}` : `${top.rows.length} share band 1${edge}`;
-  return card("Leader", names, "", sub);
-}
+// --- the refined rank table ---
 
-function valueCard(ladder) {
-  const priced = ladder.ranked.filter((row) => row.cost && !row.cost.cost_unknown && typeof row.cost.ratio === "number");
-  if (!priced.length) return card("Best value", "—", "", "No ranked model has a known cost.");
-  const best = priced.reduce((a, b) => (b.cost.ratio < a.cost.ratio ? b : a));
-  const rank = best.rank_label ? `Rank ${best.rank_label}` : "Unbanded";
-  return card("Best value", best.model, "", `${rank} at ${rankFormat.num(best.cost.ratio, 2)}× fleet cost`);
-}
-
-function rankedCard(payload, rows, ladder) {
-  const bands = payload.qualified ? ` · ${rankFormat.plural(ladder.bands.length, "band")}` : "";
-  const below = ladder.pending.length;
-  return card("Ranked", String(ladder.ranked.length), `of ${rankFormat.plural(rows.length, "model")}${bands}`,
-    below ? `${below} below the evidence gate` : "Every model passed the evidence gate");
-}
-
-function coverageCard(payload) {
-  const measures = Array.isArray(payload.measures) ? payload.measures : [];
-  const measured = measures.filter((m) => m.status === "measured").reduce((sum, m) => sum + (m.weight || 0), 0);
-  const total = typeof payload.weights_total === "number" ? payload.weights_total : measures.reduce((sum, m) => sum + (m.weight || 0), 0);
-  const missing = measures.filter((m) => m.status !== "measured").map((m) => m.label || m.key);
-  return card("Score coverage", rankFormat.num(measured, 0), `of ${rankFormat.num(total, 0)} weight measured`,
-    missing.length ? `Unmeasured: ${missing.join(", ")}` : "Every measure is measured");
-}
-
-// --- the band ladder ---
+const RANK_COLUMNS = 8;
 
 function ladderNode(payload, ladder) {
-  const measures = (Array.isArray(payload.measures) ? payload.measures : []).filter((m) => m.status === "measured");
-  const columns = 7 + measures.length;
   const axisHead = el("div", { class: "agents-rank-axis-head", "aria-hidden": "true" },
-    ladder.axis.ticks.map((tick) => el("span", { text: String(tick), style: { left: `${ladder.axis.pos(tick)}%` } })));
+    ladder.axis.ticks.map((tick) => {
+      const span = el("span", { text: String(tick), style: { left: `${ladder.axis.pos(tick)}%` } });
+      if (tick === 100) span.className = "is-100";
+      return span;
+    }));
   const head = el("tr", {}, [
+    el("th", { class: "agents-rank-chev-col", text: "" }),
     el("th", { text: "Rank" }),
     el("th", { text: "Model" }),
     el("th", { class: "agents-num", text: "Score" }),
     el("th", { class: "agents-rank-interval-col" }, [
-      el("span", { text: "Score, 10th–90th percentile" }),
+      el("span", { text: "p10–p90 interval" }),
       axisHead,
     ]),
-    ...measures.map((m) => el("th", { class: "agents-num", text: MEASURE_SHORT[m.key] || m.label || m.key, title: `${m.label || m.key} contribution, points added to 100` })),
-    el("th", { text: "Cost vs fleet", title: "List-price cost per task divided by the fleet's on the same tier mix, on a log scale centred at 1.0×" }),
-    el("th", { text: "Tier mix" }),
-    el("th", { class: "agents-num", text: "Units" }),
+    el("th", { class: "agents-num", text: "Cost / task" }),
+    el("th", { text: "Tasks" }),
+    el("th", { class: "agents-num", text: "Landed" }),
   ]);
-  const groups = ladder.bands.map((band) => bandBody(payload, band, measures, ladder.axis, columns));
+  const groups = ladder.bands.map((band) => bandBody(payload, band, ladder.axis));
   const table = el("table", { class: "agents-table agents-rank-ladder" }, [el("thead", {}, [head]), ...groups]);
   const wrap = el("div", { class: "agents-table-wrap agents-rank-ladder-wrap", role: "region", "aria-label": "Model ranking" }, [table]);
   wrap.tabIndex = 0;
   const empty = ladder.bands.length ? null : el("p", { class: "agents-rank-note", text: "No model has passed the evidence gate yet." });
   const node = el("section", { class: "agents-rank-board", "aria-label": "Model ranking" }, [
     empty || wrap,
-    legendNode(),
+    legendNode(payload),
   ]);
   node.dataset.key = "board";
-  node.dataset.hash = JSON.stringify([ladder.ranked, payload.paired_probabilities, payload.qualified, payload.measures]);
+  node.dataset.hash = JSON.stringify([ladder.ranked, payload.qualified, payload.measures]);
   return node;
 }
 
-function bandBody(payload, band, measures, axis, columns) {
-  const headCell = el("th", { class: "agents-rank-band-head" }, [
-    el("span", { class: "agents-rank-band-name", text: band.name }),
-    band.note ? el("span", { class: "agents-rank-band-note", text: band.note, title: "Probability the first model's score is above the second's. Close to 0.5 is a tie." }) : null,
-  ]);
-  headCell.colSpan = columns;
-  headCell.setAttribute("scope", "rowgroup");
-  const rows = [el("tr", { class: "agents-rank-band-row" }, [headCell])];
-  for (const row of band.rows) rows.push(...ladderRow(payload, row, measures, axis, columns));
-  if (band.edge != null) {
-    const edge = el("td", { class: "agents-rank-edge" }, [
-      el("span", { class: "agents-rank-edge-rule", "aria-hidden": "true" }),
-      el("span", { text: `P(ahead of ${band.nextName}) ≥ ${rankFormat.num(band.edge, 2)}` }),
-    ]);
-    edge.colSpan = columns;
-    rows.push(el("tr", { class: "agents-rank-edge-row" }, [edge]));
-  }
+function bandBody(payload, band, axis) {
+  const rows = band.rows.flatMap((row, index) => ladderRow(payload, row, axis, index === 0));
   return el("tbody", { class: "agents-rank-band" }, rows);
 }
 
-function ladderRow(payload, row, measures, axis, columns) {
-  const toggle = breakdownToggle(row, "agents-rank-model-button");
-  const main = el("tr", { class: "agents-rank-row" }, [
-    el("td", { class: "agents-rank-label", text: rankText(payload, row) }),
-    el("td", { class: "agents-rank-model" }, [rankFormat.providerDot(row.model), toggle.button]),
+function ladderRow(payload, row, axis, isBandStart) {
+  const toggle = breakdownToggle(row);
+  const main = el("tr", { class: `agents-rank-row${isBandStart ? " is-band-start" : ""}` }, [
+    el("td", { class: "agents-rank-chev-col" }, [toggle.button]),
+    el("td", { class: "agents-rank-label", text: isBandStart ? rankText(payload, row) : "" }),
+    el("td", { class: "agents-rank-model-cell" }, [modelNode(row)]),
     el("td", { class: "agents-num agents-rank-score", text: rankFormat.num(row.score) }),
     el("td", { class: "agents-rank-interval-col" }, [whiskerNode(row, axis)]),
-    ...measures.map((m) => contributionCell(row, m)),
-    el("td", {}, [costNode(row)]),
+    el("td", { class: "agents-num" }, [costNode(row)]),
     el("td", {}, [tierMixNode(row)]),
-    el("td", { class: "agents-num agents-muted", text: row.units == null ? "—" : String(row.units) }),
+    el("td", { class: "agents-num agents-rank-landed", text: landedText(row), title: landedTitle(row) }),
   ]);
   main.dataset.model = row.model || "";
   main.style.setProperty("--provider", rankFormat.providerColor(row.model));
   const detailCell = el("td", {}, [breakdownNode(payload, row)]);
-  detailCell.colSpan = columns;
+  detailCell.colSpan = RANK_COLUMNS;
   const detail = el("tr", { class: "agents-rank-detail" }, [detailCell]);
-  toggle.bind(detail);
+  toggle.bind(detail, main);
   return [main, detail];
 }
 
-// The model name opens its Breakdown under the row (a table row or a block).
-function breakdownToggle(row, className) {
+function modelNode(row) {
+  const crews = Array.isArray(row.crews) ? [...row.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crewNames = crews.map((crew) => crew.crew).filter(Boolean).join(", ");
+  const crewTitle = crews.map((crew) => `${crew.crew || "—"} (${crew.tasks ?? 0})`).join(", ");
+  return el("span", { class: "agents-rank-model" }, [
+    rankFormat.providerDot(row.model),
+    el("span", { class: "agents-rank-model-name", text: row.model || "—", title: row.model || "" }),
+    crewNames ? el("span", { class: "agents-rank-crew", text: crewNames, title: crewTitle }) : null,
+  ]);
+}
+
+function landedText(row) {
+  return typeof row.landed_rate === "number" ? `${rankFormat.num(row.landed_rate * 100, 1)}%` : "—";
+}
+
+function landedTitle(row) {
+  return `${rankFormat.num(row.landed_tasks, 0)} landed of ${row.units ?? 0}`;
+}
+
+// The chevron button toggles the breakdown; clicking the row does the same.
+function breakdownToggle(row) {
   const open = openModels.has(row.model);
   const button = el("button", {
-    class: className,
+    class: "agents-rank-toggle",
     type: "button",
     "aria-expanded": open ? "true" : "false",
     title: `${row.model || "Model"}: show or hide the breakdown`,
-  }, [
-    el("span", { class: "agents-rank-model-name", text: row.model || "—" }),
-    el("span", { class: "agents-rank-chevron", "aria-hidden": "true", text: "▸" }),
-  ]);
-  const bind = (detail) => {
+  }, [el("span", { class: "agents-rank-chevron", "aria-hidden": "true", text: "▸" })]);
+  const bind = (detail, mainRow) => {
     detail.id = breakdownId(row.model);
     detail.hidden = !open;
     button.setAttribute("aria-controls", detail.id);
-    button.addEventListener("click", () => {
-      const next = !openModels.has(row.model);
+    const setOpen = (next) => {
       if (next) openModels.add(row.model);
       else openModels.delete(row.model);
       detail.hidden = !next;
       button.setAttribute("aria-expanded", next ? "true" : "false");
+    };
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setOpen(!openModels.has(row.model));
     });
+    if (mainRow) {
+      mainRow.addEventListener("click", () => setOpen(!openModels.has(row.model)));
+    }
   };
   return { button, bind };
 }
@@ -394,58 +338,33 @@ function whiskerNode(row, axis) {
     ? `${row.model} score ${rankFormat.num(row.score)}, interval ${rankFormat.num(interval.p10, 1)} to ${rankFormat.num(interval.p90, 1)}`
     : `${row.model} score ${rankFormat.num(row.score)}, no interval`;
   const node = el("div", { class: "agents-rank-whisker", role: "img", "aria-label": label, title: label });
-  for (const tick of axis.ticks) node.append(el("span", { class: "agents-rank-grid", style: { left: `${axis.pos(tick)}%` } }));
+  for (const tick of axis.ticks) {
+    node.append(el("span", { class: tick === 100 ? "agents-rank-grid is-100" : "agents-rank-grid", style: { left: `${axis.pos(tick)}%` } }));
+  }
   if (hasInterval) {
     const lo = axis.pos(interval.p10);
     const hi = axis.pos(interval.p90);
-    node.append(
-      el("span", { class: "agents-rank-whisker-line", style: { left: `${lo}%`, width: `${Math.max(0, hi - lo)}%` } }),
-      el("span", { class: "agents-rank-whisker-cap", style: { left: `${lo}%` } }),
-      el("span", { class: "agents-rank-whisker-cap", style: { left: `${hi}%` } }),
-    );
-    const flip = hi > 72;
-    const text = el("span", {
-      class: flip ? "agents-rank-whisker-text is-left" : "agents-rank-whisker-text",
-      text: `${rankFormat.num(interval.p10, 1)}–${rankFormat.num(interval.p90, 1)}`,
-      style: { left: `${flip ? lo : hi}%` },
-    });
-    node.append(text);
+    node.append(el("span", { class: "agents-rank-whisker-line", style: { left: `${lo}%`, width: `${Math.max(0, hi - lo)}%` } }));
   }
-  if (typeof row.score === "number") node.append(el("span", { class: "agents-rank-whisker-dot", style: { left: `${axis.pos(row.score)}%` } }));
+  if (typeof row.score === "number") node.append(el("span", { class: "agents-rank-whisker-tick", style: { left: `${axis.pos(row.score)}%` } }));
   return node;
-}
-
-function contributionCell(row, measure) {
-  const cell = (row.measures || {})[measure.key] || {};
-  if (cell.status !== "measured" || typeof cell.contribution !== "number") {
-    return el("td", { class: "agents-num agents-rank-contrib", text: "—", title: cell.reason || "unmeasured" });
-  }
-  const value = cell.contribution;
-  const tone = Math.abs(value) < NEUTRAL_POINTS ? "is-flat" : value > 0 ? "is-up" : "is-down";
-  return el("td", {
-    class: `agents-num agents-rank-contrib ${tone}`,
-    text: signed(value),
-    title: `${measure.label || measure.key}: actual ${rankFormat.num(cell.actual)}, expected ${rankFormat.num(cell.expected)} over ${cell.units ?? "—"} ${cell.unit || ""}`.trim(),
-  });
 }
 
 function costNode(row) {
   const cost = row.cost || {};
   const coverage = typeof cost.coverage === "number" ? `${rankFormat.num(cost.coverage * 100, 0)}% of tasks priced` : "coverage unknown";
-  if (cost.cost_unknown || typeof cost.ratio !== "number" || cost.ratio <= 0) {
-    return el("span", { class: "agents-rank-cost is-unknown", text: cost.cost_unknown ? "cost unknown" : "—", title: coverage });
+  if (cost.cost_unknown || typeof cost.per_task !== "number") {
+    return el("span", { class: "agents-rank-cost is-unknown", text: "cost unknown", title: coverage });
   }
-  const scaled = Math.max(-1, Math.min(1, Math.log2(cost.ratio) / COST_LOG_SPAN));
-  const half = Math.abs(scaled) * 50;
-  const cheaper = cost.ratio < 1;
-  const bar = el("span", { class: "agents-rank-costbar", "aria-hidden": "true" }, [
-    el("span", { class: "agents-rank-costbar-mid" }),
-    el("span", { class: "agents-rank-costbar-fill", style: { left: `${cheaper ? 50 - half : 50}%`, width: `${half}%` } }),
-  ]);
+  const cheaper = typeof cost.ratio === "number" && cost.ratio < 1;
+  const dearer = typeof cost.ratio === "number" && cost.ratio >= 1;
+  const ratio = typeof cost.ratio === "number"
+    ? el("span", { class: `agents-rank-ratio${cheaper ? " is-cheaper" : dearer ? " is-dearer" : ""}`, text: `${rankFormat.num(cost.ratio, 2)}×` })
+    : null;
   return el("span", {
-    class: `agents-rank-cost ${cheaper ? "is-cheaper" : "is-dearer"}`,
+    class: "agents-rank-cost",
     title: `${rankFormat.num(cost.ratio, 2)}× the fleet's cost per task on the same tier mix. ${coverage}.`,
-  }, [bar, el("span", { class: "agents-rank-cost-text", text: `${rankFormat.num(cost.ratio, 2)}×` })]);
+  }, [el("span", { class: "agents-rank-per-task", text: rankFormat.dollars(cost.per_task) }), ratio]);
 }
 
 function tierEntries(row) {
@@ -458,41 +377,29 @@ function tierEntries(row) {
 function tierMixNode(row) {
   const entries = tierEntries(row);
   const total = entries.reduce((sum, [, count]) => sum + count, 0);
-  const text = entries.map(([tier, count]) => `${count} ${TIER_SHORT[tier] || tier}`).join(" · ");
   const title = entries.map(([tier, count]) => `${count} ${tier}`).join(", ") || "no tasks by tier";
   const bar = el("span", { class: "agents-rank-mix", "aria-hidden": "true" },
     entries.map(([tier, count]) => el("span", { class: `agents-rank-mix-${tier}`, style: { width: `${total ? (count * 100) / total : 0}%` } })));
-  return el("span", { class: "agents-rank-mixcell", title }, [bar, el("span", { class: "agents-rank-mix-text", text: text || "—" })]);
+  return el("span", { class: "agents-rank-mixcell", title }, [
+    el("span", { class: "agents-rank-units", text: String(row.units ?? 0) }),
+    bar,
+  ]);
 }
 
-function legendNode() {
+function legendNode(payload) {
   const swatch = (tier) => el("span", { class: "agents-rank-legend-item" }, [
     el("span", { class: `agents-rank-legend-swatch agents-rank-mix-${tier}`, "aria-hidden": "true" }),
     el("span", { text: tier }),
   ]);
+  const rules = payload.rules || {};
+  const confidence = typeof rules.band_probability === "number" ? `${rankFormat.num(rules.band_probability * 100, 0)}%` : "80%";
   return el("div", { class: "agents-rank-legend" }, [
-    el("span", {}, [
-      "Contribution is the points each measure adds to 100. ",
-      el("span", { class: "agents-rank-contrib is-up", text: "Blue" }), " helps, ",
-      el("span", { class: "agents-rank-contrib is-down", text: "amber" }), " hurts, — is unmeasured. ",
-      "Inside a band, rows are ordered by cost and the order is not a ranking.",
-    ]),
-    ...["low", "medium", "hard", "xhard", "unassessed"].map(swatch),
+    el("span", { text: `Shared ranks (2=) are one band at ${confidence} confidence. Cost orders a band and never crosses it.` }),
+    el("span", { class: "agents-rank-legend-tiers" }, ["low", "medium", "hard", "xhard", "unassessed"].map(swatch)),
   ]);
 }
 
-// --- not yet ranked and not scored ---
-
-function asideNode(payload, rows) {
-  const pending = rows.filter((row) => !row.eligible);
-  const node = el("div", { class: "agents-rank-aside" }, [
-    pending.length ? pendingNode(payload, pending) : null,
-    notScoredNode(payload),
-  ]);
-  node.dataset.key = "aside";
-  node.dataset.hash = JSON.stringify([pending, payload.rules, payload.not_scored, payload.unattributed]);
-  return node;
-}
+// --- not ranked and not scored ---
 
 function gateProgress(rules, row) {
   const minTasks = typeof rules.min_tasks === "number" ? rules.min_tasks : 0;
@@ -500,53 +407,59 @@ function gateProgress(rules, row) {
   const minTierTasks = typeof rules.min_tier_tasks === "number" ? rules.min_tier_tasks : 0;
   const units = row.units || 0;
   const tiers = tierEntries(row).filter(([tier, count]) => tier !== "unassessed" && count >= minTierTasks).length;
-  const parts = [];
   const fractions = [];
+  let reason = "";
   if (minTasks) {
     fractions.push(Math.min(1, units / minTasks));
-    if (units < minTasks) parts.push(`${units} / ${minTasks} tasks`);
+    if (units < minTasks) reason = `${units} of ${minTasks} tasks`;
   }
   if (minTiers) {
     fractions.push(Math.min(1, tiers / minTiers));
-    if (tiers < minTiers) parts.push(`${tiers} / ${rankFormat.plural(minTiers, "tier")}`);
+    if (!reason && tiers < minTiers) reason = `${tiers} of ${minTiers} tiers with ${minTierTasks}+ tasks`;
   }
   const progress = fractions.length ? Math.min(...fractions) : 0;
-  const text = parts.length ? parts.join(" · ") : (row.ineligible_reason || "not eligible");
-  return { progress, text };
+  return { progress, text: reason || row.ineligible_reason || "not eligible" };
 }
 
 function pendingNode(payload, pending) {
   const rules = payload.rules || {};
   const gate = [];
-  if (rules.min_tasks) gate.push(`${rules.min_tasks} implemented tasks`);
-  if (rules.min_tiers) gate.push(`${rankFormat.plural(rules.min_tiers, "tier")} with ${rules.min_tier_tasks || 0}+ tasks each`);
+  if (rules.min_tasks) gate.push(`${rules.min_tasks} tasks`);
+  if (rules.min_tiers) gate.push(`${rules.min_tiers} tiers with ${rules.min_tier_tasks || 0}+ each`);
   const items = pending
     .map((row) => ({ row, gate: gateProgress(rules, row) }))
     .sort((a, b) => b.gate.progress - a.gate.progress || (b.row.units || 0) - (a.row.units || 0));
   const list = el("ul", { class: "agents-rank-pending-list" }, items.map(({ row, gate: progress }) => {
-    const toggle = breakdownToggle(row, "agents-rank-model-button is-muted");
     const raw = typeof row.raw_score === "number" ? row.raw_score : row.score;
-    const line = el("div", { class: "agents-rank-pending-row" }, [
-      el("span", { class: "agents-rank-model" }, [rankFormat.providerDot(row.model), toggle.button]),
-      el("span", { class: "agents-rank-progress", role: "img", "aria-label": `${rankFormat.num(progress.progress * 100, 0)}% of the evidence gate` }, [
-        el("span", { style: { width: `${progress.progress * 100}%` } }),
+    return el("li", { class: "agents-rank-pending-row" }, [
+      el("span", { class: "agents-rank-model" }, [
+        rankFormat.providerDot(row.model),
+        el("span", { class: "agents-rank-model-name", text: row.model || "—", title: row.model || "" }),
       ]),
-      el("span", { class: "agents-rank-pending-gate", text: progress.text, title: row.ineligible_reason || "" }),
-      el("span", { class: "agents-num agents-rank-pending-score", title: "Unshrunk score; not comparable to ranked rows" }, [
-        rankFormat.num(raw), el("span", { class: "agents-rank-raw", text: " raw" }),
+      el("span", { class: "agents-num agents-rank-pending-score", title: "Unshrunk score; not comparable to ranked rows", text: rankFormat.num(raw) }),
+      el("span", { class: "agents-num agents-rank-pending-units", text: `${row.units ?? 0} tasks` }),
+      el("span", { class: "agents-rank-pending-gatecell" }, [
+        el("span", { class: "agents-rank-progress", role: "img", "aria-label": `${rankFormat.num(progress.progress * 100, 0)}% of the evidence gate` }, [
+          el("span", { style: { width: `${progress.progress * 100}%` } }),
+        ]),
+        el("span", { class: "agents-rank-pending-gate", text: progress.text, title: row.ineligible_reason || "" }),
       ]),
     ]);
-    const detail = el("div", { class: "agents-rank-detail" }, [breakdownNode(payload, row)]);
-    toggle.bind(detail);
-    return el("li", {}, [line, detail]);
   }));
-  return el("section", { class: "agents-rank-box agents-rank-pending", "aria-label": "Not yet ranked" }, [
-    el("div", { class: "agents-rank-box-head" }, [
-      el("h3", {}, ["Not yet ranked ", el("span", { class: "agents-rank-box-count", text: String(pending.length) })]),
-      gate.length ? el("span", { class: "agents-rank-box-meta", text: `Gate: ${gate.join(" and ")}` }) : null,
-    ]),
-    list,
+  const summary = el("summary", { class: "agents-rank-notranked-summary" }, [
+    el("span", { class: "agents-rank-notranked-title", text: "Not ranked" }),
+    el("span", { class: "agents-rank-box-count", text: rankFormat.plural(pending.length, "model") }),
+    gate.length ? el("span", { class: "agents-rank-box-meta", text: `needs ${gate.join(" across ")}` }) : null,
   ]);
+  const node = el("details", { class: "agents-rank-box agents-rank-notranked", "aria-label": "Not ranked" }, [
+    summary,
+    list,
+    el("p", { class: "agents-rank-note", text: "Scores here are unshrunk previews and carry no band." }),
+  ]);
+  node.open = true;
+  node.dataset.key = "notranked";
+  node.dataset.hash = JSON.stringify(pending);
+  return node;
 }
 
 function notScoredNode(payload) {
@@ -563,7 +476,7 @@ function notScoredNode(payload) {
       el("span", { class: "agents-num", text: rankFormat.num(count, 0) }),
     ])))
     : el("p", { class: "agents-rank-note", text: "Every problem in this window was charged to a model." });
-  return el("section", { class: "agents-rank-box agents-rank-unscored", "aria-label": "Not scored" }, [
+  const node = el("section", { class: "agents-rank-box agents-rank-unscored", "aria-label": "Not scored" }, [
     el("div", { class: "agents-rank-box-head" }, [
       el("h3", {}, ["Not scored ", el("span", { class: "agents-rank-box-count", text: rankFormat.plural(notScored.count || 0, "problem") })]),
       el("span", {
@@ -574,149 +487,107 @@ function notScoredNode(payload) {
     ]),
     list,
   ]);
+  node.dataset.key = "unscored";
+  node.dataset.hash = JSON.stringify([payload.not_scored, payload.unattributed]);
+  return node;
 }
 
 // --- the breakdown under a row ---
 
 function breakdownNode(payload, row) {
   return el("div", { class: "agents-rank-breakdown" }, [
-    el("h3", { text: `${row.model || "Model"} breakdown` }),
-    measureTable(payload, row),
-    crewsNode(row),
-    effortNode(row),
-    shownNode(payload, row),
+    contributionsNode(payload, row),
+    tierBreakdownNode(row),
+    deliveryNode(row),
   ]);
 }
 
-function measureTable(payload, row) {
+function contributionsNode(payload, row) {
   const measures = Array.isArray(payload.measures) ? payload.measures : [];
   const cells = row.measures || {};
-  const body = measures.map((measure) => {
+  const list = measures.map((measure) => {
     const cell = cells[measure.key] || {};
-    const unmarked = cell.status === "measured";
-    return el("tr", {}, [
-      el("td", { text: measure.label || measure.key }),
-      el("td", { text: cell.status || "—", title: cell.reason || "" }),
-      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.actual) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.expected) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.residual) : "—" }),
-      el("td", { class: "agents-num", text: unmarked ? rankFormat.num(cell.contribution) : "—" }),
-      el("td", { text: unmarked ? `${cell.units ?? "—"} ${cell.unit || measure.units || ""}`.trim() : (cell.reason || "unmeasured") }),
+    const measured = cell.status === "measured" && typeof cell.contribution === "number";
+    const value = measured ? cell.contribution : null;
+    const width = measured ? Math.min(Math.abs(value), CONTRIB_SCALE) / CONTRIB_SCALE * 50 : 0;
+    const bar = el("span", { class: "agents-rank-contrib-track", "aria-hidden": "true" }, [
+      el("span", { class: "agents-rank-contrib-zero" }),
+      measured ? el("span", {
+        class: `agents-rank-contrib-fill ${value >= 0 ? "is-up" : "is-down"}`,
+        style: value >= 0 ? { left: "50%", width: `${width}%` } : { right: "50%", width: `${width}%` },
+      }) : null,
+    ]);
+    return el("div", { class: "agents-rank-contrib-row" }, [
+      el("span", { class: measured ? "agents-rank-contrib-label" : "agents-rank-contrib-label is-unmeasured", text: measure.label || measure.key }),
+      el("span", { class: "agents-rank-contrib-weight", text: rankFormat.num(measure.weight, 0) }),
+      bar,
+      el("span", {
+        class: `agents-rank-contrib-value ${measured ? (value >= 0 ? "is-up" : "is-down") : "is-unmeasured"}`,
+        text: measured ? `${value > 0 ? "+" : ""}${rankFormat.num(value)}` : "not yet",
+        title: measured ? `${measure.label || measure.key}: actual ${rankFormat.num(cell.actual)}, expected ${rankFormat.num(cell.expected)}` : (cell.reason || measure.reason || "not measured yet"),
+      }),
     ]);
   });
-  return el("table", { class: "agents-table agents-rank-measures" }, [
-    el("thead", {}, [el("tr", {}, [
-      el("th", { text: "Measure" }),
-      el("th", { text: "Status" }),
-      el("th", { class: "agents-num", text: "Actual" }),
-      el("th", { class: "agents-num", text: "Expected" }),
-      el("th", { class: "agents-num", text: "Residual" }),
-      el("th", { class: "agents-num", text: "Contribution" }),
-      el("th", { text: "Units" }),
-    ])]),
-    el("tbody", {}, body.length ? body : [el("tr", {}, [emptyCell("No measures on this board.", 7)])]),
+  const rules = payload.rules || {};
+  const shrink = typeof row.raw_score === "number" && typeof row.score === "number"
+    ? el("p", { class: "agents-rank-note", text: `Raw ${rankFormat.num(row.raw_score)} → shrunk ${rankFormat.num(row.score)} toward 100 (k = ${rankFormat.num(rules.shrinkage_k, 0)}).` })
+    : null;
+  return el("div", { class: "agents-rank-breakdown-col" }, [
+    el("div", { class: "agents-rank-breakdown-head" }, [
+      el("span", { class: "agents-rank-breakdown-title", text: "Score contributions" }),
+      el("span", { class: "agents-rank-breakdown-sub", text: "vs. tier expectation" }),
+    ]),
+    ...list,
+    shrink,
   ]);
 }
 
-function emptyCell(text, span) {
-  const cell = el("td", { text });
-  cell.colSpan = span;
-  return cell;
-}
-
-function crewsNode(row) {
-  const crews = Array.isArray(row.crews) ? row.crews : [];
-  const text = crews.length
-    ? crews.map((crew) => `${crew.crew || "—"} (${crew.tasks ?? 0})`).join(", ")
-    : "No crew split.";
-  return el("p", { class: "agents-rank-note", text: `Crews: ${text}` });
-}
-
-function effortNode(row) {
-  const split = Array.isArray(row.effort_split) ? row.effort_split : [];
-  if (!split.length) return el("p", { class: "agents-rank-note", text: "No completed implementation invocations in this window." });
-  return el("table", { class: "agents-table agents-rank-measures" }, [
-    el("caption", { text: "Effort split" }),
-    el("thead", {}, [el("tr", {}, [
-      el("th", { text: "Crew" }),
-      el("th", { text: "Effort" }),
-      el("th", { class: "agents-num", text: "Invocations" }),
-      el("th", { class: "agents-num", text: "Tasks" }),
-      el("th", { class: "agents-num", text: "Run time" }),
-      el("th", { class: "agents-num", text: "Tokens" }),
-    ])]),
-    el("tbody", {}, split.map((item) => el("tr", {}, [
-      el("td", { text: item.crew || "—" }),
-      el("td", { text: item.reasoning_effort == null ? "provider default" : String(item.reasoning_effort) }),
-      el("td", { class: "agents-num", text: String(item.invocations ?? 0) }),
-      el("td", { class: "agents-num", text: String(item.tasks ?? 0) }),
-      el("td", { class: "agents-num", text: formatDuration(item.duration_ms || 0), title: "Sum of completed implementation invocations, not queue or CI time" }),
-      el("td", { class: "agents-num", text: rankFormat.num((item.input_tokens || 0) + (item.output_tokens || 0), 0), title: `${item.input_tokens || 0} in, ${item.output_tokens || 0} out` }),
-    ]))),
+function tierBreakdownNode(row) {
+  const tiers = [...(Array.isArray(row.tiers) ? row.tiers : [])]
+    .sort((a, b) => rankFormat.tierIndex(a.tier) - rankFormat.tierIndex(b.tier));
+  const head = el("div", { class: "agents-rank-tier-grid agents-rank-tier-head" }, [
+    el("span", { text: "Tier" }),
+    el("span", { class: "agents-num", text: "Tasks" }),
+    el("span", { class: "agents-num", text: "Score" }),
+    el("span", { class: "agents-num", text: "$ / task" }),
+  ]);
+  const rows = tiers.map((point) => {
+    const thin = (point.tasks || 0) < 5;
+    return el("div", { class: `agents-rank-tier-grid${thin ? " is-thin" : ""}` }, [
+      el("span", { class: "agents-rank-tier-name" }, [
+        el("span", { class: `agents-rank-legend-swatch agents-rank-mix-${point.tier}`, "aria-hidden": "true" }),
+        el("span", { text: rankFormat.tierLabel(point.tier) }),
+      ]),
+      el("span", { class: "agents-num", text: String(point.tasks ?? 0) }),
+      el("span", { class: "agents-num", text: rankFormat.num(point.score, 1) }),
+      el("span", { class: "agents-num agents-muted", text: rankFormat.dollars(point.cost_per_task) }),
+    ]);
+  });
+  return el("div", { class: "agents-rank-breakdown-col" }, [
+    el("span", { class: "agents-rank-breakdown-title", text: "By tier" }),
+    head,
+    ...rows,
+    tiers.length ? el("p", { class: "agents-rank-note", text: "Tiers under 5 tasks are greyed: shown, not trusted." }) : el("p", { class: "agents-rank-note", text: "No tasks by tier." }),
   ]);
 }
 
-function shownNode(payload, row) {
-  const totals = effortTotals(row);
+function deliveryNode(row) {
   const cost = row.cost || {};
-  const lines = [
-    `Cost per task: ${typeof cost.per_task === "number" ? rankFormat.num(cost.per_task, 4) : "—"}${cost.cost_unknown ? " (cost unknown)" : ""}. Coverage ${typeof cost.coverage === "number" ? rankFormat.num(cost.coverage * 100, 0) + "%" : "—"}.`,
-    totals.empty
-      ? "Tokens and run time: — (no completed implementation invocations)."
-      : `Tokens: ${rankFormat.num(totals.input + totals.output, 0)} (${rankFormat.num(totals.input, 0)} in, ${rankFormat.num(totals.output, 0)} out). Run time: ${formatDuration(totals.duration)}, the sum of completed implementation invocations, not queue or CI.`,
-    `Landed rate: ${typeof row.landed_rate === "number" ? rankFormat.num(row.landed_rate * 100, 1) + "%" : "—"} (${rankFormat.num(row.landed_tasks, 2)} landed of ${row.units ?? 0}).`,
-    `Per 1,000 landed lines: ${lineRates(row, totals)}.`,
-    executionText(row.execution),
-    boardStats(payload),
-  ];
-  return el("div", { class: "agents-rank-shown" }, [
-    el("h4", { text: "Shown, not scored" }),
-    ...lines.map((text) => el("p", { class: "agents-rank-note", text })),
+  const crews = Array.isArray(row.crews) ? [...row.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crewText = crews.length ? crews.map((crew) => `${crew.crew || "—"} ${crew.tasks ?? 0}`).join(" · ") : "—";
+  const fact = (label, value) => el("div", { class: "agents-rank-delivery-row" }, [
+    el("span", { text: label }),
+    el("span", { class: "agents-rank-delivery-value", text: value }),
   ]);
-}
-
-function effortTotals(row) {
-  const split = Array.isArray(row.effort_split) ? row.effort_split : [];
-  const totals = { input: 0, output: 0, duration: 0, empty: split.length === 0 };
-  for (const item of split) {
-    totals.input += item.input_tokens || 0;
-    totals.output += item.output_tokens || 0;
-    totals.duration += item.duration_ms || 0;
-  }
-  return totals;
-}
-
-function lineRates(row, totals) {
-  const changed = row.lines && typeof row.lines.changed === "number" ? row.lines.changed : 0;
-  if (!changed) return "no landed diff size";
-  const regressions = row.measures && row.measures.escaped_regressions;
-  const regressionText = regressions && regressions.status === "measured" && typeof regressions.actual === "number"
-    ? `${rankFormat.num(regressions.actual * 1000 / changed)} escaped regressions`
-    : "escaped regressions unmeasured";
-  const cost = row.cost || {};
-  let costText = "cost unknown";
-  if (typeof cost.per_task === "number" && row.units) {
-    const priced = (cost.coverage || 0) * row.units;
-    const perThousand = cost.per_task * priced * 1000 / changed;
-    costText = `${rankFormat.num(perThousand, 4)} USD${cost.cost_unknown ? " (cost unknown)" : ""}`;
-  }
-  const timeText = totals.empty ? "run time unavailable" : `${formatDuration(totals.duration * 1000 / changed)} run time`;
-  return `${regressionText}, ${costText}, ${timeText}`;
-}
-
-function executionText(execution) {
-  const counts = execution || {};
-  return `Execution split: ${counts.managed_tasks || 0} managed, ${counts.interactive_tasks || 0} interactive, ${counts.unclassified_tasks || 0} unclassified.`;
-}
-
-function boardStats(payload) {
-  const unattributed = payload.unattributed || {};
-  const notScored = payload.not_scored || {};
-  const reasons = Object.entries(notScored.reasons || {})
-    .filter(([, count]) => count)
-    .map(([reason, count]) => `${count} ${String(reason).replace(/_/g, " ")}`);
-  const reasonText = reasons.length ? ` (${reasons.join(", ")})` : "";
-  return `Board: ${unattributed.tasks || 0} unattributed tasks. Not-scored problems: ${notScored.count || 0}${reasonText}.`;
+  return el("div", { class: "agents-rank-breakdown-col" }, [
+    el("span", { class: "agents-rank-breakdown-title", text: "Delivery" }),
+    el("div", { class: "agents-rank-delivery" }, [
+      fact("Landed", `${rankFormat.num(row.landed_tasks, 0)} / ${row.units ?? 0} · ${landedText(row)}`),
+      fact("Crews", crewText),
+      fact("Expected $ / task", rankFormat.dollars(cost.expected_per_task)),
+      fact("Cost coverage", typeof cost.coverage === "number" ? `${rankFormat.num(cost.coverage * 100, 0)}%` : "—"),
+    ]),
+  ]);
 }
 
 function howNode(payload) {
@@ -738,21 +609,4 @@ function howNode(payload) {
   node.dataset.key = "how";
   node.dataset.hash = JSON.stringify([measures.map((measure) => [measure.key, measure.status, measure.weight]), rules]);
   return node;
-}
-
-// --- small helpers ---
-
-function signed(value) {
-  if (Math.abs(value) < 0.05) return "0.0";
-  return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}`;
-}
-
-function formatDuration(ms) {
-  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return "0s";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
 }
