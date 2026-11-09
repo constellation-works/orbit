@@ -185,8 +185,9 @@ orbit doctor
   `crew-memory-dream` routines seed enabled; other shipped routines seed
   disabled. `crew-memory-dream` mints nothing while `crew_memory.enabled`
   is false or no running memory-arm experiment applies, so its seeded
-  enablement does not turn the experimental feature on. Preserve existing
-  enablement choices.
+  enablement does not turn the experimental feature on. The switch,
+  inspection and both kill switches are in [Crew memory](crew-memory.md).
+  Preserve existing enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use
@@ -647,8 +648,10 @@ The task stays in the backlog while it waits.
 ## Experiments
 
 Experiments compare a control arm with one or more treatments for agent work.
-Each treatment can vary instructions, skills, tools, crew or an allowlisted
-configuration value. The `[experiments]` table is workspace policy:
+Each treatment can vary instructions, skills, tools, crew, an allowlisted
+configuration value, or crew memory. Crew memory is its own surface and stays
+off until `crew_memory.enabled` is set; the procedure is
+[Crew memory](crew-memory.md). The `[experiments]` table is workspace policy:
 
 | Key | Default | Bound or effect |
 |---|---|---|
@@ -712,7 +715,17 @@ The other experiment operations are operator-only.
 
 Choose `shadow` to record assignments without applying treatments. Choose
 `live` to apply the assigned arm's instructions, skills, tools, crew and
-allowlisted config values to work. Verify state from the command line with
+allowlisted config values to work. A memory overlay is
+`{"memory":{"roles":["implement"],"global":false}}`. `roles` lists
+`implement`, `review` or `recovery` and defaults to `implement`. `global`
+defaults to false and includes the shared global space when true. Memory is
+its own surface, so one experiment per task may own it. `start` refuses a
+memory arm while `crew_memory.enabled` is false. That key defaults to false
+and is independent of `experiments.enabled`. In `shadow` mode the owner
+records the memory capture and delivers nothing. In `live` mode the assigned
+arm delivers it. The seeded `crew-memory-dream` routine does not turn the
+key on. Inspection, write rules, proposals and both kill switches are in
+[Crew memory](crew-memory.md). Verify state from the command line with
 `orbit experiment list [--status <status>]`,
 `orbit experiment show <id-or-name>` (arms and event log) and
 `orbit experiment readout <id-or-name> [--metric <name>]` (per-arm outcomes
