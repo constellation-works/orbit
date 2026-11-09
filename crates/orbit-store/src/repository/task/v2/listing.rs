@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use super::index::IndexUsable;
 use super::*;
 use crate::contracts::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage,
@@ -31,16 +32,22 @@ impl TaskV2Store {
     }
 
     /// Informational read: never enter coordination, settle pending writes,
-    /// repair the index or persist freshness proofs. A stale index falls back
-    /// to the same strict bundle scan, without publishing a repair.
+    /// repair the index or persist freshness proofs. Index rows that disagree
+    /// with an envelope no writer holds are read from their bundles and merged
+    /// with the rest of the index ([`Self::indexed_candidates_with_stale`]);
+    /// an incomplete index falls back to the same strict bundle scan, without
+    /// publishing a repair.
     pub(crate) fn observe_task_candidates(
         &self,
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
         let filter = filter.normalized();
-        if let Some(unsettled) = self.validate_index_with_proofs(false)? {
-            return self.indexed_candidates(&filter, limit, unsettled);
+        if let Some(usable) = self.observe_index_tolerating_stale()? {
+            if usable.stale.is_empty() {
+                return self.indexed_candidates(&filter, limit, usable.unsettled);
+            }
+            return self.indexed_candidates_with_stale(&filter, limit, usable);
         }
         let envelopes = self
             .bundle_store
@@ -109,6 +116,45 @@ impl TaskV2Store {
                 total: selection.total,
                 total_without_cursor,
             });
+        }
+        Ok(select_candidates(envelopes, filter, limit))
+    }
+
+    /// Selection over an index that a freshness scan accepted apart from
+    /// `usable.stale` rows. The index answers every other task (in-flight
+    /// ones left out, as in [`Self::indexed_candidates`]); each stale task is
+    /// read from its bundle with the bundle scan's checks, so a stale row can
+    /// neither drop nor add a task. The merged envelopes then take the bundle
+    /// scan's in-memory filter, order, count and bound, giving the answer
+    /// that scan would give without reading every other bundle.
+    fn indexed_candidates_with_stale(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        usable: IndexUsable,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if filter.statuses.as_ref().is_some_and(Vec::is_empty) {
+            return Ok(TaskCandidates::default());
+        }
+        let unbounded = filter.without_cursor();
+        let mut excluded = usable.unsettled;
+        excluded.extend(usable.stale.iter().cloned());
+        let selection = self.registry.indexed_task_selection(
+            &self.workspace_id,
+            &unbounded.index_filter(excluded),
+            filter.terminal_last,
+            None,
+        )?;
+        let mut envelopes = Vec::with_capacity(selection.rows.len() + usable.stale.len());
+        for row in &selection.rows {
+            if let Some(envelope) = self.selected_envelope(&row.task_id)? {
+                envelopes.push(envelope);
+            }
+        }
+        for task_id in &usable.stale {
+            if let Some(bundle) = self.bundle_store.read_bundle_if_settled(task_id)? {
+                envelopes.push(bundle.envelope);
+            }
         }
         Ok(select_candidates(envelopes, filter, limit))
     }

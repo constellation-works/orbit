@@ -35,10 +35,27 @@ const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(60);
 
+/// What an accepted freshness scan leaves the selection to handle.
+pub(super) struct IndexUsable {
+    /// Registered tasks whose bundle a concurrent writer holds; a selection
+    /// leaves them out.
+    pub(super) unsettled: Vec<String>,
+    /// Registered tasks whose index row disagrees with a settled envelope.
+    /// Empty unless the scan tolerates stale rows.
+    pub(super) stale: Vec<String>,
+}
+
 /// What one freshness scan found.
 enum IndexFreshness {
     /// The index serves; these registered tasks' bundles are in flight.
     Usable(Vec<String>),
+    /// Only from a scan that tolerates stale rows: the index serves except
+    /// for the `stale` tasks, whose index row disagrees with an envelope no
+    /// writer holds. The caller reads those tasks from their bundles.
+    UsableExceptStale {
+        unsettled: Vec<String>,
+        stale: Vec<String>,
+    },
     /// The index holds a different set of tasks from the registry.
     Incomplete,
     /// This task's index row disagrees with its envelope.
@@ -236,6 +253,29 @@ impl TaskV2Store {
         &self,
         persist_proofs: bool,
     ) -> Result<Option<Vec<String>>, OrbitError> {
+        Ok(self
+            .validate_index_scan(persist_proofs, false)?
+            .map(|usable| usable.unsettled))
+    }
+
+    /// The observational freshness scan for a reader that can merge stale
+    /// rows itself: a row whose envelope disagrees with the index while no
+    /// writer holds its bundle is reported in [`IndexUsable::stale`] instead
+    /// of rejecting the whole index. The caller must read each stale task
+    /// from its bundle rather than trust its index row. Without this, one
+    /// such row sends every observational read to a workspace-wide bundle
+    /// scan — seconds on a large partition — until an operational read
+    /// repairs the index; observational reads never repair it.
+    pub(super) fn observe_index_tolerating_stale(&self) -> Result<Option<IndexUsable>, OrbitError> {
+        self.validate_index_scan(false, true)
+    }
+
+    fn validate_index_scan(
+        &self,
+        persist_proofs: bool,
+        tolerate_stale: bool,
+    ) -> Result<Option<IndexUsable>, OrbitError> {
+        let tolerate_stale = tolerate_stale && !persist_proofs;
         let _span = orbit_common::tracing::trace_span!(
             target: "orbit.store.task_query",
             "task_index_freshness",
@@ -248,7 +288,7 @@ impl TaskV2Store {
             // new snapshot before paying for a workspace-wide bundle scan.
             let mut awaited = None;
             for _ in 0..INDEX_FRESHNESS_ATTEMPTS {
-                match self.validate_index_once(persist_proofs)? {
+                match self.validate_index_once(persist_proofs, tolerate_stale)? {
                     IndexFreshness::Usable(unsettled) => {
                         orbit_common::tracing::debug!(
                             target: "orbit.store.task_query",
@@ -256,7 +296,20 @@ impl TaskV2Store {
                             path = "index",
                             "task index freshness accepted",
                         );
-                        return Ok(Some(unsettled));
+                        return Ok(Some(IndexUsable {
+                            unsettled,
+                            stale: Vec::new(),
+                        }));
+                    }
+                    IndexFreshness::UsableExceptStale { unsettled, stale } => {
+                        orbit_common::tracing::debug!(
+                            target: "orbit.store.task_query",
+                            workspace_id = %self.workspace_id,
+                            path = "index",
+                            stale_rows = stale.len(),
+                            "task index freshness accepted apart from stale rows",
+                        );
+                        return Ok(Some(IndexUsable { unsettled, stale }));
                     }
                     IndexFreshness::Incomplete => {}
                     IndexFreshness::Mismatch(task_id) => {
@@ -331,7 +384,11 @@ impl TaskV2Store {
         }
     }
 
-    fn validate_index_once(&self, persist_proofs: bool) -> Result<IndexFreshness, OrbitError> {
+    fn validate_index_once(
+        &self,
+        persist_proofs: bool,
+        tolerate_stale: bool,
+    ) -> Result<IndexFreshness, OrbitError> {
         let snapshot = hold_step(INDEX_SNAPSHOT_STEP, || {
             self.registry.task_index_snapshot(&self.workspace_id)
         })?;
@@ -348,6 +405,7 @@ impl TaskV2Store {
         self.envelope_cache.retain_registered(registered);
 
         let mut unsettled = Vec::new();
+        let mut stale = Vec::new();
         let mut proofs = Vec::new();
         let stamps = self.stamp_index_rows(rows);
         for (row, stamp) in rows.iter().zip(stamps) {
@@ -369,6 +427,10 @@ impl TaskV2Store {
                         "task index freshness kept an in-flight commit envelope",
                     );
                 }
+                // Only observational scans tolerate stale rows, and the arm
+                // above kept any row a writer holds: nobody is publishing this
+                // one, so the caller reads its bundle instead of the row.
+                Some(false) if tolerate_stale => stale.push(row.task_id.clone()),
                 Some(false) => return Ok(IndexFreshness::Mismatch(row.task_id.clone())),
                 None => unsettled.push(row.task_id.clone()),
             }
@@ -397,7 +459,11 @@ impl TaskV2Store {
                 ),
             }
         }
-        Ok(IndexFreshness::Usable(unsettled))
+        if stale.is_empty() {
+            Ok(IndexFreshness::Usable(unsettled))
+        } else {
+            Ok(IndexFreshness::UsableExceptStale { unsettled, stale })
+        }
     }
 
     /// Stamp every row's envelope, in row order. This is one metadata call per
