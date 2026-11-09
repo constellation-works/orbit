@@ -22,7 +22,7 @@
 // failed is already folded into that leaf in `failed`; `cascaded` is the
 // echo rows. The numerator and the denominator both use that folded count.
 
-import { el, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
+import { el, pinnedInfoHint, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -146,9 +146,7 @@ function renderSummary(payload) {
     statTile(
       "Runs in window",
       String(num(counts.total)),
-      cascaded > 0
-        ? `${settled} settled · ${cascaded} rolled up · ${excluded} not counted`
-        : `${settled} settled · ${excluded} not counted`,
+      `${settled} settled · ${cascaded} rolled up · ${excluded} not counted`,
     ),
   ];
 
@@ -159,22 +157,11 @@ function renderSummary(payload) {
   });
   syncNodes(host, nodes);
 
-  const note = $("reliability-denominator-note");
-  if (note) {
-    // The rate's numerator and denominator both count a failed delivery once.
-    // Wrapper echoes are outside that fraction; upgrade-paused, cancelled, skipped, held,
-    // in-flight, and unrecognized runs are the other exclusion.
-    const rule =
-      "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so the numerator and the denominator both omit that echo. ";
-    const rolled = cascaded > 0 ? `${cascaded} wrapper echo(s) are rolled up in this window. ` : "";
-    const settledClause =
-      `Failure rate is over settled deliveries (success + one count per failed delivery = ${settled}). `;
-    const excludedClause =
-      excluded > 0
-        ? `${excluded} further run(s) in this window were paused by an Orbit upgrade, cancelled, skipped, held, still in flight, ` +
-          "or in an unrecognized state and are excluded from the denominator."
-        : "No upgrade-paused, cancelled, skipped, held, in-flight, or unrecognized runs in this window.";
-    note.textContent = `${rule}${rolled}${settledClause}${excludedClause}`;
+  const method = $("reliability-method");
+  if (method && !method.firstChild) {
+    method.append(pinnedInfoHint(
+      "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so both the numerator and denominator omit the echo. Failure rate is over settled deliveries. Runs paused by an Orbit upgrade, cancelled, skipped, held, still in flight, or in an unrecognized state are excluded from the denominator.",
+    ));
   }
 
   const truncNote = $("reliability-truncation-note");
@@ -530,7 +517,6 @@ const RELIABILITY_REPORT = [
   "reliability-activities",
 ];
 const RELIABILITY_TEXT = [
-  "reliability-denominator-note",
   "reliability-truncation-note",
   "reliability-over-time-axis",
 ];

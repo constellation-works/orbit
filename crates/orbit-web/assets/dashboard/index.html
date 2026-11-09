@@ -475,7 +475,7 @@
       <main id="analytics-reliability-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="reliability-panel">
           <header>
-            <span>Pipeline reliability</span>
+            <span>Pipeline reliability <span id="reliability-method"></span></span>
             <span class="scope-badge independent" id="reliability-scope-badge">Fleet-wide</span>
             <span class="count" id="reliability-count">-</span>
           </header>
@@ -494,7 +494,6 @@
           </div>
           <div id="reliability-status"></div>
           <div class="rel-summary" id="reliability-summary"></div>
-          <p class="rel-note" id="reliability-denominator-note"></p>
           <p class="rel-note rel-note-warn" id="reliability-truncation-note" style="display: none;"></p>
           <div class="rel-chart-wrap">
             <div class="rel-chart-title section-title">Job-run failure rate over time</div>
