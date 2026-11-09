@@ -149,6 +149,12 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/frictions/{id}/resolve",
             post(frictions::resolve_friction_action),
         )
+        // Knowledge › Memory: crew memory reads only. Accepting, rejecting
+        // and writing memory stay on the operator CLI.
+        .route("/memory/spaces", get(crew_memory::list_memory_spaces))
+        .route("/memory/space", get(crew_memory::show_memory_space))
+        .route("/memory/history", get(crew_memory::memory_history))
+        .route("/memory/proposals", get(crew_memory::list_memory_proposals))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/failure-streaks", get(jobs::list_job_failure_streaks))
         .route("/jobs/{id}/run", post(jobs::run_job_action))

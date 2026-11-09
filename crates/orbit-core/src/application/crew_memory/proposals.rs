@@ -20,42 +20,72 @@ impl OrbitRuntime {
     /// keys whose open notes have token Jaccard overlap of at least 0.5.
     /// Similarity never changes status or selects a decision.
     pub fn crew_memory_proposals(&self) -> Result<Value, OrbitError> {
-        let proposals = self.open_crew_memory_proposals()?;
-        let tokens: Vec<_> = proposals
+        let rows = open_proposal_views(&self.open_crew_memory_proposals()?)?;
+        Ok(json!({ "count": rows.len(), "proposals": rows }))
+    }
+
+    /// The dashboard's read of the proposals, which writes nothing: the open
+    /// ones as [`Self::crew_memory_proposals`] lists them, and the most
+    /// recently closed ones with their decisions. An open proposal past its
+    /// four weeks is shown closed as `expired`; only an operator's list or
+    /// decision records its withdrawal. While `crew_memory.enabled` is false
+    /// both lists are empty, as the operator CLI reads no proposals then.
+    pub fn crew_memory_proposal_board(&self) -> Result<Value, OrbitError> {
+        if !self.current_crew_memory_enabled() {
+            return Ok(json!({
+                "enabled": false,
+                "enabled_key": operations::ENABLED_KEY,
+                "open": [],
+                "recently_closed": [],
+            }));
+        }
+        let now = Utc::now();
+        let store = self.crew_memory_store()?;
+        let workspace_id = self.workspace_id()?;
+        let (open, lapsed): (Vec<_>, Vec<_>) = store
+            .crew_memory_open_proposals(&workspace_id)?
+            .into_iter()
+            .partition(|row| !proposal_lapsed(row, now));
+        let mut closed = lapsed
             .iter()
-            .map(|row| proposal_tokens(&row.text))
-            .collect();
-        let rows = proposals
-            .iter()
-            .enumerate()
-            .map(|(index, proposal)| {
-                let similar_keys: BTreeSet<_> = proposals
-                    .iter()
-                    .enumerate()
-                    .filter(|(other, row)| {
-                        row.proposing_key != proposal.proposing_key
-                            && similar_proposal_tokens(&tokens[index], &tokens[*other])
-                    })
-                    .map(|(_, row)| &row.proposing_key)
-                    .collect();
-                let evidence: Vec<String> =
-                    serde_json::from_str(&proposal.evidence_json).map_err(|error| {
-                        OrbitError::Store(format!("invalid proposal evidence: {error}"))
-                    })?;
-                Ok(json!({
-                    "id": proposal.id,
-                    "key": proposal.proposing_key,
-                    "run_id": proposal.proposing_run_id,
-                    "text": proposal.text,
-                    "evidence": evidence,
-                    "status": proposal.status,
-                    "created_at": proposal.created_at,
-                    "expires_at": proposal.created_at + Duration::weeks(4),
-                    "similar_keys": similar_keys.len(),
-                }))
+            .rev()
+            .map(|row| {
+                let mut view = proposal_view(row)?;
+                view["status"] = json!("expired");
+                view["decided_by"] = Value::Null;
+                view["decided_at"] = Value::Null;
+                view["decision_reason"] = json!("expired after 4 weeks");
+                Ok(view)
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
-        Ok(json!({ "count": rows.len(), "proposals": rows }))
+        for row in store.crew_memory_closed_proposals(&workspace_id, RECENTLY_CLOSED_LIMIT)? {
+            let mut view = proposal_view(&row.proposal)?;
+            view["decided_by"] = json!(row.decided_by);
+            view["decided_at"] = json!(row.decided_at);
+            view["decision_reason"] = json!(row.decision_reason);
+            closed.push(view);
+        }
+        closed.truncate(RECENTLY_CLOSED_LIMIT);
+        Ok(json!({
+            "enabled": true,
+            "enabled_key": operations::ENABLED_KEY,
+            "open": open_proposal_views(&open)?,
+            "recently_closed": closed,
+        }))
+    }
+
+    /// Open proposals still inside their four weeks, read without expiring
+    /// the rest.
+    pub(super) fn unexpired_crew_memory_proposals(
+        &self,
+    ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError> {
+        let now = Utc::now();
+        Ok(self
+            .crew_memory_store()?
+            .crew_memory_open_proposals(&self.workspace_id()?)?
+            .into_iter()
+            .filter(|row| !proposal_lapsed(row, now))
+            .collect())
     }
 
     /// Accept an open proposal, appending its note to the current global
@@ -186,9 +216,68 @@ impl OrbitRuntime {
         let now = Utc::now().trunc_subsecs(6);
         let store = self.crew_memory_store()?;
         let workspace_id = self.workspace_id()?;
-        store.expire_crew_memory_proposals(&workspace_id, now - Duration::weeks(4), now)?;
+        store.expire_crew_memory_proposals(
+            &workspace_id,
+            now - Duration::weeks(PROPOSAL_OPEN_WEEKS),
+            now,
+        )?;
         store.crew_memory_open_proposals(&workspace_id)
     }
+}
+
+/// How many decided proposals the dashboard's read returns.
+const RECENTLY_CLOSED_LIMIT: usize = 20;
+
+/// The weeks a proposal stays open before it expires.
+const PROPOSAL_OPEN_WEEKS: i64 = 4;
+
+fn proposal_lapsed(row: &CrewMemoryProposalRow, now: chrono::DateTime<Utc>) -> bool {
+    row.created_at < now - Duration::weeks(PROPOSAL_OPEN_WEEKS)
+}
+
+/// One proposal as the operator list shows it, without the similarity
+/// count.
+fn proposal_view(proposal: &CrewMemoryProposalRow) -> Result<Value, OrbitError> {
+    let evidence: Vec<String> = serde_json::from_str(&proposal.evidence_json)
+        .map_err(|error| OrbitError::Store(format!("invalid proposal evidence: {error}")))?;
+    Ok(json!({
+        "id": proposal.id,
+        "key": proposal.proposing_key,
+        "run_id": proposal.proposing_run_id,
+        "text": proposal.text,
+        "evidence": evidence,
+        "status": proposal.status,
+        "created_at": proposal.created_at,
+        "expires_at": proposal.created_at + Duration::weeks(PROPOSAL_OPEN_WEEKS),
+    }))
+}
+
+/// Open proposals with the number of other proposing keys whose open notes
+/// have token Jaccard overlap of at least 0.5. Similarity never changes
+/// status or selects a decision.
+fn open_proposal_views(proposals: &[CrewMemoryProposalRow]) -> Result<Vec<Value>, OrbitError> {
+    let tokens: Vec<_> = proposals
+        .iter()
+        .map(|row| proposal_tokens(&row.text))
+        .collect();
+    proposals
+        .iter()
+        .enumerate()
+        .map(|(index, proposal)| {
+            let similar_keys: BTreeSet<_> = proposals
+                .iter()
+                .enumerate()
+                .filter(|(other, row)| {
+                    row.proposing_key != proposal.proposing_key
+                        && similar_proposal_tokens(&tokens[index], &tokens[*other])
+                })
+                .map(|(_, row)| &row.proposing_key)
+                .collect();
+            let mut view = proposal_view(proposal)?;
+            view["similar_keys"] = json!(similar_keys.len());
+            Ok(view)
+        })
+        .collect()
 }
 
 fn proposal_not_open(id: &str) -> OrbitError {
