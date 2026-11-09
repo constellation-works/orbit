@@ -83,6 +83,7 @@ fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Vec::new(),
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -382,6 +383,7 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations,
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -471,6 +473,7 @@ fn reviewer_ranks_are_dense_over_ranked_rows() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Vec::new(),
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -668,6 +671,7 @@ fn pilot_rows_keep_each_rounds_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &graded);
     let facts = AgentFacts {
         invocations,
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -770,6 +774,7 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations,
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -885,6 +890,7 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations,
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -962,6 +968,7 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations,
+        invocations_by_run: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -1272,6 +1279,7 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Vec::new(),
+        invocations_by_run: Default::default(),
         computed_at: Utc::now(),
         tasks_scanned: tasks.len(),
         tasks,

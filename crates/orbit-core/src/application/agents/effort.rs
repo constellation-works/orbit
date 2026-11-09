@@ -162,9 +162,8 @@ pub(super) fn main_invocation_effort(
     else {
         return Some(EFFORT_UNKNOWN.to_string());
     };
-    let candidates = facts.invocations.iter().filter(|fact| {
-        fact.job_run_id == run_id
-            && activity.matches(fact.activity_id.as_deref())
+    let candidates = facts.run_invocations(run_id).filter(|fact| {
+        activity.matches(fact.activity_id.as_deref())
             && activity_id.is_none_or(|id| {
                 fact.activity_id
                     .as_deref()
