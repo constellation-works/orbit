@@ -1258,7 +1258,7 @@ interactive work not yet in review). The **execution** control above the
 panel, shown on this tab, picks which tasks the ranking, detail, and size
 curves count: **Managed** (the default), **All** (managed and interactive), or
 **Interactive** on its own. Unclassified tasks count in none. Cost and run time
-count managed tasks whatever you pick. **Interactive work by crew**, under the
+count managed tasks whatever you pick. **Interactive work by model and recorded effort**, under the
 panels, lists each model-and-effort row's managed, interactive, and unclassified
 tasks (with the row's contributing crews), with how many interactive tasks landed and how many a regression names,
 so interactive work stays visible while the default leaves it out. The CLI and
