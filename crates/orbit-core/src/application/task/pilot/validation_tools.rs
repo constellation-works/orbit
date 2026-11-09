@@ -42,7 +42,9 @@ use orbit_types::workflow::activity_job::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::validation_tools::{names_tool, positive_validation_sentences};
+use crate::application::task::validation_tools::{
+    names_tool, positive_validation_sentences, sentence_requires_tool_invocation,
+};
 use crate::application::task::{
     OperatorValidationRequirement, TaskJobPort, operator_validation_requirements,
 };
@@ -257,7 +259,14 @@ impl ImplementationLane {
             ));
         }
 
-        if granted.is_some_and(|granted| !tool_allowed(tool, granted)) {
+        // Only a criterion that asks the implementer to call the tool is an
+        // allowlist requirement. A tool named as the subject whose
+        // behaviour, schema or documentation the task changes is proven by
+        // the task's own tests or doc check, not by granting the tool, so
+        // it must not hold promotion [ORB-23615].
+        if sentence_requires_tool_invocation(sentence, tool)
+            && granted.is_some_and(|granted| !tool_allowed(tool, granted))
+        {
             findings.push(format!(
                 "acceptance criterion requires `{tool}`, which the `{}` allowlist does not grant and this task's `required_tools` does not declare; declare it in `required_tools` at creation, because that field is immutable once the task exists",
                 self.activity

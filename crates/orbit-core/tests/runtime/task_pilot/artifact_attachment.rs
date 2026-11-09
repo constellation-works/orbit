@@ -280,8 +280,39 @@ fn a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_doe
     assert_ne!(decision["classification"], "warnings", "{decision}");
 }
 
+/// A criterion that describes the corrected behaviour or documentation of
+/// a registered tool — the ORB-23555 and ORB-23556 shapes — names that tool
+/// as the change's subject, not as a call the implementer must make. It
+/// yields no allowlist finding and holds no promotion.
+fn a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold() {
+    for criteria in [
+        vec![
+            "A bound MCP tools/call of orbit.workflow with action ship, at least one task id, and mode local or pr, and no workspace selector, is not refused for a missing workspace selector. It reaches the same next gate as the identical call that omits mode.".to_string(),
+            "An orbit.workflow action auto call that carries mode still requires an explicit workspace selector.".to_string(),
+        ],
+        vec![
+            "The canonical shipped skill, its synced plugin copy, and the S-workers sentence in the MCP tool evidence note name mode resize on orbit.workflow action auto, and none of them tell the caller to pass action resize.".to_string(),
+        ],
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, criteria);
+        let (audit, decision) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert!(
+            validation.is_empty(),
+            "a tool described as the change subject must produce no allowlist finding: {validation:?}"
+        );
+        assert_ne!(
+            decision["classification"], "warnings",
+            "a subject-only tool mention must hold no promotion: {decision}"
+        );
+    }
+}
+
 crate::scenario_table!(
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns_scenarios,
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns,
     a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_does_not,
+    a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold,
 );
