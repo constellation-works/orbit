@@ -1,8 +1,9 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson, relativeTime } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
-import { closeEditors, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
+import { createRoutineCatalogue, resetRoutineCatalogue } from './operations-routines-catalogue.js';
+import { closeRoutineEditors, routineEditButton, routineEditorElement } from './operations-routines-editor.js';
 
 import {
   $,
@@ -13,20 +14,16 @@ import {
   clockUnavailable,
   clockUnavailableReason,
   controlReason,
-  cronDraftText,
   cronText,
   durationText,
   explainUnavailable,
-  feedback,
   field,
   inactivePluginGroup,
   inactivePluginToggle,
   nextEvaluationText,
   operationCell,
-  operationColumns,
   operationDetails,
   operationFact,
-  operationGroup,
   operationSwitch,
   operationsState,
   outcomeDot,
@@ -58,14 +55,13 @@ let routineFailureRequest = 0;
 const pendingCadenceByHost = new Map();
 let timelineResizeObserver = null;
 let observedTimelineBody = null;
-const routineList = { query: "", pausedOpen: false };
 
 // ---------------------------------------------------------------------------
 // Routines
 registerOperationsReset(() => {
-  closeEditors("routine");
+  closeRoutineEditors();
+  resetRoutineCatalogue();
   updateRoutineFailureBadge([]);
-  Object.assign(routineList, { query: "", pausedOpen: false });
 });
 
 function routineButton(payload, routine) {
@@ -374,49 +370,6 @@ function routineFailureSummary(routines) {
   ]);
 }
 
-// The schedule column's edit affordance and, while open, the trigger editor.
-function routineEditKey(routine) {
-  return `routine-trigger:${getWorkspace()}:${routine.name}`;
-}
-
-function routineEditButton(payload, routine) {
-  const key = routineEditKey(routine);
-  return scheduleEditButton({
-    key,
-    label: `${routine.name} trigger`,
-    reason: controlReason(payload, "routine_trigger"),
-    onOpen: () => {
-      openEditor(key, "routine", routineDraft(routine.trigger), { source: routine.source, target: routine.target, trigger: routine.trigger });
-      if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true });
-    },
-  });
-}
-
-function routineEditor(payload, routine) {
-  const key = routineEditKey(routine);
-  if (!isOpen(key)) return null;
-  const selection = selectionSnapshot();
-  return routineTriggerEditor({
-    key,
-    routine,
-    cronPreview: (cron) => cronDraftText(cron, routine.cron || routine.trigger?.cron, routineNextAt(routine)),
-    save: (trigger) => {
-      const observed = editorObserved(key) || { source: routine.source, target: routine.target, trigger: routine.trigger };
-      return postJson("/api/routines/trigger", {
-        name: routine.name, source: observed.source, target: observed.target,
-        machine_name: payload.machine_name, expected_trigger: observed.trigger, trigger,
-      }).then((result) => {
-        if (selection.current()) feedback("routine-operation-feedback", "success", `${result.message}: ${routine.name}.`);
-        return result;
-      });
-    },
-    onClose: (saved) => {
-      if (saved) routinesFetchOperations().catch(() => {});
-      else if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations, { force: true });
-    },
-  });
-}
-
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
@@ -464,7 +417,7 @@ function routineRow(payload, routine, workspaceId) {
         identity,
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
-      operationCell("Cadence", [...cadence, routineEditButton(payload, routine)]),
+      operationCell("Cadence", [...cadence, routineEditButton({ payload, routine, onOpened: () => { if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true }); } })]),
       routine.enabled
         ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
@@ -484,114 +437,12 @@ function routineRow(payload, routine, workspaceId) {
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
   );
-  const editor = routineEditor(payload, routine);
+  const editor = routineEditorElement({ payload, routine, nextAt: routineNextAt(routine), onClose: (saved) => {
+      if (saved) routinesFetchOperations().catch(() => {});
+      else if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations, { force: true });
+    } });
   if (editor) card.insertBefore(editor, card.lastChild);
   return card;
-}
-
-
-// List navigation is local operator state, retained when fresh status arrives.
-// Only the list is filtered: health warnings and the timeline always use every routine.
-function routineCatalogue(payload, routines, workspaceId) {
-  const catalogue = el("div", { class: "routine-catalogue" });
-  const search = el("input", { id: "routine-filter", type: "search" });
-  search.dataset.routineFocus = "filter";
-  search.placeholder = "Name, job or description";
-  search.value = routineList.query;
-  const label = el("label", { text: "Filter routines" });
-  label.htmlFor = search.id;
-  const clear = el("button", { class: "operation-button", type: "button", text: "Clear" });
-  clear.dataset.routineFocus = "clear";
-  const count = el("span", { class: "routine-list-count", role: "status" });
-  const groups = el("div", { id: "routine-list-groups" });
-  search.setAttribute("aria-controls", groups.id);
-  catalogue.append(el("div", { class: "routine-list-toolbar" }, [label, search, clear, count]), routineTimeline(routines), groups);
-
-  // Filtering is refused only while an editor is on screen: an open
-  // editor whose routine is filtered out has nothing to
-  // close here, so the controls stay usable to navigate back to it. Every
-  // repaint re-derives the state, so filtering back to an open editor
-  // disables the controls again.
-  // Focus the first enabled, visible control of the open editor. A cron-only
-  // editor disables its Trigger select, and a pending save disables every
-  // control, so with none available focus the editor itself, not the page.
-  // A filter keystroke must focus only the panel: later query characters must
-  // not type into a cron input or activate a Trigger select's type-ahead.
-  const focusEditor = ({ focusControl = true } = {}) => {
-    const editor = groups.querySelector(".schedule-editor");
-    if (!editor) return;
-    const control = [...editor.querySelectorAll("input, select, button")]
-      .find((node) => !node.disabled && node.checkVisibility());
-    if (focusControl && control) control.focus();
-    else {
-      editor.tabIndex = -1;
-      editor.focus();
-    }
-  };
-  const paintGroups = () => {
-    groups.textContent = "";
-    const query = routineList.query.trim().toLocaleLowerCase();
-    const matches = routines.filter(routine => [routine.name, routine.target, routine.description]
-      .some(value => String(value || "").toLocaleLowerCase().includes(query)));
-    count.textContent = query ? `${matches.length} of ${routines.length} routines match` : `${routines.length} routines`;
-    for (const [kind, title, hint] of [
-      ["active", "Active", "enabled and delivered by the host clock"],
-      ["paused", "Paused", "slots are skipped, not queued"],
-    ]) {
-      const all = routines.filter(routine => Boolean(routine.enabled) === (kind === "active"));
-      if (!all.length) continue;
-      const filtered = matches.filter(routine => Boolean(routine.enabled) === (kind === "active"));
-      const group = operationGroup(kind, title, query ? `${filtered.length} of ${all.length}` : all.length, hint);
-      const states = [
-        ["blocked", all.filter(routine => routineState(routine) === "blocked").length],
-        ["stalled", all.filter(routine => routine.automation?.condition?.stall).length],
-        ["failing repeatedly", failingRoutines(all).length],
-      ].filter(([, total]) => total);
-      if (states.length) group.firstChild.appendChild(el("span", {
-        class: "routine-group-warning", text: `${query ? `Across all ${all.length}: ` : ""}${states.map(([state, total]) => `${total} ${state}`).join(" · ")}`,
-      }));
-      let container = group;
-      if (kind === "paused") {
-        container = el("details", { class: "operation-group routine-paused" });
-        container.open = routineList.pausedOpen;
-        const summary = el("summary", { class: "operation-group-head" });
-        summary.dataset.routineFocus = "paused";
-        summary.append(...group.firstChild.childNodes);
-        container.appendChild(summary);
-        container.addEventListener("toggle", () => {
-          if (container.isConnected) routineList.pausedOpen = container.open;
-        });
-      }
-      if (filtered.length) {
-        container.append(operationColumns(["", "Routine", "Cadence", "Next fire", "Last run"]));
-        for (const routine of filtered) container.appendChild(routineRow(payload, routine, workspaceId));
-      } else {
-        container.appendChild(el("p", { class: "routine-list-empty", text: `No ${kind} routines match. Clear or change the filter.` }));
-      }
-      groups.appendChild(container);
-    }
-    const editing = Boolean(groups.querySelector(".schedule-editor"));
-    search.disabled = editing;
-    search.title = editing ? "Close the trigger editor to filter routines." : "";
-    clear.disabled = editing || !routineList.query;
-  };
-  search.addEventListener("input", () => {
-    routineList.query = search.value;
-    if (routineList.query.trim()) routineList.pausedOpen = true;
-    const typing = document.activeElement === search;
-    paintGroups();
-    // Revealing an editor locks the filter mid-query. Park focus on its panel
-    // until the operator deliberately tabs or clicks into an editing control.
-    if (typing && search.disabled) focusEditor({ focusControl: false });
-  });
-  clear.addEventListener("click", () => {
-    search.value = "";
-    search.dispatchEvent(new Event("input"));
-    if (search.disabled) focusEditor();
-    else search.focus();
-  });
-  paintGroups();
-  return catalogue;
 }
 
 export function renderRoutineRows(payload, body, { workspace, workspaceId, routines, inactive, ownerOnly }) {
@@ -606,7 +457,7 @@ export function renderRoutineRows(payload, body, { workspace, workspaceId, routi
   } else if (routines.length) {
     const warning = routineFailureSummary(routines);
     if (warning) body.appendChild(warning);
-    body.appendChild(routineCatalogue(payload, routines, workspaceId));
+    body.appendChild(createRoutineCatalogue({ payload, routines, workspaceId, renderRow: routineRow, renderTimeline: routineTimeline, routineState, failingRoutines }));
   }
   if (inactive.length) {
     body.appendChild(inactivePluginGroup(inactive.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason })), "fires"));

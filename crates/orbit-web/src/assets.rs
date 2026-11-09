@@ -447,6 +447,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/operations-routines.js"),
     ),
     (
+        "/static/js/operations-routines-catalogue.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-routines-catalogue.js"),
+    ),
+    (
+        "/static/js/operations-routines-editor.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-routines-editor.js"),
+    ),
+    (
         "/static/js/operations-auto-tasks.js",
         JS,
         include_bytes!("../assets/dashboard/js/operations-auto-tasks.js"),
