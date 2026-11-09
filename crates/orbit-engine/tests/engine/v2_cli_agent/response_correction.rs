@@ -776,7 +776,8 @@ fn only_a_read_only_activity_may_declare_response_correction() {
             format!("{READ_ONLY}  tools:\n    - orbit.task.*\n"),
         ),
         (
-            "orbit.auto_task.add",
+            // The first mutating tool in table order that the list leaves open.
+            "orbit.agents.rank_snapshot",
             format!(
                 "{READ_ONLY}  tool_disallow_list:\n    - orbit.search\n  proc_disallowed_programs: []\n"
             ),
