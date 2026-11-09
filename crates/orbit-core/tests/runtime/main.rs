@@ -63,6 +63,7 @@ mod ci_retry_journal_wait;
 mod claude_worker_credential;
 mod config_settings;
 mod crew_accounts;
+mod crew_memory;
 mod decision_channel;
 mod decision_precedent;
 mod decision_raise;
