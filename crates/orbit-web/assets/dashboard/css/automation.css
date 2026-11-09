@@ -524,7 +524,8 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .resident-ended { margin-top: 12px; }
 .resident-ended > .resident-list { margin-top: 6px; }
 .resident-empty { display: flex; justify-content: center; }
-.resident-none { margin: 0 0 8px; }
+/* Inset like the toolbar, rows and Ended summary above and below it. */
+.resident-none { margin: 0 0 8px; padding: 0 10px; }
 .resident-start {
   padding: 12px; margin-bottom: 12px; border: 1px solid var(--border);
   border-radius: 4px; background: var(--bg-elev); min-width: 0;
