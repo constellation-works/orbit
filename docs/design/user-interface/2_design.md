@@ -502,7 +502,7 @@ WORK › **Leases** (`#leases`) is the read-only view of the workspace's path le
 
 WORK › **Notices** (`#notices`) is built around reading a notice first and acting on it on demand [ORB-22369]. It reads `GET /api/notices`, the same payload as the banner over every view, and adds no fields.
 
-- **One list.** Open and Recently closed (closed or expired in the last 24 hours) are one tab switch with their counts. An empty list is one line.
+- **One list.** Open notices appear first. Recently closed notices (closed or expired in the last 24 hours) follow under a `Recently closed (N)` heading when present. An empty list is one line.
 - **One row per notice.** Severity leads, then title, scope and one time: when the notice lapses if that is within a day, otherwise its age, or for an ended notice when it ended. Incidents sort first in either list, then maintenance, then info, keeping the server's order within a severity. A title that does not fit is cut on the row and shown whole once open; at phone width the row is two lines and the title wraps.
 - **Open on demand.** The row opens the body, when it opened and who posted it, its expiry, more than one report, the linked task and how an ended notice ended.
 - **Close asks only when chosen.** Close is a row action; choosing it opens the row with one reason input and moves focus there. Escape or Cancel steps back. A refused close stays on the row with the server's words and the typed reason, and a refresh keeps a half-typed reason.
