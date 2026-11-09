@@ -151,7 +151,7 @@ result. The collection pass never executes those repairs.
 **Evidence and continuation.** Every completed pass attaches
 `host-health-report.json` (signature groups, routes, dispositions, per-host
 counts and coverage gaps) and `host-health-cursor.json` (source positions,
-seven-day counts, imported windows, rejected mappings and pending evidence).
+14-day counts, imported windows, rejected mappings and pending evidence).
 Collection stops at 10,000 records or 8 MiB per host; a read or filing cap is a
 successful partial pass with a fixed window and resume position. The next pass
 drains pending groups before advancing, without recounting events. Excerpts are
