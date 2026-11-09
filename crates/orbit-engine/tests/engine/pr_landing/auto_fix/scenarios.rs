@@ -576,6 +576,27 @@ fn docs_only_pr(row: &std::path::Path) -> (Fixture, DeliveryHost) {
     (fx, host)
 }
 
+/// A docs-only PR whose base also tracks the one-character file `x`.
+fn one_char_pr(row: &std::path::Path) -> (Fixture, DeliveryHost) {
+    let mut fx = Fixture::new(row);
+    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
+    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
+    fx.commit_files_on_base(&[("src/contract", "broken\n"), ("x", "original\n")]);
+    git(&fx.repo, &["reset", "--hard", BASE]);
+    fx.base_sha = fx.head();
+    delete_remote_branch(&fx, BRANCH);
+    fx.candidate = fx.commit("README.md", "documentation only\n");
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    host.set_context_files(TASK_ID, &["file:README.md"]);
+    action(
+        &host,
+        "pr_open",
+        &fx.open_input(&fx.candidate, &fx.base_sha),
+    )
+    .unwrap();
+    (fx, host)
+}
+
 // A successful publication checkpoint deliberately keeps H0 when completion
 // fails after repairing it. Resume executes completion as R2, retaining R0's
 // task/worktree ownership but inheriting only its durable ancestor authority.
@@ -1196,6 +1217,14 @@ pub(super) fn perform_ci_repair(
         // The failure is not the candidate's: no edit, no scope record.
         return Ok(json!({"summary":"failure is not caused by the candidate; no edit"}));
     }
+    if mode == "one_char_modified" {
+        fs::write(host.repo.join("x"), "changed\n").unwrap();
+        return Ok(json!({"summary":"edit one-character tracked file without a scope record"}));
+    }
+    if mode == "one_char_deleted" {
+        fs::remove_file(host.repo.join("x")).unwrap();
+        return Ok(json!({"summary":"delete one-character tracked file without a scope record"}));
+    }
     let report = error
         .split("before writing retry, write ")
         .nth(1)
@@ -1386,6 +1415,54 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                     1
                 }
             );
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+        },
+    );
+}
+
+/// A check repair that modifies or deletes the tracked one-character file
+/// `x` and writes no scope record is refused as an unexplained edit: no
+/// no-edit history, no rerun and no commit.
+#[test]
+fn missing_scope_one_char_check_repair_is_refused_as_unexplained_edit() {
+    auto_fix_table(
+        "auto_fix::missing_scope_one_char_check_repair_is_refused_as_unexplained_edit",
+        "one_char_modified one_char_deleted",
+        |mode, row| {
+            let (fx, host) = one_char_pr(row);
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let outcome = run_repair_job(&host, auto_fix_input(&fx));
+            let error = match outcome {
+                Ok(result) => {
+                    assert!(!result.success, "{mode}: {result:?}");
+                    result.message.unwrap_or_default()
+                }
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("wrote no scope record"), "{mode}: {error}");
+            let history = host.history(TASK_ID);
+            assert!(
+                !history.iter().any(|entry| {
+                    entry.event == orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT
+                }),
+                "{mode}: an unexplained one-character edit records no no-edit rerun"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                0,
+                "{mode}: an unexplained one-character edit sends no rerun"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert_candidate_head_unchanged(&fx, mode);
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
         },
     );
