@@ -73,11 +73,36 @@ pub struct RoutineMachineIdentity {
     pub machine_name: String,
 }
 
-/// Open the config-resolved machine-local scheduler store.
+/// Open the config-resolved machine-local scheduler store for a mutating route.
+/// Creates and migrates it on first use.
 fn open_routine_store(global_root: &Path) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
     let database =
         orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
     orbit_store::compose::routine_store(&database)
+}
+
+/// Create and migrate the machine's scheduler store when it is absent. `orbit
+/// init` calls this as the first-run setup step, so reads that follow it find
+/// an existing store (STD-01 R31).
+pub fn ensure_routine_store(global_root: &Path) -> Result<(), OrbitError> {
+    open_routine_store(global_root).map(|_| ())
+}
+
+/// Open the existing scheduler store for a read-only projection. A read never
+/// creates or migrates it (STD-01 R31): a missing store is setup that has not
+/// been done, and the error names `orbit init`, which owns first-run creation.
+fn open_existing_routine_store(
+    global_root: &Path,
+) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
+    let database =
+        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    if !database.exists() {
+        return Err(OrbitError::InvalidInput(format!(
+            "routine scheduler store {} does not exist; run `orbit init` on this machine to create it",
+            database.display()
+        )));
+    }
+    Ok(Arc::new(orbit_store::Store::open_read_only(&database)?))
 }
 
 #[cfg(test)]

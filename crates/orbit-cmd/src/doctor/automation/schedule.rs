@@ -49,12 +49,14 @@ pub(in crate::doctor) fn doctor_check_routine_freshness(
 fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>, OrbitError> {
     use orbit_core::application::routines::{minimum_cron_interval, parse_cron};
 
-    let report = crate::registry_routines::routine_statuses(global_root)?;
+    // A missing scheduler store has no fires to judge; doctor must not reach the
+    // status read, which now refuses to create it (STD-01 R31).
     let database =
         orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
     if !database.exists() {
         return Ok(None);
     }
+    let report = crate::registry_routines::routine_statuses(global_root)?;
     let store = orbit_store::Store::open_read_only(&database)?;
     let now = chrono::Utc::now();
     let mut stale = Vec::new();

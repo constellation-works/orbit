@@ -121,6 +121,14 @@ clock object is `health: unknown` with the bounded diagnostic in `error` /
 `health_issue`, `enabled` is JSON null, and clock controls are disabled. That
 projection never invents paused or disabled clock authority. `orbit clock status`
 continues to fail closed with the same diagnostic.
+The read paths never create the machine's scheduler store. `orbit routine list`
+and `show`, the shared status projection behind them, `GET /api/routines` and
+the fire-history read open the existing store read-only. When the store file is
+absent they fail with an actionable setup error that names `orbit init` (STD-01
+R31), and an unwritable location fails the same way without a write attempt.
+`orbit init` and the sweep route own first-run creation and migration. Mutating
+routine commands that read the projection first (`routine toggle`, `pause`, and
+the dashboard toggle) therefore also require the store to exist.
 Core owns one projection of a routine status row, its fire records and the
 `retired`, `owner_only` and `load_errors` rows; `orbit routine list` and `show`,
 `GET /api/routines` and the MCP `orbit.routine.control` list each select the

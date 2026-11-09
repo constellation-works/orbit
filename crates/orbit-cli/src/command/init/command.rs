@@ -179,6 +179,11 @@ impl InitCommand {
             self.non_interactive,
             self.human_name,
         )?;
+        // First-run creation of the scheduler store belongs to init, so the
+        // routine reads that follow find it (STD-01 R31). The store rejects
+        // parent-relative paths, so it takes the canonical root.
+        let global_root = std::fs::canonicalize(resolve_global_root(root_override)?)?;
+        orbit_core::application::routines::ensure_routine_store(&global_root)?;
         // A release that ships a workspace routine or auto-task must reach
         // every registered workspace here, not only at the next `workspace sync`.
         let registered =
