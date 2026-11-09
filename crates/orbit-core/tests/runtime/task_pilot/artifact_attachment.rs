@@ -310,9 +310,36 @@ fn a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold(
     }
 }
 
+/// A passive that asks the implementer to call a backticked tool, such as
+/// `` `tool` must be invoked to … `` or `` `tool` is invoked to … ``, is still
+/// an invocation request. The `be` between a modal and the participle, and
+/// the closing backtick before the verb, must not hide an ungranted tool from
+/// the allowlist check.
+fn a_passive_invocation_request_still_warns_for_an_ungranted_tool() {
+    for criterion in [
+        "`orbit.pipeline.invoke` must be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` shall be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` should be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` is invoked to submit the catalog job.",
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, vec![criterion.into()]);
+        let (audit, _) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert!(
+            validation.iter().any(|warning| warning.starts_with(
+                "acceptance criterion requires `orbit.pipeline.invoke`, which the `agent_implement` allowlist does not grant"
+            )),
+            "`{criterion}` requires an ungranted tool and must produce the allowlist finding: {validation:?}"
+        );
+    }
+}
+
 crate::scenario_table!(
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns_scenarios,
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns,
     a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_does_not,
     a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold,
+    a_passive_invocation_request_still_warns_for_an_ungranted_tool,
 );
