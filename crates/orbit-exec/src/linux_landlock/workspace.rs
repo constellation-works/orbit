@@ -205,15 +205,17 @@ fn allowed_subtrees_in(
     let mut grants = Vec::new();
     for child in children_under(workspace_root, dir)? {
         if rules.allows(&relative_to(workspace_root, &child)?)? {
-            grants.extend(grant_read_tree(workspace_root, &child, rules, reach)?);
+            grants.extend(
+                grant_read_tree(workspace_root, &child, rules, reach)?
+                    .into_iter()
+                    .map(LandlockPathGrant::enumerated),
+            );
         } else if child.is_dir() {
-            grants.extend(allowed_subtrees_in(
-                workspace_root,
-                &child,
-                rules,
-                reach,
-                walked,
-            )?);
+            grants.extend(
+                allowed_subtrees_in(workspace_root, &child, rules, reach, walked)?
+                    .into_iter()
+                    .map(LandlockPathGrant::enumerated),
+            );
         }
     }
     Ok(grants)
@@ -310,7 +312,11 @@ fn carve_out_unlistable_in(
     }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_unlistable_in(&child, denied, walked)?);
+        grants.extend(
+            carve_out_unlistable_in(&child, denied, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -356,7 +362,11 @@ fn carve_out_boundary_in(
     }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
+        grants.extend(
+            carve_out_boundary_in(&child, unlistable, listable, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -479,7 +489,11 @@ fn carve_out_write_in(
     }
     let mut grants = vec![LandlockPathGrant::write_only_tree(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out_write_in(&child, unlistable, listable, walked)?);
+        grants.extend(
+            carve_out_write_in(&child, unlistable, listable, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -554,7 +568,11 @@ fn carve_out_beneath(
 
     let mut grants = vec![LandlockPathGrant::list_only(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out_beneath(&child, denied, reach, walked)?);
+        grants.extend(
+            carve_out_beneath(&child, denied, reach, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }

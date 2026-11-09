@@ -230,7 +230,7 @@ fn restrict_child(command: &mut std::process::Command, ruleset_fd: i32) {
     }
 }
 
-struct Ruleset {
+pub(crate) struct Ruleset {
     fd: OwnedFd,
     /// The filesystem rights this ruleset takes over; a rule may only grant a
     /// subset of them.
@@ -238,7 +238,7 @@ struct Ruleset {
 }
 
 impl Ruleset {
-    fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
+    pub(crate) fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
         scope.require_abi(abi)?;
         let mut handled_fs = HANDLED_FS_ACCESS;
         if scope.confine_writes {
@@ -297,7 +297,7 @@ impl Ruleset {
         Ok(Self { fd, handled_fs })
     }
 
-    fn add_path(&self, grant: &LandlockPathGrant) -> Result<(), OrbitError> {
+    pub(crate) fn add_path(&self, grant: &LandlockPathGrant) -> Result<(), OrbitError> {
         use std::os::unix::ffi::OsStrExt;
 
         let path = std::ffi::CString::new(grant.path.as_os_str().as_bytes()).map_err(|_| {
@@ -310,10 +310,23 @@ impl Ruleset {
         // descriptor that names the inode without granting access to it.
         let parent_fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
         if parent_fd < 0 {
+            let error = std::io::Error::last_os_error();
+            // A grant found by walking a shared directory (a sibling
+            // `TMPDIR/.tmpXXXX` another test or run owned) may be removed
+            // between that walk and this open. Skipping it grants nothing,
+            // so confinement is unchanged. A grant the policy names itself
+            // never carries `allow_vanished` and is refused here instead.
+            if grant.allow_vanished && error.kind() == std::io::ErrorKind::NotFound {
+                orbit_common::tracing::warn!(
+                    target: "orbit.sandbox.landlock",
+                    grant = %grant.path.display(),
+                    "landlock grant found by enumeration vanished before the ruleset opened it; skipping it"
+                );
+                return Ok(());
+            }
             return Err(OrbitError::Io(format!(
-                "open landlock grant `{}`: {}",
-                grant.path.display(),
-                std::io::Error::last_os_error()
+                "open landlock grant `{}`: {error}",
+                grant.path.display()
             )));
         }
         let rule = PathBeneathAttr {
