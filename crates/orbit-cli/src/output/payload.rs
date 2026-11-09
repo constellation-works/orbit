@@ -66,6 +66,7 @@ impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
+            Self::ConfigShow(text) => f.debug_tuple("ConfigShow").field(text).finish(),
             Self::Prose(text) => f.debug_tuple("Prose").field(text).finish(),
             Self::Notice(text) => f.debug_tuple("Notice").field(text).finish(),
             Self::Table(_) => f.write_str("Table"),
@@ -123,6 +124,12 @@ pub enum Block {
     /// Text the command formatted itself. Written verbatim; any color in it
     /// was already gated by the sink when the command built it.
     Text(String),
+    /// `orbit config show` text: aligned label/value/state/description rows
+    /// and section headings the renderer fits to the terminal width in table
+    /// mode (descriptions wrap aligned to their column). Plain and
+    /// machine-readable modes keep the text whole, so no information is lost
+    /// outside terminal fitting.
+    ConfigShow(String),
     /// Human prose, word-wrapped to the sink width in terminal table mode.
     /// Explicit line breaks survive; pipes and plain mode keep the text whole.
     Prose(String),
@@ -146,6 +153,16 @@ impl Block {
             text.pop();
         }
         Self::Prose(text)
+    }
+
+    /// A `config show` block. Like [`Block::text`], one trailing newline is
+    /// dropped because the renderer adds its own when it prints the block.
+    pub fn config_show(text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        Self::ConfigShow(text)
     }
 
     /// A text block, for the common single-`String` case.

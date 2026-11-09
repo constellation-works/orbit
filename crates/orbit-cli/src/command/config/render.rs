@@ -36,9 +36,11 @@ const NO_VALUE: &str = "–";
 /// headings, so the blurbs line up under each other.
 const HEADING_WIDTH: usize = 28;
 
-/// Upper bounds on the aligned columns. A longer cell is never truncated —
-/// it pushes the rest of its own line right — but one very long value does
-/// not indent every other row off the screen.
+/// Upper bounds on the aligned columns. A longer cell is never truncated in
+/// the text this module builds — it pushes the rest of its own line right —
+/// but one very long value does not indent every other row off the screen.
+/// The output renderer fits this text to the terminal width on a terminal
+/// (see `Block::ConfigShow`); piped and plain output keeps every line whole.
 const MAX_LABEL_WIDTH: usize = 32;
 const MAX_VALUE_WIDTH: usize = 20;
 
