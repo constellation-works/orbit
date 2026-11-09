@@ -65,6 +65,13 @@ record a reason for a deliberate exception. Do not silently remap tasks or
 undo an operator's crew change. Reuse existing authorization rather than
 asking for the same permission again.
 
+When comparing the implementer models behind candidate crews, read the
+per-model ranking in [model ranking](model-ranking.md): `orbit agents rank`
+pools each model's crews and effort levels, awards tie bands only on a
+qualified board, and leaves sparse or unmeasured evidence unranked. It is
+not the model-and-effort scorecard, and an observation from it grants no
+authority to change crew policy or a task's crew.
+
 If you take over implementation personally, assign your own configured crew
 before continuing and record the takeover; do not retain the delegation choice
 as though that crew performed the work. `orchestrator` remains supervision
