@@ -92,7 +92,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 
 ### Observe and extend
 
-- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing. The Tasks drain card and Analytics › Forecast estimate time, cost and tokens to drain the backlog. Agent scorecards link each role's scores to their evidence; host resource analytics compare measured CPU and memory with admission forecasts.
+- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing. The Tasks drain card and Analytics › Forecast estimate time, cost and tokens to drain the backlog. Agent scorecards link each role's scores to their evidence, and a Rank view orders implementer models in tie bands; host resource analytics compare measured CPU and memory with admission forecasts.
 - **Experiments.** Operators run randomized experiments over agent treatments with `orbit experiment`: sticky assignment, overlays, and a per-arm readout. Starting one needs `experiments.enabled`. See [CLI commands](../reference/cli/#experiments).
 - **Plugins** (`orbit plugin`). A plugin can add its own tools, jobs, routines, auto-tasks, skills, and CLI commands. Plugins run sandboxed under explicit permission grants, and `orbit plugin scaffold` generates a starter.
 - **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.

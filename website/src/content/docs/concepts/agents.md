@@ -616,7 +616,8 @@ With `workflow.crew_selection = "usage_pressure"`, pool draws favour crews
 whose weekly allowance would otherwise go unused. Task types
 (`workflow.task_types`) give a kind of work its own pool per tier through
 `workflow.type_complexity_crews`; inspect how each crew does by type with
-`orbit agents scorecard --role implementers --by-type`. See
+`orbit agents scorecard --role implementers --by-type`, or rank implementer
+models against each other with `orbit agents rank`. See
 [Configuration](../../reference/config/#crews) for both settings.
 
 ## Platform support
