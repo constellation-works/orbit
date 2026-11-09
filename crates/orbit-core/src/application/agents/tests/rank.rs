@@ -55,6 +55,7 @@ fn facts(work: &[Work<'_>]) -> AgentFacts {
             attempt.runner.run_id = Some(run_id);
             let review = Review {
                 attempt_id: id.clone(),
+                activity_id: None,
                 at: start + chrono::Duration::minutes(30),
                 verdict: (work.verdict)(index),
                 reviewer: Default::default(),

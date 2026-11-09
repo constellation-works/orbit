@@ -57,6 +57,10 @@ pub struct Charge {
     /// the problem itself when Not scored.
     pub anchor: DateTime<Utc>,
     pub detail: String,
+    /// The producing step or worker of the charged unit, as invocations
+    /// record it, when the unit identifies one (a pilot receipt's worker,
+    /// a review settlement's gate).
+    pub(super) activity_id: Option<String>,
     /// The rework cause, for rework.
     pub(super) cause: Option<Cause>,
     /// The regression link's severity, for a regression.
@@ -269,6 +273,7 @@ impl Draft<'_> {
             at: self.at,
             anchor,
             detail: self.detail,
+            activity_id: None,
             cause: self.cause,
             severity: self.severity,
             sites: Vec::new(),
@@ -347,13 +352,15 @@ impl Draft<'_> {
             .task
             .attempt_at(review.at)
             .and_then(|index| self.task.attempts[index].runner.run_id.clone());
-        self.charge(
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Reviewers),
             review.reviewer.crew.clone(),
             review.reviewer.model.clone(),
             run_id,
             review.at,
-        )
+        );
+        charge.activity_id.clone_from(&review.activity_id);
+        charge
     }
 }
 
@@ -506,6 +513,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             at,
             anchor: graded.at,
             detail,
+            activity_id: run.and_then(|run| run.activity_id.clone()),
             cause: None,
             severity: None,
             sites: Vec::new(),
@@ -562,9 +570,14 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
                     |activity| {
                         super::effort::main_invocation_effort(
                             facts,
-                            charge.run_id.as_deref(),
-                            activity,
-                            Some(&charge.task_id),
+                            super::effort::MainInvocationUnit {
+                                run_id: charge.run_id.as_deref(),
+                                activity,
+                                task_id: Some(&charge.task_id),
+                                model: charge.model.as_deref(),
+                                activity_id: charge.activity_id.as_deref(),
+                                after: None,
+                            },
                         )
                     },
                 );

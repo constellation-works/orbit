@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::application::agents::attribution::{Charge, Credit, Owner};
 use crate::application::agents::effort::{
-    MainActivity, ModelEffortKey, main_invocation_effort, model_effort_key,
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
@@ -77,9 +77,14 @@ pub(super) type Key = ModelEffortKey;
 pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Key {
     let effort = main_invocation_effort(
         facts,
-        attempt.runner.run_id.as_deref(),
-        MainActivity::Implement,
-        Some(&task.id),
+        MainInvocationUnit {
+            run_id: attempt.runner.run_id.as_deref(),
+            activity: MainActivity::Implement,
+            task_id: Some(&task.id),
+            model: attempt.runner.model.as_deref(),
+            activity_id: None,
+            after: None,
+        },
     );
     model_effort_key(attempt.runner.model.as_deref(), effort)
 }
@@ -88,9 +93,14 @@ pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Ke
 fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
     let effort = main_invocation_effort(
         facts,
-        charge.run_id.as_deref(),
-        MainActivity::Implement,
-        Some(&charge.task_id),
+        MainInvocationUnit {
+            run_id: charge.run_id.as_deref(),
+            activity: MainActivity::Implement,
+            task_id: Some(&charge.task_id),
+            model: charge.model.as_deref(),
+            activity_id: None,
+            after: None,
+        },
     );
     model_effort_key(charge.model.as_deref(), effort)
 }
@@ -99,9 +109,14 @@ fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
 fn credit_key(facts: &AgentFacts, credit: &Credit) -> Key {
     let effort = main_invocation_effort(
         facts,
-        credit.run_id.as_deref(),
-        MainActivity::Implement,
-        Some(&credit.task_id),
+        MainInvocationUnit {
+            run_id: credit.run_id.as_deref(),
+            activity: MainActivity::Implement,
+            task_id: Some(&credit.task_id),
+            model: credit.model.as_deref(),
+            activity_id: None,
+            after: None,
+        },
     );
     model_effort_key(credit.model.as_deref(), effort)
 }
