@@ -11,6 +11,7 @@ lint\tWait\tci-await-api: listings=1 not_modified=0 paginated=false
 const AWAIT_TIMEOUT: &str = "\
 lint\tWait\tci-await: timed out after 2400 s waiting for test (in_progress)
 lint\tWait\tci-await-api: listings=1 not_modified=0 paginated=false
+lint\tWait\t##[error]Process completed with exit code 1.
 ";
 
 fn patch_config(fx: &Fixture, edit: impl FnOnce(&mut Value)) {
