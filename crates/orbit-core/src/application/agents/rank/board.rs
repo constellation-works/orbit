@@ -65,8 +65,8 @@ impl ModelRow {
             .collect()
     }
 
-    /// The sole assessed tier when this eligible model spans exactly one,
-    /// else `None`. Ineligible models are never single-tier.
+    /// The sole assessed tier when the model meets task and tier thresholds
+    /// and spans exactly one. The caller must also check board eligibility.
     pub(super) fn single_tier(&self) -> Option<&'static str> {
         if self.ineligibility().is_some() {
             return None;
