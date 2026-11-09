@@ -158,3 +158,100 @@ pub(crate) fn names_tool(sentence: &str, tool: &str) -> bool {
 fn is_tool_name_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
 }
+
+/// Words that, immediately before a tool mention, ask the implementer to
+/// call that tool to produce evidence: an invocation verb (`run`, `call`,
+/// `invoke`, `execute`, `use`) or a route/evidence preposition (`via`,
+/// `through`, `with`, `from`, `by`). A validation verb alone (`validate
+/// `tool``) does not count: it may only describe checking the tool's own
+/// behaviour, and silence is preferred over inventing a requirement.
+const INVOCATION_CUES: &[&str] = &[
+    "run",
+    "runs",
+    "running",
+    "call",
+    "calls",
+    "calling",
+    "called",
+    "invoke",
+    "invokes",
+    "invoking",
+    "invoked",
+    "execute",
+    "executes",
+    "executing",
+    "executed",
+    "use",
+    "uses",
+    "using",
+    "used",
+    "via",
+    "through",
+    "with",
+    "from",
+    "by",
+];
+
+/// Passive verbs that, after a tool mention, still ask for a call:
+/// `` `tool` is invoked to … ``.
+const INVOKED_VERBS: &[&str] = &[
+    "run", "running", "called", "calling", "invoked", "invoking", "executed", "used",
+];
+
+/// Whether `sentence` asks the implementer to call `tool`, rather than
+/// naming it as the subject whose behaviour, schema or documentation the
+/// task changes.
+///
+/// Only a cue in the few words around the mention counts — before it an
+/// invocation verb or route preposition, after it a passive invocation —
+/// so a subject mention such as "An `orbit.workflow` action auto call …"
+/// or "… name mode resize on `orbit.workflow` …" stays silent. When no
+/// cue is present the distinction cannot be drawn, and silence is
+/// preferred over inventing a requirement (see `tools_named_in`).
+pub(crate) fn sentence_requires_tool_invocation(sentence: &str, tool: &str) -> bool {
+    let lowered = sentence.to_ascii_lowercase();
+    lowered.match_indices(tool).any(|(index, _)| {
+        let before = sentence[..index].chars().next_back();
+        let after = sentence[index + tool.len()..].chars().next();
+        if before.is_some_and(is_tool_name_char) || after.is_some_and(is_tool_name_char) {
+            return false;
+        }
+        // Only the clause holding the mention counts, so a cue in an
+        // earlier clause of the same sentence cannot invent a call.
+        let clause = lowered[..index]
+            .rsplit([';', ','])
+            .next()
+            .unwrap_or_default();
+        let before_words: Vec<&str> = clause.split_whitespace().map(normalize_cue_word).collect();
+        if before_words
+            .iter()
+            .rev()
+            .take(4)
+            .any(|word| INVOCATION_CUES.contains(word))
+        {
+            return true;
+        }
+        let after_words: Vec<&str> = lowered[index + tool.len()..]
+            .split_whitespace()
+            .map(normalize_cue_word)
+            .collect();
+        // `` `tool` is invoked to validate … ``, but not `` `tool` is
+        // called with … ``: the latter describes a call a user makes,
+        // whose behaviour the task may be fixing.
+        matches!(
+            after_words.first().copied(),
+            Some("is" | "are" | "was" | "were" | "must" | "shall" | "should" | "be" | "been")
+        ) && after_words
+            .get(1)
+            .is_some_and(|word| INVOKED_VERBS.contains(word))
+            && after_words.get(2).copied() == Some("to")
+    })
+}
+
+/// Trim quoting and punctuation around a cue word without splitting it, so
+/// `tools/call` never reads as the invocation verb `call`.
+fn normalize_cue_word(word: &str) -> &str {
+    word.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric() && !matches!(character, '/' | '_' | '-')
+    })
+}
