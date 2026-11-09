@@ -30,6 +30,36 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
     ".generation-admission.lock",
 ];
 
+/// The product-identity marker file Orbit reads in an Orbit root and in every
+/// physical ancestor of one before it opens state (`orbit-core`'s
+/// `application::workspace::product_profile`). Named here because a confined
+/// `orbit tool run` performs that check too: the sandbox grants the child read
+/// on each marker that exists above its roots, and nothing else there.
+pub const ORBIT_PRODUCT_MARKER: &str = ".orbit-product";
+
+/// Every regular-file product marker ([`ORBIT_PRODUCT_MARKER`]) in a physical
+/// ancestor of `roots`, excluding each root's own, in the order Orbit's
+/// product check visits them. A confined `orbit` needs read on exactly these
+/// files to open state beneath `roots`. A missing or non-file marker is left
+/// off: the check either skips it or refuses on its own, and a Landlock rule
+/// cannot bind a name that does not exist.
+pub fn orbit_product_markers_above_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut markers = Vec::new();
+    for root in roots {
+        let physical = physical_with_missing_tail(&root);
+        for ancestor in physical.ancestors().skip(1) {
+            let marker = ancestor.join(ORBIT_PRODUCT_MARKER);
+            let is_file = std::fs::symlink_metadata(&marker)
+                .map(|metadata| metadata.file_type().is_file())
+                .unwrap_or(false);
+            if is_file && !markers.contains(&marker) {
+                markers.push(marker);
+            }
+        }
+    }
+    markers
+}
+
 /// Host-owned trees beneath the global root that no plugin child may read,
 /// whatever else it was granted.
 ///

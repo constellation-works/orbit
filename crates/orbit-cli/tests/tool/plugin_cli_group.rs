@@ -28,6 +28,17 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::create(false)
+    }
+
+    /// A fixture whose home and workspace sit inside a directory that already
+    /// carries Orbit's product marker, as a managed worktree does inside its
+    /// repository's `.orbit/state/worktrees/`.
+    fn nested_under_orbit_root() -> Self {
+        Self::create(true)
+    }
+
+    fn create(marked_ancestor: bool) -> Self {
         // Plugin commands report resolved paths (a plugin root, a skill link's
         // target, the workspace a render names), and the assertions compare
         // them with these, so root the fixture at a resolved temp directory.
@@ -35,6 +46,10 @@ impl Fixture {
         let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
+        if marked_ancestor {
+            std::fs::write(temp.path().join(".orbit-product"), "orbit:v1\n")
+                .expect("ancestor product marker");
+        }
         std::fs::create_dir_all(&home).expect("create home");
         git_repo::init(&work);
         let fixture = Self {

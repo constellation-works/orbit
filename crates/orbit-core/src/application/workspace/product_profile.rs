@@ -13,7 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 
-const PRODUCT_MARKER: &str = ".orbit-product";
+// Shared with the plugin sandbox, which grants a confined `orbit tool run`
+// read on each marker this check visits.
+use orbit_tools::plugin::ORBIT_PRODUCT_MARKER as PRODUCT_MARKER;
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
