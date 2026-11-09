@@ -86,9 +86,15 @@ fn builtin_mcp_rules_with_route(name: &str, id_route: McpIdRoute) -> McpToolRule
         "orbit.pipeline.invoke" => {
             McpWorkspaceEcho::WhenAny(vec![McpInputCondition::True("default_input".into())])
         }
-        // Every auto-drain call carries `mode`, which only the `auto` action
-        // takes.
-        "orbit.workflow" => McpWorkspaceEcho::WhenAny(present(&["mode"])),
+        // Auto carries its own action as `mode`. Ship's `mode` (`pr` or
+        // `local`) is a different parameter and must not require a selector.
+        "orbit.workflow" => McpWorkspaceEcho::WhenAny(vec![McpInputCondition::All(vec![
+            McpInputCondition::Equals {
+                key: "action".into(),
+                value: "auto".into(),
+            },
+            McpInputCondition::Present("mode".into()),
+        ])]),
         "orbit.routine.control" => McpWorkspaceEcho::Always,
         _ => McpWorkspaceEcho::Never,
     };

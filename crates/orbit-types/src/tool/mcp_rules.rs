@@ -66,10 +66,7 @@ impl McpWorkspaceEcho {
         match self {
             Self::Never => false,
             Self::Always => true,
-            Self::WhenAny(conditions) => conditions.iter().any(|condition| match condition {
-                McpInputCondition::Present(key) => input.get(key).is_some(),
-                McpInputCondition::True(key) => input.get(key) == Some(&Value::Bool(true)),
-            }),
+            Self::WhenAny(conditions) => conditions.iter().any(|condition| condition.holds(input)),
         }
     }
 }
@@ -81,6 +78,29 @@ pub enum McpInputCondition {
     Present(String),
     /// The argument is exactly the JSON boolean true.
     True(String),
+    /// The argument is exactly this JSON string.
+    Equals {
+        /// Argument name.
+        key: String,
+        /// Required string value.
+        value: String,
+    },
+    /// Every nested condition matches. An empty list matches nothing, so a
+    /// vacant conjunction cannot enable an echo.
+    All(Vec<McpInputCondition>),
+}
+
+impl McpInputCondition {
+    fn holds(&self, input: &Value) -> bool {
+        match self {
+            Self::Present(key) => input.get(key).is_some(),
+            Self::True(key) => input.get(key) == Some(&Value::Bool(true)),
+            Self::Equals { key, value } => input.get(key).and_then(Value::as_str) == Some(value),
+            Self::All(conditions) => {
+                !conditions.is_empty() && conditions.iter().all(|condition| condition.holds(input))
+            }
+        }
+    }
 }
 
 /// A tool definition's declaration of its [`McpIdRoute`], in `const` form.
