@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Regress relative use-tree escapes through the public dependency guard."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 
@@ -1301,5 +1304,56 @@ class RelativeImportTests(unittest.TestCase):
                 self.check_crate_edge("orbit-policy", kind, target, rejected=False)
 
 
+# Each case builds its own fixture tree and spends nearly all of its wall time
+# in guard subprocesses (about 70 short Python and ripgrep children per guard
+# run), so independent cases run concurrently. Four workers match the hosted
+# 4-vCPU guardrails runner, where this suite was the guard pool's longest member.
+CONCURRENT_CASES = 4
+
+
+def available_cpus():
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def run_case(case):
+    result = unittest.TestResult()
+    case(result)
+    return result
+
+
+def run_cases_concurrently():
+    """Run every case once, each with its own result, and report like unittest."""
+    cases = list(unittest.defaultTestLoader.loadTestsFromTestCase(RelativeImportTests))
+    workers = max(1, min(CONCURRENT_CASES, available_cpus(), len(cases)))
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(run_case, cases))
+    elapsed = time.perf_counter() - started
+    problems = [("ERROR", case, trace) for result in results for case, trace in result.errors]
+    problems += [("FAIL", case, trace) for result in results for case, trace in result.failures]
+    for kind, case, trace in problems:
+        print("=" * 70, file=sys.stderr)
+        print(f"{kind}: {case}", file=sys.stderr)
+        print("-" * 70, file=sys.stderr)
+        print(trace, file=sys.stderr)
+    ran = sum(result.testsRun for result in results)
+    unexpected = sum(len(result.unexpectedSuccesses) for result in results)
+    print("-" * 70, file=sys.stderr)
+    print(f"Ran {ran} tests in {elapsed:.3f}s ({workers} concurrent)", file=sys.stderr)
+    # A case that ran nothing, or a lost result, is a failure, never a pass.
+    if not cases or ran != len(cases) or problems or unexpected:
+        print(f"FAILED (cases={len(cases)}, ran={ran}, problems={len(problems)}, "
+              f"unexpected successes={unexpected})", file=sys.stderr)
+        return 1
+    print("OK", file=sys.stderr)
+    return 0
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1:
+        # Named cases or unittest options keep the standard serial runner.
+        unittest.main()
+    else:
+        sys.exit(run_cases_concurrently())

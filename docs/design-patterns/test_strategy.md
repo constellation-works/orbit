@@ -658,6 +658,36 @@ skipped, cancelled and missing runs separately, the nearest-rank p90 against 400
 which runs executed the self-tests, and the cache, scope and CPU strata. That
 measurement is the operator's, not an acceptance gate of this leaf.
 
+A nineteenth pass (ORB-23755) follows the 2026-11-09 watch (ORB-23739: 16 executed PR
+Check jobs in the latest 20 completed PR runs, 4 skipped, none cancelled, nearest-rank
+p90 723 s, median 482.5 s, maximum 757 s). Job timings of that cohort's 16 executed runs
+split again by whether CI guardrails ran the fixture self-tests. With self-tests on (eight
+runs), the guard pool's wall equalled `test-check-dependency-direction.py`'s own wall to
+the second in every run (335–505 s; `test-qa-full-sweep.py` 184–291 s beside it). In the
+four warm-cache runs of that stratum where guardrails ended last (42594632810,
+42588330612, 42583560449, 42583069998), Check ended 5–7 s after guardrails (496–571 s),
+while the slowest test job ended at 238–481 s. With self-tests off, guardrails took
+87–145 s and the test lane bound (392–528 s). Parallel job times are compared by their
+ends, never summed.
+
+That self-test's 45 cases each build their own fixture tree and spend nearly all their
+time in 158 guard runs of about 1.3 s each, mostly about 70 short Python children per
+run. The cases are independent, so the self-test now runs them four at a time on threads,
+one `unittest` result per case. It fails unless every loaded case ran, so no case can be
+lost or selected away. Named cases or unittest options keep the standard serial runner.
+The guard, every case and every assertion are unchanged. With `inherent_calls_into`
+neutered, the concurrent and serial runners report the same 85 failures.
+
+Local evidence: base `83a476554`, a shared 32-logical-CPU AMD Ryzen AI MAX+ 395 Linux
+host at load average 3–10, Python 3.14.4, arms in sequence with no synthetic load. The
+self-test pinned with `taskset -c 0-3 chrt --idle 0` took **221.8 → 68.8 s** wall (user
+CPU 167.8 → 166.7 s). `CI_SELF_TESTS=all taskset -c 0-3 scripts/ci-guardrails.sh
+--guards` took **249 → 171 s** of guard-pool wall. The dependency self-test took 248.5 →
+140.3 s there, and `test-qa-full-sweep.py` (136.5 → 170.8 s, under more contention) is now
+the pool's longest member. The selection was the same 74 entries in both arms. This host
+is not a hosted 4-vCPU runner, and the test lane, which bound every self-test-off run, is
+unchanged, so no local figure here claims the budget is restored.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
 ### Build-runner partition delay (2026-10-31)
