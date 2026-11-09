@@ -359,6 +359,94 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
     let live = agent_rank(&facts, &live, &RankSeasons::default(), Duration::ZERO);
     assert_eq!(live["provisional"], true);
     assert_eq!(row(&live, "recent")["units"], 3);
+
+    rank_admits_single_tier_models_and_flags_them();
+}
+
+fn rank_admits_single_tier_models_and_flags_them() {
+    let days = 20;
+    let mut facts = facts(&[
+        Work {
+            model: Some("solo"),
+            crews: &["solo"],
+            tasks: 40,
+            verdict: accept,
+            regressed: 0,
+            cost: 1.0,
+            days_ago: days,
+        },
+        Work {
+            model: Some("strong"),
+            crews: &["strong-a"],
+            tasks: 40,
+            verdict: accept,
+            regressed: 0,
+            cost: 1.0,
+            days_ago: days,
+        },
+        Work {
+            model: Some("middle"),
+            crews: &["middle"],
+            tasks: 40,
+            verdict: mixed,
+            regressed: 4,
+            cost: 2.0,
+            days_ago: days,
+        },
+        Work {
+            model: Some("weak"),
+            crews: &["weak"],
+            tasks: 40,
+            verdict: poor,
+            regressed: 12,
+            cost: 1.0,
+            days_ago: days,
+        },
+        // Enough tasks overall but no assessed tier: stays ineligible.
+        Work {
+            model: Some("unassessed-only"),
+            crews: &["unassessed-only"],
+            tasks: 35,
+            verdict: accept,
+            regressed: 0,
+            cost: 1.0,
+            days_ago: days,
+        },
+    ]);
+    // Solo works only the hard tier; unassessed-only has no assessed tier.
+    for task in &mut facts.tasks {
+        if task.id.starts_with("T0-") {
+            task.complexity = Some(TaskComplexity::Hard);
+        }
+        if task.id.starts_with("T4-") {
+            task.complexity = None;
+        }
+    }
+    let payload = agent_rank(&facts, &settled(), &RankSeasons::default(), Duration::ZERO);
+    assert_eq!(payload["rules"]["min_tiers"], 1);
+    let solo = row(&payload, "solo");
+    assert_eq!(
+        solo["eligible"], true,
+        "single-tier model is ranked: {solo}"
+    );
+    assert_eq!(solo["single_tier"], "hard");
+    assert!(solo["rank"].is_number() && solo["interval"].is_object());
+    assert!(
+        payload["paired_probabilities"]["solo"]["strong"].is_number(),
+        "paired probabilities include the single-tier model"
+    );
+    assert_eq!(row(&payload, "strong")["single_tier"], Value::Null);
+    let unassessed = row(&payload, "unassessed-only");
+    assert_eq!(unassessed["eligible"], false);
+    assert_eq!(unassessed["single_tier"], Value::Null);
+    assert!(
+        unassessed["ineligible_reason"]
+            .as_str()
+            .unwrap()
+            .contains("1 needed"),
+        "{}",
+        unassessed["ineligible_reason"]
+    );
 }
 
 #[test]

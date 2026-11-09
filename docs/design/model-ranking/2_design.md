@@ -1,8 +1,8 @@
 ---
 title: Model Ranking — Design
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-09
+last_validated: 2026-11-09
 status: Draft
 feature: model-ranking
 doc_role: design
@@ -149,8 +149,10 @@ score(r) = 100 + 10 × z_s(r)
   tool calls) contributes 0 and its weight drops out of that row's denominator. The detail
   shows it as unmeasured.
 
-A row is **eligible** with at least 30 implemented tasks spanning at least two assessed
-tiers, each with at least 5 of its tasks. The board is **qualified** when at least 3 models
+A row is **eligible** with at least 30 implemented tasks and at least one assessed
+tier with at least 5 of its tasks. A model eligible on exactly one assessed tier is
+flagged **single-tier**, naming that tier (`single tier: hard`); the flag is a label,
+not a change to its score. The board is **qualified** when at least 3 models
 are eligible. An unqualified board shows scores without bands or ranks and is never frozen
 as a result.
 
@@ -330,7 +332,8 @@ change starts a new season (§4.2).
   (`p10`, `p90`), `rank` and `rank_label` (`2=`), `cost` (`ratio`, `per_task`,
   `expected_per_task`, `coverage`, `cost_unknown`), per-measure `actual`, `expected`,
   `residual`, `units`, `contribution` (score points before shrinkage) and `status`,
-  eligibility, `crews` and `effort_split`. Each row also carries `tiers`
+  eligibility, `single_tier` (the sole assessed tier's name for an eligible
+  single-tier model, else `null`), `crews` and `effort_split`. Each row also carries `tiers`
   (tasks, an unsmoothed score, cost per task, coverage and `cost_unknown`),
   `lines` (landed lines changed) and `execution` (managed, interactive and
   unclassified tasks). Per board: `measures` with their scales, `season`,
