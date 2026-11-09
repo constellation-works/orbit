@@ -60,6 +60,15 @@ const TRIGGER_CONSUMER: &str = "clock-sweep";
 /// Recent refresh runs scanned for a live one.
 const RUN_SCAN_LIMIT: usize = 20;
 
+// One task id whose history read the next baseline-hold pass treats as
+// unreadable. A corrupt bundle fails the backlog listing itself, so the
+// per-task isolation this pass owes cannot be reached by damaging a document.
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_BASELINE_HOLD_HISTORY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// What one check of the standing baseline-red holds did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct BaselineHoldRefresh {
@@ -193,7 +202,17 @@ impl OrbitRuntime {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 break;
             }
-            let Some(standing) = StandingHold::latest(&self.get_task_history(&task.id)?) else {
+            let history = match self.baseline_hold_task_history(&task.id) {
+                Ok(history) => history,
+                Err(error) => {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        "could not read a baseline-held task's history: {error}"
+                    );
+                    continue;
+                }
+            };
+            let Some(standing) = StandingHold::latest(&history) else {
                 continue;
             };
             if standing
@@ -250,6 +269,21 @@ impl OrbitRuntime {
             }
         }
         Ok(refresh)
+    }
+
+    /// History of one backlog task. A failure here is one task's document,
+    /// not a reason to abandon every later hold in the workspace.
+    fn baseline_hold_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        #[cfg(test)]
+        if FAIL_BASELINE_HOLD_HISTORY.with(|fail| fail.borrow().as_deref() == Some(task_id)) {
+            return Err(OrbitError::Store(format!(
+                "task {task_id} history is unreadable"
+            )));
+        }
+        self.get_task_history(task_id)
     }
 
     /// Whether a [`BASELINE_HOLD_REFRESH_JOB`] run is still live here.

@@ -16,20 +16,30 @@ use crate::OrbitRuntime;
 
 impl OrbitRuntime {
     /// The commit the run's worktree was cut from, as its `worktree` step
-    /// recorded it, or else this checkout's `HEAD` commit.
+    /// recorded it. A run with no recorded state falls back to this checkout's
+    /// `HEAD`. An unreadable record does not: substituting `HEAD` would pin
+    /// corpus, tag-instruction and experiment reads to a different revision
+    /// with no trace of the substitution.
     pub(crate) fn run_base_revision(&self, run_id: &str) -> Result<String, String> {
-        let recorded = self
-            .stored_run_state(run_id)
-            .ok()
-            .flatten()
-            .and_then(|state| {
-                state
-                    .pipeline
-                    .get("worktree")
-                    .and_then(|worktree| worktree.get("base_sha"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
+        let state = match self.stored_run_state(run_id) {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    %error,
+                    "run base revision: stored run state is unreadable"
+                );
+                return Err(format!("run {run_id} state is unreadable: {error}"));
+            }
+        };
+        let recorded = state.and_then(|state| {
+            state
+                .pipeline
+                .get("worktree")
+                .and_then(|worktree| worktree.get("base_sha"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
         match recorded {
             Some(sha) => commit_at(&self.paths().repo_root, &sha),
             None => commit_at(&self.paths().repo_root, "HEAD"),

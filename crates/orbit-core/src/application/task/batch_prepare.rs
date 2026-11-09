@@ -28,6 +28,13 @@ pub(crate) enum Qualification<T> {
     Rejected(&'static str),
 }
 
+/// Candidates a prepare pass has already classified.
+struct PreparedSelection<T> {
+    selected: Vec<(Task, T)>,
+    superseded: Vec<Value>,
+    excluded: BTreeMap<&'static str, usize>,
+}
+
 /// Tasks live runs hold, by task ID, with the holding run IDs.
 pub(crate) type HeldRuns = BTreeMap<String, BTreeSet<String>>;
 
@@ -44,6 +51,43 @@ pub(crate) struct BatchSpec {
     pub silent_reasons: &'static [&'static str],
     pub before_workspace: Vec<(&'static str, Value)>,
     pub before_task_count: Vec<(&'static str, Value)>,
+}
+
+/// Classify one loaded candidate. The caller applies `max_tasks` before the
+/// load in automatic mode; this still defers a qualifier that arrives after
+/// the cap, which is how an explicit list that somehow exceeds it settles.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one loaded candidate's qualification shares the prepare pass's hooks and accumulators"
+)]
+fn admit_loaded_candidate<T>(
+    task: Task,
+    explicit: bool,
+    max_tasks: usize,
+    held: &HeldRuns,
+    silent_reasons: &[&'static str],
+    qualify: &mut impl FnMut(&Task, &HeldRuns, bool) -> Result<Qualification<T>, OrbitError>,
+    skipped_detail: &impl Fn(&str, Option<&BTreeSet<String>>) -> String,
+    failed: &impl Fn(OrbitError) -> DispatchError,
+    prepared: &mut PreparedSelection<T>,
+) -> Result<(), DispatchError> {
+    match qualify(&task, held, explicit).map_err(failed)? {
+        Qualification::Selected(_) if prepared.selected.len() >= max_tasks => {
+            *prepared
+                .excluded
+                .entry("deferred_by_max_tasks")
+                .or_default() += 1;
+        }
+        Qualification::Selected(payload) => prepared.selected.push((task, payload)),
+        Qualification::Rejected(reason) if explicit => prepared.superseded.push(json!({
+            "task_id": task.id, "outcome": "superseded", "reason": reason,
+            "status": task.status,
+            "detail": skipped_detail(reason, held.get(&task.id)),
+        })),
+        Qualification::Rejected(reason) if silent_reasons.contains(&reason) => {}
+        Qualification::Rejected(reason) => *prepared.excluded.entry(reason).or_default() += 1,
+    }
+    Ok(())
 }
 
 /// Run the shared batch-selection skeleton. The hooks carry the steps'
@@ -107,9 +151,15 @@ pub(crate) fn prepare_batch<T>(
         });
     }
 
-    let candidates = if explicit {
+    // An explicitly named task that no longer qualifies settles superseded
+    // with its reason, so a claimed member is released rather than failed.
+    let mut prepared = PreparedSelection {
+        selected: Vec::new(),
+        superseded: Vec::new(),
+        excluded: BTreeMap::new(),
+    };
+    if explicit {
         let mut seen = BTreeSet::new();
-        let mut tasks = Vec::with_capacity(explicit_task_ids.len());
         for task_id in &explicit_task_ids {
             if !seen.insert(task_id.as_str()) {
                 return Err(DispatchError::action_failed(
@@ -117,7 +167,7 @@ pub(crate) fn prepare_batch<T>(
                     format!("explicit task_ids contains duplicate {task_id}"),
                 ));
             }
-            tasks.push(runtime.get_task(task_id).map_err(|error| {
+            let task = runtime.get_task(task_id).map_err(|error| {
                 if matches!(error, OrbitError::NotFound { .. }) {
                     DispatchError::action_failed(
                         action,
@@ -126,50 +176,61 @@ pub(crate) fn prepare_batch<T>(
                 } else {
                     failed(error)
                 }
-            })?);
+            })?;
+            admit_loaded_candidate(
+                task,
+                explicit,
+                max_tasks,
+                &held,
+                spec.silent_reasons,
+                &mut qualify,
+                &skipped_detail,
+                &failed,
+                &mut prepared,
+            )?;
         }
-        tasks
     } else {
         let mut envelopes = runtime
             .task_candidates(&spec.automatic_filter, usize::MAX)
-            .map_err(failed)?
+            .map_err(&failed)?
             .items;
         // Oldest first, so a capped pass makes progress through them.
+        // Full bodies stop once `max_tasks` are selected: the tail is counted
+        // deferred and never hydrated.
         envelopes.sort_by(|left, right| {
             left.created_at
                 .cmp(&right.created_at)
                 .then(left.id.cmp(&right.id))
         });
-        envelopes
-            .iter()
-            .map(|envelope| runtime.get_task(&envelope.id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?
-            .into_iter()
-            .filter(|task| keep_automatic(task))
-            .collect()
-    };
-
-    // An explicitly named task that no longer qualifies settles superseded
-    // with its reason, so a claimed member is released rather than failed.
-    let mut superseded = Vec::new();
-    let mut excluded = BTreeMap::<&'static str, usize>::new();
-    let mut selected = Vec::new();
-    for task in candidates {
-        match qualify(&task, &held, explicit).map_err(failed)? {
-            Qualification::Selected(_) if selected.len() >= max_tasks => {
-                *excluded.entry("deferred_by_max_tasks").or_default() += 1;
+        for envelope in envelopes {
+            if prepared.selected.len() >= max_tasks {
+                *prepared
+                    .excluded
+                    .entry("deferred_by_max_tasks")
+                    .or_default() += 1;
+                continue;
             }
-            Qualification::Selected(payload) => selected.push((task, payload)),
-            Qualification::Rejected(reason) if explicit => superseded.push(json!({
-                "task_id": task.id, "outcome": "superseded", "reason": reason,
-                "status": task.status,
-                "detail": skipped_detail(reason, held.get(&task.id)),
-            })),
-            Qualification::Rejected(reason) if spec.silent_reasons.contains(&reason) => {}
-            Qualification::Rejected(reason) => *excluded.entry(reason).or_default() += 1,
+            let task = runtime.get_task(&envelope.id).map_err(&failed)?;
+            if keep_automatic(&task) {
+                admit_loaded_candidate(
+                    task,
+                    explicit,
+                    max_tasks,
+                    &held,
+                    spec.silent_reasons,
+                    &mut qualify,
+                    &skipped_detail,
+                    &failed,
+                    &mut prepared,
+                )?;
+            }
         }
     }
+    let PreparedSelection {
+        selected,
+        superseded,
+        excluded,
+    } = prepared;
 
     // Every task's crew is drawn before any is dispatched, so its crew is
     // part of the prepared checkpoint the run records.

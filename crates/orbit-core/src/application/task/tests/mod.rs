@@ -1,10 +1,17 @@
 #![allow(missing_docs)]
 
 mod add;
+mod base_revision;
+mod baseline_hold;
+mod batch_prepare;
+mod human_format;
 mod lifecycle;
 mod paths;
 mod resolves;
+mod retained_candidate;
+mod transient_infra;
 mod transitions;
+mod write_response;
 
 use std::process::Command;
 
