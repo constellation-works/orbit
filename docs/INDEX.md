@@ -141,12 +141,11 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (10)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
-| [Auditability](./design/auditability/1_overview.md) | Develop tamper evidence and joined queries | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Crew Memory](./design/crew-memory/1_overview.md) | M1–M4 are built behind the disabled-by-default gate; next run the M5 memory-on vs memory-off experiment | claude |
@@ -166,13 +165,14 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (35)
+### Shipped (36)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Activity / Job](./design/activity-job/1_overview.md) | Release-readiness example (ORB-20166) stays disabled until its owner prerequisites are met; completion contracts/history (ORB-20165), historical reuse (ORB-22649) and condition facts over accepted history (ORB-20397) shipped | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
+| [Auditability](./design/auditability/1_overview.md) | — | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Operator decides when admission moves from shadow to forecast mode | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |

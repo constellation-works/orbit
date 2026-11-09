@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -285,7 +285,7 @@ policy:
 `owner_machine` is required and only that machine admits new work. State routines
 require `overlap: forbid` and the job fixed by their kind:
 `preparation_eligible` targets `job:task_pilot_pipeline`.
-`finding_unverified` ([finding verification](../_archived/finding-verification/2_design.md#7-state-trigger))
+`finding_unverified` ([ORB-15662] added it; [finding verification](../_archived/finding-verification/2_design.md#7-state-trigger))
 and `pilot_warnings_held` ([pilot warning holds](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held))
 are retired [ORB-22844]: they still parse, observe nothing, and a routine on either loads as
 retired.
@@ -1117,5 +1117,6 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-22804] retired that routine and its job with crew-performance weighting.
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
+- [ORB-23115] added the seeded `crew_memory_dream` routine, targeting the crew-memory dream job.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

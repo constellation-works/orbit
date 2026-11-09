@@ -3,7 +3,7 @@ summary: "Auditability — Design"
 type: design
 title: "Auditability — Design"
 owner: codex
-last_updated: 2026-11-03
+last_updated: 2026-11-08
 last_validated: 2026-11-03
 status: Draft
 feature: auditability
@@ -45,7 +45,7 @@ For `orbit tool run`, [T20260427-52] first collapsed duplicate `agent` + `model`
 After [T20260428-4], tool-invocation audit is written at Core's dispatch boundary for
 registered CLI/MCP tools. The current implementation is
 `crates/orbit-core/src/adapter/command/dispatch/execute/audit_store.rs`: a `ToolEntryPoint`
-(`execute/entry.rs`) becomes `subcommand: "run"` or `"run-mcp"`, setup and handler failures inside the boundary are
+(`crates/orbit-core/src/adapter/command/dispatch/execute/entry.rs`) becomes `subcommand: "run"` or `"run-mcp"`, setup and handler failures inside the boundary are
 audited, and `duration_ms` is at least `1`. The CLI RAII guard covers top-level command
 execution and suppresses its duplicate after Core records a tool row; paths such as `--dry-run` still produce a guard-side row after runtime bootstrap.
 Invalid JSON and other preflight or bootstrap failures occur before the guard exists
@@ -352,6 +352,9 @@ Friction creation uses the shared `friction_write::project_committed_friction` p
 - [ORB-20668] — Reconciled audit warning, MCP correlation, snapshot and forecast contracts with code.
 - [ORB-20702] — Corrected the GPT-5.6 Sol price period and filled its historical gap.
 - [ORB-21797] — Restored the friction live-tracing projection.
+- [ORB-22028] — Kept closed-task analytics in their actual completion buckets, counting each task at its latest terminal entry.
+- [ORB-22423] — Bounded the cost of reading closed-task completion history.
+- [ORB-22805] — Removed the explore brief and its `brief_accuracy` diagnostics endpoint.
 - [T20260427-52] — Collapsed duplicate agent and model inputs on tool invocation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

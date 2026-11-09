@@ -3,11 +3,11 @@ summary: "Auditability — Overview"
 type: design
 title: "Auditability — Overview"
 owner: codex
-last_updated: 2026-11-03
+last_updated: 2026-11-08
 last_validated: 2026-10-31
 status: Draft
-stage: building
-next: "Develop tamper evidence and joined queries"
+stage: shipped
+next: "—"
 feature: auditability
 doc_role: overview
 tags: ["auditability"]
@@ -19,8 +19,9 @@ Auditability is Orbit's answer to the operator question that matters after an ag
 
 The main audit channels are implemented, including the friction live-projection
 contract in [the coverage matrix](./specs/coverage-matrix.md#operation-classes)
-restored by [ORB-21797]. The feature remains `building`; tamper evidence and
-joined queries remain vision work.
+restored by [ORB-21797]. The feature is `shipped`: no auditability implementation task is open,
+and tamper evidence and joined queries remain vision work. The known gaps listed in the coverage
+matrix have no filed task yet.
 
 ---
 

@@ -40,7 +40,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - A provider request or response must not be stored inline in a command audit row.
 - A policy or allowlist denial must record both the denied subject and the reason.
 - Live tracing projections must be additional to canonical audit, error, log, or scoreboard writes.
-- A friction submission projects `orbit.friction.reported` once after its canonical transaction commits, with a redacted title and no body. Reports outside a task carry an empty `task_id`; rejected writes, receipt replays and dedupe reuse emit no successful-submission event.
+- A friction submission projects `orbit.friction.reported` once after its canonical transaction commits (projection restored by [ORB-21797]), with a redacted title and no body. Reports outside a task carry an empty `task_id`; rejected writes, receipt replays and dedupe reuse emit no successful-submission event.
 - A task-state mutation must leave task history or document metadata in addition to any audit row.
 - New operation classes must update this matrix in the same PR that introduces the operation.
 - Registry-backed and in-process MCP tools must have parity for preflight denial, runtime success, and tool failure, with one trusted call context across the path.

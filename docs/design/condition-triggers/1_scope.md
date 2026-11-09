@@ -1,7 +1,7 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 last_validated: 2026-11-03
 status: Draft
 stage: building
@@ -1461,5 +1461,9 @@ Daniel's answers, folded into the sections named:
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.
 - [ORB-19206] — orbit-office orchestration that relayed the watched-folder intake requirements for use case D.
 - [ORB-22649] — shipped historical `reuse_when` matching in auto-task job steps.
+- [ORB-20166] — composed the release-readiness job and routine as a disabled, unseeded example.
+- [ORB-20397] — exposed `self.last_succeeded_at` from accepted-result history to conditions.
+- [ORB-22676] — exposed `auto_tasks['<name>'].last_succeeded_at` to routine conditions.
+- [ORB-22844] — retired the `finding_unverified` and `pilot_warnings_held` trigger sources with their routines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
