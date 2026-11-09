@@ -260,8 +260,9 @@ impl WorktreeBoundaryGuard {
 
     /// Compare both monitored checkouts after the provider reaches any
     /// terminal outcome. A stationary primary delta is benign only for
-    /// `.orbit/` record-store dirt that does not intersect paths this run
-    /// changed. A primary move is benign only onto `workflow.base_branch` at
+    /// `.orbit/` record-store dirt or Orbit's root-level generation records
+    /// that do not intersect paths this run changed. A primary move is benign
+    /// only onto `workflow.base_branch` at
     /// or ahead of that branch's tip at capture (see [`PrimaryBaseline`]):
     /// linked worktrees retain their own HEAD, and the later fetched-base
     /// rebase is the authority for candidate-versus-target integration.
@@ -597,13 +598,24 @@ fn fingerprint_summary(fingerprint: &GitWorktreeFingerprint) -> Value {
 /// Record-store paths rewritten by the engine and by out-of-run curation.
 /// They are not part of a run's code candidate.
 const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
+/// Generation records Orbit writes at the repository root while a run is in
+/// flight. Names match `crates/orbit-common/src/fs/generation/paths.rs`
+/// (`COMPAT_RECORD`, `IMAGE_DIGEST_CACHE`) and
+/// `crates/orbit-common/src/fs/generation/registry.rs` (`PARTICIPANTS_DIR`).
+const GENERATION_COMPAT_RECORD: &str = ".generation-compat.json";
+const GENERATION_IMAGE_DIGEST_CACHE: &str = ".generation-image-digest.json";
+const GENERATION_PARTICIPANTS_DIR: &str = ".generation-participants";
+const GENERATION_PARTICIPANTS_PREFIX: &str = ".generation-participants/";
 
 /// Accept stationary primary record-store dirt that does not touch the run.
 ///
-/// HEAD and branch are unchanged. Every dirt path is under `.orbit/`, and none
-/// of those paths intersect the run's changed paths. That is concurrent
-/// record-store movement — a curation pass re-serializing a tracked record, or
-/// an untracked record file — and it is not the candidate.
+/// HEAD and branch are unchanged. Every dirt path is under `.orbit/` or is one
+/// of Orbit's own root-level generation records (`.generation-compat.json`,
+/// `.generation-image-digest.json`, or a `.generation-participants/` record),
+/// and none of those paths intersect the run's changed paths. That is
+/// concurrent record-store movement — a curation pass re-serializing a tracked
+/// record, an untracked record file, or a generation rewrite during the run —
+/// and it is not the candidate.
 ///
 /// Snapshots still cannot name the writer. An unrestricted provider can edit
 /// the primary checkout directly, and that edit is indistinguishable from
@@ -629,7 +641,18 @@ fn primary_stationary_dirt_delta_is_benign(
         && conflicting_paths.is_empty()
         && primary_dirt_paths
             .iter()
-            .all(|path| path.starts_with(ORBIT_RECORD_STORE_PREFIX))
+            .all(|path| is_benign_stationary_primary_path(path))
+}
+
+/// Whether a stationary-primary dirt path is Orbit-owned record-store movement
+/// rather than source drift: `.orbit/` record-store dirt or one of the
+/// root-level generation records.
+fn is_benign_stationary_primary_path(path: &str) -> bool {
+    path.starts_with(ORBIT_RECORD_STORE_PREFIX)
+        || path == GENERATION_COMPAT_RECORD
+        || path == GENERATION_IMAGE_DIGEST_CACHE
+        || path == GENERATION_PARTICIPANTS_DIR
+        || path.starts_with(GENERATION_PARTICIPANTS_PREFIX)
 }
 
 /// The registered primary checkout's baseline [ORB-19177]: the workspace's
