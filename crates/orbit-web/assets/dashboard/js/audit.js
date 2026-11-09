@@ -2,7 +2,7 @@
 // Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -477,26 +477,18 @@ function incidentScanPartialCoverageNote(scanLimit) {
   return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
 }
 
-function renderToolCallFailureRateCard(stats, window = "24h") {
+// The headline failure rate is the first line of the per-tool failures panel it
+// summarises (STD-07 §R29). Its definition sits behind an info icon (§R13), so
+// it reads on hover, keyboard focus or tap rather than as a caption.
+function toolCallFailureRateLine(stats) {
   const failed = Number(stats && stats.failed) || 0;
   const total = Number(stats && stats.total) || 0;
   const rate = stats && stats.rate != null ? Number(stats.rate) : (total ? failed / total : 0);
-  const card = el("div", { class: "audit-summary-card" });
-  card.appendChild(el("div", {
-    class: "card-title section-title",
-    text: `Tool call failure rate · window ${window}`,
-  }));
-  const body = el("div", { class: "card-body" });
-  body.appendChild(el("div", {
-    class: "tool-call-failure-rate",
-    text: `${formatFailureRatePct(rate)} · ${failed} failed / ${total} tool calls`,
-  }));
-  body.appendChild(el("div", {
-    class: "metric-trend tool-call-failure-rate-note",
-    text: `Raw status=failure over successful + failed callable tool calls (tool run + tool run-mcp). ${Number(stats && stats.denied) || 0} denied calls excluded. Distinct from unexpected failure rate.`,
-  }));
-  card.appendChild(body);
-  return card;
+  const denied = Number(stats && stats.denied) || 0;
+  return el("div", { class: "tool-call-failure-rate" }, [
+    el("span", { text: `${formatFailureRatePct(rate)} · ${failed} failed / ${total} tool calls` }),
+    pinnedInfoHint(`Raw status=failure over successful + failed callable tool calls (tool run + tool run-mcp). ${denied} denied calls excluded. Distinct from unexpected failure rate.`),
+  ]);
 }
 
 function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
@@ -505,13 +497,16 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
   }
 
-  const container = el("div", { class: "audit-summary-container" });
-  container.appendChild(el("h3", {
-    class: "summary-title section-title",
+  // Same card chrome and title row as the per-tool panel beside it, so the
+  // side-by-side pair's headers share a top edge and height (§R2).
+  const panel = el("div", { class: "audit-summary-card" });
+  panel.appendChild(el("h3", {
+    class: "card-title section-title",
     text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
   }));
+  const body = el("div", { class: "card-body tool-health-body" });
   if (capped) {
-    container.appendChild(el("div", {
+    body.appendChild(el("div", {
       class: "metric-trend",
       text: `${incidentScanPartialCoverageNote(scanLimit)} Unexpected-failure counts are scanned, while successful-call counts cover the full window; rates can be understated.`,
     }));
@@ -549,8 +544,9 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     grid.appendChild(card);
   }
 
-  container.appendChild(grid);
-  return container;
+  body.appendChild(grid);
+  panel.appendChild(body);
+  return panel;
 }
 
 // ORB-20482 — the failures-by-tool table reached 50 rows, pushing the rest
@@ -695,28 +691,27 @@ function renderAuditSummary(data, ctx) {
   const title = $("audit-summary-title");
   if (title) title.textContent = `Tool calls ${windowLabel}`;
 
-  if (data.tool_call_failure_rate) {
-    addCard(
-      "tool-call-failure-rate",
-      renderToolCallFailureRateCard(data.tool_call_failure_rate, windowLabel),
-      [data.tool_call_failure_rate, windowLabel],
-    );
-  }
-
+  // The headline rate opens the per-tool panel it summarises (STD-07 §R29), so
+  // the panel also appears with no rows when only the rate is present.
+  const failureRate = data.tool_call_failure_rate;
   const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
-  if (namedToolFailures.length) {
+  if (failureRate || namedToolFailures.length) {
+    const renderToolRows = boundedAuditSummaryTable(namedToolFailures, [
+      { key: "tool", label: "tool" },
+      { key: "failed", label: "failed", num: true },
+      { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
+      { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+      { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
+      { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
+    ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools");
     addCard(AUDIT_TOOL_FAILURES_CARD_KEY, createCard(
       `Tool call failures by tool · window ${windowLabel}`,
-      boundedAuditSummaryTable(namedToolFailures, [
-        { key: "tool", label: "tool" },
-        { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
-        { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
-        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
-        { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-      ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools"),
+      (body) => {
+        if (failureRate) body.appendChild(toolCallFailureRateLine(failureRate));
+        renderToolRows(body);
+      },
       true,
-    ), [namedToolFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
+    ), [namedToolFailures, windowLabel, failureRate, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
   }
 
   const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));

@@ -438,7 +438,6 @@ td .rel-rate { font-size: 12px; }
 
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */
 @media (max-width: 720px) {
-  .tool-health-grid { grid-template-columns: minmax(0, 1fr); }
   .health-card .card-header { flex-wrap: wrap; align-items: flex-start; }
   .health-card .tool-name { white-space: normal; overflow-wrap: anywhere; }
 }

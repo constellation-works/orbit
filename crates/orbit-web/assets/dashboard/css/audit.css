@@ -410,15 +410,15 @@ td.codebase-empty { padding: 16px 14px; }
   background: var(--bg);
 }
 @media (min-width: 1500px) {
-  /* Rows: status note, rate card, one row per side card, then a flexible row
-     that takes the rest of the table's height. The table and last present
-     side card stretch to the shared bottom; earlier side cards keep their
-     own heights. Margins rather than row gaps space the cards, so a card
-     that is absent leaves no gap. */
+  /* Rows: status note, one row per side card, then a flexible row that takes
+     the rest of the table's height. The table and last present side card
+     stretch to the shared bottom; earlier side cards keep their own heights.
+     Margins rather than row gaps space the cards, so a card that is absent
+     leaves no gap. */
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    grid-template-rows: repeat(7, auto) 1fr;
+    grid-template-rows: repeat(6, auto) 1fr;
     column-gap: 16px;
     row-gap: 0;
     padding-bottom: 0;
@@ -426,13 +426,12 @@ td.codebase-empty { padding: 16px 14px; }
   }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: 16px; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failure-rate"] { grid-row: 2; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; align-self: stretch; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 3; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 4; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 5; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 6; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 7; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 2 / -1; align-self: stretch; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 2; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 3; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 4; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 5; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 6; }
   /* syncNodes preserves addCard order: side cards follow the table. A status
      note has no data-key and must not prevent the last card from stretching. */
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > :is(
@@ -523,22 +522,23 @@ td.codebase-empty { padding: 16px 14px; }
 .summary-table tr.clickable { cursor: pointer; }
 .summary-table tr.clickable:hover td { background: rgba(110, 159, 255, 0.08); color: var(--accent-hover); }
 
-/* Failures-by-Tool health cards */
-.audit-summary-container {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 16px;
-}
-.summary-title {
-  margin: 0 0 14px 0;
+/* Failures-by-Tool health cards. The cards wrap in a flex row rather than a
+   fixed grid: a card that ends a row alone grows to the full row, so no card
+   sits beside empty space whatever the width or card count. */
+.audit-summary-card .tool-health-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .tool-health-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 .health-card {
+  flex: 1 1 240px;
+  min-width: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -585,16 +585,16 @@ td.codebase-empty { padding: 16px 14px; }
   font-size: 11px;
   color: var(--fg-dim);
 }
+/* Headline failure rate: the first line of the per-tool failures panel. The
+   info icon's 44px target hangs past the line, so its negative margins keep
+   the line's height. */
 .tool-call-failure-rate {
+  display: flex;
+  align-items: center;
   font: 12px var(--font-mono);
   color: var(--fg);
-  padding: 12px 12px 4px;
-}
-.tool-call-failure-rate-note {
-  padding: 0 12px 12px;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--fg-dim);
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
 }
 .lifecycle-failure-counts {
   font: 12px var(--font-mono); color: var(--fg); overflow-wrap: anywhere; margin-bottom: 6px;
