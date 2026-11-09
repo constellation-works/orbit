@@ -434,11 +434,13 @@ re-init does not overwrite a workspace-authored definition of the same name.
   evidence, carrying the record between runs in a `path-risk.json` artifact.
   Each run files at most 3 `proposed` fixes, tagged `path-risk-review` and
   `no-auto-approve`, with `context_files` and a `spawned_from` relation to the
-  minted chore. A fix changes the mechanism behind its path class (a footprint
-  or lock rule, a generator check, or a split of a coupling hotspot), never one
-  regression. A workspace whose rankings all sit below `min_support` is a
-  successful no-op that reports each ranking's below-support counts and files
-  nothing.
+  minted chore. A split or new module names each file it creates in
+  `context_files` and is filed with `allow_missing_context: true`, so the task
+  carries `context_creation_authorized`. A fix changes the mechanism behind its
+  path class (a footprint or lock rule, a generator check, or a split of a
+  coupling hotspot), never one regression. A workspace whose rankings all sit
+  below `min_support` is a successful no-op that reports each ranking's
+  below-support counts and files nothing.
   The minted chore is tagged `no-diff-expected` and never builds or runs tests.
 - `agent-guidance-audit` — disabled-by-default audit every 3 days of agent
   guidance files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`,

@@ -233,6 +233,7 @@ fn rows(
                         .filter(|earlier| earlier.at < review.at)
                         .map(|earlier| earlier.at)
                         .max(),
+                    until: Some(review.at),
                 },
             );
             let row = rows
@@ -313,6 +314,7 @@ fn rows(
                 model: runner.model.as_deref(),
                 activity_id: None,
                 after: None,
+                until: None,
             },
         );
         let row = rows
@@ -403,7 +405,12 @@ fn rows(
                 task_id: Some(&charge.task_id),
                 model: charge.model.as_deref(),
                 activity_id: charge.activity_id.as_deref(),
-                after: None,
+                after: charge.after,
+                until: charge
+                    .activity_id
+                    .as_ref()
+                    .filter(|_| matches!(activity, MainActivity::Review))
+                    .map(|_| charge.anchor),
             },
         );
         let row = rows

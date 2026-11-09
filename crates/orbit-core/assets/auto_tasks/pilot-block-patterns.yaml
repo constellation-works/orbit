@@ -215,6 +215,14 @@ template:
     does not provide `scripts/agent-corpus.py`, say which is missing in the execution
     summary and finish with a clean worktree as a valid no-diff handoff. Still attach
     the report and cursor and complete the other rules. Do not create a corpus here.
+    Also attach `no-diff.json` with `schema_version: 1`, this task's `task_id`, this
+    run's `run_id` (or its recorded retry lineage), the pinned HEAD checked as
+    `tested_head`, a reason no change was required, and a non-empty `validation` array
+    with one `{command, exit_code: 0, log_artifact}` entry for each validation command
+    run. Run every required validation command and at least one applicable focused
+    check; attach each referenced log as a separate task artifact. Each log is JSON
+    with matching `run_id`, `tested_head`, and `command`, plus `exit_code: 0` and the
+    captured `output`. Record and attach this evidence alongside the report and cursor.
 
     When both are present, before handoff propose every group observed in this pass in
     the mapped corpus directory.

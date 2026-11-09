@@ -138,6 +138,13 @@ pub(super) fn enable_review_crew(fixture: &Fixture) {
             &pooled,
         );
     }
+    // Init likewise seeds `workflow.purpose_crews.pre_landing_review` from
+    // the detected families; on a host that runs all of them the pool is
+    // non-empty, so before-PR review would draw from it instead of falling
+    // back to `workflow.purpose_crews.review` as these tests arrange. An
+    // empty pool keeps that fallback; a test that wants a pre-landing pool
+    // sets it after this helper runs.
+    set_policy(fixture, "workflow.purpose_crews.pre_landing_review", "[]");
 }
 
 /// Toggle the shipped consumer, as an operator switching after-landing

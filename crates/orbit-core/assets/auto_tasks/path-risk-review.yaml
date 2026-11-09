@@ -44,13 +44,13 @@ template:
 
     Read the installed `orbit` skill's task-authoring reference, then file each cause with `orbit tool run orbit.task.add`. Use the shape that fits the mechanism: `refactor` for a split, `chore` for a footprint, lock or generator rule, and `bug` for a flaky or defective test.
 
-    `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown: path class, paths, rates and support in both windows, representative task IDs, verified cause with file and line evidence, the mechanism it changes, and how the rate should move>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
+    `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown: path class, paths, rates and support in both windows, representative task IDs, verified cause with file and line evidence, the mechanism it changes, and how the rate should move>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>","file:<new module path>"],"allow_missing_context":true,"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
 
     `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown with the same contents>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
 
     `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown with the same contents>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>","file:<test path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high>","workspace":"<current workspace path>","model":"<agent-family>"}'`
 
-    Every filed task is `proposed`, carries verified `context_files` and its `spawned_from` relation, and its description names the path class and the mechanism it changes. Add observable acceptance criteria.
+    Every filed task is `proposed`, carries its `spawned_from` relation, and its description names the path class and the mechanism it changes. Every `context_files` selector must name an existing file, except a file the fix creates. A split or new module names each new file path in `context_files` and is filed with `allow_missing_context: true`, which records creation authorization for those exact selectors (`context_creation_authorized`). Without it the task pilot holds the filed task, because the implementer may not create files. A chore or bug fix that creates a file (a generator, a new test file) follows the same rule. Add observable acceptance criteria.
 
     ## Record
 
@@ -59,7 +59,8 @@ template:
   - At most five paths were investigated, chosen from the 30d and 90d rankings with multi-ranking paths first, and each was followed to the tasks behind its rates
   - Each investigated path names a dominant cause backed by task IDs and code evidence, or is reported as unestablished without filing
   - Existing tasks and frictions were searched before filing; each untracked cause became one proposed task tagged path-risk-review and no-auto-approve, with rates, evidence, proposed change and acceptance criteria; no duplicates were filed
-  - Each filed fix names its path class and the mechanism it changes, carries spawned_from and verified context_files, and at most three were filed in the run
+  - Each filed fix names its path class and the mechanism it changes, carries spawned_from and context_files (existing files, or new files granted with allow_missing_context), and at most three were filed in the run
+  - Every filed split or new-module fix names each file it creates in context_files and was filed with allow_missing_context set to true, so the task carries context_creation_authorized
   - A run where every ranking is below min_support ends as a successful no-op that reports each ranking's below_support count and any population reported, and files nothing
   - The prior instance's fixed paths were re-measured and their rate changes reported
   - path-risk.json is attached, nothing was mutated besides filed tasks and this task's artifact, and a run with nothing to file succeeds as a no-op
