@@ -1,7 +1,6 @@
 //! Compiled Landlock path grants: what a rule lets the child do with one path,
 //! the read and write predicates over a grant list, and de-duplication.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// What a compiled grant lets the child do with one path.
@@ -41,6 +40,14 @@ pub enum LandlockGrant {
 pub struct LandlockPathGrant {
     pub path: PathBuf,
     pub grant: LandlockGrant,
+    /// Whether a path that vanished after it was found may be skipped when
+    /// the ruleset is opened. Only a path found by walking a granted
+    /// directory (an enumerated sibling beneath a shared directory such as
+    /// `TMPDIR`) carries this: another owner may remove it between the walk
+    /// and the open, and its absence grants nothing. A path the policy,
+    /// boundary or host table names itself never carries it, so a missing
+    /// named target is still refused when the ruleset is opened.
+    pub allow_vanished: bool,
 }
 
 impl LandlockPathGrant {
@@ -48,6 +55,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::ReadTree,
+            allow_vanished: false,
         }
     }
 
@@ -55,6 +63,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::ListOnly,
+            allow_vanished: false,
         }
     }
 
@@ -62,6 +71,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::ReadFile,
+            allow_vanished: false,
         }
     }
 
@@ -69,6 +79,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::WriteTree,
+            allow_vanished: false,
         }
     }
 
@@ -76,6 +87,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::WriteFile,
+            allow_vanished: false,
         }
     }
 
@@ -83,6 +95,7 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::WriteOnlyTree,
+            allow_vanished: false,
         }
     }
 
@@ -90,7 +103,16 @@ impl LandlockPathGrant {
         Self {
             path,
             grant: LandlockGrant::WriteOnlyFile,
+            allow_vanished: false,
         }
+    }
+
+    /// Mark a grant found by walking a granted directory: it may have
+    /// vanished by the time the ruleset opens it. See
+    /// [`Self::allow_vanished`].
+    pub(super) fn enumerated(mut self) -> Self {
+        self.allow_vanished = true;
+        self
     }
 
     /// Whether this grant alone lets the child open `path` for reading.
@@ -125,9 +147,18 @@ pub fn grants_read(grants: &[LandlockPathGrant], path: &Path) -> bool {
 }
 
 pub(super) fn dedupe(grants: Vec<LandlockPathGrant>) -> Vec<LandlockPathGrant> {
-    let mut seen = BTreeSet::new();
-    grants
-        .into_iter()
-        .filter(|grant| seen.insert((grant.path.clone(), grant.grant)))
-        .collect()
+    // A named (required) spelling of a grant wins over an enumerated one for
+    // the same path and right: deduplication must not soften a named target
+    // into one that may vanish silently.
+    let mut deduped: Vec<LandlockPathGrant> = Vec::new();
+    for grant in grants {
+        match deduped
+            .iter_mut()
+            .find(|kept| kept.path == grant.path && kept.grant == grant.grant)
+        {
+            Some(kept) => kept.allow_vanished &= grant.allow_vanished,
+            None => deduped.push(grant),
+        }
+    }
+    deduped
 }
