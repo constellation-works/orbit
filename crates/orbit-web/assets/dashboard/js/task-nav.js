@@ -4,7 +4,7 @@ import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceC
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
-import { humanCrewFor, isMyWorkTask, myWorkCrewNames } from './task-crew.js';
+import { humanCrewFor, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
 
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
 // the hash no longer names is dropped.
@@ -376,6 +376,7 @@ async function pinOpenTask(taskId, context, tasks = []) {
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
     if (ownerTask.workspace_id && task.workspace_id && task.workspace_id !== ownerTask.workspace_id) throw new Error(`${taskId} not found`);
     taskState.pinnedExternalTask = { task: mergeTaskRecord(ownerTask, task), id: taskId };
+    if (isAggregateView()) await loadAggregateCrews([taskState.pinnedExternalTask.task]);
   } catch (error) {
     if (superseded()) return;
     taskState.taskActionNotice = error && error.status === 404
@@ -417,6 +418,7 @@ export function refreshPinnedTask(context) {
       const merged = mergeTaskRecord(previous, task);
       taskState.pinnedExternalTask = { task: merged, id: taskId };
       applyUpdatedTask(merged, context);
+      if (isAggregateView()) await loadAggregateCrews([merged]);
     } catch {
       // Keep the cached copy on a failed refresh; the next refresh retries.
     } finally {
@@ -439,6 +441,11 @@ export function setPinnedExternalTask(task, context) {
   if (taskState.selectedTaskId && taskState.selectedTaskId !== task.id) taskState.selectedTaskId = null;
   taskState.selectedTaskWorkspace = task.workspace_id || getWorkspace() || null;
   taskState.pinnedExternalTask = { task, id: task.id };
+  if (isAggregateView()) {
+    void loadAggregateCrews([task]).then(() => {
+      if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id) rerender(context);
+    });
+  }
   taskState.pendingOpenTaskId = null;
   setOpenTask(task.id);
   // The resolver has cleared the text query; retire its URL and page too.

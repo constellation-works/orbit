@@ -3,7 +3,7 @@ summary: "User Interface — Design"
 type: design
 title: "User Interface — Design"
 owner: gemini
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-11-03
 status: Draft
 feature: user-interface
@@ -293,7 +293,7 @@ Description, Plan and Execution summary render their authored Markdown inside ma
 
 The task detail edits five more fields in place [ORB-12235]. **Complexity** is a `low`/`medium`/`hard`/`xhard` select with the same pending/saved/error feedback and bounded undo as the crew select; `unassessed` is deliberately not offered because the update endpoint rejects it, and a task already carrying it keeps a disabled placeholder so the select still shows what is stored. **Description**, **tags**, **acceptance criteria**, and **context files** each render their read-only view with an `edit` affordance that swaps in a text editor carrying Save and Cancel. A save sends only the field it edited — a whole-object PATCH would clobber whatever an agent wrote concurrently — and Cancel restores the view without a request. A refused save keeps the editor open with the operator's text and the server's own reason beside it; for context files that reason is the selector-existence refusal, which the editor's `allow missing context` checkbox answers for a selector naming a target the task will create. Long acceptance criteria open collapsed behind a fade with a **Show full AC** toggle that reveals the full list, mirroring the description clamp; editing the criteria continues to present every criterion. An open editor holds its detail node through the background refresh the same way a half-written comment does, so a poll never discards unsaved text.
 
-In the aggregate ("All workspaces") view there is no ambient workspace to scope a mutation to, so every inline edit — status, crew, complexity, and the field editors — is refused unless the task carries its own `workspace_id` (present on every `/api/tasks/all` row), in which case the mutation is sent explicitly qualified to that workspace rather than the currently-selected one [ORB-10874] [ORB-12235].
+In the aggregate ("All workspaces") view there is no ambient workspace to scope a mutation to, so every inline edit — status, crew, complexity, and the field editors — is refused unless the task carries its own `workspace_id` (present on every `/api/tasks/all` row), in which case the mutation is sent explicitly qualified to that workspace rather than the currently-selected one [ORB-10874] [ORB-12235]. The crew control there is the same dropdown as on a workspace-scoped board. Its options come from that task's own workspace (`GET /api/crews?workspace=<id>`), cached per workspace for the host visit, reused across quiet refreshes, and dropped when the host changes. Saving it sends the same crew PATCH qualified to that workspace. A failed crew read disables only that workspace's selects with "crew unavailable" and does not block the task list [ORB-23883].
 
 ## 7a. Task Comment Thread
 
