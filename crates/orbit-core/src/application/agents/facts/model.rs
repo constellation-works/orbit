@@ -11,6 +11,7 @@ use super::super::records::Cause;
 use super::super::roles::pilot_warnings::Warnings;
 use super::super::roles::pilots::Graded;
 use super::invocations::AgentInvocationFacts;
+use super::launches::AgentLaunchFacts;
 use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
@@ -370,6 +371,9 @@ pub(in crate::application::agents) fn filing_attempt<'a>(
 #[derive(Debug)]
 pub struct AgentFacts {
     pub(in crate::application::agents) invocations: AgentInvocationFacts,
+    /// Launch records of the scan window, including launches whose
+    /// invocation never completed.
+    pub(in crate::application::agents) launches: AgentLaunchFacts,
     pub(in crate::application::agents) computed_at: DateTime<Utc>,
     pub(in crate::application::agents) tasks_scanned: usize,
     pub(in crate::application::agents) tasks: Vec<TaskFacts>,

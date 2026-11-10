@@ -10,6 +10,7 @@
 
 mod attempts;
 mod invocations;
+mod launches;
 mod model;
 mod review;
 mod scan;

@@ -83,6 +83,7 @@ fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Default::default(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -379,6 +380,7 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: invocations.into(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -410,6 +412,151 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
     let unknown = by_label("m1 @ effort unknown");
     assert_eq!(unknown["units"], json!(1));
     assert_eq!(unknown["reasoning_effort"], json!("unknown"));
+}
+
+fn launch(
+    id: i64,
+    run_id: &str,
+    activity_id: &str,
+    model: &str,
+    effort: Option<orbit_types::identity::ReasoningEffort>,
+    at: chrono::DateTime<Utc>,
+) -> orbit_store::contracts::AgentExecutionRecord {
+    orbit_store::contracts::AgentExecutionRecord {
+        id,
+        run_id: run_id.into(),
+        activity_id: activity_id.into(),
+        provider: "fixture".into(),
+        model: Some(model.into()),
+        identity: orbit_types::telemetry::AgentExecutionIdentity {
+            crew: Some("opus".into()),
+            reasoning_effort: effort,
+        },
+        started_at: at,
+    }
+}
+
+#[test]
+fn implementer_rows_use_launch_effort_when_invocation_never_completed() {
+    use orbit_types::identity::ReasoningEffort::{High, Low, Medium};
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(1);
+    // launch-only: launched but never completed; completed: a completed
+    // medium invocation wins over a later high launch; neither: launches
+    // only for another model or another activity stay unknown.
+    let mut tasks = Vec::new();
+    for (task_id, run_id) in [
+        ("launch-only", "run-launch"),
+        ("completed", "run-completed"),
+        ("neither", "run-neither"),
+    ] {
+        let mut attempt = Attempt {
+            start,
+            end: Some(now),
+            runner: Default::default(),
+            job: true,
+            tags: Vec::new(),
+        };
+        attempt.runner.crew = Some("opus".into());
+        attempt.runner.model = Some("m1".into());
+        attempt.runner.run_id = Some(run_id.into());
+        tasks.push(TaskFacts {
+            id: task_id.into(),
+            title: "launch effort observation".into(),
+            status: TaskStatus::Review,
+            tags: Vec::new(),
+            context_files: Vec::new(),
+            complexity: None,
+            created_at: start,
+            landed: false,
+            dropped: false,
+            attempts: vec![attempt],
+            final_attempt: Some(0),
+            execution: super::super::ExecutionMode::Managed,
+            landed_at: None,
+            records: Vec::new(),
+            reviews: Vec::new(),
+            filed: None,
+            warnings: Default::default(),
+        });
+    }
+    let invocations = vec![invocation(
+        1,
+        "run-completed",
+        "completed",
+        "opus",
+        Some(Medium),
+        true,
+        60_000,
+        now,
+    )];
+    let launches = vec![
+        // The latest matching launch decides for the unfinished attempt.
+        launch(1, "run-launch", "implement_one", "m1", Some(Low), start),
+        launch(
+            2,
+            "run-launch",
+            "implement_one",
+            "m1",
+            Some(High),
+            start + chrono::Duration::minutes(1),
+        ),
+        // Later launches for another model or another activity are not
+        // this unit's evidence.
+        launch(
+            3,
+            "run-launch",
+            "implement_one",
+            "m2",
+            Some(Medium),
+            start + chrono::Duration::minutes(2),
+        ),
+        launch(
+            4,
+            "run-launch",
+            "review",
+            "m1",
+            Some(Medium),
+            start + chrono::Duration::minutes(3),
+        ),
+        launch(
+            5,
+            "run-completed",
+            "implement_one",
+            "m1",
+            Some(High),
+            start + chrono::Duration::minutes(1),
+        ),
+        launch(6, "run-neither", "implement_one", "m2", Some(High), start),
+        launch(7, "run-neither", "review", "m1", Some(High), start),
+    ];
+    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
+    let facts = AgentFacts {
+        invocations: invocations.into(),
+        launches: launches.into(),
+        computed_at: now,
+        tasks_scanned: tasks.len(),
+        tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots: Vec::new(),
+    };
+    let payload = agent_scorecard(
+        &facts,
+        AgentRole::Implementers,
+        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
+        Duration::ZERO,
+    );
+    let rows = payload["rows"].as_array().unwrap();
+    let by_label = |label: &str| rows.iter().find(|row| row["label"] == label).unwrap();
+    assert_eq!(rows.len(), 3, "one row per attributed effort: {payload}");
+    assert_eq!(by_label("m1 @ high")["units"], json!(1));
+    assert_eq!(by_label("m1 @ medium")["units"], json!(1));
+    assert_eq!(by_label("m1 @ effort unknown")["units"], json!(1));
 }
 
 #[test]
@@ -468,6 +615,7 @@ fn reviewer_ranks_are_dense_over_ranked_rows() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Default::default(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -661,6 +809,7 @@ fn pilot_rows_keep_each_rounds_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &graded);
     let facts = AgentFacts {
         invocations: invocations.into(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -761,6 +910,7 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: invocations.into(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -873,6 +1023,7 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: invocations.into(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -949,6 +1100,7 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: invocations.into(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
@@ -1259,6 +1411,7 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
     let facts = AgentFacts {
         invocations: Default::default(),
+        launches: Default::default(),
         computed_at: Utc::now(),
         tasks_scanned: tasks.len(),
         tasks,

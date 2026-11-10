@@ -1021,3 +1021,117 @@ fn agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows() {
         "a medium per-task row lists its contributing crew:\n{per_task}"
     );
 }
+
+#[test]
+fn agents_scorecard_and_show_use_launch_effort_when_invocation_never_completed() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_and_show_use_launch_effort_when_invocation_never_completed",
+    ) {
+        return;
+    }
+    use orbit_types::identity::ReasoningEffort::High;
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        let workspace = runtime.workspace_id().unwrap();
+        let id = runtime
+            .add_task(TaskAddParams {
+                title: "launched but unfinished".into(),
+                description: "plain launch-effort fixture".into(),
+                plan: "implement the change".into(),
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                Some("claude".into()),
+                Some("model-fixture".into()),
+            )
+            .unwrap();
+        let run_id = "jrun-launch-only";
+        let finished = Utc::now();
+        let started = finished - chrono::Duration::hours(1);
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(
+                &workspace,
+                &JobRun {
+                    build: None,
+                    run_id: run_id.into(),
+                    job_id: "task_pr_pipeline".into(),
+                    attempt: 1,
+                    state: JobRunState::Failed,
+                    scheduled_at: started,
+                    created_at: started,
+                    started_at: Some(started),
+                    finished_at: Some(finished),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({ "task_ids": [id] })),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: Some("sol".into()),
+                    crew_model: Some("model-fixture".into()),
+                    steps: Vec::new(),
+                    executed_on: None,
+                },
+                None,
+            )
+            .unwrap();
+        // The agent launched at high effort, but its invocation never
+        // completed, so no invocation record follows this launch.
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .begin_agent_execution(
+                &workspace,
+                run_id,
+                "implement_one",
+                "fixture",
+                Some("model-fixture"),
+                &orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some("sol".into()),
+                    reasoning_effort: Some(High),
+                },
+            )
+            .unwrap();
+    }
+
+    let card = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    let rows = card["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one launch-attributed row: {card}");
+    assert_eq!(rows[0]["label"], "model-fixture @ high", "{card}");
+    assert_eq!(rows[0]["units"], json!(1), "{card}");
+
+    let detail = fixture.json(&[
+        "agents",
+        "show",
+        "--role",
+        "implementers",
+        "--crew",
+        "sol",
+        "--json",
+    ]);
+    assert_eq!(detail["row"]["label"], "model-fixture @ high", "{detail}");
+    assert_eq!(detail["row"]["reasoning_effort"], json!("high"), "{detail}");
+}

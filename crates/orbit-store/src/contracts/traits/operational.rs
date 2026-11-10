@@ -254,6 +254,13 @@ pub trait InvocationStoreBackend: Send + Sync {
         workspace: &str,
         run_id: &str,
     ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
+    /// Launch identities in a workspace and date window, in launch order.
+    /// Unlike completed-invocation reads, this keeps launches whose
+    /// invocation never completed.
+    fn list_agent_executions(
+        &self,
+        query: &crate::contracts::AgentExecutionQuery,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
 
     /// Records one invocation under `workspace_id`, the workspace whose run
     /// produced it. The caller supplies it from its own runtime binding, never

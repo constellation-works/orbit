@@ -26,9 +26,13 @@
 //! When the unit's invocations ran at more than one effort, the unit
 //! counts under the effort of its main invocation — the matching
 //! invocation with the longest recorded duration, ties broken by the
-//! latest end time then the highest invocation id. A unit with no
-//! matching invocation is `unknown` and is never folded into a known
-//! effort.
+//! latest end time then the highest invocation id. When no completed
+//! invocation of the unit's run matches — the agent launched but the
+//! invocation never completed — the unit counts under the effort of
+//! that run's latest matching launch record (`agent_executions`, same
+//! activity and model, narrowed to the unit's own round as above). A
+//! unit with neither a matching invocation nor a matching launch
+//! record is `unknown` and is never folded into a known effort.
 
 use orbit_store::contracts::InvocationAccountingFact;
 
@@ -144,8 +148,11 @@ fn step_produced(id: &str, step: &str) -> bool {
 
 /// The effort of a unit's main invocation: among the unit's own
 /// invocations in its job run, preferring those linked to its task, the
-/// one with the longest recorded duration. `unknown` when the unit
-/// recorded no run or no invocation of its own matches.
+/// one with the longest recorded duration. When no completed invocation
+/// of the run matches, the latest launch record of the run for the same
+/// activity and model supplies the effort. `unknown` when the unit
+/// recorded no run, or neither a matching invocation nor a matching
+/// launch record.
 pub(super) fn main_invocation_effort(
     facts: &AgentFacts,
     unit: MainInvocationUnit<'_>,
@@ -190,13 +197,43 @@ pub(super) fn main_invocation_effort(
         }
         None => candidates.collect(),
     };
-    linked
-        .into_iter()
+    if let Some(main) = linked.into_iter().max_by(|left, right| {
+        left.duration_ms
+            .cmp(&right.duration_ms)
+            .then(left.ts.cmp(&right.ts))
+            .then(left.id.cmp(&right.id))
+    }) {
+        return effort_of_invocation(main);
+    }
+    // No completed invocation of this unit's run matched: the agent may
+    // have launched without ever completing (a failed, interrupted, held
+    // or cancelled run). Its launch record still carries the dispatched
+    // effort, so take the latest launch of this run for the same
+    // activity and model, narrowed to the unit's own round exactly as
+    // the invocation match above. A launch for another model or another
+    // activity in the same run is another unit's evidence.
+    facts
+        .launches
+        .launches_for_run(run_id)
+        .filter(|record| {
+            activity.matches(Some(record.activity_id.as_str()))
+                && activity_id.is_none_or(|id| step_produced(id, record.activity_id.as_str()))
+                && model.is_none_or(|model| record.model.as_deref() == Some(model))
+                && after.is_none_or(|after| record.started_at > after)
+                && until.is_none_or(|until| record.started_at <= until)
+        })
         .max_by(|left, right| {
-            left.duration_ms
-                .cmp(&right.duration_ms)
-                .then(left.ts.cmp(&right.ts))
+            left.started_at
+                .cmp(&right.started_at)
                 .then(left.id.cmp(&right.id))
         })
-        .map_or_else(|| Some(EFFORT_UNKNOWN.to_string()), effort_of_invocation)
+        .map_or_else(
+            || Some(EFFORT_UNKNOWN.to_string()),
+            |record| {
+                record
+                    .identity
+                    .reasoning_effort
+                    .map(|effort| effort.to_string())
+            },
+        )
 }

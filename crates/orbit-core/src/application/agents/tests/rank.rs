@@ -109,6 +109,7 @@ fn facts(work: &[Work<'_>]) -> AgentFacts {
     let (charges, credits) = attribution::attribute(&tasks, &regressions, &[]);
     AgentFacts {
         invocations: Default::default(),
+        launches: Default::default(),
         computed_at: now,
         tasks_scanned: tasks.len(),
         tasks,
