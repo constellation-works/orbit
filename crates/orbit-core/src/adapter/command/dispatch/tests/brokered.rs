@@ -297,6 +297,11 @@ fn request(tool: &str, input: Value, cwd: &Path) -> Value {
 
 #[test]
 fn a_request_outside_the_run_is_refused_before_the_backend_runs() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_request_outside_the_run_is_refused_before_the_backend_runs,
+    )) {
+        return;
+    }
     let fixture = Fixture::new();
     fixture.plugin("demo", ECHO_BACKEND, None);
     let serving = serve(&fixture, fixture.run(&["demo.hello"]));
@@ -336,6 +341,11 @@ fn a_request_outside_the_run_is_refused_before_the_backend_runs() {
 
 #[test]
 fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned,
+    )) {
+        return;
+    }
     if !orbit_exec::macos_sandbox_test_guard(
         "a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
     ) {
@@ -395,6 +405,11 @@ fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
 /// built-in is still answered only by the nested `orbit`.
 #[test]
 fn the_broker_runs_the_github_reads_and_refuses_every_other_builtin() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &the_broker_runs_the_github_reads_and_refuses_every_other_builtin,
+    )) {
+        return;
+    }
     let fixture = Fixture::new();
     let serving = serve(
         &fixture,
@@ -451,6 +466,11 @@ fn the_broker_runs_the_github_reads_and_refuses_every_other_builtin() {
 /// keeps the broker's row as its only one.
 #[test]
 fn a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker,
+    )) {
+        return;
+    }
     let fixture = Fixture::new();
     fixture.plugin("demo", LISTENER_CODE_BACKEND, None);
     // The nested caller sends this process's cwd, which must lie in the run.
@@ -568,6 +588,11 @@ fn resident_cycle_run(
 /// guard still decides the right there.
 #[test]
 fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host,
+    )) {
+        return;
+    }
     let fixture = Fixture::new();
     let runtime = fixture.runtime();
     let ship = json!({"task_ids": ["ORB-1"], "mode": "local", "model": "codex"});
@@ -682,6 +707,11 @@ impl Drop for RestoreOrbitMode {
 /// guard decides them, and only those task updates are forwarded.
 #[test]
 fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_sandboxed_resident_landing_and_completion_are_decided_on_the_host,
+    )) {
+        return;
+    }
     use crate::runtime::plugin::broker::BROKERED_RESIDENT_LAND_TOOL;
     use orbit_types::workflow::ActivityToolDenyPolicy;
 
@@ -816,6 +846,11 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
 /// still judges the target, and files the request under the run's own identity.
 #[test]
 fn a_sandboxed_resident_raise_creates_the_request_through_its_broker() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &a_sandboxed_resident_raise_creates_the_request_through_its_broker,
+    )) {
+        return;
+    }
     use crate::application::task::TaskAddParams;
     use orbit_types::task::DecisionGate;
     use orbit_types::workflow::ActivityToolDenyPolicy;

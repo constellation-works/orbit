@@ -168,9 +168,11 @@ pub(super) fn resolve_agent_identity_for_entry_point(
 /// Resolve the audit `role` label for a tool invocation.
 ///
 /// Runtime envelope identity (`ORBIT_AGENT_*`) is authoritative for agent
-/// activities and overwrites any self-reported `model` field in tool JSON.
-/// Manual CLI/MCP calls without an envelope keep the legacy input/flag
-/// precedence.
+/// activities and overwrites any self-reported `model` field in tool JSON; an
+/// explicit `--agent`/`--model` flag overrides the envelope, as in
+/// `resolve_agent_identity`, and still outranks tool JSON. Manual CLI/MCP
+/// calls without an envelope keep the legacy input/flag precedence (tool JSON
+/// `model`, then flags).
 pub fn audit_role_label(
     input: &Value,
     agent_override: Option<&str>,
@@ -193,9 +195,7 @@ pub fn audit_role_label(
             .flatten()
             .or(env_agent);
         (agent.clone(), agent)
-    } else if has_input_identity {
-        (input_agent, input_model)
-    } else if has_flag_identity {
+    } else if has_flag_identity && (has_env_identity || !has_input_identity) {
         (
             agent_override
                 .map(str::trim)
@@ -206,6 +206,8 @@ pub fn audit_role_label(
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
         )
+    } else if has_input_identity {
+        (input_agent, input_model)
     } else {
         (env_agent, env_model)
     };
