@@ -61,7 +61,7 @@ let observedTimelineBody = null;
 registerOperationsReset(() => {
   closeRoutineEditors();
   resetRoutineCatalogue();
-  updateRoutineFailureBadge([]);
+  resetRoutineFailureBadge();
 });
 
 function routineButton(payload, routine) {
@@ -316,16 +316,49 @@ export function scopedRoutines(payload) {
   return workspace ? (payload.routines || []).filter(routine => routine.source === workspace) : [];
 }
 
-export function updateRoutineFailureBadge(routines) {
-  routineFailureRequest += 1;
+// The last successfully read failing list for the current host/workspace
+// visit, or null when no read has succeeded since the last scope reset. A
+// failed read consults it: unknown must not read as "no failing routines".
+let knownFailingRoutines = null;
+
+function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
   const node = $("rail-count-routine-failures");
   if (!node) return;
-  const failures = failingRoutines(routines);
-  node.hidden = failures.length === 0;
-  node.textContent = failures.length ? `${failures.length} routine${failures.length === 1 ? "" : "s"}` : "";
-  node.title = failures.length
-    ? `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. See Automation › Routines.`
-    : "";
+  node.hidden = failures.length === 0 && !unavailable;
+  node.dataset.stale = unavailable ? "true" : "false";
+  if (failures.length) {
+    node.textContent = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
+    node.title = `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`;
+  } else if (unavailable) {
+    node.textContent = "routines ?";
+    node.title = "Routine failure status is unavailable: the read failed. It retries on the next refresh.";
+  } else {
+    node.textContent = "";
+    node.title = "";
+  }
+}
+
+// A successful payload (or a scope reset): paint it and remember it.
+export function updateRoutineFailureBadge(routines) {
+  routineFailureRequest += 1;
+  knownFailingRoutines = failingRoutines(routines);
+  paintRoutineFailureBadge(knownFailingRoutines);
+}
+
+// A host/workspace switch forgets the prior scope entirely: nothing is known
+// about the new one until a read succeeds.
+function resetRoutineFailureBadge() {
+  routineFailureRequest += 1;
+  knownFailingRoutines = null;
+  paintRoutineFailureBadge([]);
+}
+
+// A failed read observes nothing. Keep the last known warning and mark it
+// stale; with no prior read for this scope show the status as unavailable.
+// A last known empty list stays hidden, as for the Jobs pill.
+function markRoutineFailuresUnavailable() {
+  if (knownFailingRoutines && knownFailingRoutines.length === 0) return;
+  paintRoutineFailureBadge(knownFailingRoutines || [], { unavailable: true });
 }
 
 // Keep Health's warning visible from every tab, including before Routines is
@@ -341,7 +374,7 @@ export async function peekRoutineFailures(read = null) {
     const payload = await (read || fetchJson("/api/routines"));
     if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge(scopedRoutines(payload));
   } catch (_) {
-    if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge([]);
+    if (visit.isCurrent() && request === routineFailureRequest) markRoutineFailuresUnavailable();
   }
 }
 
