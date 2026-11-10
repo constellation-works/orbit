@@ -56,6 +56,7 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::CheckRepairActivityAbsent
+        | DeliveryRefusal::CheckRunsAbsent
         | DeliveryRefusal::VisualNotEstablished
         | DeliveryRefusal::VisualReviewUnresolved => false,
     }
