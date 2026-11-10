@@ -2,19 +2,27 @@
 //! before Orbit recorded identities at dispatch.
 //!
 //! Every provider launch is audited as a `cli.invocation.started` event whose
-//! redacted argv carries the effort flag Orbit rendered. For each invocation
+//! redacted argv carries the effort flag Orbit rendered, and which since
+//! 2026-10-29 also records the resolved effort directly. For each invocation
 //! with no dispatch identity, the backfill finds the launch events of its
 //! workspace, run and model that started within [`LAUNCH_MATCH_TOLERANCE`] of
-//! the invocation's end minus its duration, reads the effort from their argv
-//! and records it as a dispatch identity marked as backfilled. It never runs
-//! when a store opens; an operator runs it, on any host, against that host's
-//! own store.
+//! the invocation's end minus its duration, reads the effort from the recorded
+//! effort or the argv (both must agree when both are present) and records it
+//! as a dispatch identity marked as backfilled. For a run whose invocation
+//! never completed there is no invocation to record on, so it records the
+//! launch itself, attributed to the one step whose audit interval contains
+//! it, for the scorecard scan's launch-record fallback. It never runs when a
+//! store opens; an operator runs it, on any host, against that host's own
+//! store.
 //!
 //! An invocation stays unrecorded (and its effort `unknown`) when no launch
-//! event matches, or when the matching events disagree on the effort or carry
-//! an effort flag this binary cannot read. Effort is never taken from crew
-//! configuration or a crew name. Invocations that already have an identity
-//! are never touched, so running it again changes nothing.
+//! event matches (including events that predate both effort sources), when
+//! the matching events disagree on the effort or carry an effort this binary
+//! cannot read, or when a launch's step cannot be proven from the run's
+//! audit intervals. `cli.invocation.activity` events carry no argv or effort
+//! and are never a source. Effort is never taken from crew configuration or
+//! a crew name. Invocations that already have an identity are never touched,
+//! so running it again changes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,6 +65,14 @@ pub struct DispatchEffortBackfill {
     pub conflicting: usize,
     /// Invocations another writer gave an identity while this one ran.
     pub already_recorded: usize,
+    /// Launch records recorded for runs whose invocation never completed:
+    /// no invocation exists to carry an identity, so the launch itself is
+    /// recorded and the scorecard scan's launch-record fallback reads it.
+    pub launch_only_recorded: usize,
+    /// Launches left unrecorded because no single step of their run provably
+    /// contained them, or their launches disagreed on the effort. These
+    /// units stay effort unknown.
+    pub launch_only_unmatched: usize,
 }
 
 /// Record a dispatch identity, read from the launch argv, for every
@@ -120,6 +136,52 @@ pub fn backfill_dispatch_effort(
             reasoning_effort.map_or_else(|| "provider_default".to_string(), |e| e.to_string());
         *report.recorded_by_effort.entry(key).or_default() += 1;
     }
+    // Runs whose agent launched but whose invocation never completed have
+    // no invocation to record an identity on. Record the launch itself,
+    // proven to its step by the run's audit trail, so the scorecard scan's
+    // launch-record fallback can attribute the unit. A launch no single
+    // step provably contained, or whose launches disagree, stays unknown.
+    let (launch_groups, unproven_launches) = store.list_unrecorded_launch_groups(workspace_id)?;
+    report.launch_only_unmatched += unproven_launches;
+    for group in launch_groups {
+        let Some(reasoning_effort) = agreed_launch_effort(&group.launches) else {
+            report.launch_only_unmatched += group.launches.len();
+            continue;
+        };
+        let Some(first) = group.launches.first() else {
+            continue;
+        };
+        let crew = if executor_activities.contains(&group.activity_id.as_str()) {
+            group.run_resolved_crew.clone()
+        } else {
+            None
+        };
+        let backfill = AgentExecutionBackfill {
+            source: CLI_INVOCATION_STARTED_EVENT.to_string(),
+            event_ids: group
+                .launches
+                .iter()
+                .map(|launch| launch.event_id.clone())
+                .collect(),
+            recorded_at,
+        };
+        let recorded = store.record_backfilled_launch_execution(
+            workspace_id,
+            &group,
+            first.started_at,
+            &AgentExecutionIdentity {
+                crew,
+                reasoning_effort,
+            },
+            &backfill,
+        )?;
+        if recorded {
+            report.launch_only_recorded += 1;
+            let key =
+                reasoning_effort.map_or_else(|| "provider_default".to_string(), |e| e.to_string());
+            *report.recorded_by_effort.entry(key).or_default() += 1;
+        }
+    }
     Ok(report)
 }
 
@@ -128,11 +190,31 @@ pub fn backfill_dispatch_effort(
 fn agreed_launch_effort(launches: &[InvocationLaunchEvent]) -> Option<Option<ReasoningEffort>> {
     let efforts = launches
         .iter()
-        .map(|launch| rendered_effort(&launch.argv_redacted))
+        .map(launch_effort)
         .collect::<Option<BTreeSet<_>>>()?;
     match efforts.len() {
         1 => efforts.into_iter().next(),
         _ => None,
+    }
+}
+
+/// One launch's effort: the effort the event itself records, the effort its
+/// argv rendered, or `None` when it carries neither readable source or the
+/// two disagree. An event with no argv and no recorded effort is no
+/// evidence at all, never the provider default.
+fn launch_effort(launch: &InvocationLaunchEvent) -> Option<Option<ReasoningEffort>> {
+    if launch.effort_unreadable {
+        return None;
+    }
+    let argv_effort = match launch.argv_redacted.as_deref() {
+        Some(argv) => Some(rendered_effort(argv)?),
+        None => None,
+    };
+    match (launch.reasoning_effort, argv_effort) {
+        (Some(recorded), Some(rendered)) if Some(recorded) != rendered => None,
+        (Some(recorded), _) => Some(Some(recorded)),
+        (None, Some(rendered)) => Some(rendered),
+        (None, None) => None,
     }
 }
 

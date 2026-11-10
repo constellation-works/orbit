@@ -260,7 +260,34 @@ pub struct UnidentifiedInvocationLaunch {
 pub struct InvocationLaunchEvent {
     pub event_id: String,
     pub started_at: DateTime<Utc>,
-    pub argv_redacted: Vec<String>,
+    /// The audited launch argv; `None` when the event predates argv capture
+    /// or carries only the resolved effort below.
+    pub argv_redacted: Option<Vec<String>>,
+    /// The resolved dispatch effort the launch event itself records, when it
+    /// carries one (events since 2026-10-29). Absent means the event did not
+    /// record one, never that the effort was the provider default.
+    pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
+    /// The event carried an effort value this binary cannot read.
+    pub effort_unreadable: bool,
+}
+
+/// Launches of one run and step that no `agent_executions` row and no
+/// completed invocation records: the agent launched, but its invocation
+/// never completed (the run failed, was interrupted, held or cancelled), so
+/// the dispatch-effort backfill can still record the launch itself for the
+/// scorecard scan's launch-record fallback. The step is the one whose
+/// `step.started`/`step.finished` interval contains the launch, proven by
+/// the run's own audit trail; launches no single step contains are not
+/// grouped here and stay effort unknown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnrecordedLaunchGroup {
+    pub run_id: String,
+    pub activity_id: String,
+    pub provider: String,
+    pub model: Option<String>,
+    /// The crew the job run resolved, when the run records one.
+    pub run_resolved_crew: Option<String>,
+    pub launches: Vec<InvocationLaunchEvent>,
 }
 
 /// Aggregate completed invocations without consulting mutable crew configuration.

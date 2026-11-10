@@ -245,6 +245,21 @@ fn dispatch_effort_backfill_payload(report: &DispatchEffortBackfill) -> CommandO
             report.already_recorded
         ));
     }
+    if report.launch_only_recorded > 0 || report.launch_only_unmatched > 0 {
+        text.push_str(&format!(
+            "\n{} launch records recorded for runs whose invocation never completed; \
+             {} launches left unrecorded (no single step provably contained them, or \
+             their launches disagreed)",
+            report.launch_only_recorded, report.launch_only_unmatched
+        ));
+    }
+    text.push_str(
+        "\nunits left unknown stay \"effort unknown\": invocations with no matching launch \
+         (including launches before the 2026-09-10 audit argv or with no surviving launch \
+         audit), launches no single step provably contained, attempts a follower ran whose \
+         follower reported no effort, and runs absent from this store. Effort is never \
+         inferred from crew configuration.",
+    );
     Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
 }
 
