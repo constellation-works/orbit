@@ -32,10 +32,14 @@
 //! that run's latest matching launch record (`agent_executions`, same
 //! activity and model, narrowed to the unit's own round as above). A
 //! unit with neither a matching invocation nor a matching launch
-//! record is `unknown` and is never folded into a known effort.
+//! record is `unknown` and is never folded into a known effort, except
+//! that a pulled attempt whose follower reported its leaf's effort on the
+//! claim settlement counts under that report [ORB-23825]: the follower read
+//! it from its own records by this same rule.
 
 use orbit_store::contracts::InvocationAccountingFact;
 
+use super::facts::{AgentInvocationFacts, AgentLaunchFacts};
 use super::{AgentFacts, MODEL_UNKNOWN};
 
 /// A recorded reasoning effort in the shared encoding: `None` is the
@@ -133,6 +137,10 @@ pub(super) struct MainInvocationUnit<'a> {
     /// The unit's own settlement time, when it has one: an invocation that
     /// ended after it belongs to a later round.
     pub(super) until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The effort a pulled attempt's follower reported on its claim
+    /// settlement, when it reported one: the fallback for a unit this host
+    /// holds no matching invocation or launch record of.
+    pub(super) reported: Option<&'a RecordedEffort>,
 }
 
 /// Whether the invocation recorded under pipeline step `step` can have
@@ -157,6 +165,19 @@ pub(super) fn main_invocation_effort(
     facts: &AgentFacts,
     unit: MainInvocationUnit<'_>,
 ) -> RecordedEffort {
+    let effort = recorded_main_effort(&facts.invocations, &facts.launches, unit);
+    match unit.reported {
+        Some(reported) if effort.as_deref() == Some(EFFORT_UNKNOWN) => reported.clone(),
+        _ => effort,
+    }
+}
+
+/// [`main_invocation_effort`] from this host's own records alone.
+fn recorded_main_effort(
+    invocations: &AgentInvocationFacts,
+    launches: &AgentLaunchFacts,
+    unit: MainInvocationUnit<'_>,
+) -> RecordedEffort {
     let MainInvocationUnit {
         run_id: Some(run_id),
         activity,
@@ -165,24 +186,22 @@ pub(super) fn main_invocation_effort(
         activity_id,
         after,
         until,
+        reported: _,
     } = unit
     else {
         return Some(EFFORT_UNKNOWN.to_string());
     };
-    let candidates = facts
-        .invocations
-        .invocations_for_run(run_id)
-        .filter(|fact| {
-            activity.matches(fact.activity_id.as_deref())
-                && activity_id.is_none_or(|id| {
-                    fact.activity_id
-                        .as_deref()
-                        .is_some_and(|step| step_produced(id, step))
-                })
-                && model.is_none_or(|model| fact.model.as_deref() == Some(model))
-                && after.is_none_or(|after| fact.ts > after)
-                && until.is_none_or(|until| fact.ts <= until)
-        });
+    let candidates = invocations.invocations_for_run(run_id).filter(|fact| {
+        activity.matches(fact.activity_id.as_deref())
+            && activity_id.is_none_or(|id| {
+                fact.activity_id
+                    .as_deref()
+                    .is_some_and(|step| step_produced(id, step))
+            })
+            && model.is_none_or(|model| fact.model.as_deref() == Some(model))
+            && after.is_none_or(|after| fact.ts > after)
+            && until.is_none_or(|until| fact.ts <= until)
+    });
     let linked: Vec<_> = match task_id {
         Some(task) => {
             let linked: Vec<_> = candidates
@@ -212,8 +231,7 @@ pub(super) fn main_invocation_effort(
     // activity and model, narrowed to the unit's own round exactly as
     // the invocation match above. A launch for another model or another
     // activity in the same run is another unit's evidence.
-    facts
-        .launches
+    launches
         .launches_for_run(run_id)
         .filter(|record| {
             activity.matches(Some(record.activity_id.as_str()))
@@ -236,4 +254,60 @@ pub(super) fn main_invocation_effort(
                     .map(|effort| effort.to_string())
             },
         )
+}
+
+impl crate::OrbitRuntime {
+    /// The reasoning effort a claimed leaf `run` ran at, as its follower
+    /// reports it on the claim settlement: the effort of the run's main
+    /// implementing invocation (else its latest matching launch record) in
+    /// this host's own records, exactly as this host's scorecards would count
+    /// it. `Some(None)` is the provider default, and `None` an effort this
+    /// host does not know (no matching record, or an unreadable store), which
+    /// the follower then omits. Attribution only; never derived from crew
+    /// configuration.
+    pub(crate) fn leaf_reported_effort(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<RecordedEffort> {
+        let store = self.sqlite_store().ok()?;
+        let workspace_id = self.stores().jobs().workspace_id().to_string();
+        let since = Some(run.created_at);
+        let until = chrono::Utc::now();
+        let invocations = store
+            .list_invocation_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
+                workspace_id: Some(workspace_id.clone()),
+                since,
+                until,
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: invocations unreadable");
+                Vec::new()
+            });
+        let launches = store
+            .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
+                workspace_id: Some(workspace_id),
+                since,
+                until,
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, run_id = %run.run_id, "leaf effort: launch records unreadable");
+                Vec::new()
+            });
+        let run_id = run.run_id.to_string();
+        let effort = recorded_main_effort(
+            &invocations.into(),
+            &launches.into(),
+            MainInvocationUnit {
+                run_id: Some(&run_id),
+                activity: MainActivity::Implement,
+                task_id: None,
+                model: run.crew_model.as_deref(),
+                activity_id: None,
+                after: None,
+                until: None,
+                reported: None,
+            },
+        );
+        (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some(effort)
+    }
 }

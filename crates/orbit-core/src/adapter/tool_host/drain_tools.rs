@@ -9,7 +9,9 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_store::contracts::{AdmissionRequest, ClaimAttribution, ClaimMutation};
+use orbit_store::contracts::{
+    AdmissionRequest, ClaimAttribution, ClaimMutation, PROVIDER_DEFAULT_REPORTED_EFFORT,
+};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -155,6 +157,7 @@ fn claim_settle(
         crew_model: optional_string(input, "crew_model"),
         branch: optional_string(input, "branch"),
         worktree_path: optional_string(input, "worktree_path"),
+        reasoning_effort: reported_effort(input),
     };
     let result = runtime.serve_claim_settle(
         session,
@@ -204,6 +207,17 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// The leaf's reported reasoning effort in the scorecards' encoding: absent
+/// when the key is (unknown, as an older follower sends), `Some(None)` for
+/// [`PROVIDER_DEFAULT_REPORTED_EFFORT`] (the tool input drops a `null`, so the
+/// provider default travels by name), else the trimmed wire name.
+/// Attribution only: an empty value reports nothing rather than refusing the
+/// settlement.
+fn reported_effort(input: &Value) -> Option<Option<String>> {
+    let name = optional_string(input, "reasoning_effort")?;
+    Some((name != PROVIDER_DEFAULT_REPORTED_EFFORT).then_some(name))
 }
 
 /// A malformed version field is invalid input, not a compatibility comparison.

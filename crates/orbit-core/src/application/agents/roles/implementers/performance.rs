@@ -85,6 +85,7 @@ pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Ke
             activity_id: None,
             after: None,
             until: None,
+            reported: attempt.runner.reported_effort.as_ref(),
         },
     );
     model_effort_key(attempt.runner.model.as_deref(), effort)
@@ -102,6 +103,7 @@ fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
             activity_id: None,
             after: None,
             until: None,
+            reported: charge.reported_effort.as_ref(),
         },
     );
     model_effort_key(charge.model.as_deref(), effort)
@@ -119,6 +121,7 @@ fn credit_key(facts: &AgentFacts, credit: &Credit) -> Key {
             activity_id: None,
             after: None,
             until: None,
+            reported: credit.reported_effort.as_ref(),
         },
     );
     model_effort_key(credit.model.as_deref(), effort)

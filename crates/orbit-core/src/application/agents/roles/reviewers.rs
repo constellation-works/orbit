@@ -234,6 +234,7 @@ fn rows(
                         .map(|earlier| earlier.at)
                         .max(),
                     until: Some(review.at),
+                    reported: None,
                 },
             );
             let row = rows
@@ -315,6 +316,7 @@ fn rows(
                 activity_id: None,
                 after: None,
                 until: None,
+                reported: runner.reported_effort.as_ref(),
             },
         );
         let row = rows
@@ -411,6 +413,7 @@ fn rows(
                     .as_ref()
                     .filter(|_| matches!(activity, MainActivity::Review))
                     .map(|_| charge.anchor),
+                reported: charge.reported_effort.as_ref(),
             },
         );
         let row = rows

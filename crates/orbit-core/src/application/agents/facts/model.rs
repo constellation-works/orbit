@@ -130,6 +130,11 @@ pub(in crate::application::agents) struct Runner {
     pub(in crate::application::agents) crew: Option<String>,
     pub(in crate::application::agents) model: Option<String>,
     pub(in crate::application::agents) run_id: Option<String>,
+    /// The reasoning effort a pulled attempt's follower reported on its claim
+    /// settlement, in the shared encoding (`Some(None)` is the provider
+    /// default); `None` when it reported none. Used only when the owner holds
+    /// no invocation evidence of its own for the attempt's run.
+    pub(in crate::application::agents) reported_effort: Option<Option<String>>,
 }
 
 /// One implementation attempt: a run span from task history, and the job

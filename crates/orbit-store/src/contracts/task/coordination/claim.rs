@@ -100,8 +100,9 @@ pub struct ClaimInvocation {
     pub(crate) attribution: ClaimAttribution,
 }
 
-/// The crew and model a claimed leaf ran as, and the branch and worktree its
-/// `worktree` step recorded, as its follower reports them. Attribution only:
+/// The crew, model and reasoning effort a claimed leaf ran as, and the branch
+/// and worktree its `worktree` step recorded, as its follower reports them.
+/// Attribution only:
 /// the owner keeps them on the claim's settlement record for the scorecards
 /// and the task detail panel, and never consults them for validation, a
 /// settlement's outcome or review-crew selection.
@@ -117,6 +118,17 @@ pub struct ClaimAttribution {
     /// The leaf's absolute worktree path on its executing machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// The effective reasoning effort of the leaf's main implementing
+    /// invocation, in the agent scorecards' encoding: `Some(Some(name))` is
+    /// the effort's wire name, `Some(None)` (`null` on the wire) the
+    /// provider default, and `None` (absent) an effort the follower does not
+    /// know, as every follower that predates the report sends.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reported_effort"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
 }
 
 impl ClaimAttribution {
@@ -127,7 +139,25 @@ impl ClaimAttribution {
             && self.crew_model.is_none()
             && self.branch.is_none()
             && self.worktree_path.is_none()
+            && self.reasoning_effort.is_none()
     }
+}
+
+/// The `reasoning_effort` a follower's settle call sends for a leaf that ran
+/// at its provider's default effort. Tool input drops a `null` parameter, so
+/// the provider default travels by this name and the owner records it as
+/// `null`.
+pub const PROVIDER_DEFAULT_REPORTED_EFFORT: &str = "provider_default";
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. A plain
+/// `Option<Option<_>>` would read `null` as absent and lose the provider
+/// default.
+pub(crate) fn reported_effort<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 impl ClaimInvocation {

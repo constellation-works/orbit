@@ -320,6 +320,12 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
             false,
             "Optional. The absolute path of the leaf run's worktree on the executing machine. Attribution only, like `branch`.",
         ),
+        param(
+            "reasoning_effort",
+            ParamType::String,
+            false,
+            "Optional. The effective reasoning effort of the leaf's main implementing invocation: its name (`low`, `medium`, `high`, `xhigh` or `max`), or `provider_default` when the provider's default applied. Omit it when the effort is unknown. Attribution only, like `crew`: the owner's agent scorecards count the attempt under it.",
+        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],

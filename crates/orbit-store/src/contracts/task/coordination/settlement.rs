@@ -85,6 +85,16 @@ pub struct ClaimSettlementRecord {
     /// follower reported it. Absent for a follower that predates the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// The leaf's effective reasoning effort, when its follower reported it,
+    /// in the agent scorecards' encoding: the effort's wire name, `null` for
+    /// the provider default, and absent when the follower did not know it or
+    /// predates the report. Attribution only, like `crew_model`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::claim::reported_effort"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +142,13 @@ impl ClaimSettlementRecord {
             crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
             branch: named(&reported.branch),
             worktree_path: named(&reported.worktree_path),
+            reasoning_effort: reported.reasoning_effort.as_ref().and_then(|effort| {
+                match effort.as_deref().map(str::trim) {
+                    None => Some(None),
+                    Some("") => None,
+                    Some(name) => Some(Some(name.to_string())),
+                }
+            }),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),

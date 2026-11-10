@@ -167,9 +167,13 @@ impl PullPeer for RoutedPullPeer<'_> {
         // The leaf's crew and model ride beside the settlement, since a typed
         // handoff carries no evidence to hold them, and so do the branch and
         // worktree path its `worktree` step recorded, which the owner shows
-        // for inspecting the run here. An owner that predates the fields
-        // warns and ignores them. Attribution only: an unreadable leaf run
-        // sends none rather than failing the delivery.
+        // for inspecting the run here, and the effort its main implementing
+        // invocation ran at, which the owner's scorecards count the attempt
+        // under (`provider_default` for the provider's default, omitted when
+        // unknown). An
+        // owner that predates the fields warns and ignores them. Attribution
+        // only: an unreadable leaf run sends none rather than failing the
+        // delivery.
         let leaf = admission
             .leaf_run_id
             .as_deref()
@@ -178,6 +182,14 @@ impl PullPeer for RoutedPullPeer<'_> {
         if let (Some(leaf), Some(object)) = (leaf, input.as_object_mut()) {
             let attribution = leaf_attribution(&leaf);
             let worktree = self.runtime.recorded_run_worktree(&leaf.run_id);
+            if let Some(effort) = self.runtime.leaf_reported_effort(&leaf) {
+                object.insert(
+                    "reasoning_effort".into(),
+                    Value::String(effort.unwrap_or_else(|| {
+                        orbit_store::contracts::PROVIDER_DEFAULT_REPORTED_EFFORT.to_string()
+                    })),
+                );
+            }
             for (key, value) in [
                 ("crew", attribution.crew),
                 ("crew_model", attribution.crew_model),

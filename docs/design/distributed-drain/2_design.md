@@ -1439,6 +1439,13 @@ the probe reports the first refusal admission would raise by running the same or
   attribution only and kept on the same record, so the owner's task detail can name where the
   run executed (`job_run_worktree`); a follower that predates them leaves both unrecorded, and
   the owner never derives them.
+  It also carries `reasoning_effort` ([ORB-23825]): the effort the leaf's main implementing
+  invocation ran at, from the follower's own invocation and launch records, as its wire name or
+  `provider_default` (tool input drops a `null`), and omitted when the follower does not know
+  it. The record keeps it as the agent scorecards encode effort (`null` for the provider
+  default), and they count the pulled attempt under it. Attribution only, like the crew; an
+  owner that predates it warns and ignores it, and the owner never derives it from its own crew
+  configuration.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

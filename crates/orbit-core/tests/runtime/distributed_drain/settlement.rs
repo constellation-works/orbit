@@ -1222,6 +1222,123 @@ fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
     );
 }
 
+/// [ORB-23825] A follower reports its leaf's reasoning effort beside the
+/// settlement, and the owner's implementer scorecard counts the pulled
+/// attempt, which has no local job run, under it: a wire name under that
+/// name, `provider_default` under the provider default (a null effort), and
+/// no field, as
+/// an older follower sends, under `unknown`. The report is attribution only:
+/// every variant settles to the same phase and task status.
+fn settle_reporting_effort(effort: Option<Value>, expected: &Value) {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let mut input = json!({
+        "claim_id": claim.claim_id,
+        "run_id": leaf,
+        "settlement": ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("leaf failed".into()),
+            ..Default::default()
+        }),
+        "crew": "sol",
+        "crew_model": "model-pulled",
+    });
+    if let Some(effort) = effort {
+        input["reasoning_effort"] = effort;
+    }
+    let settled = pair
+        .wire
+        .call("", "orbit.drain.claim.settle", input)
+        .expect("the owner accepts the settlement");
+    assert_eq!(settled["phase"], "failed", "{settled}");
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    let rows: Vec<&Value> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["model"] == "model-pulled")
+        .collect();
+    assert_eq!(rows.len(), 1, "one row for the pulled attempt: {card:#}");
+    assert_eq!(rows[0]["reasoning_effort"], *expected, "{card:#}");
+}
+
+fn a_pulled_attempt_counts_under_the_effort_its_follower_reported() {
+    settle_reporting_effort(Some(json!("high")), &json!("high"));
+}
+
+fn a_pulled_attempt_reported_at_the_provider_default_counts_under_a_null_effort() {
+    settle_reporting_effort(Some(json!("provider_default")), &Value::Null);
+}
+
+fn a_pulled_attempt_whose_follower_reports_no_effort_stays_unknown() {
+    settle_reporting_effort(None, &json!("unknown"));
+}
+
+/// [ORB-23825] A follower whose leaf launched its implementing agent at
+/// `high` reports that effort when it settles the claim, from its own launch
+/// record, and the owner's implementer scorecard counts the pulled attempt
+/// under it.
+fn a_follower_reports_its_leafs_recorded_effort_on_settlement() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    // Keep this fixture from signalling the test process used as the fake
+    // worker, as the operator cancel scenario does.
+    let mut run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
+    run.pid = None;
+    run.pid_start_time = None;
+    let workspace = pair.follower.workspace_id().unwrap();
+    let store = pair.follower.sqlite_store().unwrap();
+    store
+        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .unwrap();
+    store
+        .begin_agent_execution(
+            &workspace,
+            &leaf,
+            "implement_one",
+            "fixture",
+            run.crew_model.as_deref(),
+            &orbit_types::telemetry::AgentExecutionIdentity {
+                crew: Some("sol".into()),
+                reasoning_effort: Some(orbit_types::identity::ReasoningEffort::High),
+            },
+        )
+        .unwrap();
+
+    pair.follower
+        .cancel_job_run_with_options_and_policy(&leaf, "operator", "cli", None, false, false)
+        .expect("cancel claimed leaf");
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    assert_eq!(settles[0]["reasoning_effort"], "high", "{:#}", settles[0]);
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    let efforts: Vec<&Value> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| &row["reasoning_effort"])
+        .collect();
+    assert_eq!(efforts, [&json!("high")], "{card:#}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -1241,7 +1358,11 @@ crate::scenario_table!(
     an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged,
     a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back,
     backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement,
-    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
+    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection,
+    a_pulled_attempt_counts_under_the_effort_its_follower_reported,
+    a_pulled_attempt_reported_at_the_provider_default_counts_under_a_null_effort,
+    a_pulled_attempt_whose_follower_reports_no_effort_stays_unknown,
+    a_follower_reports_its_leafs_recorded_effort_on_settlement
 );
 
 #[cfg(unix)]
