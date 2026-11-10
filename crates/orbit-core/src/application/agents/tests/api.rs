@@ -839,6 +839,145 @@ fn pilot_rows_keep_each_rounds_own_effort() {
     assert_eq!(units("orphan-model @ effort unknown"), json!(1));
 }
 
+/// A pilot row's warning terms rate per settled assessment, and warnings
+/// settle independently of the assessed cohort, so the interval must resample
+/// settled warnings on tasks the row never assessed.
+#[test]
+fn pilot_interval_resamples_settled_warnings_on_unassessed_tasks() {
+    use crate::application::agents::roles::pilot_warnings::{Assessment, Outcome, Warnings};
+    use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
+
+    let now = Utc::now();
+    let at = now - chrono::Duration::minutes(30);
+    let run = |id: &str| PilotRun {
+        run_id: id.into(),
+        crew: Some("crew".into()),
+        model: Some("pilot-model".into()),
+        activity_id: Some("pilot".into()),
+        seconds: None,
+        tokens: None,
+    };
+    // Ten landed tasks the pilot assessed with no lift over the filer.
+    let mut tasks: Vec<TaskFacts> = (0..10)
+        .map(|index| minimal_task(&format!("assessed-{index}"), at))
+        .collect();
+    let graded = crate::application::agents::roles::pilots::grade_all(PilotEvidence {
+        assessments: tasks
+            .iter()
+            .map(|task| PilotAssessment {
+                task_id: task.id.clone(),
+                at,
+                run: Some(run(&format!("run-{}", task.id))),
+                after: vec!["file:src/a.rs".into()],
+                author: vec!["file:src/a.rs".into()],
+                landed: BTreeSet::from(["src/a.rs".to_string()]),
+                contested: Vec::new(),
+            })
+            .collect(),
+        waits: Vec::new(),
+    });
+    // Warnings that settled in the window on other tasks: some dropped, one
+    // never landed, none in the assessed cohort.
+    let settled = |outcomes: &[Outcome]| -> Vec<TaskFacts> {
+        outcomes
+            .iter()
+            .enumerate()
+            .map(|(index, outcome)| {
+                let mut task = minimal_task(&format!("other-{index}"), at);
+                task.landed = index % 2 == 0;
+                task.landed_at = task.landed.then_some(at);
+                task.dropped = index % 2 == 1;
+                task.status = if task.dropped {
+                    TaskStatus::Rejected
+                } else {
+                    TaskStatus::Done
+                };
+                task.warnings = Warnings {
+                    assessments: vec![Assessment {
+                        at: at - chrono::Duration::days(2),
+                        operation_id: format!("op-{index}"),
+                        run_id: None,
+                        held: Vec::new(),
+                        outcome: outcome.clone(),
+                        settled: Some((at, "settled".into())),
+                        run: Some(run(&format!("run-other-{index}"))),
+                        mode: "full".into(),
+                        escalated: false,
+                    }],
+                    triaged: Vec::new(),
+                };
+                task
+            })
+            .collect()
+    };
+    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
+    let scored = |tasks: Vec<TaskFacts>| {
+        let (charges, credits) = attribution::attribute(&tasks, &[], &graded);
+        let facts = AgentFacts {
+            invocations: Default::default(),
+            launches: Default::default(),
+            computed_at: now,
+            tasks_scanned: tasks.len(),
+            tasks,
+            charges,
+            credits,
+            run_costs: BTreeMap::new(),
+            regressions: Vec::new(),
+            landed_lines: BTreeMap::new(),
+            performance_types: Vec::new(),
+            pilots: graded.clone(),
+        };
+        let payload = agent_scorecard(&facts, AgentRole::Pilots, &query, Duration::ZERO);
+        let rows = payload["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{payload}");
+        rows[0].clone()
+    };
+    let band = |row: &Value| {
+        (
+            row["interval"]["p10"].as_f64().unwrap(),
+            row["interval"]["p90"].as_f64().unwrap(),
+        )
+    };
+
+    // Ten confirmed warnings on other tasks: the score is 3 x 100 and every
+    // draw of the settled cohort is all-confirmed, so the interval is that
+    // score, not the zero the assessed-only draws produced.
+    let mut confirmed_tasks = tasks.clone();
+    confirmed_tasks.extend(settled(&vec![Outcome::Confirmed; 10]));
+    let confirmed = scored(confirmed_tasks);
+    assert_eq!(confirmed["units"], json!(10));
+    assert_eq!(confirmed["rank"], json!(1));
+    assert_eq!(confirmed["raw"].as_f64(), Some(300.0));
+    assert_eq!(confirmed["score"].as_f64(), Some(300.0));
+    assert_eq!(confirmed["term_units"]["confirmed_warnings"], json!(10));
+    assert_eq!(band(&confirmed), (300.0, 300.0), "{confirmed}");
+
+    // Seven confirmed and three dismissed: 3 x 70 - 30 = 180. The settled
+    // cohort's own denominator is resampled, so the band is real, brackets
+    // the score and repeats exactly.
+    let mut mixed_tasks = tasks.clone();
+    let mut outcomes = vec![Outcome::Confirmed; 7];
+    outcomes.extend(vec![Outcome::Dismissed; 3]);
+    mixed_tasks.extend(settled(&outcomes));
+    let mixed = scored(mixed_tasks.clone());
+    assert_eq!(mixed["raw"].as_f64(), Some(180.0));
+    assert_eq!(mixed["score"].as_f64(), Some(180.0));
+    let (low, high) = band(&mixed);
+    assert!(
+        low > 0.0 && low < 180.0 && high > 180.0,
+        "the band must bracket the score: {mixed}"
+    );
+    assert_eq!(band(&scored(mixed_tasks)), (low, high));
+
+    // Fewer than the minimum settled: the warning terms stay unscored, the
+    // score is the lift's own (0) and the interval does not invent warnings.
+    let mut thin_tasks = std::mem::take(&mut tasks);
+    thin_tasks.extend(settled(&vec![Outcome::Confirmed; 9]));
+    let thin = scored(thin_tasks);
+    assert_eq!(thin["raw"].as_f64(), Some(0.0));
+    assert_eq!(band(&thin), (0.0, 0.0), "{thin}");
+}
+
 #[test]
 fn reviewer_rows_keep_each_settlements_own_effort() {
     use orbit_types::identity::ReasoningEffort::{High, Medium};

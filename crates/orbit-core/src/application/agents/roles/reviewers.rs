@@ -517,6 +517,7 @@ fn rows(
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
                 sample_units,
+                exposure_units: Vec::new(),
                 expected: None,
                 reviewed_units: None,
                 unjudged: !row.judged,
