@@ -376,6 +376,62 @@ fn ci_checkout_identity_gaps_are_named_at_the_filing_boundary() {
         "{output}"
     );
 }
+#[test]
+fn ci_snapshot_wide_retryable_errors_defer_without_filing() {
+    if !isolated("ci_snapshot_wide_retryable_errors_defer_without_filing") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_fixture("");
+    let run = failure(
+        "error: would file without the snapshot-wide gap",
+        0,
+        &commits[0],
+    );
+    let output = runtime
+        .run_deterministic(
+            "file_ci_failure_tasks",
+            &json!({}),
+            &json!({"ci_evidence": {
+                "schema_version": 2, "collected": true,
+                "outcome_hint": "current_failures",
+                "capability": {"available": true, "authenticated": true},
+                "repository": {"name": "orbit", "full_name": "acme/orbit", "default_branch": "main"},
+                "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+                "latest_runs": [run.clone()], "current_failures": [run],
+                "stale_or_superseded": [], "in_flight": [],
+                "retryable_errors": [{
+                    "stage": "collection", "operation": "list_runs",
+                    "run_id": null, "job_id": null, "retryable": true,
+                    "message": "run listing did not finish",
+                }],
+                "collected_at": "2026-09-07T08:00:00Z",
+            }}),
+            ToolContext::default(),
+        )
+        .expect("a snapshot-wide retryable gap defers instead of failing");
+    assert_eq!(output["outcome"], json!("deferred"), "{output}");
+    assert_eq!(
+        output["stage"],
+        json!("collection_or_investigation"),
+        "{output}"
+    );
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["filed"], json!([]), "{output}");
+    assert_eq!(output["audit"]["retryable_errors"], json!(1), "{output}");
+    assert_eq!(
+        output["retryable_errors"][0]["operation"],
+        json!("list_runs")
+    );
+    assert!(
+        runtime
+            .list_tasks()
+            .unwrap()
+            .iter()
+            .all(|task| !task.tags.iter().any(|tag| tag == "ci-failure-sweep")),
+        "no CI-failure task is filed from the incomplete snapshot"
+    );
+}
+
 fn named_failure(
     log: &str,
     index: usize,

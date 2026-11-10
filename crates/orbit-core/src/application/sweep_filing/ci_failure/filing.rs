@@ -125,7 +125,19 @@ pub(crate) fn file_ci_failure_tasks(
         let run_id = ["job_run_id", "run_id"]
             .into_iter()
             .find_map(|key| input.get(key).and_then(Value::as_str));
-        if output["rate_limit"].is_object() {
+        if output.get("stage").and_then(Value::as_str) == Some("collection_or_investigation") {
+            runtime.record_run_deferral(
+                run_id,
+                OUTCOME_DEFERRED,
+                "ci_failure_sweep deferred because collection was incomplete due to \
+                 retryable errors",
+                json!({
+                    "stage": output["stage"],
+                    "retryable_errors": output["retryable_errors"],
+                    "audit": output["audit"],
+                }),
+            );
+        } else if output["rate_limit"].is_object() {
             runtime.record_run_deferral(
                 run_id,
                 OUTCOME_DEFERRED,
@@ -148,7 +160,7 @@ pub(crate) fn file_ci_failure_tasks(
     Ok(output)
 }
 
-fn file_ci_failure_tasks_with_ops<L, F>(
+pub(crate) fn file_ci_failure_tasks_with_ops<L, F>(
     runtime: &OrbitRuntime,
     input: &Value,
     lookup: &L,
@@ -310,11 +322,31 @@ where
         // that failed may be exactly the one holding the newer run that would
         // have superseded a finding. Report every error, not just the
         // snapshot-wide ones, so one payload explains the whole sweep.
-        return Err(retryable_pipeline_error(
-            "collection_or_investigation",
-            &audit,
-            retryable_errors,
-        ));
+        // The gaps are retryable, so hold the sweep for a later pass instead
+        // of failing the run: return the deferred outcome with the audit
+        // payload the retryable error used to carry, and file nothing.
+        let mut held_audit = audit.clone();
+        held_audit["retryable_errors"] = json!(retryable_errors.len());
+        return Ok(json!({
+            "outcome": OUTCOME_DEFERRED,
+            "stage": "collection_or_investigation",
+            "capability": capability,
+            "clusters": 0,
+            "filed_count": 0,
+            "filed": [],
+            "pilot_candidate_count": 0,
+            "pilot_candidates": [],
+            "skipped_existing": [],
+            "withheld": [],
+            "skipped_over_cap": [],
+            "deferred_count": 0,
+            "deferred": [],
+            "retryable_errors": retryable_errors,
+            "audit": held_audit,
+            "detail": "collection was incomplete because of retryable errors, so the \
+                       sweep is deferred to a later sweep; no task was filed from this \
+                       incomplete snapshot and this is not a CI pass",
+        }));
     }
     // A landing failure collection could not evidence across its retry window
     // gets an owner now, whatever else this snapshot still defers.
