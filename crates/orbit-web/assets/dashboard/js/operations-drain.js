@@ -15,8 +15,12 @@ let holdDrainAnnouncement = false;
 // Bumped on every host or workspace reset. A readiness read captures the value
 // it started with and will not paint after a newer scope has taken the card.
 let drainScopeGeneration = 0;
+// What the card shows: resolved from the operator's stored pick on each paint.
 let aggregateDrainHost = null;
 let aggregateDrainWorkspace = null;
+// The operator's own picks, held here for a page whose storage refuses them.
+let chosenAggregateHost = null;
+let chosenAggregateWorkspace = null;
 const aggregateDrainScopes = new WeakMap();
 const PULL_OWNER_UNAVAILABLE = "The owner's host and workspace are unavailable. Reload the page before starting a pull window.";
 
@@ -44,26 +48,28 @@ function aggregateDrainScope(workspace, hostName, connection, generation, checko
   };
 }
 // The card's chosen workspace and host survive a reload like the dock's other
-// selections. Storage can refuse; the in-memory choice then serves this page,
-// and a remembered value that no longer exists falls back to the defaults.
+// selections. Only an operator's change is stored. Each paint resolves the card
+// from the stored pick, falling back to the defaults without storing them, so a
+// default keeps following the fleet until the operator chooses. Storage can
+// refuse; the in-memory choice then serves this page.
 const AGGREGATE_WORKSPACE_STORAGE_KEY = "orbit.dashboard.autoDrainWorkspace";
 const AGGREGATE_HOST_STORAGE_KEY = "orbit.dashboard.autoDrainHost";
 const LIVE_DRAIN_PHASES = ["draining", "pulling", "winding_down"];
 function rememberedAggregateWorkspace() {
-  try { return window.localStorage.getItem(AGGREGATE_WORKSPACE_STORAGE_KEY) || aggregateDrainWorkspace; } catch { return aggregateDrainWorkspace; }
+  try { return window.localStorage.getItem(AGGREGATE_WORKSPACE_STORAGE_KEY) || chosenAggregateWorkspace; } catch { return chosenAggregateWorkspace; }
 }
-function rememberAggregateWorkspace(id) {
-  aggregateDrainWorkspace = id || null;
+function chooseAggregateWorkspace(id) {
+  chosenAggregateWorkspace = id || null;
   try {
     if (id) window.localStorage.setItem(AGGREGATE_WORKSPACE_STORAGE_KEY, id);
     else window.localStorage.removeItem(AGGREGATE_WORKSPACE_STORAGE_KEY);
   } catch { /* the in-memory choice serves */ }
 }
 function rememberedAggregateHost() {
-  try { return window.localStorage.getItem(AGGREGATE_HOST_STORAGE_KEY) || aggregateDrainHost; } catch { return aggregateDrainHost; }
+  try { return window.localStorage.getItem(AGGREGATE_HOST_STORAGE_KEY) || chosenAggregateHost; } catch { return chosenAggregateHost; }
 }
-function rememberAggregateHost(name) {
-  aggregateDrainHost = name || null;
+function chooseAggregateHost(name) {
+  chosenAggregateHost = name || null;
   try {
     if (name) window.localStorage.setItem(AGGREGATE_HOST_STORAGE_KEY, name);
     else window.localStorage.removeItem(AGGREGATE_HOST_STORAGE_KEY);
@@ -436,6 +442,8 @@ registerOperationsReset(() => {
   announcedDrainState = null;
   aggregateDrainHost = null;
   aggregateDrainWorkspace = null;
+  chosenAggregateHost = null;
+  chosenAggregateWorkspace = null;
   $("auto-drain-host")?.remove();
   $("auto-drain-workspace")?.remove();
   clearDrainChrome();
@@ -459,16 +467,20 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       const options = aggregateWorkspaceOptions(fleet);
       const rememberedWorkspace = rememberedAggregateWorkspace();
       const liveDefault = options.find(option => (fleet.items || []).some(row => row.workspace_id === option.id && !row.error && LIVE_DRAIN_PHASES.includes(row.phase)));
-      rememberAggregateWorkspace(options.some(option => option.id === rememberedWorkspace)
+      aggregateDrainWorkspace = options.some(option => option.id === rememberedWorkspace)
         ? rememberedWorkspace
-        : (liveDefault || options[0])?.id || null);
+        : (liveDefault || options[0])?.id || null;
       let workspaceSelect = $("auto-drain-workspace");
       if (!workspaceSelect) {
         workspaceSelect = el("select", { id: "auto-drain-workspace", class: "workspace-select", "aria-label": "Drain workspace" });
         workspaceSelect.addEventListener("change", () => {
-          rememberAggregateWorkspace(workspaceSelect.value);
+          chooseAggregateWorkspace(workspaceSelect.value);
           // Changing the workspace resets the host to its owner.
-          rememberAggregateHost(null);
+          chooseAggregateHost(null);
+          // The panel's scope key reads the shown selection, so the pick is
+          // shown now; the next paint resolves it the same way from storage.
+          aggregateDrainWorkspace = workspaceSelect.value || null;
+          aggregateDrainHost = null;
           resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
@@ -485,13 +497,20 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       }
       workspaceSelect.value = aggregateDrainWorkspace || "";
       const ordered = aggregateDrainWorkspace ? aggregateWorkspaceHosts(fleet, aggregateDrainWorkspace, hosts) : hosts.map(host => host.name);
-      const rememberedHost = rememberedAggregateHost();
-      rememberAggregateHost(ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null);
+      // A remembered host applies only to the workspace it was picked with. One
+      // missing from this paint's list (its fleet read is briefly unreachable)
+      // shows the owner for now and stays stored.
+      const rememberedHost = aggregateDrainWorkspace === rememberedWorkspace ? rememberedAggregateHost() : null;
+      aggregateDrainHost = ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null;
       let select = $("auto-drain-host");
       if (!select) {
         select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
         select.addEventListener("change", () => {
-          rememberAggregateHost(select.value);
+          // The pick is stored with the workspace it was made for, so a later
+          // workspace default cannot inherit this host.
+          chooseAggregateWorkspace(aggregateDrainWorkspace);
+          chooseAggregateHost(select.value);
+          aggregateDrainHost = select.value || null;
           resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
