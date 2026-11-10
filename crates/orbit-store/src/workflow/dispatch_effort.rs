@@ -10,11 +10,13 @@
 //! effort or the argv (both must agree when both are present) and records it
 //! as a dispatch identity marked as backfilled. For a run whose invocation
 //! never completed there is no invocation to record on, so it records each
-//! launch on its own, stamped with that launch's time and attributed to the
+//! readable launch on its own, stamped with that launch's time and attributed to the
 //! one step whose audit interval contains it. A later launch of the same
 //! step is its own record. A launch a dispatch-time row already covers — the
-//! closest sibling of the same run, step, provider and model within a minute
-//! — is left as that row. It never runs when a store opens; an operator runs
+//! closest sibling of the same run, step, provider and model within a minute,
+//! including a sibling whose effort cannot be read — is left as that row. An
+//! unreadable sibling can own that row and is never assigned an inferred
+//! effort. It never runs when a store opens; an operator runs
 //! it, on any host, against that host's own store.
 //!
 //! An invocation stays unrecorded (and its effort `unknown`) when no launch
@@ -150,12 +152,16 @@ pub fn backfill_dispatch_effort(
         *report.recorded_by_effort.entry(key).or_default() += 1;
     }
     // Runs whose agent launched but whose invocation never completed have
-    // no invocation to record an identity on. Record each launch on its
-    // own, proven to its step by the run's audit trail, so the scorecard
-    // scan's launch-record fallback can attribute a later round of that
-    // step from that launch's time. A launch no single step provably
-    // contained, that names no provider, or whose own effort cannot be
-    // read, stays unknown. A launch a row already covers is left as it is.
+    // no invocation to record an identity on. Record each readable launch
+    // on its own, proven to its step by the run's audit trail, so the
+    // scorecard scan's launch-record fallback can attribute a later round
+    // of that step from that launch's time. A launch no single step
+    // provably contained, that names no provider, or whose own effort
+    // cannot be read, stays unknown and is never given an inferred effort.
+    // Unreadable siblings stay in the set a dispatch-time row is matched
+    // against: the closest one can own that row, and a later readable
+    // launch is recorded from its own evidence. A launch a row already
+    // covers is left as it is.
     let (launch_groups, omissions) = store.list_unrecorded_launch_groups(workspace_id)?;
     report.launch_only_no_step = omissions.no_step;
     report.launch_only_no_provider = omissions.no_provider;
@@ -166,15 +172,14 @@ pub fn backfill_dispatch_effort(
         } else {
             None
         };
-        let mut readable = group;
-        let before = readable.launches.len();
-        readable
+        let unreadable = group
             .launches
-            .retain(|launch| launch_effort(launch).is_some());
-        let unreadable = before - readable.launches.len();
+            .iter()
+            .filter(|launch| launch_effort(launch).is_none())
+            .count();
         report.launch_only_unreadable += unreadable;
         report.launch_only_unmatched += unreadable;
-        for launch in readable.launches.clone() {
+        for launch in group.launches.clone() {
             let Some(reasoning_effort) = launch_effort(&launch) else {
                 continue;
             };
@@ -185,7 +190,7 @@ pub fn backfill_dispatch_effort(
             };
             let recorded = store.record_backfilled_launch_execution(
                 workspace_id,
-                &readable,
+                &group,
                 &launch,
                 LAUNCH_MATCH_TOLERANCE,
                 &AgentExecutionIdentity {

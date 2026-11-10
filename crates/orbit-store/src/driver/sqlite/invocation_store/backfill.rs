@@ -355,8 +355,11 @@ impl Store {
     /// covers only the launch it was stamped with). A dispatch-time row,
     /// which has no provenance, covers the one sibling launch of the same
     /// run, step, provider and model whose start is within `tolerance` and
-    /// is the closest to the row. A later launch of the same step is its
-    /// own row, and running the backfill again writes nothing new.
+    /// is the closest to the row. `group.launches` is that full sibling
+    /// set, including a launch whose effort cannot be read: an unreadable
+    /// audit does not move the row onto a later launch, and this function
+    /// never infers an effort for it. A later launch of the same step is
+    /// its own row, and running the backfill again writes nothing new.
     pub fn record_backfilled_launch_execution(
         &self,
         workspace_id: &str,
@@ -469,8 +472,10 @@ fn backfill_row_covers_launch(
 }
 
 /// A dispatch-time row has no launch event. It covers the closest sibling
-/// launch within `tolerance`, one row to one launch. Equal distances keep
-/// the earlier start, then the lower event id.
+/// launch within `tolerance`, one row to one launch. `siblings` includes
+/// launches whose effort cannot be read; the closest one owns the row, and
+/// this match does not infer an effort. Equal distances keep the earlier
+/// start, then the lower event id.
 fn dispatch_row_covers_launch(
     row_started: DateTime<Utc>,
     launch: &InvocationLaunchEvent,
