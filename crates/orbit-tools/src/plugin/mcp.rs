@@ -378,7 +378,7 @@ impl McpBackend {
     /// session key resolved for this caller's context.
     fn spawn(&self, ctx: &ToolContext, cwd: &str) -> Result<McpSession, OrbitError> {
         let cwd = cwd.to_string();
-        let mut environment = self.spec.child_environment(ctx, &cwd, None);
+        let mut environment = self.spec.child_environment(ctx, &cwd, None)?;
         // The same intersection the session key carries, recorded as the
         // child's callback ceiling: a session is shared only by callers who
         // agree on it, so one ceiling describes every caller it serves

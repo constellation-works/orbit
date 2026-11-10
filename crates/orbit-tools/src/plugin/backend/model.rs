@@ -122,6 +122,21 @@ pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
         .join(format!("{plugin}.json"))
 }
 
+/// Host-owned directory beside the grant witnesses, holding one link per
+/// granted `requires.programs` name in each plugin's subdirectory. Each link
+/// points at the recorded executable, so a child's `PATH` can resolve the
+/// declared name whatever the symlink layout on the operator's `PATH` was.
+/// The plugin is granted read on it and never write, so it cannot re-point a
+/// granted name; only the host writes these links.
+pub const PLUGIN_PROGRAM_LINK_DIR: &str = ".programs";
+
+/// Where `plugin`'s program links sit, relative to the global root.
+pub fn plugin_program_links_relative(plugin: &str) -> PathBuf {
+    Path::new("plugins")
+        .join(PLUGIN_PROGRAM_LINK_DIR)
+        .join(plugin)
+}
+
 /// The same narrowing for the workspace's `.orbit/`: the stores a callback
 /// writes, never `plugins.yaml` (the install pin), `routines/`, `auto_tasks/`
 /// or `config.toml`.

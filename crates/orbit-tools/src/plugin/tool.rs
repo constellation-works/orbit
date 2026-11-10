@@ -163,7 +163,7 @@ impl PluginTool {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;
         let timeout_ms = spec.timeout_ms();
-        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name));
+        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name))?;
         // Minted before the profile is compiled: the child is granted a read
         // rule on this one record, and a Landlock rule binds the inode that
         // exists when it is compiled.

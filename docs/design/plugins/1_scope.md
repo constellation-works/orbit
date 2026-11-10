@@ -859,10 +859,15 @@ the consenting operator's `PATH`:
   path is what gets recorded, in the grant witness (§3).
 - The profile grants each recorded path read and execute, whichever caller (systemd unit, MCP
   server, ssh shell) spawns the backend. Nothing is resolved at call time.
-- The backend child's `PATH` is prepended with the parent directory of each recorded path
-  that is still granted (deduplicated), so the backend can resolve that program by name
-  whatever the spawning caller's `PATH`. A program whose recorded path is no longer granted
-  adds nothing to the child's `PATH`.
+- The backend child's `PATH` is prepended with the host's per-plugin program link directory,
+  `<global>/plugins/.programs/<ns>/`, which holds one symbolic link per granted bare name
+  pointing at its recorded path. The name therefore resolves whatever the file's own name,
+  whatever the spawning caller's `PATH`, and whatever symlink layout the operator's `PATH`
+  used (an installed `claude` is commonly a link into a versioned tree). Only the host writes
+  the directory: the plugin is granted read on it and never write, so it cannot re-point a
+  granted name. The links are rebuilt on every call, and a link for a name that is no longer
+  granted is removed. A program whose recorded path is no longer granted gets no link and adds
+  nothing to the child's `PATH`. Absolute declared entries run as written and get no link.
 - A recorded path is granted only while it still names that executable: it exists, is an
   executable regular file, is still its own canonical path (a link retargeted after consent
   stops matching), and lies outside the unreadable trees below. A path for a name the manifest
@@ -873,6 +878,11 @@ the consenting operator's `PATH`:
   `orbit plugin doctor` reports every program of an active plugin that will not be granted,
   including those with no recorded path (unresolved at enable, or enabled by an Orbit that did
   not record them).
+- Drift is inspection only. When a bare name now resolves on the inspecting `PATH` to a file
+  other than the recorded one (an auto-updated CLI), `orbit plugin show` marks the row with the
+  new file and the fix, and `orbit plugin doctor` reports it for an active plugin. The plugin
+  keeps running the recorded file; the fix is re-running `orbit plugin enable <ns>`. The call
+  path never reads the inspecting `PATH`, so drift cannot change what runs.
 
 **Who bounds the declared programs.** Before a call runs, every `requires.programs` entry is
 checked against a bound chosen by who chose the call. The tool context names the caller kind
