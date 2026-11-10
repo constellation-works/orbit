@@ -23,6 +23,10 @@ impl TaskReviewPort for OrbitRuntime {
         use crate::application::job::ReviewAdmissionHook;
         use orbit_types::task::ArtifactWriter;
         use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewTiming};
+        // No handoff head means no candidate to cover, whatever the review policy.
+        let Some(head) = head else {
+            return Ok(false);
+        };
         let captured = task
             .job_run_id
             .as_deref()
@@ -37,9 +41,6 @@ impl TaskReviewPort for OrbitRuntime {
         {
             return Ok(true);
         }
-        let Some(head) = head else {
-            return Ok(false);
-        };
         let manifest = self.get_task_artifact_manifest(&task.id)?;
         if !manifest.iter().any(|file| {
             file.path == REVIEW_GATE_ARTIFACT && file.writer == Some(ArtifactWriter::System)
