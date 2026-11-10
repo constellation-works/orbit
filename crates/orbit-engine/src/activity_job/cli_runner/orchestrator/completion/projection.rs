@@ -22,9 +22,10 @@ use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, Di
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
-    muse_terminal_failure_diagnostic, normalize_cli_stdout, project_cli_response,
-    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_invocation_diagnostic, provider_long_prompt_requests, provider_usage_limit,
+    latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
+    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
+    provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
+    provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
 use serde_json::Value;
@@ -68,6 +69,34 @@ fn provider_reported_ending(
 /// holds no answer [ORB-22427].
 fn is_provider_frame(message: &str) -> bool {
     serde_json::from_str::<Value>(message).is_ok_and(|value| value.get("type").is_some())
+}
+
+/// [ORB-23898] The terminal assistant message of a truncated capture, when the
+/// answer projection holds no response envelope yet that message does.
+///
+/// A truncated capture keeps only a head and a tail, and the answer projection
+/// reads one terminal frame. When that frame is absent from the kept bytes, the
+/// projection is empty even though the newest assistant message in the tail
+/// carries the agent's envelope. Returns that message only if it holds an
+/// envelope frame; the caller validates it like any other envelope (frame,
+/// status/error consistency, exit alignment), so the recovery admits nothing
+/// the normal parser would refuse.
+fn truncated_terminal_envelope_message(
+    provider: &str,
+    protocol_bytes: &[u8],
+    answer_text: &str,
+) -> Option<String> {
+    if ParsedStdout::parse(answer_text)
+        .peek_response_envelope()
+        .is_some()
+    {
+        return None;
+    }
+    let message = latest_assistant_message(provider, protocol_bytes)?;
+    ParsedStdout::parse(&message)
+        .peek_response_envelope()
+        .is_some()
+        .then_some(message)
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -147,11 +176,26 @@ pub(in super::super) fn project_completion(
     let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
     let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
     let answer_parsed = ParsedStdout::parse(answer_text.as_ref());
-    let declared_failure = answer_parsed.peek_declared_response_failure();
+    // [ORB-23898] Envelope decisions read the recovered terminal message when a
+    // truncated capture lost the answer's envelope frame; trace reads keep the
+    // answer projection, which carries the usage frames.
+    let recovered_message = stdout
+        .truncated()
+        .then(|| {
+            truncated_terminal_envelope_message(
+                &provider,
+                stdout.protocol_bytes(),
+                answer_text.as_ref(),
+            )
+        })
+        .flatten();
+    let envelope_parsed =
+        ParsedStdout::parse(recovered_message.as_deref().unwrap_or(answer_text.as_ref()));
+    let declared_failure = envelope_parsed.peek_declared_response_failure();
     let envelope_status = declared_failure
         .as_ref()
         .map(|failure| failure.status.clone())
-        .or_else(|| answer_parsed.peek_response_status());
+        .or_else(|| envelope_parsed.peek_response_status());
     // The operator-facing preview stays on the *raw* capture: normalization
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
@@ -161,7 +205,7 @@ pub(in super::super) fn project_completion(
         stdout_text_preview(raw_stdout_text.as_ref(), redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
         parse_cli_response_result_from(
-            &answer_parsed,
+            &envelope_parsed,
             stderr.protocol_bytes(),
             exit_code,
             duration.as_millis() as u64,
@@ -183,7 +227,7 @@ pub(in super::super) fn project_completion(
     // Only meaningful on an otherwise-clean exit: a timeout or nonzero exit
     // already fails the step with a more specific message.
     let completion_envelope_error = exit_success
-        .then(|| answer_parsed.response_envelope_protocol_check())
+        .then(|| envelope_parsed.response_envelope_protocol_check())
         .and_then(Result::err)
         .map(|error| completion_diagnostic(&error.to_string(), redaction));
     let completion_protocol_violation =
@@ -285,7 +329,7 @@ pub(in super::super) fn project_completion(
                 if completion_protocol_violation {
                     return None;
                 }
-                let reply = answer_parsed.peek_response_envelope()?.to_string();
+                let reply = envelope_parsed.peek_response_envelope()?.to_string();
                 let reply =
                     bounded_redacted_text(&reply, redaction, false, FINAL_MESSAGE_LIMIT_BYTES);
                 return Some((

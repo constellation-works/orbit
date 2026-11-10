@@ -65,6 +65,8 @@ mod response_correction;
 mod stderr_failure;
 #[cfg(unix)]
 mod tag_instructions;
+#[cfg(unix)]
+mod truncated_envelope;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
