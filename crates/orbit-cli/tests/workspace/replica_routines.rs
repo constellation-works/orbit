@@ -505,12 +505,7 @@ fn exercise_routine_settlement(assertion_failure: bool) {
         owner_ci_sweep_row["reason"], "disabled_in_definition",
         "{owner_ci_sweep_row}"
     );
-    assert!(
-        fired["auto_task_reports"]
-            .as_array()
-            .is_none_or(|rows| rows.iter().all(|row| row["source"] != REPLICA)),
-        "a replica never evaluates or mints auto-tasks: {fired}"
-    );
+    assert_no_replica_auto_task(&fired);
 
     // The replica GC run executes in the replica checkout and settles there.
     let gc_run_id = routine_report(&fired, &replica_gc).expect("replica GC row")["run_id"]
@@ -894,32 +889,133 @@ fn enable_auto_task(repo: &Path, file: &str) {
     let path = repo.join(".orbit/auto_tasks").join(file);
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    fs::write(
-        &path,
-        content.replacen("enabled: false", "enabled: true", 1),
-    )
-    .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    assert!(
+        content.lines().any(|line| line.trim() == "enabled: false"),
+        "seeded {file} must start disabled so the edit is observable: {content}"
+    );
+    let updated = content.replacen("enabled: false", "enabled: true", 1);
+    assert_ne!(
+        updated, content,
+        "enable_auto_task did not change seeded {file}"
+    );
+    assert!(
+        updated.lines().any(|line| line.trim() == "enabled: true")
+            && !updated.lines().any(|line| line.trim() == "enabled: false"),
+        "enable_auto_task must leave {file} enabled: {updated}"
+    );
+    fs::write(&path, &updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    let written = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reread {}: {error}", path.display()));
+    assert_eq!(
+        written, updated,
+        "enable_auto_task write did not stick for {file}"
+    );
 }
 
-/// Drop the seeded job's age floor so a just-finished fixture run is old
-/// enough to classify.
+/// Drop the seeded job's whole-worktree age floor so a just-finished fixture
+/// run is old enough to classify. Only the `older_than_hours` key changes;
+/// `scratch_older_than_hours` keeps its seeded value.
 fn zero_worktree_gc_age_floor(home: &Path) {
     let path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let updated = content
+    let scratch_before = exact_key_line(&content, "scratch_older_than_hours:");
+    let updated = rewrite_older_than_hours_floor(&content);
+    assert_ne!(
+        updated,
+        content,
+        "older_than_hours floor must change in {}",
+        path.display()
+    );
+    assert_eq!(
+        exact_key_line(&updated, "scratch_older_than_hours:"),
+        scratch_before,
+        "scratch_older_than_hours must stay at its seeded value in {}",
+        path.display()
+    );
+    assert!(
+        sets_exact_key(&updated, "older_than_hours:", "0"),
+        "expected an older_than_hours: 0 key in {}",
+        path.display()
+    );
+    fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+/// `orbit sweep --format json` folds auto-tasks into `reports` (`kind:
+/// auto_task`) and counts mints in `minted`. A replica is never evaluated.
+fn assert_no_replica_auto_task(fired: &Value) {
+    let reports = fired["reports"]
+        .as_array()
+        .unwrap_or_else(|| panic!("sweep json has no reports array: {fired}"));
+    let replica_auto: Vec<_> = reports
+        .iter()
+        .filter(|row| row["kind"] == "auto_task" && row["source"] == REPLICA)
+        .collect();
+    assert!(
+        replica_auto.is_empty(),
+        "a replica never evaluates or mints auto-tasks: {replica_auto:?}"
+    );
+    let minted = fired["minted"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("sweep json minted count is missing: {fired}"));
+    let minted_rows = reports
+        .iter()
+        .filter(|row| row["kind"] == "auto_task" && row["action"] == "minted")
+        .count() as u64;
+    assert_eq!(
+        minted, minted_rows,
+        "minted must count auto_task rows with action minted: {fired}"
+    );
+    assert_eq!(
+        minted, 0,
+        "this fixture mints no auto-task, and a replica never can: {fired}"
+    );
+}
+
+fn exact_key_line(content: &str, key: &str) -> Option<String> {
+    content
         .lines()
-        .map(|line| match line.split_once("older_than_hours:") {
-            Some((indent, value)) if value.trim().parse::<u64>().is_ok() => {
-                format!("{indent}older_than_hours: 0")
+        .find(|line| line.trim_start().starts_with(key))
+        .map(str::to_string)
+}
+
+fn sets_exact_key(content: &str, key: &str, value: &str) -> bool {
+    content.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(key)
+            .is_some_and(|rest| rest.trim() == value)
+    })
+}
+
+/// Rewrite a numeric `older_than_hours` default to 0. A longer key such as
+/// `scratch_older_than_hours` does not match, and a templated passthrough
+/// (`older_than_hours: "{{ input.older_than_hours }}"`) is not an integer.
+fn rewrite_older_than_hours_floor(content: &str) -> String {
+    let mut replaced = false;
+    let mut updated = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let Some(value) = trimmed.strip_prefix("older_than_hours:") else {
+                return line.to_string();
+            };
+            if value.trim().parse::<u64>().is_err() {
+                return line.to_string();
             }
-            _ => line.to_string(),
+            replaced = true;
+            let indent = &line[..line.len() - trimmed.len()];
+            format!("{indent}older_than_hours: 0")
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(updated.contains("older_than_hours: 0"), "{updated}");
-    fs::write(&path, updated + "\n")
-        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+    assert!(
+        replaced,
+        "found no numeric older_than_hours default to rewrite: {content}"
+    );
+    if content.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated
 }
 
 fn sweep(cwd: &Path, home: &Path) -> Value {

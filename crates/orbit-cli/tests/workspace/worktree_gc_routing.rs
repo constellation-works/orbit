@@ -238,9 +238,9 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         .canonicalize()
         .expect("workspace B fixture worktree path is resolvable");
 
-    // The routine's own job asset defaults to a 24h `older_than_hours`
-    // floor; drop it so a freshly finished fixture run is eligible without
-    // needing to fabricate a backdated run record.
+    // The seeded job's `older_than_hours` floor is one hour. Drop that floor
+    // so a freshly finished fixture run is eligible without a backdated run
+    // record. `scratch_older_than_hours` stays at its seeded value.
     zero_worktree_gc_age_floor(&home);
     enable_worktree_gc_routine(&workspace_b);
     // Every new workspace seeds its own enabled hourly (`35 * * * *`)
@@ -573,10 +573,23 @@ fn zero_worktree_gc_age_floor(home: &Path) {
     let path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let scratch_before = exact_key_line(&content, "scratch_older_than_hours:");
     let updated = replace_seeded_older_than_hours_default(&content);
+    assert_ne!(
+        updated,
+        content,
+        "older_than_hours floor must change in {}",
+        path.display()
+    );
     assert!(
-        updated.contains("older_than_hours: 0"),
-        "expected an `older_than_hours: 0` default after rewriting the seeded job in {}",
+        sets_exact_key(&updated, "older_than_hours:", "0"),
+        "expected an `older_than_hours: 0` key after rewriting the seeded job in {}",
+        path.display()
+    );
+    assert_eq!(
+        exact_key_line(&updated, "scratch_older_than_hours:"),
+        scratch_before,
+        "scratch_older_than_hours must stay at its seeded value in {}",
         path.display()
     );
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
@@ -584,23 +597,26 @@ fn zero_worktree_gc_age_floor(home: &Path) {
 
 /// Rewrites the seeded pipeline's own `older_than_hours: <integer>` default to
 /// `0`, whatever integer it currently holds — independent of the exact seeded
-/// value so a future default change doesn't desync this fixture. Leaves the
-/// step config's templated passthrough (`older_than_hours: "{{ input.older_than_hours }}"`)
-/// untouched: its value isn't a bare integer, so it never matches.
+/// value so a future default change doesn't desync this fixture. The key must
+/// be the whole trimmed line, so `scratch_older_than_hours` is left alone.
+/// The step config's templated passthrough
+/// (`older_than_hours: "{{ input.older_than_hours }}"`) is not an integer, so
+/// it never matches.
 fn replace_seeded_older_than_hours_default(content: &str) -> String {
     let mut replaced_any = false;
     let mut updated: String = content
         .lines()
         .map(|line| {
-            let Some(key_start) = line.find("older_than_hours:") else {
+            let trimmed = line.trim_start();
+            let Some(value) = trimmed.strip_prefix("older_than_hours:") else {
                 return line.to_string();
             };
-            let value = line[key_start + "older_than_hours:".len()..].trim();
-            if value.parse::<u64>().is_err() {
+            if value.trim().parse::<u64>().is_err() {
                 return line.to_string();
             }
             replaced_any = true;
-            format!("{}older_than_hours: 0", &line[..key_start])
+            let indent = &line[..line.len() - trimmed.len()];
+            format!("{indent}older_than_hours: 0")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -614,13 +630,43 @@ fn replace_seeded_older_than_hours_default(content: &str) -> String {
     updated
 }
 
+fn exact_key_line(content: &str, key: &str) -> Option<String> {
+    content
+        .lines()
+        .find(|line| line.trim_start().starts_with(key))
+        .map(str::to_string)
+}
+
+fn sets_exact_key(content: &str, key: &str, value: &str) -> bool {
+    content.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(key)
+            .is_some_and(|rest| rest.trim() == value)
+    })
+}
+
 fn enable_worktree_gc_routine(workspace: &Workspace) {
     let path = workspace.orbit_dir.join("routines/worktree_gc.yaml");
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let updated = content
-        .replace("enabled: false", "enabled: true")
-        .replace("cron: \"35 * * * *\"", "cron: \"* * * * *\"");
+    // The seeded routine is already enabled. Only the hourly cron needs to
+    // become always-due, and that replace must change the file.
+    assert!(
+        content.lines().any(|line| line.trim() == "enabled: true"),
+        "seeded worktree_gc is already enabled: {content}"
+    );
+    let seeded_cron = "cron: \"35 * * * *\"";
+    let always_due = "cron: \"* * * * *\"";
+    assert!(
+        content.contains(seeded_cron),
+        "seeded worktree_gc cron must be the hourly default so the replace is observable: {content}"
+    );
+    let updated = content.replace(seeded_cron, always_due);
+    assert_ne!(updated, content, "worktree_gc cron replace was a no-op");
+    assert!(
+        updated.contains(always_due) && !updated.contains(seeded_cron),
+        "worktree_gc cron replace did not stick: {updated}"
+    );
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 

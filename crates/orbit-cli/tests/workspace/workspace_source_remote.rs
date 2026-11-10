@@ -573,32 +573,57 @@ fn credential_bearing_rebind_is_redacted_and_does_not_mutate() {
     );
 }
 
+/// Subcommand and flag presence only. Help prose is not pinned: there is no
+/// `help_goldens` case for `workspace source-remote` or `workspace init`.
+/// Show, rebind, dry-run, credential refusal, and `--force` are covered by
+/// the other rows in this module.
 fn source_remote_help_names_inspection_dry_run_and_rebind() {
     let home = tempdir().expect("home");
     let cwd = tempdir().expect("cwd");
     crate::git_repo::run(cwd.path(), &["init"]);
-    orbit(cwd.path(), home.path())
-        .args(["workspace", "source-remote", "--help"])
+    let parent = help_stdout(
+        cwd.path(),
+        home.path(),
+        &["workspace", "source-remote", "--help"],
+    );
+    assert!(
+        help_lists_command(&parent, "show") && help_lists_command(&parent, "rebind"),
+        "source-remote help must list the show and rebind subcommands: {parent}"
+    );
+    let rebind = help_stdout(
+        cwd.path(),
+        home.path(),
+        &["workspace", "source-remote", "rebind", "--help"],
+    );
+    assert!(
+        help_lists_flag(&rebind, "--dry-run") && help_lists_flag(&rebind, "--remote"),
+        "rebind help must list --dry-run and --remote: {rebind}"
+    );
+    let init = help_stdout(cwd.path(), home.path(), &["workspace", "init", "--help"]);
+    assert!(
+        help_lists_flag(&init, "--force"),
+        "workspace init help must list --force: {init}"
+    );
+}
+
+fn help_stdout(cwd: &Path, home: &Path, args: &[&str]) -> String {
+    let output = orbit(cwd, home)
+        .args(args)
         .assert()
         .success()
-        .stdout(predicate::str::contains("show"))
-        .stdout(predicate::str::contains("rebind"))
-        .stdout(predicate::str::contains("verify"))
-        .stdout(predicate::str::contains("roll back"))
-        .stdout(predicate::str::contains("publication bindings"));
-    orbit(cwd.path(), home.path())
-        .args(["workspace", "source-remote", "rebind", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("--dry-run"))
-        .stdout(predicate::str::contains("Credentials"));
-    orbit(cwd.path(), home.path())
-        .args(["workspace", "init", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("--force"))
-        .stdout(predicate::str::contains("first source identity"))
-        .stdout(predicate::str::contains("source-remote"));
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8(output).expect("help is utf-8")
+}
+
+fn help_lists_command(help: &str, name: &str) -> bool {
+    help.lines()
+        .any(|line| line.split_whitespace().next() == Some(name))
+}
+
+fn help_lists_flag(help: &str, flag: &str) -> bool {
+    help.split_whitespace().any(|word| word == flag)
 }
 
 fn force_init(repo: &Path, home: &Path) {

@@ -153,6 +153,7 @@ impl Fleet {
             .current_dir(cwd)
             .env("HOME", home)
             .env("USERPROFILE", home)
+            .env("RUST_LOG", "off")
             .env("PATH", std::env::join_paths(paths).expect("join PATH"))
             .args(args);
         command

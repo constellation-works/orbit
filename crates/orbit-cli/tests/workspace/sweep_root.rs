@@ -1,6 +1,8 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[cfg(target_os = "linux")]
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -143,6 +145,9 @@ fn doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup() {
     let fixture = Fixture::initialized();
     let unit_dir = fixture.home.join(".config/systemd/user");
     fs::create_dir_all(&unit_dir).unwrap();
+    // A healthy timer on PATH, so a missing host timer cannot satisfy this
+    // check. The warning has to name the unit file's deadline and cleanup.
+    let stub_dir = install_healthy_user_timer_stub(&fixture.home);
     let program = env!("CARGO_BIN_EXE_orbit")
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
@@ -155,6 +160,7 @@ fn doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup() {
         let root_arg = fixture.root.to_string_lossy();
         let args = ["--root", root_arg.as_ref(), "doctor", "--format", "json"];
         let output = command(&fixture.repo, &fixture.home, &args, None)
+            .env("PATH", path_with_stub(&stub_dir))
             .args(args)
             .output()
             .unwrap();
@@ -174,11 +180,84 @@ fn doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup() {
             clock["status"], "warning",
             "unsafe unit must be actionable: {clock}"
         );
+        let message = clock["message"].as_str().unwrap_or("");
         assert!(
-            clock["remediation"].is_string(),
-            "unsafe unit must offer repair: {clock}"
+            message.contains("cannot recover safely from a hung tick")
+                && message.contains("missing finite TimeoutStartSec")
+                && message.contains("missing KillMode=mixed"),
+            "unsafe unit must name the missing deadline and descendant cleanup, independent of the host timer: {clock}"
+        );
+        let remediation = clock["remediation"].as_str().unwrap_or("");
+        assert!(
+            remediation.contains("TimeoutStartSec") && remediation.contains("KillMode=mixed"),
+            "unsafe unit must offer the deadline and descendant-cleanup repair: {clock}"
         );
     }
+}
+
+/// `systemctl` that reports an enabled, active user timer and a service that
+/// already has a finite start timeout and mixed kill mode.
+#[cfg(target_os = "linux")]
+fn install_healthy_user_timer_stub(home: &Path) -> PathBuf {
+    let bin = home.join("stub-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("systemctl");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+# Healthy user timer. Doctor warnings then come from the unit file, not
+# from this host's real systemd.
+unit=
+for arg in "$@"; do
+  case "$arg" in
+    *.timer|*.service) unit=$arg ;;
+  esac
+done
+case " $* " in
+  *" is-enabled "*)
+    echo enabled
+    exit 0
+    ;;
+esac
+case "$unit" in
+  *.timer)
+    printf '%s\n' \
+      LoadState=loaded \
+      ActiveState=active \
+      'NextElapseUSecRealtime=Thu 2030-01-01 00:00:00 UTC' \
+      NextElapseUSecMonotonic=1d \
+      'LastTriggerUSec=Wed 2020-01-01 00:00:00 UTC'
+    exit 0
+    ;;
+  *.service)
+    printf '%s\n' \
+      ActiveState=inactive \
+      ExecMainStartTimestampMonotonic=0 \
+      Result=success \
+      TimeoutStartUSec=10min \
+      KillMode=mixed
+    exit 0
+    ;;
+esac
+echo "fixture systemctl stub has no reply for: $*" >&2
+exit 1
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    bin
+}
+
+#[cfg(target_os = "linux")]
+fn path_with_stub(stub_dir: &Path) -> std::ffi::OsString {
+    let mut paths = vec![stub_dir.to_path_buf()];
+    if let Some(path) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&path));
+    }
+    env::join_paths(paths).expect("join PATH")
 }
 
 fn assert_sweep_used_custom_root(outcome: &Value) {
