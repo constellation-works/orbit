@@ -1352,6 +1352,32 @@ jobs:
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
 
+      # The Landlock ruleset regressions are lib-unit tests, so the ignored
+      # sandbox leg above does not select them. Run them once, in the first
+      # shard, with the capability required: a kernel without Landlock ABI 2
+      # fails this step instead of reporting the regressions as passed after
+      # a visible skip (STD-04 §R8). No `--no-tests` pass: an empty selection
+      # (nextest exits 4) fails, and the list count is checked first.
+      - name: Linux Landlock ruleset gate
+        if: ${{ env.SHARD == '1' && (!contains(needs.scope.outputs.mode, ':') || contains(needs.scope.outputs.mode, 'orbit-exec')) }}
+        env:
+          ORBIT_REQUIRE_LANDLOCK_RULESET: "1"
+        run: |
+          set -euo pipefail
+          reuse=(--binaries-metadata target/nextest/binaries-metadata.json
+            --cargo-metadata target/nextest/cargo-metadata.json
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
+          selected=$(cargo nextest list "${reuse[@]}" \
+            -E 'package(orbit-exec) & test(/^linux_landlock::tests::ruleset::/)' \
+            --message-format json |
+            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
+          if [[ "$selected" -eq 0 ]]; then
+            echo "Linux Landlock ruleset gate: the filterset selects no tests" >&2
+            exit 1
+          fi
+          cargo nextest run --profile ci --no-fail-fast "${reuse[@]}" \
+            -E 'package(orbit-exec) & test(/^linux_landlock::tests::ruleset::/)'
+
   test-2:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
