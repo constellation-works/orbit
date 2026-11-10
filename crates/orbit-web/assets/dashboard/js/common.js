@@ -223,10 +223,59 @@ let workspaceNames = new Map();
 const workspaceNameListeners = new Set();
 
 export function setWorkspaceNames(workspaces) {
-  workspaceNames = new Map((Array.isArray(workspaces) ? workspaces : [])
-    .filter((workspace) => workspace && workspace.id && workspace.name)
-    .map((workspace) => [workspace.id, workspace.name]));
+  const list = (Array.isArray(workspaces) ? workspaces : []).filter((workspace) => workspace && workspace.id);
+  workspaceNames = new Map(list.filter((workspace) => workspace.name).map((workspace) => [workspace.id, workspace.name]));
+  workspaceOrder = new Map(list.map((workspace, index) => [workspace.id, index]));
+  workspaceColorSlots = assignWorkspaceColorSlots(list.map((workspace) => workspace.id));
   for (const listener of workspaceNameListeners) listener();
+}
+
+// Where a workspace sits in the picker (`/api/workspaces` order); the All
+// workspaces task list groups each status section in this order. An id the
+// list does not hold sorts after every listed one.
+let workspaceOrder = new Map();
+
+export function workspacePickerIndex(id) {
+  return workspaceOrder.has(id) ? workspaceOrder.get(id) : Number.MAX_SAFE_INTEGER;
+}
+
+// One colour per workspace from the `--ws-1` … `--ws-12` palette in base.css.
+// A workspace's preferred slot is a hash of its id, so it keeps its colour
+// across reloads and pages. Listed workspaces are placed in id order, and one
+// whose slot is taken moves to the next free slot, so two workspaces share a
+// colour only once all twelve are used.
+const WORKSPACE_COLOR_COUNT = 12;
+let workspaceColorSlots = new Map();
+
+function preferredWorkspaceColorSlot(id) {
+  // FNV-1a: small, stable across browsers, and spreads short ids well.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % WORKSPACE_COLOR_COUNT;
+}
+
+function assignWorkspaceColorSlots(ids) {
+  const slots = new Map();
+  const taken = new Set();
+  for (const id of [...new Set(ids)].sort()) {
+    let slot = preferredWorkspaceColorSlot(id);
+    if (taken.size < WORKSPACE_COLOR_COUNT) {
+      while (taken.has(slot)) slot = (slot + 1) % WORKSPACE_COLOR_COUNT;
+    }
+    taken.add(slot);
+    slots.set(id, slot);
+  }
+  return slots;
+}
+
+/// The palette number (1–12) a workspace's pill and picker entry are drawn in.
+/// The single source both read; base.css maps `data-ws-color` to the tokens.
+export function workspaceColor(id) {
+  const slot = workspaceColorSlots.has(id) ? workspaceColorSlots.get(id) : preferredWorkspaceColorSlot(String(id || ""));
+  return slot + 1;
 }
 
 export function onWorkspaceNamesChange(listener) {

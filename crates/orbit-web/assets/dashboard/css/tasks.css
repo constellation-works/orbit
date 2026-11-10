@@ -342,6 +342,14 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   line-height: 17px;
   white-space: nowrap;
 }
+/* All workspaces: the workspace pill in its palette colour (base.css
+   `--ws-*`), text and border in the hue over a faint tint of it. Colour only;
+   the shape above is shared with the other title badges. */
+.title-tags > .ws-badge[data-ws-color] {
+  color: var(--ws);
+  border-color: color-mix(in srgb, var(--ws) 45%, transparent);
+  background: var(--ws-low);
+}
 .title-tags > .os-badge-invalid { background: transparent; border-style: dashed; color: var(--fg-dim); }
 .title-tags > .readiness-blocking { color: var(--warn-fg); background: var(--warn-wash); border-color: var(--warn-line); }
 .title-tags > .readiness-advisory { background: transparent; color: var(--fg-mute); }

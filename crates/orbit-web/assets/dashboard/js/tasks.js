@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
@@ -444,6 +444,14 @@ function buildHumanCrewBadge(task) {
 }
 
 // A card whose rows the readiness filter hid entirely still says so.
+// The All workspaces row's workspace pill, in its workspace's palette colour
+// (the same one the rail picker's entry shows).
+function buildWorkspaceBadge(task) {
+  const badge = el("span", { class: "ws-badge mono", text: task.workspace_name, title: `Workspace: ${task.workspace_name}` });
+  badge.dataset.wsColor = String(workspaceColor(task.workspace_id));
+  return badge;
+}
+
 function buildFilteredEmpty(status) {
   const note = el("div", { class: "group-empty", text: `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
   note.dataset.key = `empty-${status}`;
@@ -541,6 +549,14 @@ export function renderTasks(tasks, context) {
     if (!groups.has(t.status)) groups.set(t.status, []);
     groups.get(t.status).push(t);
   }
+  // Under All workspaces each status section reads workspace by workspace,
+  // in picker order. The sort is stable, so one workspace's rows keep their
+  // order; /api/tasks/all already cuts pages in this order.
+  if (aggregate) {
+    for (const group of groups.values()) {
+      group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));
+    }
+  }
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
@@ -562,7 +578,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate ? workspaceColor(t.workspace_id) : ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -579,7 +595,7 @@ export function renderTasks(tasks, context) {
         const [prefixes, rest] = splitTitlePrefix(t.title);
         const tags = [
           aggregate && t.workspace_name
-            ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
+            ? buildWorkspaceBadge(t)
             : null,
           ...buildOsBadges(t),
           buildHumanCrewBadge(t),

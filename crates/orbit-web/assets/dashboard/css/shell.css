@@ -1266,4 +1266,6 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .workspace-options [role="option"] { display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; }
 .workspace-options [role="option"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .workspace-options input { pointer-events: none; }
+/* Each entry's text is the colour key for the All workspaces task pills. */
+.workspace-options [role="option"][data-ws-color] { color: var(--ws); }
 @media (max-width: 1000px) { .workspace-options { top: 100px; bottom: auto; } }
