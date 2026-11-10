@@ -2,6 +2,7 @@
 """Wait for other jobs of this workflow run and fail unless each succeeds.
 
 usage: ci-await-jobs.py --job NAME [--job NAME ...] [--step NAME]
+                        [--artifact NAME ...]
                         [--poll-seconds S] [--timeout-seconds S]
 
 The Check / Clippy / Test job runs this after its own checks, naming the test
@@ -33,6 +34,17 @@ while its later steps still run. The shard jobs wait this way for the test
 build's archive upload, not for the partition guard after it. A step that
 concludes without success, or a job that completes without success before the
 step succeeded, fails the wait at once.
+
+A named job omitted from a complete listing is absent: the wait fails at once
+and names it (`ci-await: <job> is absent from the run`). Several omitted names
+use `are`. An API error or a partial page is not absence and is retried until
+the timeout.
+
+--artifact NAME (repeatable) applies only after every named job is done. The
+wait then lists the run's artifacts and returns only once each name is present,
+unexpired and non-empty. A missing part stays pending until the timeout, which
+names it (`archive parts <name>`). A failed artifact listing is retried the
+same way and is never treated as an empty set.
 """
 
 import argparse
@@ -54,7 +66,7 @@ class ListingTimeout(Exception):
     """The job listing was still running when the wait budget ran out."""
 
 
-def request_job_listing(arguments, remaining):
+def request_job_listing(arguments, remaining, kind="job listing"):
     """Run a listing under the remaining deadline, killing and reaping it at expiry."""
     child = subprocess.Popen(
         ["gh", "api", *arguments],
@@ -66,7 +78,7 @@ def request_job_listing(arguments, remaining):
         try:
             child.communicate(timeout=CLEANUP_SECONDS)
         except subprocess.TimeoutExpired:
-            print(f"ci-await: job listing child {child.pid} did not exit within "
+            print(f"ci-await: {kind} child {child.pid} did not exit within "
                   f"{CLEANUP_SECONDS} s of being killed", file=sys.stderr)
         raise ListingTimeout from None
     finally:
@@ -80,15 +92,30 @@ def request_job_listing(arguments, remaining):
             and status_line[0].startswith("HTTP/") and status_line[1] == "304"):
         status = 0
     if status != 0:
-        print(f"ci-await: job listing failed (exit {status}): {stderr.strip()}",
+        print(f"ci-await: {kind} failed (exit {status}): {stderr.strip()}",
               file=sys.stderr)
     return status, stdout
+
+
+def artifact_is_available(artifact):
+    """An uploaded part is available once it is unexpired and non-empty."""
+    if not isinstance(artifact, dict) or artifact.get("expired"):
+        return False
+    size = artifact.get("size_in_bytes")
+    if isinstance(size, bool):
+        return False
+    try:
+        return int(size) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 class JobListingPoller:
     """Cache only a complete latest-attempt listing, never a partial page."""
 
     def __init__(self, repository, run_id, poll_seconds):
+        self.repository = repository
+        self.run_id = run_id
         self.endpoint = f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
         self.fallback_seconds = poll_seconds
         self.poll_seconds = poll_seconds
@@ -216,6 +243,62 @@ class JobListingPoller:
             self.poll_seconds = max(minimum, min(3, self.fallback_seconds))
         return self.jobs
 
+    def read_artifact_names(self, remaining):
+        """Return unexpired, non-empty artifact names, or None when the listing is unusable.
+
+        A non-200 response, a short page, or a total_count that does not match
+        the returned artifacts is None so the caller retries. It is not an
+        empty set: a failed listing must not look like a missing part that
+        will never appear, and it must not look like every part being ready.
+        """
+        names = set()
+        returned = 0
+        total = None
+        for page in range(1, 11):
+            if remaining <= 0:
+                raise ListingTimeout
+            started = time.monotonic()
+            endpoint = (f"repos/{self.repository}/actions/runs/{self.run_id}/artifacts"
+                        f"?per_page=100&page={page}")
+            self.requests += 1
+            status, stdout = request_job_listing(
+                ["--include", endpoint], remaining, kind="artifact listing")
+            remaining -= time.monotonic() - started
+            if status:
+                return None
+            head, _, body = stdout.partition("\n\n")
+            status_line = head.splitlines()[0].split() if head else []
+            http_status = status_line[1] if len(status_line) >= 2 else ""
+            if http_status != "200":
+                print(f"ci-await: artifact listing returned unexpected HTTP status {http_status}",
+                      file=sys.stderr)
+                return None
+            try:
+                payload = json.loads(body)
+                artifacts = payload["artifacts"]
+                page_total = payload["total_count"]
+                if isinstance(page_total, bool) or not isinstance(page_total, int):
+                    return None
+                if total is None:
+                    total = page_total
+                elif total != page_total:
+                    return None
+                if not isinstance(artifacts, list):
+                    return None
+                returned += len(artifacts)
+                if returned > total:
+                    return None
+                for artifact in artifacts:
+                    if artifact_is_available(artifact) and isinstance(artifact.get("name"), str):
+                        names.add(artifact["name"])
+            except (ValueError, KeyError, TypeError):
+                return None
+            if returned == total:
+                return names
+            if len(artifacts) < 100:
+                return None
+        return None
+
 
 def elapsed(started, completed):
     try:
@@ -272,6 +355,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--job", action="append", required=True, dest="jobs")
     parser.add_argument("--step")
+    parser.add_argument("--artifact", action="append", default=[], dest="artifacts")
     parser.add_argument("--poll-seconds", type=float, default=15)
     parser.add_argument("--timeout-seconds", type=float, default=2400)
     args = parser.parse_args()
@@ -304,8 +388,12 @@ def await_workflow_jobs(args, poller):
                 listing = "job listing still running at the deadline, killed"
         if jobs is not None and time.monotonic() < deadline:
             pending = []
+            absent = []
             for name in args.jobs:
-                job = jobs.get(name, {"status": "missing"})
+                job = jobs.get(name)
+                if job is None:
+                    absent.append(name)
+                    continue
                 status, conclusion, url = job["status"], job.get("conclusion"), job.get("html_url")
                 started, completed = job.get("started_at") or "", job.get("completed_at") or ""
                 step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
@@ -331,9 +419,31 @@ def await_workflow_jobs(args, poller):
                     reported.add(name)
                     print(f"ci-await: {name} succeeded started={started} completed={completed} "
                           f"elapsed_s={elapsed(started, completed)}")
+            if absent:
+                listed = ", ".join(absent)
+                verb = "is" if len(absent) == 1 else "are"
+                print(f"ci-await: {listed} {verb} absent from the run", file=sys.stderr)
+                return 1
+            if not pending and args.artifacts and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                available = None
+                try:
+                    available = poller.read_artifact_names(remaining)
+                except ListingTimeout:
+                    blocked = True
+                    listing = "artifact listing still running at the deadline, killed"
+                if available is None:
+                    pending.append("archive parts (listing unavailable)")
+                else:
+                    missing = [name for name in args.artifacts if name not in available]
+                    if missing:
+                        pending.append("archive parts " + ", ".join(missing))
             if not pending and time.monotonic() < deadline:
                 reached = f" or passed step '{args.step}'" if args.step else ""
-                print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}")
+                parts = ""
+                if args.artifacts:
+                    parts = " with archive parts " + ", ".join(args.artifacts)
+                print(f"ci-await: all {len(args.jobs)} awaited jobs succeeded{reached}{parts}")
                 return 0
         remaining = deadline - time.monotonic()
         if remaining <= 0:

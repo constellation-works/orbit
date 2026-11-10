@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-11-09
+last_validated: 2026-11-10
 ---
 
 # Development Reference
@@ -472,15 +472,20 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   selection, compiling any libraries that selection did not build. A doctest
   failure fails `Test build` and the Check wait. The step also runs after an
   earlier build-job failure unless cancelled, retaining its diagnostics.
-  The shards continue to await
-  the final upload, so neither this check nor the partition proof delays their
+  The shards continue to await the final upload and the listing of every
+  archive part, so neither this check nor the partition proof delays their
   start.
 - `Test shard k/N` jobs, one per shard, start beside the build and set up
   their runner. Each waits through
   [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
-  last `Upload nextest archive part N/N` step rather than the whole job,
-  downloads every part at once (one stream per artifact; a single stream ran
-  at 3–10 MB/s on some runners), restores a native small-window encoding of
+  last `Upload nextest archive part N/N` step rather than the whole job, and
+  passes `--artifact` for every `nextest-archive-k` part. The wait returns
+  only once that step has succeeded and the artifacts API lists every part
+  unexpired and non-empty. The job then downloads every part at once (one
+  stream per artifact; a single stream ran at 3–10 MB/s on some runners),
+  in at most three download attempts. The first two attempts continue on
+  error; the third fails the job, so nextest does not run without the
+  archive. It restores a native small-window encoding of
   their concatenation with
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
@@ -500,7 +505,10 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   default local profile keeps its ordinary order. See the
   [timing notes](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
   before interpreting a local replay as hosted budget evidence.
-  A build that fails before the upload fails the wait at once.
+  A build that fails before the upload fails the wait at once. A `Test build`
+  job that is absent from a complete jobs listing also fails the wait at once
+  (`ci-await: Test build is absent from the run`) instead of waiting out the
+  timeout.
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
@@ -524,7 +532,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   step and wait (every additional partition job's too) and the Check
   job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, each
-  shard waits for the upload step ahead of the partition guard, and the Check
+  shard waits for the upload step ahead of the partition guard and names every
+  uploaded part, and the Check
   job's wait names the build, every shard, every additional partition job and `CI guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 400 s, with skipped and cancelled runs
@@ -561,7 +570,9 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
   job. A shard's wait prints `ci-await: Test build step 'Upload nextest
-  archive' succeeded started=...` instead.
+  archive part N/N' succeeded started=...`, then
+  `ci-await: all 1 awaited jobs succeeded or passed step '...' with archive parts ...`
+  once every part is listed.
   `--timeout-seconds` (default 2400) is one absolute budget for the whole
   wait, for the Check job and each shard's upload wait alike: every `gh api`
   listing runs under the remaining budget, the poll sleep is clipped to it, and a
@@ -570,8 +581,14 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `timed out` diagnostic naming the unavailable listing or the jobs still
   pending. A listing that arrives after expiry is never accepted as success,
   even when every awaited job succeeded. Failed, skipped or cancelled jobs and
-  steps still fail the wait at once, and transient API errors are retried within
-  the remaining budget.
+  steps still fail the wait at once. A named job missing from a complete
+  listing fails at once with `ci-await: <job> is absent from the run` (several
+  names use `are`) instead of waiting out the timeout. An incomplete listing
+  or an API error is not absence: it is retried within the remaining budget.
+  After the awaited step or job has succeeded, a wait that passed `--artifact`
+  stays pending until each named artifact is listed, unexpired and non-empty,
+  or the same timeout expires naming the missing parts. Transient API errors
+  are retried within the remaining budget.
   For a single-page response with an ETag, both waits issue authenticated
   conditional requests every three seconds. An unchanged `304 Not Modified` reuses
   the last complete listing and consumes no primary GitHub API quota
@@ -587,8 +604,9 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   single-page and paginated listings alike, so its interval is at least 60
   seconds. The absolute deadline applies to both intervals. Each wait prints
   `ci-await-api: listings=... not_modified=... paginated=...` for the hosted
-  phase and quota readout. Across four waits, a three-second cadence makes at
-  most 80 listing calls per minute before API latency, below the secondary
+  phase and quota readout. The listing count includes artifact-listing calls
+  made after the awaited jobs are ready. Across four waits, a three-second cadence makes at
+  most 80 job-listing calls per minute before API latency, below the secondary
   [REST limit of 900 points per minute](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits) for these GET requests; other repository
   traffic shares the limits, and changed responses still consume primary
   quota. Check those counters and response fallback behavior on candidate

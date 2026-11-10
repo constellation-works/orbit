@@ -305,9 +305,18 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                       if step.get("name", "").startswith("Upload nextest archive")][-1]
             job = {"name": "Test build", "status": "in_progress", "conclusion": None,
                    "steps": [{"name": upload, "status": "completed", "conclusion": "success"}]}
-            gh.write_text(f"#!{sys.executable}\nimport sys\n"
-                          f"print('HTTP/2.0 200 OK\\n\\n' + {json.dumps({'total_count': 1, 'jobs': [job]})!r} "
-                          f"if '--include' in sys.argv else {json.dumps(job)!r})\n")
+            # The shard wait also lists artifacts. Returning the jobs document
+            # for that call makes the real helper poll until its 2400 s timeout.
+            parts = [{"name": f"nextest-archive-{index}", "expired": False, "size_in_bytes": 1}
+                     for index in range(1, 5)]
+            jobs_json = json.dumps({"total_count": 1, "jobs": [job]})
+            artifacts_json = json.dumps({"total_count": len(parts), "artifacts": parts})
+            gh.write_text(
+                f"#!{sys.executable}\nimport sys\n"
+                f"jobs = {jobs_json!r}\n"
+                f"artifacts = {artifacts_json!r}\n"
+                "payload = artifacts if any('artifacts' in arg for arg in sys.argv) else jobs\n"
+                "print('HTTP/2.0 200 OK\\n\\n' + payload if '--include' in sys.argv else payload)\n")
             gh.chmod(0o755)
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
                        GITHUB_REPOSITORY="fixture/repository", GITHUB_RUN_ID="1")
