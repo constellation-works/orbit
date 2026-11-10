@@ -355,7 +355,7 @@ template:
     - host-health
     - no-diff-expected
   priority: medium
-  complexity: hard
+  complexity: low
   required_tools:
     - orbit.task.list
     - orbit.task.show
