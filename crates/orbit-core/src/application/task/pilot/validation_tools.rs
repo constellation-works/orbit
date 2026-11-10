@@ -63,6 +63,26 @@ const EXTERNAL_CREDENTIALS: &[(&str, &str)] = &[("github.", "GitHub authenticati
 
 const MCP_TRANSPORT_MARKERS: &[&str] = &["mcp", "tools/call", "tools/list"];
 
+/// Wording that asks for a sign-off or approval only a person can give.
+const SIGN_OFF_TERMS: &[&str] = &[
+    "sign-off",
+    "sign off",
+    "signs off",
+    "signoff",
+    "signed off",
+    "signed-off",
+    "approval",
+];
+
+/// Authority words that, with a [`SIGN_OFF_TERMS`] entry, name an owner or
+/// operator as the one who must give the sign-off.
+const SIGN_OFF_AUTHORITIES: &[&str] = &["owner", "operator"];
+
+/// Finding for a criterion that needs an owner or operator sign-off recorded.
+/// No implementing lane can record it: `orbit.decision.submit` is operator-only
+/// and governance refuses it to agent sessions.
+const OWNER_SIGN_OFF_FINDING: &str = "acceptance criterion requires an owner sign-off to be recorded, which no implementing agent can record: `orbit.decision.submit` is operator-only and governance refuses it to agent sessions, so route this validation to an explicit operator handoff instead of expecting the implementing agent to record the decision";
+
 /// The execution lane a task's validation criteria have to be feasible in.
 ///
 /// Each source is optional because none of them may fail preparation: when a
@@ -209,6 +229,12 @@ impl ImplementationLane {
             }
         }
         for (_, sentence) in positive_validation_sentences(task) {
+            if requires_owner_sign_off(&sentence) {
+                findings.push(OWNER_SIGN_OFF_FINDING.into());
+                if findings.is_full() {
+                    return findings.ordered;
+                }
+            }
             for tool in self.tools_named_in(&sentence) {
                 self.report(tool, &sentence, granted.as_deref(), &mut findings);
                 if findings.is_full() {
@@ -286,6 +312,17 @@ impl ImplementationLane {
             ));
         }
     }
+}
+
+/// Whether `sentence` requires an owner or operator sign-off. A sign-off term
+/// and an authority word must both appear, so a criterion that only mentions a
+/// decision in docs stays unflagged.
+fn requires_owner_sign_off(sentence: &str) -> bool {
+    let lowered = sentence.to_ascii_lowercase();
+    SIGN_OFF_TERMS.iter().any(|term| lowered.contains(term))
+        && SIGN_OFF_AUTHORITIES
+            .iter()
+            .any(|authority| lowered.contains(authority))
 }
 
 /// The finding for a tool reserved for a non-agent capability, or `None` when
