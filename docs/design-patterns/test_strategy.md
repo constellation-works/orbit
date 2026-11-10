@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-08
+last_validated: 2026-11-10
 ---
 # Boundary-First Testing
 
@@ -781,6 +781,16 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. A test attribute counts wherever it sits on a masked source line, so `#[cfg(test)]`, `#[allow(dead_code)]`, or another attribute before `#[test]`, `#[r#test]`, or `#[path::test]` does not hide the test. `#[cfg(test)]` by itself is not a test. The baseline stays the reviewed admission list: a scan that newly sees a real test is a missing admission, and the baseline is not rewritten only to conceal it. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
 
 Admitted unit tests:
+
+- `orbit-core`'s
+  `application/agents/tests/api.rs::reviewer_interval_resamples_review_units_not_task_groups`
+  is a criterion 1 regression for ORB-23843. It drives the public
+  `agent_scorecard` API with synthetic facts to prove two reviewer settlements
+  on one task resample as two row units, matching the same settlements on two
+  tasks, and that the fixed-seed interval repeats. `AgentFacts` is opaque to
+  crate-root integration callers; constructing this exact duplicate-task
+  observation there would require populating mutable workspace state and
+  scanning it, rather than exercising the scorecard boundary directly.
 
 - `orbit-core`'s `application/task/tests/add.rs` cases
   `filing_refuses_an_unliftable_disallowed_required_tool`,

@@ -1,6 +1,6 @@
 //! Regression fixtures exercise the public scorecard API. Facts are opaque to
 //! external callers; constructing them here avoids a mutable workspace fixture.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -8,7 +8,7 @@ use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
-use super::super::facts::{Attempt, RejectOutcome, Review, TaskFacts};
+use super::super::facts::{Attempt, Finding, FindingState, RejectOutcome, Review, TaskFacts};
 use super::super::{AgentFacts, AgentQuery, AgentRole, agent_scorecard, attribution};
 
 // (crew, tier, implemented tasks, landed tasks, reviewed tasks, first accepts).
@@ -1055,6 +1055,103 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
         rows.iter()
             .all(|row| row["label"] != "rev-model @ effort unknown"),
         "{payload}"
+    );
+}
+
+#[test]
+fn reviewer_interval_resamples_review_units_not_task_groups() {
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(1);
+    let changed = BTreeSet::from(["src/lib.rs".to_string()]);
+    let review = |id: &str, at| {
+        let mut review = Review {
+            attempt_id: id.into(),
+            activity_id: None,
+            at,
+            verdict: ReviewVerdict::Reject,
+            reviewer: Default::default(),
+            findings: vec![Finding {
+                severity: "low".into(),
+                state: FindingState::Open,
+                paths: changed.clone(),
+                line: format!("finding {id}"),
+            }],
+            reviewed: None,
+            final_candidate: None,
+            seconds: None,
+            fix_failed: false,
+            infrastructure: false,
+            outcome: RejectOutcome::Judged {
+                changed: changed.clone(),
+                accepted: false,
+            },
+        };
+        review.reviewer.crew = Some("review-crew".into());
+        review.reviewer.model = Some("review-model".into());
+        review
+    };
+    let facts = |tasks: Vec<TaskFacts>| {
+        let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
+        AgentFacts {
+            invocations: Default::default(),
+            launches: Default::default(),
+            computed_at: now,
+            tasks_scanned: tasks.len(),
+            tasks,
+            charges,
+            credits,
+            run_costs: BTreeMap::new(),
+            regressions: Vec::new(),
+            landed_lines: BTreeMap::new(),
+            performance_types: Vec::new(),
+            pilots: Vec::new(),
+        }
+    };
+    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
+    let shared = {
+        let mut task = minimal_task("shared-task", start);
+        task.reviews = vec![
+            review("review-one", start + chrono::Duration::minutes(10)),
+            review("review-two", start + chrono::Duration::minutes(10)),
+        ];
+        facts(vec![task])
+    };
+    let split = {
+        let mut first = minimal_task("first-task", start);
+        first.reviews = vec![review("review-one", start + chrono::Duration::minutes(10))];
+        let mut second = minimal_task("second-task", start);
+        second.reviews = vec![review("review-two", start + chrono::Duration::minutes(20))];
+        facts(vec![first, second])
+    };
+    let payload =
+        |facts: &AgentFacts| agent_scorecard(facts, AgentRole::Reviewers, &query, Duration::ZERO);
+    let shared_payload = payload(&shared);
+    let repeated = payload(&shared);
+    let split_payload = payload(&split);
+    let interval = |payload: &Value| {
+        payload["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["model"] == "review-model")
+            .unwrap()["interval"]
+            .clone()
+    };
+    assert!(interval(&shared_payload).is_object(), "{shared_payload}");
+    assert_eq!(
+        shared_payload["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["model"] == "review-model")
+            .unwrap()["units"],
+        json!(2)
+    );
+    assert_eq!(interval(&shared_payload), interval(&repeated));
+    assert_eq!(
+        interval(&shared_payload),
+        interval(&split_payload),
+        "the same two review units must have the same interval whether they belong to one or two tasks"
     );
 }
 
