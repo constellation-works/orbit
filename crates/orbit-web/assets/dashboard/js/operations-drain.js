@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getServingHost, getHost } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getSelectedWorkspaces, workspaceDisplayName, findRegisteredHost } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -17,6 +17,62 @@ let holdDrainAnnouncement = false;
 let drainScopeGeneration = 0;
 let aggregateDrainHost = null;
 let aggregateDrainWorkspace = null;
+// The card's chosen workspace and host survive a reload like the dock's other
+// selections. Storage can refuse; the in-memory choice then serves this page,
+// and a remembered value that no longer exists falls back to the defaults.
+const AGGREGATE_WORKSPACE_STORAGE_KEY = "orbit.dashboard.autoDrainWorkspace";
+const AGGREGATE_HOST_STORAGE_KEY = "orbit.dashboard.autoDrainHost";
+const LIVE_DRAIN_PHASES = ["draining", "pulling", "winding_down"];
+function rememberedAggregateWorkspace() {
+  try { return window.localStorage.getItem(AGGREGATE_WORKSPACE_STORAGE_KEY) || aggregateDrainWorkspace; } catch { return aggregateDrainWorkspace; }
+}
+function rememberAggregateWorkspace(id) {
+  aggregateDrainWorkspace = id || null;
+  try {
+    if (id) window.localStorage.setItem(AGGREGATE_WORKSPACE_STORAGE_KEY, id);
+    else window.localStorage.removeItem(AGGREGATE_WORKSPACE_STORAGE_KEY);
+  } catch { /* the in-memory choice serves */ }
+}
+function rememberedAggregateHost() {
+  try { return window.localStorage.getItem(AGGREGATE_HOST_STORAGE_KEY) || aggregateDrainHost; } catch { return aggregateDrainHost; }
+}
+function rememberAggregateHost(name) {
+  aggregateDrainHost = name || null;
+  try {
+    if (name) window.localStorage.setItem(AGGREGATE_HOST_STORAGE_KEY, name);
+    else window.localStorage.removeItem(AGGREGATE_HOST_STORAGE_KEY);
+  } catch { /* the in-memory choice serves */ }
+}
+// The workspaces ticked in the rail's dropdown, in alphabetical order by the
+// name the rail shows them under.
+function aggregateWorkspaceOptions(fleet) {
+  const names = new Map();
+  for (const row of fleet?.items || []) {
+    if (row.workspace_id && row.workspace_name && !names.has(row.workspace_id)) names.set(row.workspace_id, row.workspace_name);
+  }
+  return [...new Set(getSelectedWorkspaces())]
+    .map(id => ({ id, name: names.get(id) || workspaceDisplayName(id) || id }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+// The hosts that can show this workspace's drain: its owner first, then the
+// follower hosts holding a replica of it. A fleet row names its owner only
+// on a replica (`owner_machine_id`); the owner's own row names none.
+function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
+  const rows = (fleet?.items || []).filter(row => row.workspace_id === workspaceId && !row.pending);
+  let owner = rows.find(row => !row.owner_machine_id)?.host || null;
+  if (!owner) {
+    for (const row of rows) {
+      owner = findRegisteredHost(row.owner_machine_id)?.name || null;
+      if (owner) break;
+    }
+  }
+  const ordered = [];
+  if (owner) ordered.push(owner);
+  for (const row of rows) {
+    if (row.host && !ordered.includes(row.host)) ordered.push(row.host);
+  }
+  return ordered.length ? ordered : hosts.map(host => host.name);
+}
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
   updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
@@ -341,6 +397,7 @@ registerOperationsReset(() => {
   aggregateDrainHost = null;
   aggregateDrainWorkspace = null;
   $("auto-drain-host")?.remove();
+  $("auto-drain-workspace")?.remove();
   clearDrainChrome();
   updateDrainIndicators("idle", "idle");
   repaintRailDrainFromFleet();
@@ -354,44 +411,69 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     const token = ++operationsState.aggregateFleetToken;
     const revision = getWorkspaceRevision();
     const guard = () => generation === drainScopeGeneration && token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
-    return requestPanel("auto-drain-body", `aggregate:${aggregateDrainHost || "owner"}`, async () => {
+    return requestPanel("auto-drain-body", `aggregate:${aggregateDrainHost || "owner"}:${aggregateDrainWorkspace || "none"}`, async () => {
       const fleet = await loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } });
       if (!guard()) return null;
       paintAggregateFleet(fleet);
       const hosts = getRegisteredHosts();
-      const serving = getServingHost()?.name;
-      const localRows = fleet.items.filter(row => row.host === (getHost() || serving));
-      const owner = localRows.find(row => row.owner_machine_id)?.owner_machine_id || getHost() || serving;
-      const ordered = [...hosts].sort((a, b) => Number(b.name === owner || b.machine_id === owner) - Number(a.name === owner || a.machine_id === owner));
-      if (!aggregateDrainHost || !ordered.some(host => host.name === aggregateDrainHost)) aggregateDrainHost = ordered[0]?.name || owner;
+      const options = aggregateWorkspaceOptions(fleet);
+      const rememberedWorkspace = rememberedAggregateWorkspace();
+      const liveDefault = options.find(option => (fleet.items || []).some(row => row.workspace_id === option.id && !row.error && LIVE_DRAIN_PHASES.includes(row.phase)));
+      rememberAggregateWorkspace(options.some(option => option.id === rememberedWorkspace)
+        ? rememberedWorkspace
+        : (liveDefault || options[0])?.id || null);
+      let workspaceSelect = $("auto-drain-workspace");
+      if (!workspaceSelect) {
+        workspaceSelect = el("select", { id: "auto-drain-workspace", class: "workspace-select", "aria-label": "Drain workspace" });
+        workspaceSelect.addEventListener("change", () => {
+          rememberAggregateWorkspace(workspaceSelect.value);
+          // Changing the workspace resets the host to its owner.
+          rememberAggregateHost(null);
+          clearDrainChrome();
+          fetchAndRenderAutoDrain().catch(error => console.error(error));
+        });
+        $("auto-drain-phase").before(workspaceSelect);
+      }
+      const workspaceSignature = JSON.stringify(options.map(option => [option.id, option.name]));
+      if (workspaceSelect.dataset.workspaces !== workspaceSignature) {
+        workspaceSelect.replaceChildren(...options.map(option => {
+          const node = el("option", { text: option.name });
+          node.value = option.id;
+          return node;
+        }));
+        workspaceSelect.dataset.workspaces = workspaceSignature;
+      }
+      workspaceSelect.value = aggregateDrainWorkspace || "";
+      const ordered = aggregateDrainWorkspace ? aggregateWorkspaceHosts(fleet, aggregateDrainWorkspace, hosts) : hosts.map(host => host.name);
+      const rememberedHost = rememberedAggregateHost();
+      rememberAggregateHost(ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null);
       let select = $("auto-drain-host");
       if (!select) {
         select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
         select.addEventListener("change", () => {
-          aggregateDrainHost = select.value;
+          rememberAggregateHost(select.value);
           clearDrainChrome();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
         $("auto-drain-phase").before(select);
       }
-      const signature = JSON.stringify(ordered.map(host => host.name));
+      const signature = JSON.stringify(ordered);
       if (select.dataset.hosts !== signature) {
-        select.replaceChildren(...ordered.map(host => el("option", { value: host.name, text: host.name })));
+        select.replaceChildren(...ordered.map(name => {
+          const node = el("option", { text: name });
+          node.value = name;
+          return node;
+        }));
         select.dataset.hosts = signature;
       }
-      select.value = aggregateDrainHost;
-      const rows = fleet.items.filter(row => row.host === aggregateDrainHost);
-      const failed = rows.find(row => row.error);
-      const live = rows.filter(row => !row.error && ["draining", "pulling", "winding_down"].includes(row.phase))
-        .sort((a, b) => (b.running_tasks || 0) - (a.running_tasks || 0));
-      aggregateDrainWorkspace = live[0]?.workspace_id || null;
-      if (!live.length) {
-        if (failed) throw new Error(failed.error);
-        return { capacity: { drain_phase: "idle" } };
-      }
+      select.value = aggregateDrainHost || "";
+      if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
+      const row = (fleet.items || []).find(item => item.host === aggregateDrainHost && item.workspace_id === aggregateDrainWorkspace);
+      if (row?.error) throw new Error(row.error);
+      if (!row || row.pending || !LIVE_DRAIN_PHASES.includes(row.phase)) return { capacity: { drain_phase: "idle" } };
       // Explicitly address even the serving host, so the rail's remote host
       // cannot accidentally rewrite this independent card's request.
-      return fetchJson(`/api/on/${encodeURIComponent(aggregateDrainHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(live[0].workspace_id)}`);
+      return fetchJson(`/api/on/${encodeURIComponent(aggregateDrainHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(aggregateDrainWorkspace)}`);
     }, payload => {
       if (guard() && payload) renderAutoDrain(payload, generation);
     }, "auto-drain-phase-label");

@@ -60,9 +60,14 @@ workspaces no longer available.
 
 With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**,
 **Locks held**, **Log**. Drain reuses the Auto-drain body, with an
-**Auto-draining** header followed by an owner-first host select and phase pill.
-The owner is selected by default; followers are readable through the host forward.
-The busiest live workspace window on that host is shown, or Idle when none is live.
+**Auto-draining** header followed by a workspace select, an owner-first host select and phase pill.
+The workspace select lists only the ticked workspaces in alphabetical order,
+defaulting to the first with a live drain on any host; the host select lists
+that workspace's owner first and selected by default, then its follower hosts,
+and changing the workspace resets the host to the owner. Followers are readable
+through the host forward. The chosen workspace's drain on the chosen host is
+shown, or Idle when none is live there; both choices survive a reload, with a
+remembered value that no longer exists falling back to those defaults.
 Aggregate controls remain read-only. Fleet holds the existing fleet drains card,
 one tab per host when more than one is registered (the chosen tab is
 remembered), with phase and
