@@ -3,7 +3,7 @@ summary: "Agent Families — Decisions"
 type: design
 title: "Agent Families — Decisions"
 owner: grok
-last_updated: 2026-11-05
+last_updated: 2026-11-09
 last_validated: 2026-10-15
 status: Draft
 feature: agent-families
@@ -180,6 +180,20 @@ Agent availability is detected once during init using `DetectedAgents`, rendered
 - Runtime behavior is deterministic for a given config file, including hot config loads.
 - Cost: A user who installs or removes agent CLIs after init must edit or regenerate config instead of getting automatic runtime drift.
 
+## Pin the built-in Fable crew to Fable 5.2 and seed it in the xhard pool
+
+**Recorded:** 2026-11-10 · [ORB-23821]
+
+**Context.** The built-in `fable` crew used the Claude CLI's `fable` alias, on the reasoning of [Default Claude to opus/sonnet CLI aliases](#default-claude-to-opussonnet-cli-aliases-centralize-model-defaults-in-orbit-commonmodel_defaults) that an alias never drifts. Fable 5.2 was released on 2026-11-09. Claude CLI 2.1.318 and 2.1.319 still resolve `fable` to `claude-fable-5-1`; they serve `claude-fable-5-2` only when it is named, after an `unrecognized_model` notice on stderr. The `orbit init` seed also gave the xhard pool to `opus` (`["opus", "astra"]`, or `["opus"]` on a Claude-only host), the same crew that carries the hard pool.
+
+**Decision.** `CLAUDE_FABLE_MODEL` is the pinned id `claude-fable-5-2`. `opus`, `sonnet` and `haiku` stay on their aliases. The seeded xhard pool names `fable` where it named `opus`; opus keeps the hard pool, the default-crew role and its purpose pools. The price table gains a `claude-fable-5-2` row from the published rates.
+
+**Consequences.**
+- A config with no `[crews]` table, and every newly seeded one, runs the `fable` crew on Fable 5.2 whatever the installed CLI's alias says.
+- A pin does not follow later Fable releases: the next one needs an edit to the constant and a price row, as the Codex, Grok and Muse crews already do.
+- Existing configs are not rewritten. An operator who wants the change sets `crews.fable.model` and `workflow.xhard_complexity_crews` by hand.
+- A seeded xhard pool now costs Fable's rates ($8 / $40 per MTok) where it cost Opus's.
+
 ## Retire crew role slots and role-based model resolution
 
 **Recorded:** 2026-08-09 06:33:12.872319Z · [ORB-10620], [ORB-10621], [ORB-10622]
@@ -228,5 +242,6 @@ Crew configuration accepts flat `provider`/`model` only; the retired `backend` k
 - ORB-10620: Reject legacy crew role sub-tables at config load.
 - ORB-10621: Route system-activity crews through configuration instead of the task's crew.
 - ORB-10622: Retire activity roles and role-based crew resolution.
+- ORB-23821: Ship Fable 5.2 as a default crew and seed it in the xhard pool.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

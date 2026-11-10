@@ -76,9 +76,9 @@ rewritten.
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
   |---|---|---|---|---|
-  | Codex and Claude | `haiku, luna` | `terra, sonnet` | `sol, opus` | `opus, astra` |
+  | Codex and Claude | `haiku, luna` | `terra, sonnet` | `sol, opus` | `fable, astra` |
   | Codex only | `luna` | `terra` | `sol` | `astra` |
-  | Claude only | `haiku` | `sonnet` | `opus` | `opus` |
+  | Claude only | `haiku` | `sonnet` | `opus` | `fable` |
 
   Other detected providers add to these pools. Grok appends `grok` to
   `medium`, even when neither Codex nor Claude is detected. Antigravity (`agy`)

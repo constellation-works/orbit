@@ -59,11 +59,15 @@ const BASE_POOLS: &[(bool, bool, [&[&str]; 4])] = &[
             &["haiku", "luna"],
             &["terra", "sonnet"],
             &["sol", "opus"],
-            &["opus", "astra"],
+            &["fable", "astra"],
         ],
     ),
     (true, false, [&["luna"], &["terra"], &["sol"], &["astra"]]),
-    (false, true, [&["haiku"], &["sonnet"], &["opus"], &["opus"]]),
+    (
+        false,
+        true,
+        [&["haiku"], &["sonnet"], &["opus"], &["fable"]],
+    ),
 ];
 
 /// The four `workflow.*_complexity_crews` keys, in pool order.
