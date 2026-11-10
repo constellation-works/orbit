@@ -361,17 +361,11 @@
         },
         "priority": {
           "type": "string",
-          "description": "Priority level."
+          "description": "low|medium|high|critical"
         },
         "complexity": {
           "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "hard",
-            "xhard"
-          ],
-          "description": "Task complexity."
+          "description": "low|medium|hard|xhard"
         },
         "type": {
           "type": "string",
@@ -646,7 +640,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view."
+          "description": "Bounded metadata view. The only accepted value is `bounded`."
         },
         "offset": {
           "type": "integer",
@@ -840,17 +834,11 @@
         },
         "priority": {
           "type": "string",
-          "description": "New dispatch priority."
+          "description": "low|medium|high|critical"
         },
         "complexity": {
           "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "hard",
-            "xhard"
-          ],
-          "description": "New task complexity."
+          "description": "low|medium|hard|xhard"
         },
         "type": {
           "type": "string",

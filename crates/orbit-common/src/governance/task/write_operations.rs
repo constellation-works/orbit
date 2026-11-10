@@ -277,7 +277,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 both(
                     "priority",
                     ParamType::Enum(TASK_PRIORITY_VALUES),
-                    "Priority level.",
+                    "low|medium|high|critical",
                     CliArgKind::flag("priority"),
                     "Priority level",
                 ),
@@ -286,7 +286,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             cli_required(both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "Task complexity.",
+                "low|medium|hard|xhard",
                 flag_named("complexity", "low|medium|hard|xhard"),
                 "Task complexity (low, medium, hard, or xhard). Required",
             )),
@@ -571,14 +571,14 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "priority",
                 ParamType::Enum(TASK_PRIORITY_VALUES),
-                "New dispatch priority.",
+                "low|medium|high|critical",
                 CliArgKind::flag("priority"),
                 "New dispatch priority",
             ),
             both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "New task complexity.",
+                "low|medium|hard|xhard",
                 CliArgKind::flag("complexity"),
                 "Task complexity",
             ),

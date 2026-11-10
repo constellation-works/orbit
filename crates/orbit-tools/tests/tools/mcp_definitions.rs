@@ -137,6 +137,44 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
     );
 }
 
+#[test]
+fn task_write_schemas_advertise_priority_and_complexity_values() {
+    let definitions =
+        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
+    for tool_name in ["orbit.task.add", "orbit.task.update"] {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.schema.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} is advertised"));
+        let schema = orbit_common::protocol::tool_schema::tool_input_schema(&definition.schema);
+        for (field, values) in [
+            ("priority", &["low", "medium", "high", "critical"][..]),
+            ("complexity", &["low", "medium", "hard", "xhard"][..]),
+        ] {
+            let description = schema["properties"][field]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool_name} {field} description is advertised"));
+            assert_eq!(
+                description.split('|').collect::<Vec<_>>(),
+                values,
+                "{tool_name} {field} description must list every accepted value"
+            );
+        }
+    }
+
+    let show = definitions
+        .iter()
+        .find(|definition| definition.schema.name == "orbit.task.show")
+        .expect("orbit.task.show is advertised");
+    let schema = orbit_common::protocol::tool_schema::tool_input_schema(&show.schema);
+    assert!(
+        schema["properties"]["view"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("only accepted value is `bounded`")),
+        "orbit.task.show schema must name its accepted view"
+    );
+}
+
 /// A builtin fixture that addresses one id with an optional workspace but
 /// declares no id route at its definition site.
 struct UnclassifiedIdTool;

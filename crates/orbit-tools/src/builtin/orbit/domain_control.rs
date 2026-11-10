@@ -121,7 +121,7 @@ pub(super) fn bounded(input: &Value) -> Result<bool, OrbitError> {
         None => Ok(false),
         Some(Value::String(v)) if v == "bounded" => Ok(true),
         _ => Err(OrbitError::InvalidInput(
-            "view must be bounded when supplied".into(),
+            "view must be bounded when supplied; the only accepted value is `bounded`".into(),
         )),
     }
 }

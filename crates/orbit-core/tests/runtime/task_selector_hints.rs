@@ -136,3 +136,78 @@ fn task_tool_unknown_selectors_give_specific_recovery_hints() {
         )
     );
 }
+
+#[test]
+fn task_write_and_show_refusals_name_valid_values() {
+    if !super::dispatch_admission::isolated(
+        "task_selector_hints::task_write_and_show_refusals_name_valid_values",
+    ) {
+        return;
+    }
+    let (_root, runtime, workspace) = test_runtime();
+    let added = runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Value refusal fixture",
+                "description": "Exercise task value validation.",
+                "complexity": "low",
+                "workspace": workspace.clone(),
+                "model": "codex"
+            }),
+        )
+        .expect("seed a task through the task API");
+    let id = added["id"].as_str().expect("task id");
+
+    for (tool, input, valid_values) in [
+        (
+            "orbit.task.add",
+            json!({
+                "title": "Invalid priority",
+                "description": "The invalid value is refused before a write.",
+                "priority": "urgent",
+                "complexity": "low",
+                "workspace": workspace.clone(),
+                "model": "codex"
+            }),
+            "valid priorities: low, medium, high, critical",
+        ),
+        (
+            "orbit.task.add",
+            json!({
+                "title": "Invalid complexity",
+                "description": "The invalid value is refused before a write.",
+                "priority": "low",
+                "complexity": "huge",
+                "workspace": workspace.clone(),
+                "model": "codex"
+            }),
+            "valid complexities: low, medium, hard, xhard",
+        ),
+        (
+            "orbit.task.update",
+            json!({"id": id, "priority": "urgent", "model": "codex"}),
+            "valid priorities: low, medium, high, critical",
+        ),
+        (
+            "orbit.task.update",
+            json!({"id": id, "complexity": "huge", "model": "codex"}),
+            "valid complexities: low, medium, hard, xhard",
+        ),
+    ] {
+        let message = invalid_input_message(runtime.run_tool(tool, input));
+        assert!(
+            message.contains(valid_values),
+            "{tool} refusal must name {valid_values}: {message}"
+        );
+    }
+
+    let unsupported_view = invalid_input_message(runtime.run_tool(
+        "orbit.task.show",
+        json!({"id": id, "view": "summary", "model": "codex"}),
+    ));
+    assert!(
+        unsupported_view.contains("the only accepted value is `bounded`"),
+        "show refusal must name the accepted view: {unsupported_view}"
+    );
+}

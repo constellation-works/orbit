@@ -204,7 +204,11 @@ const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
 pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix";
 
 /// The `view: "bounded"` selector of the dashboard's bounded reads.
-const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only("view", ParamType::String, "Bounded metadata view.");
+const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
+    "view",
+    ParamType::String,
+    "Bounded metadata view. The only accepted value is `bounded`.",
+);
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
