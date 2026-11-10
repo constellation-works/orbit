@@ -112,7 +112,13 @@ function shownSelection() {
   return spaces?.keys?.[0]?.key ?? null;
 }
 
-accordionMedia.addEventListener("change", () => paint());
+// Crossing the accordion breakpoint changes which key the detail shows.
+// Paint alone leaves that key on "Loading…" until the next refresh.
+accordionMedia.addEventListener("change", () => {
+  paint();
+  const key = shownSelection();
+  if (key && key !== MEMORY_PROPOSALS && !detailInVisit(key)) fetchDetail();
+});
 
 export function fetchAndRenderMemory() {
   if (isAggregateView()) {

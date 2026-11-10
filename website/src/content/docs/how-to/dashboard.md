@@ -685,6 +685,8 @@ and raw tool-call counts still cover the full window.
 Tools follows the Analytics window independently of an Events cutoff. With
 an **all** or **1h** window, its bounded summary uses **24h**, named in the cards.
 Select a tool on **Tools** to open its events for the window the card shows.
+Events keeps that tool, and an execution id or profile from the address, as a
+removable scope chip. Removing the chip lists events without that filter.
 Exact incident-event links select **all** statuses because they list the
 recorded event IDs without a status restriction. Spend and token usage are explained in [Analytics](#analytics).
 
@@ -1296,8 +1298,9 @@ infrastructure. How often a reviewer accepts or rejects is never scored.
 - **Provisional.** A review younger than 30 days can still be charged a
   `review_missed` regression filed later, so while the window has such reviews
   a banner says how many, and those scores can still fall.
-- **accepts often** tags a reviewer whose accept rate is 10 or more points
-  above the other reviewers' on the same task tiers. It is shown, never scored.
+- **accepts often** tags a reviewer whose accept rate, on the task tiers
+  other reviewers also judged, is 10 or more points above theirs. The tag's
+  tooltip quotes those two rates. It is shown, never scored.
 - The **How verdicts turned out** panel splits each reviewer's reviews into
   accepted and held up, caught a real problem, false alarm, missed a
   regression, and unresolved (not judged yet, incomplete, or fixes that
