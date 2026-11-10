@@ -2,7 +2,7 @@
 
 import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
 import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
-import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
+import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle, aggregateCrewPayload, aggregateCrewUnavailable } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
 import { collapseTask, stopRowInteraction } from './task-nav.js';
 
@@ -91,16 +91,23 @@ export function buildStatusUpdateControl(task, context) {
 
 // The list row overlays a chip on its select; the detail styles the select
 // itself inside a visible field label and needs no duplicate value.
-export function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
-  const cell = el("span", { class: "crew-cell" });
-  if (isAggregateView()) {
-    // The aggregate task list has no single crew registry to validate against.
-    // Keep the task's own crew visible without marking it missing or offering
-    // a workspace-scoped edit control.
-    cell.textContent = explicitCrewValue(task) || resolvedCrewName(task);
-    cell.title = "Crew settings are workspace-specific; select a workspace to edit.";
-    return cell;
+// All workspaces installs that task's own workspace registry for the build,
+// then puts the ambient payload back. A selected workspace never takes this
+// branch, so its select is built against `lastCrewPayload` as before.
+export function buildCrewUpdateControl(task, context, options = {}) {
+  if (!isAggregateView()) return buildScopedCrewUpdateControl(task, context, options);
+  const previous = taskState.lastCrewPayload;
+  const registryUnavailable = aggregateCrewUnavailable(task);
+  taskState.lastCrewPayload = aggregateCrewPayload(task);
+  try {
+    return buildScopedCrewUpdateControl(task, context, { ...options, registryUnavailable });
+  } finally {
+    taskState.lastCrewPayload = previous;
   }
+}
+
+function buildScopedCrewUpdateControl(task, context, { withChip = true, registryUnavailable = false } = {}) {
+  const cell = el("span", { class: "crew-cell" });
 
   const mutable = canMutateTask(task);
   const feedback = taskState.crewFeedback.get(taskDispatchIdentity(task));
@@ -111,7 +118,9 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   });
   select.setAttribute("aria-label", label);
   const currentValue = explicitCrewValue(task);
-  const staleCurrentValue = hasStaleExplicitCrew(task);
+  // A failed or missing aggregate registry is "crew unavailable", not a crew
+  // the workspace no longer configures. A loaded registry keeps the (missing) option.
+  const staleCurrentValue = !registryUnavailable && hasStaleExplicitCrew(task);
   select.dataset.currentValue = currentValue;
   select.dataset.staleCurrentValue = staleCurrentValue ? currentValue : "";
 
@@ -156,7 +165,8 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
     select.appendChild(option);
   }
 
-  if (crews.length === 0 && humanCrews.length === 0) {
+  const registryEmpty = registryUnavailable || (crews.length === 0 && humanCrews.length === 0);
+  if (registryEmpty) {
     select.disabled = true;
     defaultOption.textContent = "crew unavailable";
   }
@@ -178,7 +188,7 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   if (withChip) {
     const chip = el("span", {
       class: "task-select-chip",
-      text: crews.length === 0 && humanCrews.length === 0 ? "unavailable" : staleCurrentValue
+      text: registryEmpty ? "unavailable" : staleCurrentValue
         ? `${currentValue} (missing)`
         : currentValue || resolvedCrewName(task),
     });

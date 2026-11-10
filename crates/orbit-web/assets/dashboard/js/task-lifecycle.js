@@ -1,7 +1,7 @@
 // Orbit dashboard task detail metadata: the meta block, the lifecycle and
 // delivery-stage strips, the hands chain, the delivery card and the OS readout.
 
-import { el, infoHint, isAggregateView } from './common.js';
+import { el, infoHint } from './common.js';
 import { elapsedLabel } from './task-runtime.js';
 import { buildExecutionProvenance, formatExecutionLocation } from './distributed.js';
 import { absTimeNode, canMutateTask, pullRequestLink, taskRunHref } from './task-shared.js';
@@ -32,7 +32,7 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
   levers.appendChild(taskFields.buildComplexityUpdateControl(task, context));
-  if (canMutateTask(task) && !isAggregateView()) {
+  if (canMutateTask(task)) {
     const control = buildCrewUpdateControl(task, context, { withChip: false });
     control.classList.add("task-chip-crew");
     const select = control.querySelector("select");

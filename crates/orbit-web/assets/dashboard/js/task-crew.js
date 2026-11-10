@@ -2,7 +2,7 @@
 // Split out of tasks.js; imports task-shared for the crew payload state and
 // the list re-render hook, and never imports tasks.js.
 
-import { el } from './common.js';
+import { el, fetchJson, getHostRevision, isAggregateView } from './common.js';
 import { taskState, rerender } from './task-shared.js';
 
 export function scheduleFeedbackExpiry(map, key, context, delay) {
@@ -103,12 +103,112 @@ export function cacheCrewPayload(payload) {
   return taskState.lastCrewPayload;
 }
 
+// No crews, and not a loaded registry. Aggregate rows use this when the
+// workspace read failed or has not been stored for the current host.
+const EMPTY_CREW_PAYLOAD = {
+  default_crew: null,
+  crews: [],
+  human_crews: [],
+  viewer_human_crew: null,
+};
+
+// Crew registries for the All workspaces list, one per workspace on this host.
+// A quiet refresh reuses an entry. A host change drops every other host's
+// entries. The ambient `lastCrewPayload` stays cleared in that view so My work
+// and comment authors do not borrow one workspace's registry.
+const aggregateCrewsByWorkspace = new Map();
+
+function aggregateCrewEntry(workspaceId) {
+  if (!workspaceId) return null;
+  const entry = aggregateCrewsByWorkspace.get(String(workspaceId));
+  if (!entry || entry.hostRevision !== getHostRevision()) return null;
+  return entry;
+}
+
+export function aggregateCrewPayload(task) {
+  const entry = aggregateCrewEntry(task && task.workspace_id);
+  if (!entry || entry.failed || !entry.payload) return EMPTY_CREW_PAYLOAD;
+  return entry.payload;
+}
+
+// The aggregate select has nothing to list: the crew read failed, this host
+// has no stored registry for the workspace, or the task names no workspace.
+export function aggregateCrewUnavailable(task) {
+  if (!isAggregateView()) return false;
+  const entry = aggregateCrewEntry(task && task.workspace_id);
+  return !entry || entry.failed || !entry.payload;
+}
+
+export function rememberAggregateCrew(workspaceId, hostRevision, payload) {
+  if (!workspaceId || hostRevision !== getHostRevision()) return;
+  aggregateCrewsByWorkspace.set(String(workspaceId), {
+    hostRevision,
+    payload: normalizeCrewPayload(payload),
+    failed: false,
+  });
+}
+
+export function rememberAggregateCrewFailure(workspaceId, hostRevision) {
+  if (!workspaceId || hostRevision !== getHostRevision()) return;
+  aggregateCrewsByWorkspace.set(String(workspaceId), {
+    hostRevision,
+    payload: null,
+    failed: true,
+  });
+}
+
+export function dropAggregateCrewsForOtherHosts(hostRevision) {
+  for (const [id, entry] of aggregateCrewsByWorkspace) {
+    if (entry.hostRevision !== hostRevision) aggregateCrewsByWorkspace.delete(id);
+  }
+}
+
+function aggregateCrewSignature() {
+  const hostRevision = getHostRevision();
+  const rows = [];
+  for (const [id, entry] of aggregateCrewsByWorkspace) {
+    if (entry.hostRevision !== hostRevision) continue;
+    rows.push([id, entry.failed, entry.payload]);
+  }
+  rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  return JSON.stringify(rows);
+}
+
+// Read `/api/crews` for each workspace that has a task on this page. A failed
+// workspace is recorded and does not reject the caller, so the task list still
+// renders. `force` refetches, matching a refresh that asks for crew options;
+// otherwise a stored entry for this host is reused.
+export async function loadAggregateCrews(tasks, { force = false } = {}) {
+  const hostRevision = getHostRevision();
+  dropAggregateCrewsForOtherHosts(hostRevision);
+  const pending = [];
+  const seen = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const id = task && task.workspace_id ? String(task.workspace_id) : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (!force && aggregateCrewEntry(id)) continue;
+    pending.push(id);
+  }
+  await Promise.all(pending.map(async (id) => {
+    try {
+      const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
+      rememberAggregateCrew(id, hostRevision, payload);
+    } catch (error) {
+      rememberAggregateCrewFailure(id, hostRevision);
+      console.error(error);
+    }
+  }));
+}
+
 export function hasCrewOptions() {
   return Array.isArray(taskState.lastCrewPayload.crews) && taskState.lastCrewPayload.crews.length > 0;
 }
 
 export function crewOptionsSignature() {
-  return JSON.stringify(taskState.lastCrewPayload);
+  const ambient = JSON.stringify(taskState.lastCrewPayload);
+  if (!isAggregateView()) return ambient;
+  return `${ambient}|${aggregateCrewSignature()}`;
 }
 
 // A stable string for a task's current mutation-feedback entry (or "" when

@@ -3,6 +3,7 @@
 
 import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
+import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
@@ -1317,21 +1318,27 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   taskPageLoading = true;
   taskPageError = null;
   renderTaskPagination(taskContext());
-  // /api/crews is per-workspace and 400s without a concrete workspace, so in
-  // aggregate mode skip the crew fetch and let the crew controls degrade to a
-  // disabled "crew unavailable" fallback rather than rejecting the Promise.all
-  // and blocking the whole task list. Clear any crew cache left over from a
-  // previously-selected concrete workspace so the fallback is consistent (a
-  // stale, still-enabled crew <select> would PATCH with no workspace).
+  // /api/crews is per-workspace. Aggregate mode has no ambient workspace, so
+  // the single-workspace cache stays empty (a stale registry would make My
+  // work and comment authors borrow one workspace). Crews for the rows on
+  // this page are read per workspace below; one failure does not reject this
+  // request. A selected workspace still uses the fetch beside the task list.
   if (aggregate) cacheCrewPayload({ crews: [] });
   // Crew options change with configuration, not with tasks: a refresh that
   // does not ask for them reuses this workspace visit's cached options.
   const revision = getWorkspaceRevision();
   const fetchCrews = !aggregate && (includeCrews || crewsRevision !== revision);
-  return requestPanel("tasks-body", scope, () => Promise.all([
+  const loadTasks = () => Promise.all([
     fetchJson(path),
     fetchCrews ? fetchJson("/api/crews") : Promise.resolve(null),
-  ]), ([payload, crews]) => {
+  ]);
+  const load = aggregate
+    ? () => fetchJson(path).then(async (payload) => {
+        await loadAggregateCrews(listItems(payload), { force: includeCrews });
+        return [payload, null];
+      })
+    : loadTasks;
+  return requestPanel("tasks-body", scope, load, ([payload, crews]) => {
     if (crews) {
       cacheCrewPayload(crews);
       crewsRevision = revision;
@@ -2206,6 +2213,7 @@ onWorkspaceChange(() => {
   lastTasks = [];
   lastTasksMeta = null;
   cacheCrewPayload({ crews: [] });
+  dropAggregateCrewsForOtherHosts(getHostRevision());
   lastRuns = [];
   lastRunsMeta = null;
   lastRunsLoading = true;
