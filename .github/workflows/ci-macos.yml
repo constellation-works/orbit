@@ -10,14 +10,18 @@ name: macOS Platform
 on:
   push:
     branches: [main, agent-main]
+  workflow_dispatch:
 
 # Push runs share one group per branch and are never cancelled: GitHub keeps at
 # most one running and one pending run there, and a newer push replaces the
 # pending one. An intermediate agent-main commit can therefore get no macOS
 # run, while the newest commit always does. This bounds the queue on the two
-# macOS runners.
+# macOS runners. A workflow_dispatch run instead gets a group per run, so a
+# deploy-candidate dispatch for a chosen SHA is never queued behind, replaced
+# or cancelled by later agent-main pushes (see docs/DEVELOPMENT.md, Hosted CI).
+# Ordinary pushes keep the exact group below; no extra macOS push runs are added.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('run-{0}', github.run_id) || github.ref }}
   cancel-in-progress: false
 
 permissions:
