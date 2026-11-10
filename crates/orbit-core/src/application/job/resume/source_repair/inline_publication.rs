@@ -487,10 +487,7 @@ impl OrbitRuntime {
         if field(marker, "task_id")? != task.id
             || field(marker, "pr_number")? != pr
             || field(marker, "head_sha")? != field(&original.pipeline["push"], "local_sha")?
-            || !matches!(
-                field(marker, "blocker")?,
-                "failed_checks" | "conflict" | "landing_review"
-            )
+            || !repair_grant_names_its_cause(marker)
             || marker
                 .get("failed_checks")
                 .and_then(Value::as_array)
@@ -542,6 +539,7 @@ impl OrbitRuntime {
                 "pr_number",
                 "head_sha",
                 "blocker",
+                "hold_code",
                 "drain_run_id",
             ]
             .iter()
@@ -576,4 +574,24 @@ impl OrbitRuntime {
 
 fn is_delivery(job: &str) -> bool {
     matches!(job, "task_pr_pipeline" | "task_local_pipeline") || job.starts_with("task_claimed_")
+}
+
+/// Whether an out-of-run repair grant names what it resumed delivery for: a
+/// repairable blocker, or [ORB-23809] no blocker and a delivery hold the
+/// drain hands back to completion.
+fn repair_grant_names_its_cause(marker: &Value) -> bool {
+    match marker.get("blocker") {
+        Some(Value::String(blocker)) => {
+            matches!(
+                blocker.as_str(),
+                "failed_checks" | "conflict" | "landing_review"
+            )
+        }
+        Some(Value::Null) => marker
+            .get("hold_code")
+            .and_then(Value::as_str)
+            .and_then(orbit_types::workflow::DeliveryRefusal::from_error_code)
+            .is_some_and(crate::application::job::pr_repair::handed_back_hold),
+        _ => false,
+    }
 }

@@ -1106,7 +1106,13 @@ Network-inconclusive output (HTTP status `000`; a curl connect, resolve, timeout
 
 #### Delivery refusals are held
 
-A fail-closed delivery decision ends the run `held` with a typed diagnostic code:
+A fail-closed delivery decision ends the run `held` with a typed diagnostic code.
+An `--auto-fix` drain pass (or dashboard **Fix PR**) hands a `review` task held
+on `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
+`delivery_base_checks_pending`, `delivery_completion_budget_expired`,
+`delivery_check_evidence_inconclusive` or
+`delivery_forge_observation_unavailable` back to its completion step, within a
+backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 
 | Code | Decision |
 | --- | --- |
@@ -1928,6 +1934,22 @@ observation time). Blockers are null when a refusal preceded the forge read.
 pass in `step_output`, including `auto_fix.skipped`. See
 [a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
 
+The same pass hands back a `review` task whose newest leaf ended `held` with
+its pull request open on a delivery hold a fresh forge read can clear:
+`delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
+`delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
+`delivery_base_checks_pending` or `delivery_forge_observation_unavailable`. The
+leaf reruns its completion step with a fresh completion budget and `auto_fix`
+granted, under every rule above. A conflict or failed required check is
+repaired through the ledger; otherwise the hand-back spends no repair budget
+and records `hold_code` instead of a blocker. Such hand-backs wait 5 minutes
+after the leaf held, doubled for each earlier hand-back of the pull request for
+that code, and stop after 3 per pull request, head and code; the pass then
+lists the task under `auto_fix.skipped` with the hold code as its `reason`. A
+task that a `completion.hold` rule keeps in review is skipped as
+`completion_held`. Other holds keep their own next step, and the held leaf
+still counts as `held` in run history.
+
 The dashboard's **Fix PR** action on a `review` task starts the same repair for
 that one task without a drain (`POST /api/tasks/<task>/auto-fix`). It runs the
 drain pass's checks and start: the same attempt ledger and budget, footprint
@@ -1936,8 +1958,9 @@ as `auto_drain.auto_fix`. It grants repair only: the resumed leaf keeps its own
 `completion`, and a leaf started with `--complete` is resumed only when the
 session also holds completion authority (`auto_drain.complete`). The button
 shows only when the task records a pull request. It is enabled only when that
-pull request conflicts with its base or a required check failed on its head;
-otherwise it is disabled with the reason in its title. A refused start answers
+pull request conflicts with its base or a required check failed on its head,
+or the task's newest leaf is held on a hold the drain hands back (Fix PR skips
+the drain's backoff, not its ceiling); otherwise it is disabled with the reason in its title. A refused start answers
 `409` with code `task_auto_fix_<reason>`, using the drain's reasons plus the
 single-task ones; nothing starts. Unlike a drain pass, Fix PR also hands
 back a delivery that succeeded without `--complete` and left its pull request

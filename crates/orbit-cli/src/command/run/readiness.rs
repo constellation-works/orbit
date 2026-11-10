@@ -339,7 +339,10 @@ fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
                 return format!(
                     "Out-of-run auto-fix skipped: {tasks} PR #{} ({}): {} — {} (latest pass of {ended} {}, {}).",
                     repair["pr_number"].as_str().unwrap_or("-"),
-                    repair["blocker"].as_str().unwrap_or("blocker unknown"),
+                    repair["blocker"]
+                        .as_str()
+                        .or_else(|| repair["hold_code"].as_str())
+                        .unwrap_or("blocker unknown"),
                     repair["reason"].as_str().unwrap_or("unknown"),
                     repair["detail"].as_str().unwrap_or("-"),
                     repair["drain_run_id"].as_str().unwrap_or("-"),
@@ -349,7 +352,10 @@ fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
             format!(
                 "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
                 repair["pr_number"].as_str().unwrap_or("-"),
-                repair["blocker"].as_str().unwrap_or("-"),
+                repair["blocker"]
+                    .as_str()
+                    .or_else(|| repair["hold_code"].as_str())
+                    .unwrap_or("-"),
                 repair["run_id"].as_str().unwrap_or("-"),
                 repair["state"].as_str().unwrap_or("-"),
                 repair["source_run_id"].as_str().unwrap_or("-"),

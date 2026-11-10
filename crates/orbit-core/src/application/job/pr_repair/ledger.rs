@@ -21,7 +21,14 @@ pub(crate) const PR_AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 pub(super) struct OutOfRunStart {
     pub(super) pr_number: String,
     pub(super) head_sha: String,
-    pub(super) blocker: PrAutoFixBlocker,
+    /// The blocker a repair resumed delivery for; absent for a held
+    /// hand-back with no blocker on the pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) blocker: Option<PrAutoFixBlocker>,
+    /// The delivery hold a held hand-back resumed completion from
+    /// (`held`); absent for a repair of a stopped leaf.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) hold_code: Option<String>,
     pub(super) source_run_id: String,
     pub(super) resumed_run_id: String,
     /// The drain that started it; absent for a dashboard start.
@@ -44,7 +51,9 @@ pub(super) fn out_of_run_starts(
 
 /// `Err` with the skip when the pull request's ledger would not admit a
 /// repair of `head_sha` for `blocker`, or an out-of-run auto-fix already
-/// resumed delivery for it, or for as many heads as the budget allows.
+/// resumed delivery for it, or for as many heads as the budget allows. A
+/// held hand-back without a blocker repairs nothing, so it spends none of
+/// this budget (`held` bounds those).
 pub(super) fn ledger_admits(
     history: &[TaskHistoryEntry],
     pr_number: &str,
@@ -81,10 +90,13 @@ pub(super) fn ledger_admits(
             ));
         }
     }
-    let starts = out_of_run_starts(history, pr_number);
+    let starts: Vec<_> = out_of_run_starts(history, pr_number)
+        .into_iter()
+        .filter(|start| start.blocker.is_some())
+        .collect();
     if let Some(start) = starts
         .iter()
-        .find(|start| start.head_sha == head_sha && start.blocker == blocker)
+        .find(|start| start.head_sha == head_sha && start.blocker == Some(blocker))
     {
         return Err(Verdict::Skip(
             "already_started",

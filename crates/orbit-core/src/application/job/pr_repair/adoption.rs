@@ -50,23 +50,43 @@
 //! Nothing here ends the drain: each refusal is reported in the step output
 //! and a later pass reconsiders it.
 //!
+//! A leaf that ended `held` on a delivery refusal a fresh forge read can
+//! clear (`delivery_check_evidence_inconclusive`,
+//! `delivery_completion_budget_expired`, `delivery_evidence_stale`,
+//! `delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
+//! `delivery_forge_observation_unavailable`) is handed back too [ORB-23809],
+//! under every other rule above except the blocker: completion reads the
+//! forge again, and repairs only what its own watcher then finds. A held
+//! leaf whose task a `completion.hold` rule keeps in review is not handed
+//! back. Its pull request is repaired through the ledger when the forge
+//! reports a blocker; otherwise the hand-back spends none of the ledger and
+//! is bounded per held lineage by a backoff and a ceiling (`held`), after
+//! which the pass reports the task under its hold code. Other holds keep
+//! their own documented next step.
+//!
 //! The dashboard's Fix PR action starts the same repair for one task through
 //! [`OrbitRuntime::start_task_pr_auto_fix`] (`task_auto_fix`): the same
 //! verdict, plan, start and history record, with no drain behind it.
 
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
 use orbit_types::workflow::{
-    DEFAULT_BRANCH_PREFIX, JobRun, JobRunState, PipelineState, PrAutoFixBlocker,
+    COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
+    PipelineState, PrAutoFixBlocker, current_completion_hold,
 };
 use serde_json::{Value, json};
 
 use super::super::orphan_adoption::AdoptionAuthority;
 use super::super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
 use super::super::{RunOwnerLiveness, run_owner_liveness};
+use super::held::{
+    HELD_HANDBACK_CEILING, handed_back_hold, held_backoff, held_backoff_until, held_handbacks,
+    held_refusal,
+};
 use super::ledger::{OutOfRunStart, ledger_admits};
 use crate::OrbitRuntime;
 use crate::runtime::run_input::carried_task_ids;
@@ -88,7 +108,11 @@ pub(super) struct Repair {
     status: TaskStatus,
     pr_number: String,
     head_sha: String,
-    blocker: PrAutoFixBlocker,
+    /// What the repair resumes delivery for; `None` for a held hand-back on
+    /// a pull request with no blocker.
+    blocker: Option<PrAutoFixBlocker>,
+    /// The delivery hold a held hand-back resumes completion from.
+    hold: Option<DeliveryRefusal>,
     /// The run input record of the repair.
     marker: Value,
 }
@@ -101,7 +125,8 @@ impl Repair {
             "source_run_id": run.run_id,
             "pr_number": self.pr_number,
             "head_sha": self.head_sha,
-            "blocker": self.blocker.as_str(),
+            "blocker": self.blocker.map(PrAutoFixBlocker::as_str),
+            "hold_code": self.hold.map(DeliveryRefusal::error_code),
         })
     }
 }
@@ -148,6 +173,8 @@ pub(super) struct PassReads {
 pub(super) struct RepairObservation {
     pub(super) pr_number: Option<String>,
     pub(super) blocker: Option<PrAutoFixBlocker>,
+    /// The delivery hold of a held leaf the pass considered.
+    pub(super) hold_code: Option<&'static str>,
 }
 
 impl PassReads {
@@ -193,8 +220,8 @@ impl OrbitRuntime {
         };
         let tasks = {
             let _span = tracing::debug_span!("pr_repair_candidates").entered();
-            // A repair needs a stopped delivery. Project task IDs from all
-            // stopped leaves before reading envelopes, so unrelated task history
+            // A repair needs a stopped or held delivery. Project task IDs
+            // from all such leaves before reading envelopes, so unrelated task history
             // costs no reads and old stopped leaves remain discoverable. This
             // projection is fresh on each pass, with no age window or cache.
             let tasks = self
@@ -206,6 +233,7 @@ impl OrbitRuntime {
                         JobRunState::Failed,
                         JobRunState::Timeout,
                         JobRunState::Interrupted,
+                        JobRunState::Held,
                     ],
                     include_steps: false,
                     ..Default::default()
@@ -253,6 +281,7 @@ impl OrbitRuntime {
                     "source_run_id": Value::Null,
                     "pr_number": task.github_pr_number(),
                     "blocker": Value::Null,
+                    "hold_code": Value::Null,
                     "reason": "store_unreadable",
                     "detail": format!("read the task's delivery leaves: {error}"),
                 })),
@@ -314,6 +343,7 @@ impl OrbitRuntime {
                         "source_run_id": run.run_id,
                         "pr_number": observation.pr_number,
                         "blocker": observation.blocker,
+                        "hold_code": observation.hold_code,
                         "reason": reason,
                         "detail": detail,
                     }));
@@ -378,7 +408,39 @@ impl OrbitRuntime {
         let ended_at_review = authority.drain_run_id.is_none()
             && run.state == JobRunState::Success
             && input.get("completion").and_then(Value::as_str) != Some("done");
+        // [ORB-23809] A leaf held on a delivery refusal a fresh forge read
+        // can clear is handed back like a stopped one; every other hold keeps
+        // its own next step.
+        let held = if run.state == JobRunState::Held {
+            let refusal = match self.stores().jobs().get_job_run(&run.run_id) {
+                Ok(Some(full)) => held_refusal(&full),
+                Ok(None) => None,
+                Err(error) => {
+                    return skip("store_unreadable", format!("read the run's steps: {error}"));
+                }
+            };
+            match refusal {
+                Some(refusal) if handed_back_hold(refusal) => Some(refusal),
+                refusal => {
+                    return Verdict::Ignore(
+                        "leaf_held",
+                        format!(
+                            "its newest delivery run {} is held{}; only a hold a fresh forge read \
+                             can clear is handed back, and this one keeps its own next step",
+                            run.run_id,
+                            refusal
+                                .map(|refusal| format!(" as {}", refusal.error_code()))
+                                .unwrap_or_default()
+                        ),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        observation.hold_code = held.map(DeliveryRefusal::error_code);
         if !ended_at_review
+            && held.is_none()
             && !matches!(
                 run.state,
                 JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
@@ -388,7 +450,8 @@ impl OrbitRuntime {
                 "leaf_not_stopped",
                 format!(
                     "its newest delivery run {} ended {}; only a delivery that failed, timed \
-                     out, was interrupted or ended in review is handed back",
+                     out, was interrupted, held on a re-observable delivery hold or ended in \
+                     review is handed back",
                     run.run_id, run.state
                 ),
             );
@@ -448,6 +511,36 @@ impl OrbitRuntime {
             Ok(history) => history,
             Err(error) => return skip("store_unreadable", format!("read the history: {error}")),
         };
+        if let Some(refusal) = held {
+            if let Some(hold) = current_completion_hold(task.status, &history) {
+                return skip(
+                    "completion_held",
+                    format!(
+                        "a `{COMPLETION_HOLD_KEY}` rule keeps the task in review for a person \
+                         ({hold}); its held delivery is not handed back"
+                    ),
+                );
+            }
+            // An operator asking about one task is not held to the drain's
+            // backoff; the ceiling still binds both.
+            if !reads.fresh
+                && let Some(until) = held_backoff_until(
+                    run.finished_at,
+                    held_backoff(&history, &pr_number, refusal),
+                    Utc::now(),
+                )
+            {
+                return skip(
+                    refusal.error_code(),
+                    format!(
+                        "its delivery run {} held as {}; it is handed back no earlier than {}",
+                        run.run_id,
+                        refusal.error_code(),
+                        until.to_rfc3339()
+                    ),
+                );
+            }
+        }
         if task.status != TaskStatus::Review {
             let lineage = match self.resume_lineage_run_ids(run) {
                 Ok((_, lineage)) => lineage,
@@ -561,6 +654,7 @@ impl OrbitRuntime {
             );
         }
         if !reads.fresh
+            && held.is_none()
             && self
                 .pr_repair_checks
                 .lock()
@@ -627,40 +721,72 @@ impl OrbitRuntime {
             }
         }
         let blocker = if blockers.conflicting {
-            PrAutoFixBlocker::Conflict
+            Some(PrAutoFixBlocker::Conflict)
         } else if !blockers.failed_required_checks.is_empty() {
-            PrAutoFixBlocker::FailedChecks
+            Some(PrAutoFixBlocker::FailedChecks)
         } else {
-            if let Ok(mut checks) = self.pr_repair_checks.lock() {
-                checks.insert(pull_number, Instant::now());
-            }
-            return skip(
-                "no_blocker",
-                format!(
-                    "#{number} does not conflict and no required check failed on {}",
-                    blockers.head_sha
-                ),
-            );
+            None
         };
-        observation.blocker = Some(blocker);
-        if let Err(skipped) = ledger_admits(&history, &number, &blockers.head_sha, blocker) {
-            return skipped;
-        }
-        let marker = json!({
+        // A blocker is repaired through the ledger, whether the leaf stopped
+        // or held. A held leaf with none is handed back for completion to
+        // read the forge again, within its own ceiling.
+        let hold = match (blocker, held) {
+            (Some(blocker), _) => {
+                observation.blocker = Some(blocker);
+                if let Err(skipped) = ledger_admits(&history, &number, &blockers.head_sha, blocker)
+                {
+                    return skipped;
+                }
+                None
+            }
+            (None, Some(refusal)) => {
+                let handed_back = held_handbacks(&history, &number, &blockers.head_sha, refusal);
+                if handed_back >= HELD_HANDBACK_CEILING {
+                    return skip(
+                        refusal.error_code(),
+                        format!(
+                            "#{number} was handed back {handed_back} times on {} and its delivery \
+                             held again as {}, the ceiling of {HELD_HANDBACK_CEILING} per head \
+                             and hold; a person decides it now",
+                            blockers.head_sha,
+                            refusal.error_code()
+                        ),
+                    );
+                }
+                Some(refusal)
+            }
+            (None, None) => {
+                if let Ok(mut checks) = self.pr_repair_checks.lock() {
+                    checks.insert(pull_number, Instant::now());
+                }
+                return skip(
+                    "no_blocker",
+                    format!(
+                        "#{number} does not conflict and no required check failed on {}",
+                        blockers.head_sha
+                    ),
+                );
+            }
+        };
+        let mut marker = json!({
             "task_id": task_id,
             "pr_number": number,
             "head_sha": blockers.head_sha,
-            "blocker": blocker.as_str(),
+            "blocker": blocker.map(PrAutoFixBlocker::as_str),
             "failed_checks": blockers.failed_required_checks,
             "source_run_id": run.run_id,
             "drain_run_id": authority.drain_run_id,
         });
+        if let Some(hold) = hold {
+            marker["hold_code"] = json!(hold.error_code());
+        }
         Verdict::Repair(Box::new(Repair {
             task_id: task_id.to_string(),
             status: task.status,
             pr_number: number,
             head_sha: blockers.head_sha,
             blocker,
+            hold,
             marker,
         }))
     }
@@ -800,9 +926,10 @@ impl OrbitRuntime {
             resumed_run_id = %invoke.run_id,
             task_id = %repair.task_id,
             pr = %repair.pr_number,
-            blocker = repair.blocker.as_str(),
+            blocker = repair.blocker.map(PrAutoFixBlocker::as_str),
+            hold_code = repair.hold.map(DeliveryRefusal::error_code),
             drain_run_id = authority.drain_run_id,
-            "handed a blocked pull request back to its delivery for an auto-fix",
+            "handed a pull request back to its delivery for an auto-fix",
         );
         self.record_out_of_run_start(
             &repair.task_id,
@@ -810,6 +937,7 @@ impl OrbitRuntime {
                 pr_number: repair.pr_number.clone(),
                 head_sha: repair.head_sha.clone(),
                 blocker: repair.blocker,
+                hold_code: repair.hold.map(|hold| hold.error_code().to_string()),
                 source_run_id: run.run_id.clone(),
                 resumed_run_id: invoke.run_id.clone(),
                 drain_run_id: authority.drain_run_id.map(str::to_string),
@@ -821,7 +949,8 @@ impl OrbitRuntime {
             "resumed_run_id": invoke.run_id,
             "pr_number": repair.pr_number,
             "head_sha": repair.head_sha,
-            "blocker": repair.blocker.as_str(),
+            "blocker": repair.blocker.map(PrAutoFixBlocker::as_str),
+            "hold_code": repair.hold.map(DeliveryRefusal::error_code),
         }))
     }
 
@@ -842,6 +971,7 @@ impl OrbitRuntime {
                     "task_ids": carried_task_ids(input),
                     "pr_number": repair["pr_number"],
                     "blocker": repair["blocker"],
+                    "hold_code": repair.get("hold_code").cloned().unwrap_or(Value::Null),
                     "head_sha": repair["head_sha"],
                     "source_run_id": repair["source_run_id"],
                     "drain_run_id": repair["drain_run_id"],

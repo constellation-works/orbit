@@ -1833,6 +1833,28 @@ For the full persisted pass, including every skip and any `pass_error`, run
   stopped before its completion step;
 - `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
   and `task_moved`: a later pass tries again.
+- `completion_held`: a `completion.hold` rule keeps the held task in review
+  for a person;
+- a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
+  leaf is waiting out its backoff, or has been handed back 3 times on this head
+  for this hold (the detail says which). Once spent, resolve it as the
+  run-debugging delivery-refusal table describes.
+
+**Held leaves.** A task in `review` whose newest leaf ended `held` with its pull
+request open is handed back the same way when the hold is one a fresh forge
+read can clear: `delivery_check_evidence_inconclusive`,
+`delivery_completion_budget_expired`, `delivery_evidence_stale`,
+`delivery_requirements_unsatisfied`, `delivery_base_checks_pending` or
+`delivery_forge_observation_unavailable`. Completion reruns with a fresh budget
+and repairs only what its own watcher then finds. A conflict or failed
+required check on the pull request goes through the ledger above; otherwise
+the hand-back spends no repair budget, and the record, started entry and
+resumed run's `out_of_run_auto_fix` input carry `hold_code` with a null
+`blocker`. A drain pass hands a held leaf back no earlier than 5 minutes after
+it held, doubled for each earlier hand-back of that pull request for that code,
+and at most 3 times per pull request, head and code. Other holds, such as
+`delivery_head_changed`, `delivery_pr_draft` or `base_chase_exhausted`, keep
+their own next step; the pass does not list them.
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
@@ -1853,7 +1875,9 @@ That reading is cached for 60 seconds; a dashboard refresh after the cache
 interval reads it again, so a pull request whose checks or mergeability
 changed is re-evaluated without reopening the task.
 The button is enabled only when the pull request conflicts with its base or a
-required check failed on its head. Otherwise it is disabled, and its title names
+required check failed on its head, or when the task's newest leaf is held on a
+hold the drain would hand back (Fix PR skips the drain's backoff but not its
+ceiling). Otherwise it is disabled, and its title names
 the reason: no blocker, mergeability still being calculated, budget spent, a
 repair already running, and so on.
 

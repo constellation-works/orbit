@@ -614,6 +614,7 @@ fn readiness_snapshot_with_detail(
                 "task_ids": [skipped["task_id"]],
                 "pr_number": skipped["pr_number"],
                 "blocker": skipped["blocker"],
+                "hold_code": skipped.get("hold_code").cloned().unwrap_or(Value::Null),
                 "reason": skipped["reason"],
                 "detail": skipped["detail"],
                 "source_run_id": skipped["source_run_id"],
