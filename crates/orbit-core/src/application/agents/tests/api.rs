@@ -482,8 +482,7 @@ fn implementer_rows_use_launch_effort_when_invocation_never_completed() {
     }
     let invocations = vec![invocation(
         1,
-        "run-completed",
-        "completed",
+        ("run-completed", "completed"),
         "opus",
         Some(Medium),
         true,
