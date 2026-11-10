@@ -136,7 +136,7 @@ refused everywhere.
 | `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Add or remove tools for the listed roles. It must add or remove at least one tool, and no tool may be in both lists. |
 | `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draw the implementing crew from this weighted pool instead of the usual draw. The pool must name at least one crew, no crew twice, each with a positive weight. |
 | `config` | `{"values": {key: value}, "roles": [...]}` | Set task-local configuration values for the listed roles. It must set at least one key, with a non-blank key. |
-| `memory` | `{"roles": [...], "global": bool}` | Deliver the drawn crew's model memory space (and the shared `global` space when `global` is `true`) to the listed roles. `roles` defaults to `["implement"]`; `global` defaults to `false`. Memory reaches a prompt only through a running `live` memory arm; a `shadow` arm captures without delivering. See [Give models a memory](../crew-memory/). |
+| `memory` | `{"roles": [...], "global": bool}` | Deliver the crew's model memory to these roles; `global: true` adds shared memory. Roles default to `implement`; `global` to `false`. See [Give models a memory](../crew-memory/). |
 
 `roles` defaults to `["implement"]` on `skills`, `tools`, and `config`,
 and must name at least one role. A blank skill name, crew, tool, or config

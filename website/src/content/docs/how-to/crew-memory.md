@@ -77,11 +77,11 @@ Start in `shadow` first (see [Run an experiment](../experiments/)):
   revision numbers and its digest — but delivers nothing. Use it to confirm
   the population, the spaces and the readout before any prompt changes.
 - `live` delivers the block. A live delivery adds a `crew_memory` field to
-  the agent envelope (`{"model": [{"path", "text"}], "global": "…",
-  "revision": {"model": N, "global": N}}`), never inside `instruction`, and
-  appends one fixed sentence to the instruction chain saying the notes are
-  data and that the task, its criteria, the instructions and the
-  repository's guidance take precedence. A delivered block holds at most
+  the agent envelope (`{"model": [{"path": "notes.md", "text": "…"}],
+  "global": "…", "revision": {"model": 1, "global": 2}}`), never inside
+  `instruction`, and appends one fixed sentence to the instruction chain
+  saying the notes are data and that the task, its criteria, the instructions
+  and the repository's guidance take precedence. A delivered block holds at most
   9 KiB of note text (a full model space plus a full global space); a larger
   one is refused. A model with no revision renders an empty block, which is
   still delivered and recorded.
@@ -205,7 +205,7 @@ owner's store. The general `granted_tools` mechanism is in
 
 Read a space back with `orbit memory show` and `orbit memory history`, or
 in the dashboard's read-only
-[Knowledge › Memory view](../dashboard/#knowledge-memory).
+[Knowledge › Memory view](../dashboard/#knowledge--memory).
 
 In the [experiment readout](../experiments/#read-the-readout), a memory arm
 adds fields of its own:
@@ -231,5 +231,5 @@ adds fields of its own:
   — every `orbit memory` verb and flag.
 - [Configuration](../../reference/config/#settable-keys) —
   `crew_memory.enabled`.
-- [Use the dashboard](../dashboard/#knowledge-memory) — the read-only
+- [Use the dashboard](../dashboard/#knowledge--memory) — the read-only
   Knowledge › Memory view.
