@@ -147,7 +147,12 @@ score(r) = 100 + 10 × z_s(r)
   result.
 - **Unmeasured measures.** A measure with zero units for a row (no reviewed deliveries, no
   tool calls) contributes 0 and its weight drops out of that row's denominator. The detail
-  shows it as unmeasured.
+  shows it as unmeasured. Review outcome is also unmeasured for a model with fewer reviewed
+  deliveries than `review_min_support` (30, the scorecard's value, returned in `rules`):
+  its units, actual and expected still show, but it contributes nothing and its 20 weight
+  points leave that model's denominator [ORB-23838]. The bootstrap fixes that status by
+  the model's own reviewed count, a tier point applies it to that tier's reviewed count,
+  and the calibration sample and the other models' expectations are unchanged.
 
 A row is **eligible** with at least 30 implemented tasks and at least one assessed
 tier with at least 5 of its tasks. A model eligible on exactly one assessed tier is
@@ -312,7 +317,8 @@ change starts a new season (§4.2).
   are measured. CI failures and tool-call errors report `unmeasured` while model attribution
   is unavailable. Final recoveries also report `unmeasured`: R1 records their fault, but the
   ranking does not yet compute that measure. Each unmeasured measure's weight leaves every
-  denominator. A measure whose calibrated scale is zero reports `no_scale` and leaves the
+  denominator, and review outcome leaves a model's denominator while the model has fewer than
+  30 reviewed deliveries. A measure whose calibrated scale is zero reports `no_scale` and leaves the
   denominator too.
 - **Seasons.** `orbit agents rank calibrate [--window] [--until] [--settle-lag]
   [--execution]` calibrates the settled window and appends a season to

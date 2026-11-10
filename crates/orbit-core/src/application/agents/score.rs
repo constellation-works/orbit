@@ -24,6 +24,14 @@ use super::facts::TaskFacts;
 /// on the fleet's evidence or outrank a larger row with the same raw score.
 pub(super) const SMOOTHING: f64 = 30.0;
 
+/// Reviewed deliveries an implementer row, by-type cell or ranked model needs
+/// before its review terms score. Below it the terms are provisional: rated
+/// and shown, but left out of the raw score (or, on the model ranking, the
+/// review-outcome measure is unmeasured and leaves the weight denominator).
+/// Zero reviewed deliveries stays unmeasured. Matches [`SMOOTHING`]; one named
+/// value for every surface, returned as `review_min_support`.
+pub(super) const REVIEW_MIN_SUPPORT: usize = 30;
+
 /// One weighted term of a role's score.
 pub(super) struct Term {
     pub(super) key: &'static str,

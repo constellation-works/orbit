@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
@@ -91,8 +91,9 @@ the **Score breakdown** beside it carries those exact contributions.
   above it names the hidden terms and why; a column some rows can score keeps its
   values and marks the rest with a compact **—** (title **no reviewed
   deliveries**). Measured zeros stay values.
-  Any positive reviewed count is measured, without a separate provisional
-  threshold. Reviewers' pending
+  A positive reviewed count below `review_min_support` (30) is rated and
+  shown but provisional, so those axes are gaps too (§5.2); zero is
+  unmeasured. Reviewers' pending
   `provisional` reviews make the missed-regressions axis provisional, while
   their other observed terms remain available. An explicitly unmeasured
   missed-scope-block source is also a gap. Unsupported rates never enter the
@@ -198,7 +199,7 @@ One module computes every role's score. A role supplies its unit of work, its te
 
 ### 4.1 Rates and the raw score
 
-Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' calibration term is rated per 100 placed tasks, and warning terms per 100 settled assessments (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of observations cannot swing a rank. The implementers' three review terms use reviewed deliveries (§5.2), with zero reviews unmeasured and neutral. Every other term uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
+Each term's count is converted to a rate per 100 units of the role's work (§5). A role may give a term its own denominator instead: the pilots' calibration term is rated per 100 placed tasks, and warning terms per 100 settled assessments (§5.4). Such a term also has its own minimum support; below it the term is **provisional**, rated and shown but left out of the raw score, so a handful of observations cannot swing a rank. The implementers' three review terms use reviewed deliveries (§5.2) and have the same provisional rule at `review_min_support` (30, matching the smoothing constant K): fewer reviewed deliveries leave them rated and shown but out of the raw score, and zero reviews is unmeasured and neutral. Every other term uses the role's units. For roles without expectations, the **raw score** is `Σ weight × rate` over the role's terms. Positive weights are credit; negative weights are problems. Weights live in one table per role, shown in the view and returned in the payload.
 
 Implementers instead start at 100 and sum weighted actual-minus-expected rates for their tier mix (§5.2).
 
@@ -294,7 +295,9 @@ rows contributes once to each row and once to each corresponding fleet
 observation. For review terms, only observations with a settled first review
 enter the denominator or expectation; unreviewed work supplies neither credit
 nor penalty. Zero reviewed deliveries gives a zero expected count and neutral
-contribution, with a null rate rather than a measured zero. Repeated rejects
+contribution, with a null rate rather than a measured zero.
+
+**Review terms need minimum support [ORB-23838].** The three review terms are rated per 100 reviewed deliveries, so a few reviews could outweigh hundreds of tasks and decide the top of the board (a row with 31 reviewed of 394 tasks scored 144.3 on +42.7 review points; another scored −16.5 from 2 reviewed deliveries). A row with fewer than `review_min_support` reviewed deliveries (default 30, one named value that matches K) lists `first_pass_accepts`, `review_rejects` and `reviewer_repairs` in `provisional_terms`: counts, rates, expectations and `term_units` are still returned and shown, and each contributes 0 to the raw score. At or above the threshold nothing changes. Zero reviewed deliveries stays unmeasured, not provisional. The fleet expectation's population is unchanged: a provisional row's reviews still count in the fleet's rates. By-type and tier cells apply the same rule to their own reviewed count. The implementers header and the by-type payload return `review_min_support`, and the dashboard's "How the score works" states it. Repeated rejects
 can exceed one per reviewed task. Other terms include unreviewed and unlanded
 implemented tasks, not just tasks with the outcome.
 
@@ -484,7 +487,8 @@ tier, type)`, where the type comes from the ordered
 expectation taken from the same `(tier, type)` fleet cell; a `(tier, type)`
 fleet cell under 30 observations falls back to the tier's rates. Review terms
 use reviewed deliveries in both the cell and its reference, with neutral
-contributions for cells without reviews, just like headline scores. Cells are
+contributions for cells without reviews and for cells with fewer than
+`review_min_support` reviewed deliveries, just like headline scores. Cells are
 small, so the matrix applies a two-sided, two-level shrinkage with K = 30:
 `crew_mean = (n_tier × raw_tier + 30 × 100) / (n_tier + 30)`, then
 `score = (n_cell × raw_cell + 30 × crew_mean) / (n_cell + 30)`. Each cell carries the row's `crews`, `model`, `reasoning_effort`, `effort_label` and `label`. A cell with
@@ -635,7 +639,7 @@ GET /api/agents/implementers/size-curves?window=&complexity=&execution=&until=
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`;
 - implementers only: `execution_split` (§5.2).
 
-Each row carries `crew` (the first contributing crew), `crews`, `model`, `reasoning_effort` (`null` for the provider default, `"unknown"` for unrecorded work), `effort_label`, `label` (`model @ effort`), `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` (term key to number) and `per_100` (term key to number, or null for an implementer review term with no reviewed deliveries), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: the scoring denominator for the three review terms and their expectations (§5.2). A row of a role with per-term denominators (implementers and pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Implementer review terms have no additional minimum support: zero reviewed deliveries is unmeasured, not provisional. Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
+Each row carries `crew` (the first contributing crew), `crews`, `model`, `reasoning_effort` (`null` for the provider default, `"unknown"` for unrecorded work), `effort_label`, `label` (`model @ effort`), `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` (term key to number) and `per_100` (term key to number, or null for an implementer review term with no reviewed deliveries), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: the scoring denominator for the three review terms and their expectations (§5.2). A row of a role with per-term denominators (implementers and pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support). Implementer review terms are provisional below `review_min_support` reviewed deliveries (returned in the implementers header and by-type payload, default 30); zero reviewed deliveries is unmeasured, not provisional. Calibration support counts placed tasks and uses `min_support`; warning support counts settled assessments and uses `warning_min_support`.
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 

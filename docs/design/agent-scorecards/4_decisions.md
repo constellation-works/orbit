@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-10
 last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
@@ -233,8 +233,28 @@ No scorecard ranks task authorship. The orchestrators role and every surface tha
 - The one-per-task charge for a confirmed task-pilot scope hold existed only for this role and is no longer produced; pilot warning terms are unchanged.
 - Bringing authorship back needs a new decision, with an owner named for spec problems under the one-owner rule.
 
+## Implementer review terms need minimum support
+
+**Recorded:** 2026-11-10 · [ORB-23838]
+
+### Context
+
+The implementers' first-pass accepts, review rejects and reviewer repairs are rated per 100 reviewed deliveries and entered the raw score at any positive count. With the in-run review gate idle, few tasks are reviewed (270 of 4,086 row-task units in one window), so a handful of reviews outweighed hundreds of tasks: a row with 31 reviewed of 394 tasks took +42.7 of its +47.2 raw points from them and ranked first, and another scored −16.5 from 2 reviewed deliveries. The pilots' terms already leave a term below its own minimum support out of the raw score as `provisional_terms`.
+
+### Decision
+
+A row, by-type or tier cell, or ranked model with fewer than `review_min_support` reviewed deliveries has the three review terms provisional: rated and shown, left out of the raw score. The default is 30, one named value that matches the smoothing constant K, returned in the implementers payload. On the model ranking, review outcome is then unmeasured and its weight leaves the model's denominator. Zero reviewed deliveries stays unmeasured. The fleet expectation's population is unchanged, so a provisional row's reviews still count in the fleet's rates. Other roles and terms are unchanged. This supersedes the earlier rule that any positive reviewed count is measured with no separate threshold.
+
+### Consequences
+
+- A row's score no longer separates on one or two reviews; ranking among low-review rows follows landings, rework and escaped regressions.
+- The fleet average no longer conserves to 100 when provisional rows leave the review terms out, since the fleet's rates still include their reviews.
+- A model near the threshold gains or loses review outcome as reviews settle, which shifts its weight denominator and score; the count and rate stay visible throughout.
+- Cost: the threshold is not a per-query option; changing it is a code change and a new decision.
+
 ## Task References
 
+- ORB-23838 — minimum support for the implementer review terms and the model ranking's review outcome.
 - ORB-23066 — optional `until` window end on the agent scorecard CLI, MCP tools and API.
 
 - ORB-17118 — the unit-landed orchestrator principle this decision extends.

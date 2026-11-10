@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use super::measures::{MEASURE_COUNT, Totals, composite, observe, totals};
+use super::measures::{MEASURE_COUNT, Totals, composite, observe, review_supported, totals};
 use super::sample::{BOOTSTRAP_SEED, DRAWS, Record, Rng, by_tier, draw, percentile};
 use crate::application::agents::roles::LedgerRow;
 use crate::application::agents::{CREW_UNKNOWN, MODEL_UNKNOWN};
@@ -195,7 +195,10 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
     let units: Vec<f64> = rows.iter().map(|row| row.units() as f64).collect();
     let z: Vec<Option<f64>> = rows
         .iter()
-        .map(|row| composite(&row.totals(), scales))
+        .map(|row| {
+            let totals = row.totals();
+            composite(&totals, scales, review_supported(&totals))
+        })
         .collect();
     let eligible: Vec<bool> = rows
         .iter()
@@ -218,6 +221,12 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
             (strata, per_tier)
         })
         .collect();
+    // Whether a model's review outcome counts is fixed by its own reviewed
+    // deliveries, not redrawn with each resample.
+    let review_counts: Vec<bool> = rows
+        .iter()
+        .map(|row| review_supported(&row.totals()))
+        .collect();
     let mut rng = Rng::seeded(BOOTSTRAP_SEED);
     let mut draws: Vec<Vec<f64>> = vec![Vec::with_capacity(DRAWS); eligible_rows.len()];
     for _ in 0..DRAWS {
@@ -225,7 +234,7 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
         for (position, &index) in eligible_rows.iter().enumerate() {
             let (strata, per_tier) = &strata[position];
             let sample = draw(&mut rng, strata, per_tier);
-            drawn[index] = composite(&totals(sample), scales).or(z[index]);
+            drawn[index] = composite(&totals(sample), scales, review_counts[index]).or(z[index]);
         }
         for (position, &index) in eligible_rows.iter().enumerate() {
             let z_loo = leave_one_out(&drawn, &units, &eligible, index);
@@ -419,11 +428,9 @@ pub(super) fn tier_points(row: &ModelRow, scales: &[Option<f64>; MEASURE_COUNT])
         .into_iter()
         .map(|(tier, records)| {
             let tasks = records.len();
-            let score = composite(
-                &totals(records.iter().map(|record| &record.observed)),
-                scales,
-            )
-            .map(|z| 100.0 + 10.0 * z);
+            let tier_totals = totals(records.iter().map(|record| &record.observed));
+            let score = composite(&tier_totals, scales, review_supported(&tier_totals))
+                .map(|z| 100.0 + 10.0 * z);
             let priced: Vec<f64> = row
                 .costs
                 .iter()

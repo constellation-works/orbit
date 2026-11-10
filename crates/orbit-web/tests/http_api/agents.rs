@@ -373,9 +373,20 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
             assert_eq!(accepted["counts"]["first_pass_accepts"], 1);
             assert_eq!(repaired["counts"]["reviewer_repairs"], 1);
             assert_eq!(repaired["counts"]["crew_rework"], 0);
-            assert!(
-                as_f64(&accepted["score"]) > as_f64(&repaired["score"]),
-                "an accepted candidate outranks one repaired by its reviewer"
+            // One reviewed delivery each is below the review terms' minimum
+            // support: the verdicts stay counted and rated, but score nothing.
+            assert_eq!(card["review_min_support"], 30);
+            for row in [accepted, repaired] {
+                assert_eq!(
+                    row["provisional_terms"],
+                    json!(["first_pass_accepts", "review_rejects", "reviewer_repairs"])
+                );
+            }
+            assert_eq!(accepted["per_100"]["first_pass_accepts"], 100);
+            assert_eq!(repaired["per_100"]["reviewer_repairs"], 100);
+            assert_eq!(
+                accepted["score"], repaired["score"],
+                "a single reviewed delivery does not separate two rows"
             );
             for row in rows {
                 let weighted = as_f64(&row["counts"]["weighted_landed"]);

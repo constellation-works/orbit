@@ -14,6 +14,7 @@ use super::sample::{DRAWS, Record};
 use super::season::{DEFINITION_VERSION, RankSeasons, Season, SeasonScale};
 use super::{board, sample};
 use crate::OrbitRuntime;
+use crate::application::agents::score::REVIEW_MIN_SUPPORT;
 
 /// The scales a board divides by, and where they came from.
 pub(super) struct Scales {
@@ -122,6 +123,7 @@ pub fn agent_rank(
         "min_tasks": board::MIN_TASKS,
         "min_tiers": board::MIN_TIERS,
         "min_tier_tasks": board::MIN_TIER_TASKS,
+        "review_min_support": REVIEW_MIN_SUPPORT,
         "min_eligible_models": board::MIN_ELIGIBLE_MODELS,
         "band_probability": board::BAND_PROBABILITY,
         "min_cost_coverage": board::MIN_COST_COVERAGE,
