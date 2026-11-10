@@ -1089,7 +1089,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(foreground["nice"], os.getpriority(os.PRIO_PROCESS, 0))
         background = [row for row in observed
                       if row["argv"][0] in ("check", "test", "doc")]
-        self.assertEqual(len(background), 2, observed)
+        self.assertEqual(len(background), 3, observed)
         for row in background:
             self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
 
@@ -1184,8 +1184,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 9, result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
 
-        # --checks: formatting, production Clippy and documentation, with no
-        # guard, self-test, doctests, test build or nextest.
+        # --checks: formatting, production Clippy, documentation and the
+        # Apple-target type-check, with no guard, self-test, doctests, test
+        # build or nextest. The type-check uses plain rustc.
         for call in self.guard_calls.iterdir():
             call.unlink()
         self.log.write_text("")
@@ -1197,12 +1198,19 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
+        apple = ["check", "--workspace", "--lib", "--bins", "--tests", "--target", "aarch64-apple-darwin"]
         for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
-                         ["doc", "--no-deps", "--workspace"]):
+                         ["doc", "--no-deps", "--workspace"], apple):
             self.assertIn(expected, calls)
+        self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]), calls.index(apple))
         self.assertFalse(any("--doc" in call for call in calls), calls)
+        checks_env = [json.loads(line) for line in env_log.read_text().splitlines()]
+        apple_rows = [row for row in checks_env if row["argv"] == apple]
+        self.assertEqual(len(apple_rows), 1, checks_env)
+        self.assertIsNone(apple_rows[0]["RUSTC_WORKSPACE_WRAPPER"])
+        self.assertIsNone(apple_rows[0]["CLIPPY_ARGS"])
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "documentation", "supply-chain"):
+        for phase in ("fmt", "clippy-production", "documentation", "apple-target-check", "supply-chain"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
         self.assertNotIn("repository-guards", phases)
 

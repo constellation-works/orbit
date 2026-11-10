@@ -76,6 +76,7 @@ jobs:
         with:
           toolchain: "1.98.1"
           components: rustfmt, clippy
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: lookup
@@ -121,8 +122,12 @@ jobs:
           shared-key: rust-1.98.1-checks
           save-if: ${{ github.event_name == 'push' }}
 
-      # Produce the same check/doc dependency units, without guards, tests or
-      # shard waits. Failed producers do not save a partially seeded archive.
+      # Produce the same dependency units the Check job compiles: the host
+      # check and doc under the production lint wrapper, then the Apple-target
+      # type-check (libraries, binaries and tests, plain rustc). No guards and
+      # no test execution. The Apple check is last so a failure of an earlier
+      # command still stops the producer. Failed producers do not save a
+      # partially seeded archive.
       - name: Compile Check dependencies
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
         env:
@@ -132,6 +137,9 @@ jobs:
           set -euo pipefail
           cargo check --locked --workspace --lib --bins
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --workspace
+          CC_aarch64_apple_darwin="${GITHUB_WORKSPACE:-.}/scripts/ci-apple-target-cc.sh" \
+            env -u RUSTC_WORKSPACE_WRAPPER -u CLIPPY_ARGS \
+            cargo check --locked --workspace --lib --bins --tests --target aarch64-apple-darwin
 
   seed-build:
     needs: scope
