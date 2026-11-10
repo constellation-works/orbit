@@ -97,6 +97,7 @@ pub(super) fn run<T: Into<Outcome>>(module: &str, table: &str, rows: &[Scenario<
         "distributed_drain::desktop_completion",
         "review_evidence_fulfilment",
         "baseline_hold_tick",
+        "host_os_executor",
         "task_pilot::crew_selection",
         "provider_limit_admission",
         "task_delivery",

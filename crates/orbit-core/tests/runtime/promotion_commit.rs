@@ -12,7 +12,13 @@ use serde_json::json;
 /// and their history order, and gives both events the commit's timestamp.
 #[test]
 fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
-    let root = tempfile::tempdir().expect("tempdir");
+    if !super::dispatch_admission::isolated(
+        "promotion_commit::no_diff_promotion_records_attribution_and_review_in_one_commit",
+    ) {
+        return;
+    }
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(repo.join(".orbit")).expect("workspace");

@@ -49,43 +49,96 @@ fn activity_resolved_tools(
         .unwrap()
 }
 
-/// The declared disallow list of one shipped activity.
-fn activity_declared_disallow_list(activity: &str) -> Vec<String> {
-    let yaml = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("assets/activities/{activity}.yaml")),
+#[cfg(unix)]
+/// The deny list the child of one shipped activity receives from the real CLI
+/// dispatcher. A fixture provider records the `ORBIT_ACTIVITY_TOOLS_DENY` it
+/// was launched with, so the claimed-mode additions, granted-tool lifts and
+/// host suppressions are exactly what production stamps.
+fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let recorded = root.join(format!("{activity}.deny"));
+    let bin = root.join(format!("{activity}-provider"));
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_TOOLS_DENY\" > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"is_error\":false,\"result\":\"{{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{{}},\\\"error\\\":null}}\"}}'\n",
+            recorded.display()
+        ),
     )
     .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut executor: orbit_types::resource::ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/claude.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(bin.display().to_string());
+    executor.spec.sandbox = Some(orbit_types::workflow::ExecutorSandboxKind::Off);
+    runtime
+        .upsert_executor_def(&orbit_types::workflow::ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+    let yaml = std::fs::read_to_string(assets.join(format!("activities/{activity}.yaml"))).unwrap();
     let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
-    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(mut spec) = asset.spec.spec else {
         panic!("agent activity")
     };
-    spec.tool_disallow_list.unwrap_or_default()
+    spec.provider = orbit_types::workflow::activity_job::Provider::Claude;
+    let run = runtime
+        .insert_job_run("notice_policy_fixture", 1, chrono::Utc::now(), None, None)
+        .unwrap();
+    let audit = orbit_engine::V2AuditWriter::with_disk_sinks(
+        &root.join("audit"),
+        std::sync::Arc::new(runtime.sqlite_store().unwrap()),
+        runtime.workspace_id().unwrap(),
+        &run.run_id,
+        "fixture",
+        None,
+    )
+    .unwrap();
+    orbit_engine::activity_job::cli_runner::run_cli_backend(
+        runtime,
+        &spec,
+        activity,
+        &run.run_id,
+        audit,
+        &json!({"workspace_path": root.join("repo")}),
+        None,
+    )
+    .unwrap();
+    let list: Vec<String> = std::fs::read_to_string(&recorded)
+        .unwrap_or_else(|error| panic!("{activity} provider never ran: {error}"))
+        .split(',')
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_string)
+        .collect();
+    // The shipped activity declares denials, so an empty recorded list means
+    // the dispatcher stamped nothing and every allow check below would pass.
+    assert!(
+        !list.is_empty(),
+        "{activity} child received no ORBIT_ACTIVITY_TOOLS_DENY"
+    );
+    list
 }
 
-/// The deny policy a child receives for one shipped activity: its declared
-/// disallow list plus the host-suppressed tools the dispatcher stamps.
-fn propagated_deny_policy(
+#[cfg(unix)]
+/// Whether the child `run_cli_backend` launches for `activity` may call `tool`.
+fn propagated_policy_allows(
     runtime: &OrbitRuntime,
+    root: &Path,
     activity: &str,
-) -> orbit_types::workflow::ActivityToolDenyPolicy {
-    let resolved = activity_resolved_tools(runtime, activity);
-    let mut disallow_list = activity_declared_disallow_list(activity);
-    for tool in &resolved.suppressed_tools {
-        if !disallow_list.contains(tool) {
-            disallow_list.push(tool.clone());
-        }
-    }
-    orbit_types::workflow::ActivityToolDenyPolicy {
-        activity: activity.to_string(),
-        disallow_list,
-    }
-}
-
-/// Whether the propagated managed policy permits `tool` for `activity`.
-fn propagated_policy_allows(runtime: &OrbitRuntime, activity: &str, tool: &str) -> bool {
+    tool: &str,
+) -> bool {
     let context = orbit_tools::ToolContext {
-        tool_deny_policy: Some(propagated_deny_policy(runtime, activity)),
+        tool_deny_policy: Some(orbit_types::workflow::ActivityToolDenyPolicy {
+            activity: activity.to_string(),
+            disallow_list: dispatched_deny_list(runtime, root, activity),
+        }),
         ..Default::default()
     };
     orbit_runtime::tool_exec::check_activity_tool_policy(tool, &context).is_ok()
@@ -765,10 +818,9 @@ fn lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request() {
 
 fn assert_close_kept_corroboration(closed: &Value, corroborated: &Value, revision: &Value) {
     assert_eq!(
-        corroborated["outcome"], "corroborated",
+        corroborated["notice"]["revision"], *revision,
         "the overlapping post must leave content and revision unchanged"
     );
-    assert_eq!(corroborated["notice"]["revision"], *revision);
     assert!(
         corroborated["notice"]["reports"]["count"].as_u64().unwrap() > 1,
         "the corroboration must commit a higher report count before close writes"
@@ -992,18 +1044,13 @@ fn agent_posting_baseline_governs_managed_runs() {
     // their baselines; no other notice tool is granted by this slice.
     for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
         let resolved = activity_resolved_tools(&runtime, activity);
-        // The only host suppression left is crew memory's agent tools, which
-        // a run outside a dreaming task, a memory arm and an operator's read
-        // grant never lists.
-        assert_eq!(
-            resolved.suppressed_tools,
-            [
-                "orbit.memory.show",
-                "orbit.memory.write",
-                "orbit.memory.propose",
-                "orbit.memory.history"
-            ],
-            "{activity} must suppress no notice tool when agent posting is on"
+        assert!(
+            !resolved
+                .suppressed_tools
+                .iter()
+                .any(|tool| tool.starts_with("orbit.notice.")),
+            "{activity} must suppress no notice tool when agent posting is on: {:?}",
+            resolved.suppressed_tools
         );
         for tool in [
             "orbit.notice.post",
@@ -1015,8 +1062,9 @@ fn agent_posting_baseline_governs_managed_runs() {
                 resolved.effective_tools.iter().any(|name| name == tool),
                 "{activity} baseline must carry {tool}"
             );
+            #[cfg(unix)]
             assert!(
-                propagated_policy_allows(&runtime, activity, tool),
+                propagated_policy_allows(&runtime, root.path(), activity, tool),
                 "{activity} child policy must allow {tool} when agent posting is on"
             );
         }

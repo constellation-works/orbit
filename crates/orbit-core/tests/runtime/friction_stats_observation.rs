@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use orbit_common::fs::io::{FileLockProbe, probe_file_lock, with_exclusive_file_lock};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use serde_json::json;
@@ -68,6 +68,18 @@ fn friction_stats_reads_a_decided_commit_without_waiting_for_its_bundle_writer()
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
+        .unwrap();
+    // Attribute the backlog task, so only its status keeps it out of the count.
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                implemented_by: Some(Some("grok".into())),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
         .unwrap();
     let before = runtime
         .run_tool("orbit.friction.stats", json!({}))
