@@ -227,6 +227,13 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             logs.push(json!({"job_id":root.job_id,"authenticated":"conclusion"}));
             continue;
         }
+        if handoff_step_authenticated(root, job) {
+            // The provider's failed-step name is the evidence; a handoff
+            // job's log is often truncated or has no failing command.
+            root_ids.insert(root.job_id);
+            logs.push(json!({"job_id":root.job_id,"authenticated":"failed_step"}));
+            continue;
+        }
         let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
         let failed_steps = job["steps"]
             .as_array()
@@ -327,6 +334,28 @@ fn conclusion_authenticated(roots: &[CiRerunRoot], job_id: u64, job: &Value) -> 
                 && root.classification == "transient"
                 && root.signature == format!("concluded {conclusion}")
         })
+}
+
+/// A transient root whose signature names the dependency-handoff step the
+/// provider reports as the failed job's one failed step. Which step names
+/// are handoffs is the caller's configured classification; this binds the
+/// root to the provider's own step listing.
+fn handoff_step_authenticated(root: &CiRerunRoot, job: &Value) -> bool {
+    let Some(step) = root
+        .signature
+        .strip_prefix(orbit_types::workflow::CI_HANDOFF_STEP_SIGNATURE_PREFIX)
+    else {
+        return false;
+    };
+    let failed_steps = job["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|candidate| candidate["conclusion"] == "failure")
+        .collect::<Vec<_>>();
+    root.classification == "transient"
+        && job["conclusion"] == "failure"
+        && matches!(failed_steps.as_slice(), [only] if only["name"].as_str() == Some(step))
 }
 
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a

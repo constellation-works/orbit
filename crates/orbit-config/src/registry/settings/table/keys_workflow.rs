@@ -64,6 +64,15 @@ macro_rules! with_workflow_keys {
         allowed: integers(1, 3600, "seconds"),
         resolve: |raw: Option<u64>| resolve_bounded_range(raw, 60, "workflow.ci_infrastructure_retry.backoff_seconds"),
     },
+    workflow_ci_infrastructure_retry_handoff_steps: Vec<String> => Vec<String> {
+        key: "workflow.ci_infrastructure_retry.handoff_steps", value_type: "array<string>",
+        description: "Failed-step name patterns that mark a CI job stopped while obtaining another job's output.",
+        section: ConfigSection::Delivery, order: 171,
+        tier: ConfigKeyTier::Advanced,
+        allowed: format("step names; `*` matches any characters"),
+        detail: "When every failed job stopped in a matching step, the set gets the infrastructure rerun from its step names alone, even when a log is unreadable. Empty declares none.",
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.ci_infrastructure_retry.handoff_steps"),
+    },
     workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
         key: "workflow.generated_paths", value_type: "table<string,string>",
         description: "Generated files and the command that regenerates each one.",

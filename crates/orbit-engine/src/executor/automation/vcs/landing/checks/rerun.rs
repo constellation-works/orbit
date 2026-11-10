@@ -141,7 +141,13 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     // A failed job that is neither a dependency record nor a rerun root: its
     // own class (candidate, base, inconclusive) has a route beside the records.
     let mut other_failure = false;
-    if let Some((run_id, pre_roots)) =
+    // [ORB-23813] Every failed job stopped in a declared dependency-handoff
+    // step: the failed-step names are the classification, so no log is read.
+    let handoff_set = handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed);
+    let roots_preclassified = handoff_set.is_some();
+    if let Some((run_id, handoff_roots)) = handoff_set {
+        roots.insert(run_id, handoff_roots);
+    } else if let Some((run_id, pre_roots)) =
         try_conclusion_transient(host, workspace, &jobs, &runs, deadline_ms, diagnostic)?
     {
         // Conclusions (and a pure ci-await of them) are the classification.
@@ -290,7 +296,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             }
         }
     }
-    if !conclusion_set {
+    if !conclusion_set && !roots_preclassified {
         // [ORB-20771] Only records with no other failed sibling hold here. A
         // sibling the logs cannot tie to a changed file (a guardrail such as a
         // stale body-history check) is still a candidate failure, and it takes
@@ -830,6 +836,73 @@ fn conclusion_root(job: &CiCommitJobEvidence) -> Option<CiRerunRoot> {
         classification: CheckFailureClass::Transient.as_str().into(),
         signature: super::jobs::conclusion_signature(conclusion),
     })
+}
+
+/// [ORB-23813] The rerun roots of a failed set in which every failed job
+/// stopped in a dependency-handoff step: a step `patterns`
+/// (`workflow.ci_infrastructure_retry.handoff_steps`) name, where the job
+/// waits for or downloads another job's output. The provider's failed-step
+/// name is the evidence, so no log is read and an unreadable one cannot turn
+/// the set inconclusive.
+///
+/// `None` keeps today's per-job classification: no patterns, a failed check
+/// no failed job answers, failed jobs in more than one run, or any
+/// unsuccessful job in the run that is not a `failure` whose one failed step
+/// matches (another step, several failed steps, or a cancelled or timed-out
+/// conclusion, which keeps its own transient route).
+pub(in crate::executor::automation::vcs) fn handoff_step_set(
+    patterns: &[String],
+    jobs: &[CiCommitJobEvidence],
+    failed: &[(Option<String>, String)],
+) -> Option<(u64, Vec<CiRerunRoot>)> {
+    if patterns.is_empty() || failed.is_empty() {
+        return None;
+    }
+    let mut runs = BTreeSet::new();
+    for check in failed {
+        let mut answering = jobs
+            .iter()
+            .filter(|job| unsuccessful(job) && answers(job, check))
+            .peekable();
+        answering.peek()?;
+        for job in answering {
+            runs.insert(job.run_id.number()?);
+        }
+    }
+    let [run_id] = runs.into_iter().collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let mut roots = Vec::new();
+    for job in jobs
+        .iter()
+        .filter(|job| job.run_id.number() == Some(run_id) && unsuccessful(job))
+    {
+        if job.conclusion.value() != Some(&CiJobConclusion::Failure) {
+            return None;
+        }
+        let step = handoff_step(patterns, job)?;
+        roots.push(CiRerunRoot {
+            job_id: job.job_id.number()?,
+            check: job_label(job),
+            classification: CheckFailureClass::Transient.as_str().into(),
+            signature: orbit_types::workflow::ci_handoff_step_signature(step),
+        });
+    }
+    (!roots.is_empty()).then_some((run_id, roots))
+}
+
+/// The provider's one failed step of `job` when `patterns` name it.
+fn handoff_step<'a>(patterns: &[String], job: &'a CiCommitJobEvidence) -> Option<&'a str> {
+    let step = job.failed_step.text()?;
+    if let Some(steps) = job.failed_steps.value() {
+        let [only] = steps.as_slice() else {
+            return None;
+        };
+        if only.text() != Some(step) {
+            return None;
+        }
+    }
+    orbit_types::workflow::ci_handoff_step_matches(patterns, step).then_some(step)
 }
 
 fn cancellation_timeout_reason(roots: &[CiRerunRoot]) -> String {
