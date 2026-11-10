@@ -18,6 +18,19 @@ export function getSelectedWorkspaces() {
   return currentWorkspace ? [currentWorkspace] : [...selectedWorkspaces];
 }
 
+/// Whether a `/api/workspaces` row is one this host owns. A row with no
+/// recorded role (single-host installs, older registrations and older
+/// hosts) counts as owned; only an explicit `replica` is a follower's
+/// checkout, which has no board on this host.
+export function isOwnedWorkspace(workspace) {
+  return !!workspace && workspace.checkout_role !== "replica";
+}
+
+/// The owned rows of a `/api/workspaces` list, in list order.
+export function ownedWorkspaces(workspaces) {
+  return (Array.isArray(workspaces) ? workspaces : []).filter(isOwnedWorkspace);
+}
+
 export function setSelectedWorkspaces(ids) {
   const next = [...new Set(ids)].sort();
   if (!next.length) return;

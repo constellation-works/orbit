@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder};
 use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
 use orbit_core::{FleetReadinessFacts, JobRun, JobRunState, OrbitRuntime};
+use orbit_types::workspace::WorkspaceCheckoutRole;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -35,6 +36,16 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
         Ok(values) => Json(Value::Array(values)).into_response(),
         Err(response) => *response,
     }
+}
+
+/// Whether this host owns the checkout for `entry`. A binding with no
+/// recorded role (single-host installs, older registrations) counts as owned.
+pub(crate) fn entry_is_owned(entry: &crate::state::WsEntry) -> bool {
+    entry
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.checkout_role)
+        != Some(WorkspaceCheckoutRole::Replica)
 }
 
 fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
@@ -68,6 +79,8 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
                 "status": if entry.active { "active" } else { "invalid" },
                 "is_default": default == Some(entry.id.as_str()),
                 "lease_enabled": lease_enabled,
+                "checkout_role": entry.binding.as_ref().and_then(|binding| binding.checkout_role).map(|role| role.as_str()),
+                "owner_machine_id": entry.binding.as_ref().and_then(|binding| binding.owner_machine_id.clone()),
             })
         })
         .collect()
@@ -349,6 +362,7 @@ fn aggregate_task_entries<'a>(
     pinned
         .entries()
         .iter()
+        .filter(|entry| entry_is_owned(entry))
         .filter(|entry| query.workspaces.is_empty() || query.workspaces.contains(&entry.id))
         .collect()
 }
@@ -383,7 +397,7 @@ fn aggregate_task_scope(pinned: &Pinned) -> String {
     let mut workspace_ids = pinned
         .entries()
         .iter()
-        .filter(|entry| entry.active)
+        .filter(|entry| entry.active && entry_is_owned(entry))
         .map(|entry| entry.id.as_str())
         .collect::<Vec<_>>();
     workspace_ids.sort_unstable();
@@ -484,7 +498,11 @@ pub(super) fn all_job_runs_json(
     scope: &JobRunScope,
 ) -> Value {
     let pinned = state.pin();
-    let entries = pinned.entries();
+    let entries: Vec<&crate::state::WsEntry> = pinned
+        .entries()
+        .iter()
+        .filter(|entry| entry_is_owned(entry))
+        .collect();
     // Per workspace, read only its bounded page (at most `limit` runs), its
     // exact count and its page's task titles. Each workspace's reads are
     // independent (its own runtime, run store and task store, whose title

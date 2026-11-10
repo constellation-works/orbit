@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -1408,7 +1408,11 @@ async function initWorkspaceSelector() {
   // A host switch while the list was in flight retired it: the next host's
   // workspaces are loaded on its own.
   if (hostRevision !== getHostRevision()) return false;
-  dashboardWorkspaces = Array.isArray(entries) ? entries : [];
+  // Only the workspaces this host owns have a board here. A follower's
+  // replica checkouts stay in the server's list (with `checkout_role`), but
+  // the dropdown, the aggregate and every reader of this list follow the
+  // owned subset; a row with no role counts as owned.
+  dashboardWorkspaces = ownedWorkspaces(entries);
   // Names, picker order and workspace colours, before the picker is built
   // from them.
   setWorkspaceNames(dashboardWorkspaces);
@@ -1426,6 +1430,12 @@ async function initWorkspaceSelector() {
       setWorkspace(only.id);
       // A link asking for "all" has nothing to aggregate here; repair the address.
       if (linkedAll) persistScopeToUrl();
+    } else if (getWorkspace() || getSelectedWorkspaces().length) {
+      // This host owns nothing (its checkouts are all replicas, or it has
+      // none): a remembered or linked replica must not open its board, so
+      // clear the selection and let the panels show their empty state.
+      setWorkspace(null);
+      persistScopeToUrl();
     }
     return true; // single mode: selected implicitly, no selector needed
   }
