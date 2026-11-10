@@ -142,7 +142,13 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   touches the same file, because that task does not request it. Build and CI definitions and
   code never match the default. `[]` locks every entry. Owner pull admission still checks a
   claim's full declared footprint against in-flight tasks, so a remote claim may wait on a
-  shared Markdown file that a local wave admits.
+  shared Markdown file that a local wave admits. The reverse holds too: the work-start guard
+  (`guard_ordinary_footprint`) compares a task's whole canonical context with every protecting
+  claim's frozen footprint, unlocked entries included, so the backlog snapshot and explicit
+  `list_backlog_tasks` defer a task that guard would refuse (`ClaimHolders::refusing_work_start`,
+  sharing `claim_refusing_work_start`) as `context_lock_conflict` naming the claim, rather
+  than admit it and fail it at worktree setup on every pass [ORB-23894]. A known no-diff
+  holder's claim still fences only its own task.
 - `workflow.lock_modes` decides which overlaps block. It is an ordered list of
   `{pattern, mode}` entries, where `pattern` is a Rust regex searched for in the selector's
   normalized anchor path (the path `OverlapScope::Anchored` holds) and `mode` is `exclusive`

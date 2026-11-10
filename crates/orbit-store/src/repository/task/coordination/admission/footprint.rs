@@ -28,11 +28,9 @@ impl TaskCommitBoundary {
             return Ok(());
         } // legacy no-context chore semantics
         let canonical = canonical_footprint(files, &checkout.repo_root)?;
-        let lock_modes = self.store.footprint_lock_modes();
-        if let Some(conflicting_claim) = claims.iter().find(|claim| {
-            claim.phase.protects_footprint()
-                && lock_modes.footprints_block(&canonical, &claim.footprint)
-        }) {
+        if let Some(conflicting_claim) =
+            claim_refusing_work_start(&claims, &canonical, self.store.footprint_lock_modes())
+        {
             return Err(OrbitError::InvalidInput(format!(
                 "task footprint overlaps an execution claim (task {}, run {})",
                 conflicting_claim.task_id, conflicting_claim.run_context.run_id

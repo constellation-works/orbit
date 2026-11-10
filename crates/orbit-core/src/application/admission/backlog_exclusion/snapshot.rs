@@ -657,6 +657,39 @@ pub(super) fn backlog_snapshot_in_mode(
             );
         }
     }
+    // [ORB-23894] The work-start guard compares a task's whole canonical
+    // context with every protecting claim's frozen footprint: unlocked paths
+    // count there, and a published resume or no-diff task is not exempt
+    // (a known no-diff holder still locks nothing, as above). A
+    // task it would refuse waits here, naming the claim, instead of being
+    // admitted, failed at worktree setup and readmitted every pass.
+    backlog.retain(|task| {
+        let Some((claim, overlapping)) =
+            claims.refusing_work_start(task, workspace_root, lock_modes, |holder| {
+                task_lookup
+                    .get(holder)
+                    .is_some_and(|holder| is_no_diff_expected(&holder.tags))
+            })
+        else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::ContextLockConflict,
+            conflicts: overlapping
+                .into_iter()
+                .map(|requested_file| BacklogTaskConflict {
+                    requested_file,
+                    locking_task_id: claim.task_id.clone(),
+                })
+                .collect(),
+            crew: None,
+            // Another task's claim is named from `blocked_by` where the wait
+            // is reported; a claim on this task itself is named here.
+            detail: (claim.task_id == task.id).then(|| claim_holders::claim_detail(claim)),
+        });
+        false
+    });
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
     let footprint_waits = footprint_waits(runtime, action, backlog.iter().copied(), Utc::now())?;
     let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();

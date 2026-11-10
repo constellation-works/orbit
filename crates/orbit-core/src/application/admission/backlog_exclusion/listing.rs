@@ -8,7 +8,7 @@ use orbit_types::task::{
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
-use super::super::claim_holders::claim_detail;
+use super::super::claim_holders::{ClaimHolders, claim_detail};
 use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
@@ -335,12 +335,15 @@ pub(crate) fn list_backlog_tasks(
             }
             tasks.push(task);
         }
-        // No-diff work waits on other holders using its declared surface,
-        // but must not publish that surface as an owner-wave reservation.
-        // Known no-diff claim holders remain exempt; missing metadata does
-        // not exempt a frozen claim footprint.
-        if !live_claims.is_empty() && tasks.iter().any(|task| is_no_diff_expected(&task.tags)) {
-            let no_diff_holders = runtime
+        // [ORB-23894] Nor may an override start a task the work-start guard
+        // would refuse for an execution claim over its whole context, no-diff
+        // work included. Known no-diff claim holders lock nothing for other
+        // tasks; missing metadata does not exempt a frozen claim footprint.
+        let holders = ClaimHolders::from_claims(&live_claims);
+        let no_diff_holders = if live_claims.is_empty() || tasks.is_empty() {
+            std::collections::BTreeSet::new()
+        } else {
+            runtime
                 .stores()
                 .tasks()
                 .task_envelopes_for_ids(&claimed_tasks)
@@ -351,33 +354,26 @@ pub(crate) fn list_backlog_tasks(
                 .into_iter()
                 .filter(|task| is_no_diff_expected(&task.tags))
                 .map(|task| task.id)
-                .collect::<std::collections::BTreeSet<_>>();
-            tasks.retain(|task| {
-                if !is_no_diff_expected(&task.tags) {
-                    return true;
-                }
-                let footprint = lock_context_files_for_task(
-                    task,
-                    runtime.paths().repo_root.as_path(),
-                    runtime.unlocked_context_paths(),
-                );
-                let Some(claim) = live_claims.iter().find(|claim| {
-                    !no_diff_holders.contains(&claim.task_id)
-                        && runtime
-                            .footprint_lock_modes()
-                            .footprints_block(&footprint, &claim.footprint)
-                }) else {
-                    return true;
-                };
-                excluded.push(claim_lock_exclusion(
-                    runtime,
-                    task.id.clone(),
-                    &footprint,
-                    claim,
-                ));
-                false
-            });
-        }
+                .collect()
+        };
+        let workspace_root = runtime.paths().repo_root.as_path();
+        tasks.retain(|task| {
+            let Some((claim, overlapping)) = holders.refusing_work_start(
+                task,
+                workspace_root,
+                runtime.footprint_lock_modes(),
+                |holder| no_diff_holders.contains(holder),
+            ) else {
+                return true;
+            };
+            excluded.push(claim_lock_exclusion(
+                runtime,
+                task.id.clone(),
+                &overlapping,
+                claim,
+            ));
+            false
+        });
         // Explicit selection still takes the same admission section as an
         // automatic wave. A follower may claim an overlapping footprint while
         // the per-task checks above run; defer it before creating a leaf run.
