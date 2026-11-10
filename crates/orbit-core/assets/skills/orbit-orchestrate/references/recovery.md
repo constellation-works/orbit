@@ -107,6 +107,19 @@ preservation recorded when there is one to resume — and an update with
 `--discard-candidate` still discards the candidate and closes its pull
 requests so the next run implements fresh.
 
+When the finished candidate has a failure-handoff pull request, the operator can
+choose **Approve and land** on its block decision, or use
+`orbit decision answer <request-id> land`. It merges the green handoff and completes
+the task without another run. Agents, drains and automatic corpus rules cannot
+choose this answer. A required pre-landing review must have settled for the exact
+candidate before the answer is offered. At answer time a missing receipt, live run,
+changed specification, closed or draft PR, moved head, failed or pending required
+check, wrong target or conflicting merge refuses it with the request still open
+and nothing changed. A matching `completion.hold` rule is recorded and the human
+approval satisfies it. Requeue keeps its normal meaning. If the operator requeues
+first and then merges that same handoff PR on the forge, external-merge settlement
+also completes the preserved backlog task; it needs no forced status transition.
+
 When a run stops on a rebase conflict, final recovery can repair the conflict
 files and resume. The next conflict recovery adopts those repairs and continues
 the stopped rebase, so don't abort it or stage files by hand. Adoption still

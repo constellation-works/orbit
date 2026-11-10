@@ -104,7 +104,7 @@ pub fn bound_branch_pull_request(branch: &str) -> ExecRequest {
 /// required, so this asks the GraphQL API, as completion's watcher does.
 pub fn pull_request_blockers(number: u64) -> ExecRequest {
     let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
-        pullRequest(number:$pr){state body author{login} headRefName headRefOid mergeable \
+        pullRequest(number:$pr){state body author{login} headRefName headRefOid baseRefName isDraft mergeable \
         commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){\
         pageInfo{hasNextPage} nodes{__typename \
         ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr)} \

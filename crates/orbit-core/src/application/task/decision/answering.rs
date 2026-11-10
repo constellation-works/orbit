@@ -87,14 +87,21 @@ impl OrbitRuntime {
                     .find(|candidate| candidate.id == request_id)
                     .ok_or_else(not_found)?;
                 ensure_request_answerable(&request, answer_id)?;
-                deferred = self.apply_decision_answer(
-                    &request,
-                    answer_id,
-                    note.as_deref(),
-                    &actor_label,
-                    provenance.as_deref(),
-                )?;
-
+                let lands_handoff = request
+                    .answers
+                    .iter()
+                    .find(|answer| answer.id == answer_id)
+                    .and_then(|answer| answer.option.as_ref())
+                    .is_some_and(|option| option.action == Some(DecisionAction::Land));
+                if !lands_handoff {
+                    deferred = self.apply_decision_answer(
+                        &request,
+                        answer_id,
+                        note.as_deref(),
+                        &actor_label,
+                        provenance.as_deref(),
+                    )?;
+                }
                 let now = chrono::Utc::now();
                 let resolution = DecisionResolution {
                     request_id: request.id.clone(),
@@ -118,14 +125,18 @@ impl OrbitRuntime {
                     decision: None,
                 };
                 let corpus_append = self.task_corpus_append_for_decision(&request, &resolution)?;
-                self.stores().task_records().update(
-                    &task_id,
-                    TaskRecordUpdateParams {
-                        actor: actor_label.clone(),
-                        append_history: std::iter::once(entry).chain(corpus_append).collect(),
-                        ..Default::default()
-                    },
-                )?;
+                if lands_handoff {
+                    self.land_handoff_decision(&request, &resolution, entry, corpus_append)?;
+                } else {
+                    self.stores().task_records().update(
+                        &task_id,
+                        TaskRecordUpdateParams {
+                            actor: actor_label.clone(),
+                            append_history: std::iter::once(entry).chain(corpus_append).collect(),
+                            ..Default::default()
+                        },
+                    )?;
+                }
                 answered = self
                     .get_task_decision_requests(&task_id)?
                     .into_iter()
@@ -519,6 +530,9 @@ impl OrbitRuntime {
                 });
                 self.reject_task(task_id, reason, Some(comment))?;
                 return Ok(None);
+            }
+            Some(DecisionAction::Land) => {
+                return Err(refuse("landing requires the operator handoff route"));
             }
             Some(DecisionAction::Archive) => {
                 params.status = Some(TaskStatus::Archived);

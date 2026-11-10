@@ -21,6 +21,13 @@ pub(in crate::application) trait TaskReviewPort {
     /// The current effective review admission, before any per-run request.
     fn forecast_review_admission(&self) -> Result<ReviewAdmission, OrbitError>;
 
+    /// Whether every current or captured pre-landing review covers this exact handoff head.
+    fn handoff_landing_review_ready(
+        &self,
+        task: &Task,
+        head: Option<&str>,
+    ) -> Result<bool, OrbitError>;
+
     /// The review gate evidence for `task`, read from the certificate its
     /// `artifacts` list; `None` when no gate ever settled it.
     fn task_review_evidence(

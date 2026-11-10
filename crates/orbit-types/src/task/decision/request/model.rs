@@ -315,7 +315,9 @@ impl DecisionRequest {
                     .as_ref()
                     .and_then(|option| option.action.as_ref())
                 {
-                    Some(DecisionAction::Reject) => DecisionRiskTier::Irreversible,
+                    Some(DecisionAction::Reject | DecisionAction::Land) => {
+                        DecisionRiskTier::Irreversible
+                    }
                     Some(_) => DecisionRiskTier::Reversible,
                     None if answer.id == "dismiss" => DecisionRiskTier::Routine,
                     None if answer

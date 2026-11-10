@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, names_task_delivery_pull_request};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, names_task_delivery_pull_request,
+};
 use orbit_types::workflow::ConventionTemplate;
 use orbit_types::workflow::handoff::{
     HandoffDelivery, LandingAttemptState, LandingStartState, LandingStopEvidence,
@@ -19,6 +21,7 @@ pub(super) struct Candidate {
     pub(super) task: Task,
     /// Accepted handoff and released claim PRs, each with its landing branch.
     follower_prs: BTreeMap<u64, String>,
+    requeued_handoff: Option<u64>,
     /// The task's handed-off claim whose landing stopped or whose completion
     /// authority was revoked. Only its candidate PR settles it with the claim.
     pub(super) revoked: Option<RevokedHandoff>,
@@ -61,6 +64,9 @@ impl Candidate {
     pub(super) fn pr_numbers(&self) -> Vec<u64> {
         if let Some(revoked) = &self.revoked {
             return vec![revoked.pull_request];
+        }
+        if let Some(number) = self.requeued_handoff {
+            return vec![number];
         }
         let mut numbers = self
             .task
@@ -138,10 +144,30 @@ impl OrbitRuntime {
     ) -> Result<Candidate, String> {
         if !SETTLEABLE_STATUSES.contains(&task.status) {
             return Err(format!(
-                "it is '{}'; only a blocked, in-progress or review task settles",
+                "it is '{}'; only a blocked, in-progress, review or preserved failure-handoff backlog task settles",
                 task.status
             ));
         }
+        let requeued_handoff = if task.status == TaskStatus::Backlog {
+            let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
+            let receipt = self.handoff_receipt(&task).map_err(|e| e.to_string())?;
+            match receipt {
+                Some(receipt)
+                    if super::super::requeue::current_run_requeue_stands(&task, &history)
+                        && task.spec_digest_matches(&receipt.task_spec_digest) =>
+                {
+                    Some(
+                        receipt
+                            .pull_request
+                            .parse::<u64>()
+                            .map_err(|e| e.to_string())?,
+                    )
+                }
+                _ => return Err("backlog task has no preserved failure-handoff requeue".into()),
+            }
+        } else {
+            None
+        };
         if let Some(live) = self.live_task_run(&task) {
             return Err(format!("{live}; that run lands or fails the task itself"));
         }
@@ -167,6 +193,7 @@ impl OrbitRuntime {
         };
         let candidate = Candidate {
             follower_prs,
+            requeued_handoff,
             task,
             revoked,
         };
@@ -387,6 +414,11 @@ impl OrbitRuntime {
         let task = &candidate.task;
         merged
             .iter()
+            .filter(|merged| {
+                candidate
+                    .requeued_handoff
+                    .is_none_or(|number| merged.pull.number == number)
+            })
             .filter(|merged| {
                 names_delivery(
                     &self

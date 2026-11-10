@@ -33,7 +33,7 @@ fn option(
 
 /// Raise a block-triage request on the blocked fixture task with one option
 /// that rewrites the description and one that only requeues.
-fn raise_block_triage(f: &Fixture) -> DecisionRequest {
+pub(super) fn raise_block_triage(f: &Fixture) -> DecisionRequest {
     let blocked_at = f
         .runtime
         .get_task_history(&f.task)

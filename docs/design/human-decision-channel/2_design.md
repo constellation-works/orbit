@@ -105,6 +105,24 @@ per request:
   assessment of edited description/criteria (drain repilot, `orbit task repilot <id>`,
   `orbit.task.recover` action `repilot`, or task update `repilot: true`). A held warning retains
   one decision across routine windows until answered or explicitly reassessed.
+- **Accept a failure handoff:** a block request with a plain requeue option also offers
+  **Approve and land** (`land`). This is derived when read, so a request raised just before
+  publication and requests stored by older builds gain it without rewriting history.
+  It carries the requeue option's sign-off text. Only a human operator can apply it;
+  agent sessions and automatic corpus rules cannot. Agents cannot propose `land` in an
+  option set. If either current workspace policy
+  or the run's captured admission requires review before landing, the answer is hidden
+  until an authenticated, passed review certificate covers the exact candidate and task.
+  At answer time Orbit requires a stopped run, a failure-handoff receipt for the unchanged
+  task, an open non-draft delivery PR into its target branch at exactly the receipt head,
+  passed required checks and a clean merge. A refusal names the condition, changes nothing
+  and leaves the request open. The merge uses an exact-head lease and normal forge protection.
+  Completion, merge evidence, the answering human's sign-off and `decision_answered` are
+  saved together. A matching `completion.hold` rule is recorded and the human approval
+  satisfies it. Requeue keeps its existing behavior. The closed `DecisionAction` enum
+  still refuses unknown tags: a build predating `land` cannot deserialize a stored option
+  carrying it and cannot silently interpret it as requeue. Existing stored options retain
+  their original shape and behavior.
 - **Block triage `report` / final-recovery escalation:** answers are `done` (the
   `human_action:` the readout carries,
   `crates/orbit-core/src/application/task/blocked_recovery/readout.rs`, has been
