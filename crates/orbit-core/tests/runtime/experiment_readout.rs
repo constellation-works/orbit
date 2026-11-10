@@ -1666,6 +1666,153 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
     );
 }
 
+#[test]
+fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_warns_when_primary_is_unmeasured_on_every_settled_task",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "primary-all-unmeasured",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    let started = runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    assert_eq!(started.status, "running");
+    let start_event = started
+        .events
+        .iter()
+        .find(|event| event.kind == "started")
+        .unwrap();
+    let start_warnings = start_event.detail["warnings"].as_array().unwrap();
+    assert_eq!(start_warnings.len(), 1);
+    let start_warning = start_warnings[0].as_str().unwrap();
+    assert!(
+        start_warning.contains("first_pass_acceptance")
+            && start_warning.contains("review.timing")
+            && start_warning.contains("no enrolled task has a review gate settlement"),
+        "{start_warning}"
+    );
+
+    for arm in ["control", "treatment"] {
+        for _ in 0..2 {
+            let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+            runtime.archive_task(&task_id).unwrap();
+        }
+    }
+    // A still-open task must not suppress the warning.
+    enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let warning = readout
+        .warnings
+        .iter()
+        .find(|warning| warning.kind == "primary_all_unmeasured")
+        .expect("primary_all_unmeasured warning");
+    assert!(
+        warning.message.contains("first_pass_acceptance")
+            && warning.message.contains("`control`: 2")
+            && warning.message.contains("`treatment`: 2")
+            && warning
+                .message
+                .contains("no enrolled task has a review gate settlement"),
+        "{}",
+        warning.message
+    );
+    assert!(
+        !readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "primary_unmeasured"),
+        "the no-source-series warning must stay distinct"
+    );
+    let repairs = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "review_repairs")
+        .unwrap();
+    for arm in &repairs.arms {
+        assert_eq!(arm.estimate.n, 0, "{}", arm.arm);
+        assert_eq!(arm.unmeasured, 2, "{}", arm.arm);
+    }
+    let primary = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "first_pass_acceptance")
+        .unwrap();
+    for arm in &primary.arms {
+        assert_eq!(arm.estimate.n, 0, "{}", arm.arm);
+        assert_eq!(arm.unmeasured, 2, "{}", arm.arm);
+    }
+
+    // A task with a review gate settlement is measured (zero repairs for an
+    // `accept`), and one measured primary outcome silences the warning.
+    use orbit_core::application::task::TaskUpdateParams;
+    let settled = enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+    runtime
+        .force_update_task_with_identity(
+            &settled,
+            TaskUpdateParams {
+                comment: Some(
+                    "before-landing review settled attempt `attempt-1`: verdict **accept**".into(),
+                ),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    runtime.archive_task(&settled).unwrap();
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert!(
+        !readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "primary_all_unmeasured"),
+        "a measured primary outcome in one active arm silences the warning"
+    );
+    let repairs = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "review_repairs")
+        .unwrap();
+    let control = repairs
+        .arms
+        .iter()
+        .find(|arm| arm.arm == "control")
+        .unwrap();
+    assert_eq!(control.estimate.n, 1);
+    assert_eq!(control.estimate.mean, Some(0.0));
+    assert_eq!(control.unmeasured, 2);
+}
+
 mod delivery;
 mod per_line;
 mod shadow_memory;

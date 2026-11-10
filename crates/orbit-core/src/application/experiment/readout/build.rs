@@ -11,7 +11,9 @@ use crate::application::crew_memory::CREW_MEMORY_DREAM_TAG;
 use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };
-use crate::application::experiment::definition::{ExperimentOverlay, validate_metric};
+use crate::application::experiment::definition::{
+    ExperimentOverlay, experiment_metric_is_review_derived, validate_metric,
+};
 use crate::application::experiment::memory_arm_names;
 use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
@@ -219,6 +221,52 @@ fn build_readout(
                 primary.metric
             ),
         });
+    }
+    if let Some(primary) = primary
+        && primary.measured
+    {
+        let active_arms: Vec<&str> = record
+            .arms
+            .iter()
+            .filter(|arm| arm.retired_segment.is_none())
+            .map(|arm| arm.name.as_str())
+            .collect();
+        let active_estimates: Vec<_> = primary
+            .arms
+            .iter()
+            .filter(|estimate| active_arms.contains(&estimate.arm.as_str()))
+            .collect();
+        let any_measured = active_estimates
+            .iter()
+            .any(|estimate| estimate.estimate.n > 0);
+        let unmeasured: Vec<_> = active_estimates
+            .iter()
+            .filter(|estimate| estimate.unmeasured > 0)
+            .collect();
+        let unmeasured_total: usize = unmeasured.iter().map(|estimate| estimate.unmeasured).sum();
+        if !any_measured && unmeasured_total > 0 {
+            let per_arm = unmeasured
+                .iter()
+                .map(|estimate| format!("`{}`: {}", estimate.arm, estimate.unmeasured))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut message = format!(
+                "the primary metric `{}` is unmeasured on every settled task in every active arm (settled and unmeasured per arm: {per_arm}), so no verdict can be read on it",
+                primary.metric
+            );
+            if experiment_metric_is_review_derived(&primary.metric)
+                && !tasks
+                    .iter()
+                    .filter(|task| active_arms.contains(&task.arm.as_str()))
+                    .any(|task| task.has_review_settlement)
+            {
+                message.push_str(": no enrolled task has a review gate settlement");
+            }
+            warnings.push(ReadoutWarning {
+                kind: "primary_all_unmeasured",
+                message,
+            });
+        }
     }
     let horizon_reached = verdict::horizon_reached(record, primary, horizon_at, now);
     let undelivered = verdict::undelivered_reasons(&arms, min_delivered_rate, horizon_reached);

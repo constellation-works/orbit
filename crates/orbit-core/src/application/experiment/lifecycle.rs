@@ -15,9 +15,9 @@ use orbit_store::contracts::{
 use serde_json::{Value, json};
 
 use super::definition::{
-    ArmDefinition, EXPERIMENT_METRICS, ExperimentOverlay, experiment_metric_is_step_local,
-    parse_arms, parse_guardrails, parse_population, require_lines_changed_guardrail,
-    validate_handle, validate_metric,
+    ArmDefinition, EXPERIMENT_METRICS, ExperimentOverlay, experiment_metric_is_review_derived,
+    experiment_metric_is_step_local, parse_arms, parse_guardrails, parse_population,
+    require_lines_changed_guardrail, validate_handle, validate_metric,
 };
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
@@ -218,10 +218,11 @@ impl OrbitRuntime {
                 running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);
                 experiment.status = RUNNING.into();
                 experiment.segment = 1;
-                (
-                    "started",
-                    json!({ "segment": 1, "weights": weights(&record.arms) }),
-                )
+                let mut detail = json!({ "segment": 1, "weights": weights(&record.arms) });
+                if let Some(warning) = self.review_derived_start_warning(current) {
+                    detail["warnings"] = json!([warning]);
+                }
+                ("started", detail)
             }
             ExperimentChange::Pause => {
                 require_status(current, &[RUNNING], "pause")?;
@@ -374,6 +375,28 @@ impl OrbitRuntime {
             .into_iter()
             .map(ExperimentView::from_record)
             .collect()
+    }
+
+    /// The start warning for a review-derived primary metric in a workspace
+    /// whose effective review policy runs no review gate. A warning only: a
+    /// drain can add a review layer for its window (`run auto --review`), so
+    /// the policy at start does not settle whether tasks get settlements.
+    fn review_derived_start_warning(&self, experiment: &ExperimentRow) -> Option<String> {
+        let metric = experiment
+            .primary_metric
+            .as_deref()
+            .filter(|metric| experiment_metric_is_review_derived(metric))?;
+        let policy = self.operation_policy();
+        let timing = policy.review_timing();
+        if timing != orbit_config::ReviewTimingSetting::Off
+            || !policy.review_before_landing_hosts.value.is_empty()
+        {
+            return None;
+        }
+        Some(format!(
+            "primary metric `{metric}` is review-derived, but this workspace runs no review gate (review.timing = \"{}\"), so no enrolled task has a review gate settlement and `{metric}` will be unmeasured on every settled task; a drain can add a review layer for its window (run auto --review)",
+            timing.as_str()
+        ))
     }
 
     fn experiment_record(&self, id_or_name: &str) -> Result<ExperimentRecord, OrbitError> {
