@@ -247,10 +247,14 @@ fn dispatch_effort_backfill_payload(report: &DispatchEffortBackfill) -> CommandO
     }
     if report.launch_only_recorded > 0 || report.launch_only_unmatched > 0 {
         text.push_str(&format!(
-            "\n{} launch records recorded for runs whose invocation never completed; \
-             {} launches left unrecorded (no single step provably contained them, or \
-             their launches disagreed)",
-            report.launch_only_recorded, report.launch_only_unmatched
+            "\n{} launch records recorded, one per launch, for runs whose invocation never completed\
+             \n{} left unrecorded: no single step provably contained the launch\
+             \n{} left unrecorded: the launch named no provider\
+             \n{} left unrecorded: the launch's effort sources disagreed or were unreadable",
+            report.launch_only_recorded,
+            report.launch_only_no_step,
+            report.launch_only_no_provider,
+            report.launch_only_unreadable
         ));
     }
     text.push_str(

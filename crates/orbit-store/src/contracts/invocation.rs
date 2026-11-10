@@ -236,7 +236,9 @@ pub struct AgentExecutionRecord {
 pub struct AgentExecutionBackfill {
     /// The audit event type the effort was read from.
     pub source: String,
-    /// Every matching launch event, all of which rendered the same effort.
+    /// The launch events this record was read from. An invocation record
+    /// lists every matching launch that agreed on the effort. A launch-only
+    /// record lists that one launch.
     pub event_ids: Vec<String>,
     pub recorded_at: DateTime<Utc>,
 }
@@ -271,14 +273,14 @@ pub struct InvocationLaunchEvent {
     pub effort_unreadable: bool,
 }
 
-/// Launches of one run and step that no `agent_executions` row and no
-/// completed invocation records: the agent launched, but its invocation
-/// never completed (the run failed, was interrupted, held or cancelled), so
-/// the dispatch-effort backfill can still record the launch itself for the
-/// scorecard scan's launch-record fallback. The step is the one whose
-/// `step.started`/`step.finished` interval contains the launch, proven by
-/// the run's own audit trail; launches no single step contains are not
-/// grouped here and stay effort unknown.
+/// Launches of one run, step, provider and model that the dispatch-effort
+/// backfill may still record, one row per launch. The agent launched, but
+/// its invocation never completed (the run failed, was interrupted, held or
+/// cancelled), so there is no invocation to carry an identity. The step is
+/// the one whose `step.started`/`step.finished` interval contains the
+/// launch, proven by the run's own audit trail. Launches no single step
+/// contains, and launches that name no provider, are counted aside and are
+/// not grouped here.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnrecordedLaunchGroup {
     pub run_id: String,
@@ -288,6 +290,18 @@ pub struct UnrecordedLaunchGroup {
     /// The crew the job run resolved, when the run records one.
     pub run_resolved_crew: Option<String>,
     pub launches: Vec<InvocationLaunchEvent>,
+}
+
+/// Launch-only events the backfill did not group, by the reason each one
+/// was left out. A launch has one reason: a step that cannot be proven is
+/// counted there, and a launch inside one step that names no provider is
+/// counted as missing a provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnrecordedLaunchOmissions {
+    /// No step interval contained the launch, or more than one did.
+    pub no_step: usize,
+    /// The launch event named no provider, so no row can be written.
+    pub no_provider: usize,
 }
 
 /// Aggregate completed invocations without consulting mutable crew configuration.

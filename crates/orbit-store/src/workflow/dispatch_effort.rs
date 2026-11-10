@@ -9,20 +9,24 @@
 //! the invocation's end minus its duration, reads the effort from the recorded
 //! effort or the argv (both must agree when both are present) and records it
 //! as a dispatch identity marked as backfilled. For a run whose invocation
-//! never completed there is no invocation to record on, so it records the
-//! launch itself, attributed to the one step whose audit interval contains
-//! it, for the scorecard scan's launch-record fallback. It never runs when a
-//! store opens; an operator runs it, on any host, against that host's own
-//! store.
+//! never completed there is no invocation to record on, so it records each
+//! launch on its own, stamped with that launch's time and attributed to the
+//! one step whose audit interval contains it. A later launch of the same
+//! step is its own record. A launch a dispatch-time row already covers — the
+//! closest sibling of the same run, step, provider and model within a minute
+//! — is left as that row. It never runs when a store opens; an operator runs
+//! it, on any host, against that host's own store.
 //!
 //! An invocation stays unrecorded (and its effort `unknown`) when no launch
-//! event matches (including events that predate both effort sources), when
+//! event matches (including events that predate both effort sources), or when
 //! the matching events disagree on the effort or carry an effort this binary
-//! cannot read, or when a launch's step cannot be proven from the run's
-//! audit intervals. `cli.invocation.activity` events carry no argv or effort
-//! and are never a source. Effort is never taken from crew configuration or
-//! a crew name. Invocations that already have an identity are never touched,
-//! so running it again changes nothing.
+//! cannot read. A launch stays unrecorded when no single step contains it,
+//! when it names no provider, or when that launch's own effort cannot be
+//! read; another launch of the same step is recorded on its own.
+//! `cli.invocation.activity` events carry no argv or effort and are never a
+//! source. Effort is never taken from crew configuration or a crew name.
+//! Invocations that already have an identity are never touched, so running
+//! it again changes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,12 +70,21 @@ pub struct DispatchEffortBackfill {
     /// Invocations another writer gave an identity while this one ran.
     pub already_recorded: usize,
     /// Launch records recorded for runs whose invocation never completed:
-    /// no invocation exists to carry an identity, so the launch itself is
-    /// recorded and the scorecard scan's launch-record fallback reads it.
+    /// no invocation exists to carry an identity, so each launch is
+    /// recorded on its own and the scorecard scan's launch-record fallback
+    /// reads it.
     pub launch_only_recorded: usize,
     /// Launches left unrecorded because no single step of their run provably
-    /// contained them, or their launches disagreed on the effort. These
-    /// units stay effort unknown.
+    /// contained them.
+    pub launch_only_no_step: usize,
+    /// Launches left unrecorded because the event named no provider.
+    pub launch_only_no_provider: usize,
+    /// Launches left unrecorded because that launch's recorded effort and
+    /// argv disagreed, or its effort value could not be read. Another
+    /// launch of the same step is recorded on its own.
+    pub launch_only_unreadable: usize,
+    /// [`Self::launch_only_no_step`] + [`Self::launch_only_no_provider`] +
+    /// [`Self::launch_only_unreadable`].
     pub launch_only_unmatched: usize,
 }
 
@@ -137,49 +150,56 @@ pub fn backfill_dispatch_effort(
         *report.recorded_by_effort.entry(key).or_default() += 1;
     }
     // Runs whose agent launched but whose invocation never completed have
-    // no invocation to record an identity on. Record the launch itself,
-    // proven to its step by the run's audit trail, so the scorecard scan's
-    // launch-record fallback can attribute the unit. A launch no single
-    // step provably contained, or whose launches disagree, stays unknown.
-    let (launch_groups, unproven_launches) = store.list_unrecorded_launch_groups(workspace_id)?;
-    report.launch_only_unmatched += unproven_launches;
+    // no invocation to record an identity on. Record each launch on its
+    // own, proven to its step by the run's audit trail, so the scorecard
+    // scan's launch-record fallback can attribute a later round of that
+    // step from that launch's time. A launch no single step provably
+    // contained, that names no provider, or whose own effort cannot be
+    // read, stays unknown. A launch a row already covers is left as it is.
+    let (launch_groups, omissions) = store.list_unrecorded_launch_groups(workspace_id)?;
+    report.launch_only_no_step = omissions.no_step;
+    report.launch_only_no_provider = omissions.no_provider;
+    report.launch_only_unmatched = omissions.no_step + omissions.no_provider;
     for group in launch_groups {
-        let Some(reasoning_effort) = agreed_launch_effort(&group.launches) else {
-            report.launch_only_unmatched += group.launches.len();
-            continue;
-        };
-        let Some(first) = group.launches.first() else {
-            continue;
-        };
         let crew = if executor_activities.contains(&group.activity_id.as_str()) {
             group.run_resolved_crew.clone()
         } else {
             None
         };
-        let backfill = AgentExecutionBackfill {
-            source: CLI_INVOCATION_STARTED_EVENT.to_string(),
-            event_ids: group
-                .launches
-                .iter()
-                .map(|launch| launch.event_id.clone())
-                .collect(),
-            recorded_at,
-        };
-        let recorded = store.record_backfilled_launch_execution(
-            workspace_id,
-            &group,
-            first.started_at,
-            &AgentExecutionIdentity {
-                crew,
-                reasoning_effort,
-            },
-            &backfill,
-        )?;
-        if recorded {
-            report.launch_only_recorded += 1;
-            let key =
-                reasoning_effort.map_or_else(|| "provider_default".to_string(), |e| e.to_string());
-            *report.recorded_by_effort.entry(key).or_default() += 1;
+        let mut readable = group;
+        let before = readable.launches.len();
+        readable
+            .launches
+            .retain(|launch| launch_effort(launch).is_some());
+        let unreadable = before - readable.launches.len();
+        report.launch_only_unreadable += unreadable;
+        report.launch_only_unmatched += unreadable;
+        for launch in readable.launches.clone() {
+            let Some(reasoning_effort) = launch_effort(&launch) else {
+                continue;
+            };
+            let backfill = AgentExecutionBackfill {
+                source: CLI_INVOCATION_STARTED_EVENT.to_string(),
+                event_ids: vec![launch.event_id.clone()],
+                recorded_at,
+            };
+            let recorded = store.record_backfilled_launch_execution(
+                workspace_id,
+                &readable,
+                &launch,
+                LAUNCH_MATCH_TOLERANCE,
+                &AgentExecutionIdentity {
+                    crew: crew.clone(),
+                    reasoning_effort,
+                },
+                &backfill,
+            )?;
+            if recorded {
+                report.launch_only_recorded += 1;
+                let key = reasoning_effort
+                    .map_or_else(|| "provider_default".to_string(), |e| e.to_string());
+                *report.recorded_by_effort.entry(key).or_default() += 1;
+            }
         }
     }
     Ok(report)

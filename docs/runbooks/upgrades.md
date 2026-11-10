@@ -1100,6 +1100,8 @@ type, matched event ids, time recorded) in its stored record. Existing identitie
 changed, so a rerun changes nothing. Run it on any host, owner or follower, against its own
 store; attempts a follower ran have no invocation on the owner.
 
+A run whose invocation never completed has no invocation to carry an identity. The same command records one row per `cli.invocation.started` event of that run, stamped with the event's time, when exactly one `step.started`/`step.finished` interval contains the launch and the event names a provider. Each launch is its own row. A dispatch-time row already covering that launch — the same run, step, provider and model, with a start within a minute of the closest such launch — is left as it is, so a record written at dispatch is not duplicated. A rerun records nothing new. The report says how many launch records it wrote and how many launches it left unrecorded because no single step contained them, because the launch named no provider, or because that launch's effort could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
+
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace
 upgrade, and only then restart workers. Older binaries still contain the
