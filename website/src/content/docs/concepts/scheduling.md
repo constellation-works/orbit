@@ -115,7 +115,7 @@ that is due. A new chore is a new definition, never new code.
   still open.
 - **Mint now to try one.** `orbit auto-task mint`, or **Mint now** in the
   dashboard, files a task immediately and leaves the schedule untouched.
-- **Seeded mostly disabled.** The built-in catalog of 19 covers QA sweeps,
+- **Seeded mostly disabled.** The built-in catalog of 21 covers QA sweeps,
   code and security reviews, friction curation, doc duties, run-failure
   patterns, and maintenance sweeps for code health, architecture and
   dependency freshness, all off until you enable them. The `host-health`
