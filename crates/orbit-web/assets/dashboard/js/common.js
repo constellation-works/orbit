@@ -31,6 +31,26 @@ export function ownedWorkspaces(workspaces) {
   return (Array.isArray(workspaces) ? workspaces : []).filter(isOwnedWorkspace);
 }
 
+// Replica checkouts of the selected host when that host owns no workspace.
+// Tasks names their owner from these rows. Empty when the host owns a board,
+// when its workspace list has not loaded, or after a host switch until the new
+// host's list arrives (its rows name that host's owners, not the previous one's).
+let unownedReplicas = [];
+
+/// Remember replica rows from the selected host's `/api/workspaces` list.
+/// Pass the unfiltered list only when the owned subset is empty; any other
+/// call clears the list. Rows without `checkout_role: "replica"` are dropped.
+export function setUnownedReplicas(rows) {
+  unownedReplicas = (Array.isArray(rows) ? rows : []).filter(
+    (row) => row && row.checkout_role === "replica",
+  );
+}
+
+/// Replica checkouts remembered by `setUnownedReplicas`, in list order.
+export function getUnownedReplicas() {
+  return unownedReplicas;
+}
+
 export function setSelectedWorkspaces(ids) {
   const next = [...new Set(ids)].sort();
   if (!next.length) return;
@@ -157,6 +177,7 @@ export function setHost(name) {
   hostRevision += 1;
   hostWrites = null;
   hostUnavailable = false;
+  unownedReplicas = [];
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
   return true;
