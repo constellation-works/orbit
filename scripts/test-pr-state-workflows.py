@@ -416,6 +416,51 @@ exit 0
         _, package_seconds, _ = self._bubblewrap_timings(output)
         self.assertEqual(package_seconds, 0)
 
+    def test_bubblewrap_retry_after_timed_out_install_recovers_interrupted_dpkg(self):
+        # A timed-out apt-get install is retried. The killed attempt leaves dpkg
+        # interrupted, and apt refuses every install until `dpkg --configure -a`
+        # finishes the unpack; the retry must recover that state before running.
+        # Runner failure in CI run 42762761224. [ORB-23887]
+        state = self.root / "bubblewrap-state"
+        state.mkdir()
+        self.env["FIXTURE_BUBBLEWRAP_STATE"] = str(state)
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        self.write("bin/apt-get", """#!/bin/sh
+case " $* " in
+  *" install "*)
+    if [ -e "$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted" ]; then
+      echo 'E: dpkg was interrupted, you must manually run sudo dpkg --configure -a' >&2
+      exit 100
+    fi
+    if [ ! -e "$FIXTURE_BUBBLEWRAP_STATE/install-attempted" ]; then
+      : >"$FIXTURE_BUBBLEWRAP_STATE/install-attempted"
+      : >"$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted"
+      exit 124
+    fi
+    : >"$FIXTURE_BUBBLEWRAP_STATE/bwrap-ready"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+""", executable=True)
+        self.write("bin/dpkg", """#!/bin/sh
+[ "$*" = '--configure -a' ] || exit 2
+rm -f "$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted"
+exit 0
+""", executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap --bind-fd' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) [ -e "$FIXTURE_BUBBLEWRAP_STATE/bwrap-ready" ] || {
+       echo 'setting up uid map: Permission denied' >&2; exit 1; } ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap probe passed without an AppArmor profile", output)
+
     def test_slow_step_past_the_removed_cap_completes(self):
         # Sleep stands in for a correct step that loses the CPU under idle
         # scheduling. 25s is past the removed 10s and 20s caps.
