@@ -1203,8 +1203,8 @@ on.
   unranked, and listed last.
 - **The p10–p90 interval** on each ranked Implementers, Reviewers, and Pilots row is a sampling band for that row's own evidence:
   the 10th and 90th percentiles of 1,000 resamples of the row's own units, drawn with replacement from a fixed seed
-  so the same facts always give the same band, each resample rescored with the fleet references held fixed
-  (term expectations, term denominators, smoothing, and the fleet average). A narrow band means the score is stable
+  so the same facts always give the same band, each resample rescored with fleet expectations and the fleet average held fixed;
+  term-specific denominator units are resampled alongside their units, and smoothing stays unchanged. A narrow band means the score is stable
   under the row's own mix of work; the band never changes the score, the rank, smoothing, or minimum support.
   Rows with no rank show no interval: below-support rows and unjudged rows (Reviewers rows with no judged unit yet,
   whose score is null). Implementer tier views show scores by tier with no interval, because the band describes
