@@ -119,8 +119,12 @@ spec:
     `deferred` with its reasons and is excluded from clustering, while
     every complete finding in the same snapshot still files and dedupes. One
     that names no run — a repository, run-listing, or pull-request-listing
-    read, a registration, dedupe-lookup, or task-creation failure — leaves the
-    whole snapshot in doubt and fails the activity with a bounded
+    read — leaves the whole snapshot in doubt, so no finding is filed from
+    it; because that gap is retryable, the sweep reports `deferred` (stage
+    `collection_or_investigation`, with the full retryable errors and audit)
+    and records one `pipeline.run.deferred` audit row instead of failing,
+    so a later sweep retries the read. A registration, dedupe-lookup, or
+    task-creation failure still fails the activity with a bounded
     `retryable_error` payload. A snapshot in which nothing was complete enough
     to file fails the same way, unless every gap is a run-scoped collection
     error, which collection's sweep history degrades or escalates after three

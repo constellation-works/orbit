@@ -64,9 +64,13 @@
 #   `deferred_count` and the sweep succeeds; it records a
 #   `pipeline.run.deferred` audit row, which Incidents lists as `deferred`.
 #   That is never `no_current_failure`. One that names no run — a repository
-#   or listing read, a registration, dedupe, or task-creation failure — or a
-#   snapshot in which nothing else was complete enough to file, fails `file`
-#   with a bounded `retryable_error` payload. The job retry wrapper retries
+#   or listing read — leaves the whole snapshot in doubt, so `file` files
+#   nothing and reports `deferred` (stage `collection_or_investigation`,
+#   with the retryable errors and audit) and records a
+#   `pipeline.run.deferred` row for a later sweep to retry. A registration,
+#   dedupe, or task-creation failure, or a snapshot in which nothing else
+#   was complete enough to file, still fails `file` with a bounded
+#   `retryable_error` payload. The job retry wrapper retries
 #   the handoff; no current failure is consumed as a clean result.
 # - Bounded investigation makes progress across sweeps rather than re-spending
 #   its budget on the same refs: red runs on branches origin no longer has are
