@@ -188,7 +188,10 @@ changed.
 
 Three or more consecutive failures produce a warning above the routine rows
 and a badge in the Health rail for the selected workspace and host. The badge
-refreshes from every tab and clears on a host/workspace switch. History reads
+refreshes from every tab and clears on a host/workspace switch. A failed
+refresh is not a recovery: the badge keeps the last known warning marked
+“stale”, or shows “routines ?” when no read has succeeded in this scope; only
+a successful empty payload or a scope switch clears it. History reads
 are bounded to 100 records per source; a streak that reaches that boundary is
 shown as “at least” the retained count, with a start time that may be earlier.
 The HTTP routine payload retains `last_fire` and adds `recent_fires` (newest
