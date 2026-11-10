@@ -111,12 +111,19 @@ fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> 
         None,
     )
     .unwrap();
-    std::fs::read_to_string(&recorded)
+    let list: Vec<String> = std::fs::read_to_string(&recorded)
         .unwrap_or_else(|error| panic!("{activity} provider never ran: {error}"))
         .split(',')
         .filter(|tool| !tool.is_empty())
         .map(str::to_string)
-        .collect()
+        .collect();
+    // The shipped activity declares denials, so an empty recorded list means
+    // the dispatcher stamped nothing and every allow check below would pass.
+    assert!(
+        !list.is_empty(),
+        "{activity} child received no ORBIT_ACTIVITY_TOOLS_DENY"
+    );
+    list
 }
 
 #[cfg(unix)]
