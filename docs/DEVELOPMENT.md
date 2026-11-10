@@ -620,7 +620,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   traffic shares the limits, and changed responses still consume primary
   quota. Artifact polls add unconditional primary-quota cost on top: while parts
   are missing each wait issues one artifact GET per page per cycle at the
-  fallback interval (four calls per 15 s across four waits, eight per cycle when
+  fallback interval (eight calls per 15 s across eight waits, sixteen per cycle when
   paginated to two pages). Check those counters and response fallback behavior on candidate
   hosted jobs instead of assuming every poll is free.
 
