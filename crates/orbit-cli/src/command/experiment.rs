@@ -165,6 +165,14 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
         blocks.push(Block::table(table));
     }
     for event in &events {
+        for warning in event["detail"]["warnings"].as_array().into_iter().flatten() {
+            blocks.push(Block::text(format!("Warning: {}", text(warning))));
+        }
+        if let Some(warning) = event["detail"]["warning"].as_str() {
+            blocks.push(Block::text(format!("Warning: {warning}")));
+        }
+    }
+    for event in &events {
         if event["kind"] != "concluded" {
             continue;
         }

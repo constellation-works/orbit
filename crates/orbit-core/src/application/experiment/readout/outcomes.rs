@@ -403,7 +403,12 @@ impl OrbitRuntime {
                 .iter()
                 .filter(|verdict| **verdict == ReviewVerdict::AcceptWithFixes)
                 .count();
-            values.insert("review_repairs", settled(Some(repairs as f64)));
+            // No review happened without a settlement, so that is
+            // unmeasured, not a measured zero repairs.
+            values.insert(
+                "review_repairs",
+                settled((!verdicts.is_empty()).then_some(repairs as f64)),
+            );
             let count = |pick: fn(&RunEvents) -> u64| Some(events.map_or(0, pick) as f64);
             values.insert("step_recoveries", settled(count(|e| e.step_recoveries)));
             values.insert("final_recoveries", settled(count(|e| e.final_recoveries)));
@@ -446,6 +451,7 @@ impl OrbitRuntime {
                 admitted_pool_label,
                 crew: crew_name,
                 terminal,
+                has_review_settlement: !verdicts.is_empty(),
                 admitted_treatment: self.admitted_experiment_treatment(
                     id,
                     experiment_id,

@@ -46,6 +46,14 @@ pub fn experiment_metric_is_step_local(metric: &str) -> bool {
     STEP_LOCAL_METRICS.contains(&metric)
 }
 
+/// Metrics read from a task's review gate settlements.
+pub const REVIEW_DERIVED_METRICS: &[&str] = &["first_pass_acceptance", "review_repairs"];
+
+/// Whether a registered metric is derived from review gate settlements.
+pub fn experiment_metric_is_review_derived(metric: &str) -> bool {
+    REVIEW_DERIVED_METRICS.contains(&metric)
+}
+
 /// Whole-task metrics that divide a total by reviewable lines.
 pub const PER_LINE_METRICS: &[&str] = &["cost_per_line", "lead_time_per_line"];
 

@@ -399,8 +399,8 @@ pub struct Verdict {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
     /// `sample_ratio`, `drift`, `undelivered`, `lagging`, `primary_unmeasured`,
-    /// `first_edit_incomplete`, `tool_trace_incomplete`,
-    /// `explorer_trace_incomplete`, `crew_mismatch` or
+    /// `primary_all_unmeasured`, `first_edit_incomplete`,
+    /// `tool_trace_incomplete`, `explorer_trace_incomplete`, `crew_mismatch` or
     /// `crew_mismatch_unavailable`.
     pub kind: &'static str,
     pub message: String,
@@ -577,6 +577,8 @@ pub(super) struct TaskOutcome {
     /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
     pub(super) crew: String,
     pub(super) terminal: bool,
+    /// The task carries at least one review gate settlement comment.
+    pub(super) has_review_settlement: bool,
     /// Latest admission applied this arm; absent for legacy evidence.
     pub(super) admitted_treatment: Option<bool>,
     /// An implement invocation at or after assignment recorded an

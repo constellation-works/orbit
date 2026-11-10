@@ -270,6 +270,30 @@ case and an `explorer_trace_incomplete` warning for the explorer case. A later
 truncated invocation leaves a complete first invocation's first edit measured
 ([ORB-20590]).
 
+`first_pass_acceptance` and `review_repairs` are review-derived: they read a
+task's review gate settlement comments. `review_repairs` counts a task's
+`accept_with_fixes` settlements, and that count (zero included) is measured
+only for a task with at least one settlement; a terminal task with no review
+gate settlement is `unmeasured` for `review_repairs`, not a measured zero,
+because no review happened. A non-terminal task stays open.
+
+When the primary metric has a source series but is unmeasured on every
+settled task in every active arm, the readout carries a
+`primary_all_unmeasured` warning naming the metric and the settled-and-
+unmeasured count per arm; for a review-derived metric with no settlement on
+any enrolled task it also states that no enrolled task has a review gate
+settlement. The warning appears in the JSON readout's `warnings` and in the
+human readout. It is absent when at least one active arm has a measured
+primary outcome, and absent while every enrolled task is still open. It is
+distinct from `primary_unmeasured`, which still fires only when the metric
+has no source series at all. Starting an experiment whose primary metric is
+review-derived in a workspace whose effective review policy runs no review
+gate (`review.timing = "off"` with no before-landing hosts) prints the same
+reason as a warning naming the metric and the policy, records it in the
+started event's `warnings`, and still starts the experiment: a drain can add
+a review layer for its window (`run auto --review`), so the policy at start
+does not settle it.
+
 `cost_usd` uses each invocation's valid provider-reported dollars first, then
 its token-derived estimate from the shared, versioned configuration data in
 `crates/orbit-common/assets/model_prices.yaml`. Rates are keyed by model and
