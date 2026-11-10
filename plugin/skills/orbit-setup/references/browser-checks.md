@@ -56,6 +56,45 @@ kit's unpacked libraries and fonts: Orbit never puts them on every worker's
 verified kit (none installed, never verified, or changed since its last
 pass), workers receive none of the three.
 
+## Launching Chromium in a worker
+
+Inside a worker, Chromium's own sandbox and zygote cannot start on Linux: the
+executor sandbox grants no unprivileged user namespaces. That is expected, and
+it is not required. The Orbit executor sandbox is the containment, so a worker
+launches Playwright's default Chromium (sandbox off) with the flags below:
+
+```bash
+. "$ORBIT_BROWSER_KIT_ENV" && node --input-type=module -e '
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+const browser = await chromium.launch({
+  args: ["--no-zygote", "--disable-gpu", "--disable-dev-shm-usage"],
+});
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.goto("http://127.0.0.1:<port>/");
+// wait for rendered content (see below), then page.screenshot() under .orbit/tmp/
+await browser.close();
+'
+```
+
+- Keep the default launch. Do not set `chromiumSandbox: true`. A sandboxed
+  launch fails with `No usable sandbox`, and adding `--no-zygote` to it fails
+  with `Zygote cannot be disabled if sandbox is enabled`. Both are expected
+  inside a worker and are not a blocker: use the launch above instead.
+- Drive the kit's Playwright, not a system Chromium binary. A raw
+  `chromium --screenshot` run without `--no-zygote` produces no output in a
+  worker.
+- Do not pass `--virtual-time-budget` to a page that keeps polling. The virtual
+  clock never settles (a dashboard polls continuously, and a run timed out at
+  120 s). Wait for content instead.
+- Wait for rendered content, not the static shell. `waitForSelector` on an
+  element the page fills from its data, before the screenshot: `.agents-row` on
+  the Implementers table of Analytics › Agents, or `.agents-rank-row` on its
+  default Rank table. A static element such as `#agents-panel` or a
+  "connecting..." header is present before data arrives, and a screenshot taken
+  after only those was blank in an earlier run.
+- A `lib*.so`, Skia/FontConfig or `Executable doesn't exist` failure is a host
+  kit defect, not a sandbox expectation: see Diagnose below.
+
 ## Which tasks need it
 
 A task tagged `ui` runs only on a host whose kit is verified. A local drain,

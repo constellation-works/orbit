@@ -247,6 +247,11 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
 ```
 
 Save screenshots under `.orbit/tmp/` and open them to look at the result.
+Inside a worker, Chromium's own sandbox cannot start, and that failure is not a
+blocker: launch Playwright's default (sandbox off) with `--no-zygote
+--disable-gpu --disable-dev-shm-usage`, and wait for rendered content rather
+than a static shell element. The worker launch recipe is in the orbit-setup
+browser-checks reference, section "Launching Chromium in a worker".
 Don't install Playwright, download a browser or run `sudo` yourself. When the
 variables are absent, the host has no verified kit: record the browser check
 as unavailable, naming `orbit config browser-kit install` as the host fix. A missing
