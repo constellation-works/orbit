@@ -16,6 +16,16 @@ use crate::application::task::{
     PilotAdmissionHold, TaskCorpusPort, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
 };
 
+/// Whether a block-triage option returns the blocked task to `backlog`.
+/// Reject, land and archive take another status and do not resume a
+/// published candidate.
+fn option_returns_blocked_task_to_backlog(action: &Option<DecisionAction>) -> bool {
+    !matches!(
+        action,
+        Some(DecisionAction::Reject | DecisionAction::Land | DecisionAction::Archive)
+    )
+}
+
 /// What an answer's comment says when its rewrite discarded the task's
 /// published or kept candidate, which the rewritten specification no longer
 /// matches.
@@ -374,8 +384,9 @@ impl OrbitRuntime {
     /// proposed task), with one comment naming the option and the note. The
     /// caller holds the task's write lock and records the resolution, so the
     /// whole answer closes the request in one operation. Everything refusable
-    /// is refused before the first write; a `split` files its follow-up
-    /// first, so a failure there applies nothing to this task.
+    /// is refused before the first write, including a source-repair refusal
+    /// of the backlog return. A `split` files its follow-up only after that
+    /// authentication, so a refusal applies nothing.
     fn apply_option_answer(
         &self,
         request: &DecisionRequest,
@@ -457,6 +468,21 @@ impl OrbitRuntime {
                 params.acceptance_criteria.as_deref(),
             )?;
         params.discard_candidate = discards;
+        // Source repair of the backlog return is refused before a split
+        // files its follow-up. `add_task` commits on its own, so a later
+        // refusal of the parent update would leave the follow-up behind.
+        // A rewrite that strands the candidate discards it and skips this
+        // authentication, the same way the update does.
+        if blocked && !discards && option_returns_blocked_task_to_backlog(&option.action) {
+            let mut preview = task.clone();
+            if let Some(description) = &params.description {
+                preview.description.clone_from(description);
+            }
+            if let Some(criteria) = &params.acceptance_criteria {
+                preview.acceptance_criteria.clone_from(criteria);
+            }
+            self.authenticate_published_backlog_return(&preview)?;
+        }
 
         let mut consequence = format!("Consequence: {}", answer.consequence);
         if !applied.is_empty() {

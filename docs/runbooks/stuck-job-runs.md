@@ -1656,12 +1656,15 @@ The evidence determines which recovery path to take:
 
 An operator attempting to recover a held or blocked delivery may meet two common refusals:
 
-- **A held run refuses source-repair requeue:**
-  Source-repair requeue requires a conclusively stopped, failed run. When the run is `held`,
-  `orbit task requeue` without discard refuses because the source is not in `failed` or
-  `cancelled` state (`published source is live, discarded, changed, or lacks an applied requeue`).
-  **Workaround:** Save the candidate patch first as a task artifact using `orbit task artifact put`
-  (or `orbit task update --artifact`), then discard the candidate to implement fresh:
+- **A held run without a review-decision hold refuses source-repair requeue:**
+  A `held` run is eligible to preserve its published candidate only when it has finished, its
+  worker is gone, and its recorded steps identify the before-landing review-decision hold. In
+  that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
+  request when it remains open at the recorded head with every required check passed. An
+  unfinished run or a held run without that recorded decision still refuses candidate
+  preservation. **Workaround:** If the candidate should be retired, save its patch first as a
+  task artifact using `orbit task artifact put` (or `orbit task update --artifact`), then discard
+  the candidate to implement fresh:
   ```bash
   orbit task requeue <task-id> --discard-candidate --reason '<reason for fresh run>'
   ```
