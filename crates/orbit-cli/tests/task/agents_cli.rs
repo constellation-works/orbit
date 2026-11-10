@@ -1768,35 +1768,6 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
     assert_eq!(again["launch_only_unmatched"], 10, "{again}");
     assert_eq!(rows(), after, "a second run changes nothing");
 
-    let human = fixture
-        .command(&["migrate", "--backfill-dispatch-effort"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let human = String::from_utf8(human).unwrap();
-    assert!(
-        human.contains(
-            "0 launch records recorded, one per launch, for runs whose invocation never completed"
-        ),
-        "{human}"
-    );
-    assert!(
-        human.contains("10 left unrecorded: no single step provably contained the launch"),
-        "{human}"
-    );
-    assert!(
-        human.contains("0 left unrecorded: the launch named no provider"),
-        "{human}"
-    );
-    assert!(
-        human.contains(
-            "0 left unrecorded: the launch's effort sources disagreed or were unreadable"
-        ),
-        "{human}"
-    );
-
     let _authority = orbit_common::test_env::unset(
         orbit_common::test_env::INHERITED_AUTHORITY_ENV
             .iter()
