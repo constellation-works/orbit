@@ -411,11 +411,17 @@ a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
 other view from the fleet read. In All workspaces mode Drain shows the same
-Auto-drain body with a header ordered **Auto-draining**, host select, phase pill.
-The owner host is the first and default option, followed by followers. Reads of
-another host use `/api/on/<host>/...`; the live workspace window with the most
-running tasks wins, and no live window shows Idle. This card does not start a
-follower drain. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
+Auto-drain body with a header ordered **Auto-draining**, workspace select, host select, phase pill.
+The workspace select lists only the workspaces ticked in the rail's workspace
+dropdown, in alphabetical order; its default is the first of those with a live
+drain on any host, or the first when none is live. The host select follows the
+workspace: that workspace's owner host first and selected by default, then the
+follower hosts holding a replica of it, and changing the workspace resets the
+host to its owner. Reads of another host use `/api/on/<host>/...` for the chosen
+workspace; the card shows exactly the chosen workspace's drain on the chosen
+host, and no live window there shows Idle. The chosen workspace and host are
+remembered across reloads, falling back to the defaults when a remembered
+value no longer exists. This card does not start a follower drain. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
 phase, leaf slots, eligible work, waits, holds and queued windows. Rows switch
 host and workspace. Its cache and cadence are shared with the rail reading.
 
