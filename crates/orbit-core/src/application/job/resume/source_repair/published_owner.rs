@@ -6,6 +6,7 @@
 //! the blocked task keeps (`failure_handoff`). Both are re-authenticated in
 //! full from the immutable source when the next run adopts them.
 use super::*;
+use orbit_types::workflow::{HeldFailure, JobRunStep};
 use serde::{Deserialize, Serialize};
 
 const PRESERVED: &str = "published_owner_requeued";
@@ -52,15 +53,74 @@ fn parse_preserved(entry: &TaskHistoryEntry) -> Result<PreservedPublication, Orb
         .map_err(|e| refuse(e.to_string()))
 }
 
-/// Refuse unless `source` is a conclusively stopped failed delivery.
-pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(), OrbitError> {
-    let stopped = run_owner_liveness(source) == RunOwnerLiveness::Stopped;
-    if source.state != JobRunState::Failed || source.finished_at.is_none() || !stopped {
-        return Err(refuse(
-            "the task's run is not a conclusively stopped failed delivery",
-        ));
+/// The worker that owned `source` is gone and the run has a finish time.
+fn source_owner_is_gone(source: &JobRun) -> bool {
+    source.finished_at.is_some() && run_owner_liveness(source) == RunOwnerLiveness::Stopped
+}
+
+/// A step that records the before-landing review hold: the run ended `held`
+/// so a recorded decision can land the open pull request.
+fn step_holds_review_decision(step: &JobRunStep) -> bool {
+    HeldFailure::of(step.error_code.as_deref(), step.error_message.as_deref())
+        == Some(HeldFailure::DecisionPending)
+}
+
+/// `source` is `held` because a before-landing review left its pull request
+/// open for a recorded decision.
+fn held_for_review_decision(source: &JobRun) -> bool {
+    source.state == JobRunState::Held && source.steps.iter().any(step_holds_review_decision)
+}
+
+/// A failed delivery, or a review-decision hold, whose worker is gone.
+///
+/// A before-landing review refusal ends the delivery `held`, not `failed`,
+/// and final recovery asks the operator about that same run. The run will
+/// never become `failed`, so that conclusively stopped hold is a requeue
+/// source. A delivery that is still running is not.
+fn repairable_stopped_source(source: &JobRun) -> bool {
+    source_owner_is_gone(source)
+        && (source.state == JobRunState::Failed || held_for_review_decision(source))
+}
+
+/// A publication the next run may adopt: a stopped failed or cancelled
+/// delivery, or a stopped review-decision hold.
+fn adoptable_published_source(source: &JobRun) -> bool {
+    source_owner_is_gone(source)
+        && (matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
+            || held_for_review_decision(source))
+}
+
+/// What to tell the operator when `source` cannot be repaired, naming an
+/// action that can succeed in its current state.
+fn stopped_source_refusal(source: &JobRun) -> String {
+    let run_id = &source.run_id;
+    if !source.state.is_terminal() || source.finished_at.is_none() {
+        // Cancel succeeds only while the run is not terminal. Discard of a
+        // blocked task also succeeds; the requeue wrapper names that route.
+        format!(
+            "delivery `{run_id}` is still running, so it cannot be repaired. \
+             Cancel it with `orbit run cancel {run_id} --confirm`"
+        )
+    } else if run_owner_liveness(source) != RunOwnerLiveness::Stopped {
+        // The record is terminal, so cancel reports already terminal and
+        // does not stop the worker. Discard is the route that can succeed.
+        format!("delivery `{run_id}` is still running, so it cannot be repaired")
+    } else {
+        format!(
+            "run `{run_id}` is {}, not a conclusively stopped failed delivery",
+            source.state
+        )
     }
-    Ok(())
+}
+
+/// Refuse unless `source` is a conclusively stopped failed delivery, or a
+/// conclusively stopped run held for a before-landing review decision.
+/// A delivery that is still running stays refused.
+pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(), OrbitError> {
+    if repairable_stopped_source(source) {
+        return Ok(());
+    }
+    Err(refuse(stopped_source_refusal(source)))
 }
 
 impl OrbitRuntime {
@@ -124,9 +184,7 @@ impl OrbitRuntime {
             || source.input.as_ref().is_none_or(|i| {
                 i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
             })
-            || !matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+            || !adoptable_published_source(&source)
         {
             return Ok(None);
         }
@@ -513,9 +571,7 @@ impl OrbitRuntime {
         }
         let source = source.ok_or_else(|| refuse("published source missing"))?;
         self.owner_source_identity(&source, &task)?;
-        if !matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+        if !adoptable_published_source(&source)
             || self.recorded_final_recovery(task_id, source_id)?
                 != Some(crate::application::task::FinalRecoveryOutcome::Requeued)
             || matching[0].1.schema_version != 1
