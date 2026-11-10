@@ -418,7 +418,9 @@ extending or restarting the wait by assumption.
 A conclusive candidate failure stops for one automatic repair leaf with
 fresh validation and a new handoff. Once that repair is spent, the owner
 ends the claim and returns the task to `backlog`, preserving the candidate
-and failure evidence for its next run. Exhausting the task's landing repair
+and failure evidence for its next run. That landing run is held as
+`delivery_landing_repair_requeue`, not failed, and the hold is not resumed
+or handed back to completion. Exhausting the task's landing repair
 budget blocks it for an operator. Unresolved base waits and evidence that
 leaves classification undecided spend no candidate repair. Confirm the actual task and latest landing
 attempt state before recommending any action.
@@ -674,6 +676,7 @@ its reason, and the next step is yours.
 | `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
 | `delivery_check_repair_activity_absent` | An in-budget auto-fix check repair was admitted, and the job has no `step_failure_recovery` to run it. No repair agent runs, but the admission remains in the per-PR ledger and spends one repair attempt. | Adding `step_failure_recovery` and retrying the same head holds again as `delivery_repair_dispatched`; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run. |
 | `delivery_check_runs_absent` | The head this run pushed reported no run, queued or otherwise, of any required check for five minutes, completion re-requested its hosted checks once (recorded as `pr_checks_retrigger_requested` in the task history; on GitHub by closing and reopening the pull request, which keeps its head, branch and reviews), and still no required check run started five minutes later. The head is unchanged, no repair is spent and the task stays in review. A later completion attempt on the same head holds again without re-triggering. Pending, queued, failed or skipped required checks never take this path. | Check that the forge runs workflows for the repository (Actions enabled, workflow triggers, outages). Then start the required checks on that head by hand, or push a new head, and start a new delivery attempt. |
+| `delivery_landing_repair_requeue` | A required check failed because of the candidate after its one automatic repair was spent. The claim already ended. The task returned to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The landing run is held and is not a failure. | The next run repairs that candidate. Do not resume this held run, and do not hand it back to completion. |
 
 ## Check Git State For Workflow Failures
 

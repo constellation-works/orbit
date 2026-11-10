@@ -2546,12 +2546,16 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
         forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
 
         let error = land_now(&forge).expect_err("the surviving failure stops the landing");
-        if tip_passes {
-            // A red tip keeps its deadline hold below; a green tip's survivor is
-            // repaired or requeued, so it must end the run failed, never held.
+        if repair_spent && tip_passes {
+            // The spent repair requeues. The run is held and the refusal keeps
+            // the candidate for the backlog return.
+            assert_spent_requeue_held(&error, &forge, &candidate, label);
+        } else if tip_passes {
+            // A green tip whose repair is still available is repaired, so it
+            // ends the run failed. A red tip keeps its review stop below.
             assert!(
                 !matches!(&error, OrbitError::DeliveryRefused { .. }),
-                "{label}: a surviving inherited failure on a green tip ends the run failed: {error}"
+                "{label}: a surviving inherited failure on a green tip with repair remaining ends the run failed: {error}"
             );
         }
 
@@ -2597,6 +2601,9 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
 /// one automatic repair, whose evidence carries the failed step's signature
 /// and log excerpt. The repair's own landing failing again stops, classified,
 /// for a backlog requeue instead of asking for a second repair [ORB-16890].
+/// That spent stop goes through check recovery's requeue and `refuse_pr`
+/// with [`HandoffLandingStep::StopForRequeue`], and the landing run is held
+/// as `delivery_landing_repair_requeue` rather than failed [ORB-23953].
 /// A base whose job query succeeds with no jobs ran nothing to fail, which is
 /// not a failed read. [model ranking §5.1] A failure that cites no file the
 /// head changed is first rerun once on the unchanged head; failing again
@@ -2617,10 +2624,14 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         }
 
         let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
-        assert!(
-            !matches!(&error, OrbitError::DeliveryRefused { .. }),
-            "candidate-caused: a candidate failure ends the run failed, never held: {error}"
-        );
+        if repair_spent {
+            assert_spent_requeue_held(&error, &forge, &candidate, "candidate-caused");
+        } else {
+            assert!(
+                !matches!(&error, OrbitError::DeliveryRefused { .. }),
+                "candidate-caused: a candidate failure with repair remaining ends the run failed, never held: {error}"
+            );
+        }
 
         assert_steps(&forge.steps(), &[step], "candidate-caused");
         assert_reason(
@@ -3122,6 +3133,67 @@ fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
         &forge,
         &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
         "unreadable retry",
+    );
+}
+
+/// A spent repair's `StopForRequeue` holds the landing. The recorded refusal
+/// is what the owner applies as a backlog return, and it keeps the accepted
+/// candidate. Finalization persists `held` for this code, which is neither
+/// `failed` nor `interrupted`.
+fn assert_spent_requeue_held(error: &OrbitError, forge: &FakeForge, candidate: &str, case: &str) {
+    let OrbitError::DeliveryRefused { refusal, message } = error else {
+        panic!("{case}: a spent repair holds the landing instead of failing the run: {error}");
+    };
+    assert_eq!(
+        *refusal,
+        DeliveryRefusal::LandingRepairRequeue,
+        "{case}: {message}"
+    );
+    assert_eq!(refusal.error_code(), "delivery_landing_repair_requeue");
+    let held = orbit_types::workflow::HeldFailure::of(Some(refusal.error_code()), Some(message));
+    let recorded = match held {
+        Some(orbit_types::workflow::HeldFailure::DeliveryRefused(actual)) => {
+            assert_eq!(actual, DeliveryRefusal::LandingRepairRequeue, "{case}");
+            orbit_types::workflow::JobRunState::Held
+        }
+        other => panic!("{case}: the refusal must record a held outcome, got {other:?}"),
+    };
+    assert_eq!(recorded.to_string(), "held", "{case}");
+    assert_ne!(
+        recorded,
+        orbit_types::workflow::JobRunState::Failed,
+        "{case}"
+    );
+    assert_ne!(
+        recorded,
+        orbit_types::workflow::JobRunState::Interrupted,
+        "{case}"
+    );
+    let parsed = orbit_types::workflow::handoff::LandingStopEvidence::parse(&forge.last_evidence());
+    let orbit_types::workflow::handoff::LandingStopEvidence::OwnerRefusal(evidence) = parsed else {
+        panic!("{case}: requeue evidence is the owner landing refusal");
+    };
+    assert_eq!(evidence.requeue, Some(true), "{case}: {evidence:?}");
+    assert!(
+        evidence
+            .reason
+            .value
+            .contains("returns the task to the backlog"),
+        "{case}: {}",
+        evidence.reason.value
+    );
+    assert_eq!(
+        evidence.accepted["candidate"]["value"].as_str(),
+        Some(candidate),
+        "{case}: the backlog return keeps the candidate: {}",
+        evidence.accepted
+    );
+    assert!(
+        message.contains("handoff_land:")
+            && error
+                .to_string()
+                .contains("returns the task to the backlog"),
+        "{case}: {error}"
     );
 }
 

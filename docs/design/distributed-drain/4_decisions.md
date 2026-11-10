@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
@@ -826,6 +826,7 @@ forge read can clear. Per code:
 | `base_chase_exhausted` | no | Orphan adoption already continues it. |
 | `delivery_origin_unavailable` | no | Backlog admission, no pull request. |
 | `delivery_check_repair_activity_absent` | no | Needs recovery configured and a new head. |
+| `delivery_landing_repair_requeue` | no | The claim already ended and the task returned to the backlog (or is blocked). Resuming the held run would land a revoked handoff. |
 | `delivery_visual_*` | no | Retired; nothing raises them. |
 
 A conflict or failed required check on the held PR is repaired through the per-PR ledger as

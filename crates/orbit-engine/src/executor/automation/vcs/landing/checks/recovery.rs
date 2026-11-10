@@ -126,7 +126,7 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
     /// to the backlog for its next run to repair the candidate, with this
-    /// evidence.
+    /// evidence. The landing run is held, not failed.
     Requeue(String),
     /// Stop in review and fail the run, with this evidence. A status that
     /// reports no head or number has no jobs to read, so it fails here too. A
@@ -704,7 +704,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             // An update already landed the candidate on a base tip where
             // the same job passes, so the failure that remains is the
             // candidate's. It takes the same single repair a candidate-class
-            // failure does, and a spent repair stops in review.
+            // failure does, and a spent repair requeues with the run held.
             if context.automatic_repair_spent {
                 Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
             } else {

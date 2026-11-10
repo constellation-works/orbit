@@ -1123,6 +1123,7 @@ backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 | `delivery_pr_closed` | The PR closed without merging. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. |
 | `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
+| `delivery_landing_repair_requeue` | A required check failed because of the candidate after its one automatic repair was spent. The same hold covers a spent section-gap draft and a spent unreadable retry classified as the candidate's. The landing run is held. The claim ends and the task returns to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The next run repairs that candidate. This hold is not handed back and the held run is not resumed. While that one automatic repair is still available, the same candidate failure still fails the run so the repair can start. |
 | `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
 | `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
@@ -1177,8 +1178,12 @@ evidence produce typed `delivery_evidence_stale` holds. A permanent failure to
 read required-check evidence in auto-fix, including a credential or permission
 refusal, holds as `delivery_check_evidence_inconclusive` before or after a
 completion mutation; no repair agent runs and no merge is admitted on that
-evidence. Permanent forge-read failures at other boundaries, failed candidate
-checks, and unlisted refusals remain failures. Transport failures after a merge,
+evidence. Permanent forge-read failures at other boundaries, a candidate-caused
+required-check failure whose one automatic repair is still available, and
+unlisted refusals remain failures. Once that repair is spent, the same
+failure holds as `delivery_landing_repair_requeue`: the claim ends, the
+task returns to the backlog with the candidate kept (or blocks once the
+landing repair budget is spent), and the held run is not resumed. Transport failures after a merge,
 auto-merge or rebase request (in that run or recorded in the task's history)
 also remain failures, except that a narrowly classified synchronous HTTP
 500/502/503/504 merge server error permits one read-only reconciliation within

@@ -1853,8 +1853,8 @@ resumed run's `out_of_run_auto_fix` input carry `hold_code` with a null
 `blocker`. A drain pass hands a held leaf back no earlier than 5 minutes after
 it held, doubled for each earlier hand-back of that pull request for that code,
 and at most 3 times per pull request, head and code. Other holds, such as
-`delivery_head_changed`, `delivery_pr_draft` or `base_chase_exhausted`, keep
-their own next step; the pass does not list them.
+`delivery_head_changed`, `delivery_pr_draft`, `delivery_landing_repair_requeue`
+or `base_chase_exhausted`, keep their own next step; the pass does not list them.
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
