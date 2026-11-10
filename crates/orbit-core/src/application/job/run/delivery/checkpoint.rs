@@ -6,6 +6,8 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+pub(super) use orbit_types::workflow::SuccessfulCheckpoint as Checkpoint;
+
 use super::observation::{DeliveryStep, MAX_ID_LEN};
 use crate::runtime::run_input::recorded_task_ids;
 
@@ -28,27 +30,8 @@ pub(super) fn run_task_ids(run: &JobRun) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-/// A step's checkpoint after the consistency check.
-pub(super) enum Checkpoint<'a> {
-    Recorded(&'a Value),
-    Absent,
-    Inconsistent,
-}
-
 pub(super) fn checkpoint<'a>(state: &'a PipelineState, step: &DeliveryStep) -> Checkpoint<'a> {
-    if state.step_states.get(&step.index) != Some(&JobRunState::Success) {
-        return Checkpoint::Absent;
-    }
-    let Some(output) = state.step_output(step.index) else {
-        return Checkpoint::Absent;
-    };
-    // The pipeline entry under the step's id is written by the same host
-    // checkpoint. A mismatch means the index no longer names this step (the
-    // definition changed since the run) or the record was altered.
-    match state.pipeline.get(&step.id) {
-        Some(entry) if entry != output => Checkpoint::Inconsistent,
-        _ => Checkpoint::Recorded(output),
-    }
+    state.successful_checkpoint(step.index, &step.id)
 }
 
 pub(super) fn provenance(step: &DeliveryStep) -> DeliveryEvidenceProvenance {
