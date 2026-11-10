@@ -297,8 +297,18 @@ impl FromStr for TaskPriority {
             "medium" => Ok(TaskPriority::Medium),
             "high" => Ok(TaskPriority::High),
             "critical" => Ok(TaskPriority::Critical),
-            other => Err(format!("unknown task priority: {other}")),
+            other => Err(format!(
+                "unknown task priority: {other} (valid priorities: {})",
+                TaskPriority::valid_names().join(", ")
+            )),
         }
+    }
+}
+
+impl TaskPriority {
+    /// Priority values accepted on task create and update surfaces.
+    pub fn valid_names() -> &'static [&'static str] {
+        &["low", "medium", "high", "critical"]
     }
 }
 
@@ -349,12 +359,20 @@ impl FromStr for TaskComplexity {
             "hard" => Ok(TaskComplexity::Hard),
             "xhard" => Ok(TaskComplexity::XHard),
             "unassessed" => Ok(TaskComplexity::Unassessed),
-            other => Err(format!("unknown task complexity: {other}")),
+            other => Err(format!(
+                "unknown task complexity: {other} (valid complexities: {})",
+                TaskComplexity::assessed_names().join(", ")
+            )),
         }
     }
 }
 
 impl TaskComplexity {
+    /// Complexity values an operator or agent may assign to a task.
+    pub fn assessed_names() -> &'static [&'static str] {
+        &["low", "medium", "hard", "xhard"]
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             TaskComplexity::Low => "low",

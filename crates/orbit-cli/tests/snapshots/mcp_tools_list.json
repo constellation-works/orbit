@@ -361,6 +361,12 @@
         },
         "priority": {
           "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
           "description": "Priority level."
         },
         "complexity": {
@@ -646,7 +652,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view."
+          "description": "Bounded metadata view. The only accepted value is `bounded`."
         },
         "offset": {
           "type": "integer",
@@ -840,6 +846,12 @@
         },
         "priority": {
           "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
           "description": "New dispatch priority."
         },
         "complexity": {

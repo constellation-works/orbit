@@ -15,7 +15,7 @@ use orbit_types::tool::{
     McpIdRoute, McpToolDefinitionError, McpToolScope, TOOL_FAMILIES, ToolParam, ToolSchema,
     tool_family,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 struct TestTool(&'static str);
 
@@ -134,6 +134,41 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
         definitions.iter().all(|definition| {
             !matches!(definition.schema.name.as_str(), "orbit.workspace.list")
         })
+    );
+}
+
+#[test]
+fn task_write_schemas_advertise_priority_and_complexity_values() {
+    let definitions =
+        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
+    for tool_name in ["orbit.task.add", "orbit.task.update"] {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.schema.name == tool_name)
+            .unwrap_or_else(|| panic!("{tool_name} is advertised"));
+        let schema = orbit_common::protocol::tool_schema::tool_input_schema(&definition.schema);
+        assert_eq!(
+            schema["properties"]["priority"]["enum"],
+            json!(["low", "medium", "high", "critical"]),
+            "{tool_name} priority must enumerate every accepted value"
+        );
+        assert_eq!(
+            schema["properties"]["complexity"]["enum"],
+            json!(["low", "medium", "hard", "xhard"]),
+            "{tool_name} complexity must enumerate every assignable value"
+        );
+    }
+
+    let show = definitions
+        .iter()
+        .find(|definition| definition.schema.name == "orbit.task.show")
+        .expect("orbit.task.show is advertised");
+    let schema = orbit_common::protocol::tool_schema::tool_input_schema(&show.schema);
+    assert!(
+        schema["properties"]["view"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("only accepted value is `bounded`")),
+        "orbit.task.show schema must name its accepted view"
     );
 }
 

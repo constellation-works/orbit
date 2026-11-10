@@ -15,6 +15,7 @@ const TASK_STATUS_ENUM: &[&str] = &[
     "blocked",
     "rejected",
 ];
+const TASK_PRIORITY_ENUM: &[&str] = &["low", "medium", "high", "critical"];
 const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard", "xhard"];
 const AGENT_ROLE_ENUM: &[&str] = &["implementers", "reviewers", "pilots"];
 const AGENT_WINDOW_ENUM: &[&str] = &[
@@ -176,6 +177,7 @@ pub fn tool_parameter_enum_values(
     match (tool_name, param_name) {
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
+        ("orbit.task.add" | "orbit.task.update", "priority") => Some(TASK_PRIORITY_ENUM),
         ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
         // Value lists that MCP descriptions shorten move here whole, so a
         // shortened description never invents a closed set (ORB-23869).
