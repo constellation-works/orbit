@@ -6,11 +6,13 @@
 # between the registry contract, npm proxy, and GitHub Release binary.
 #
 # Steps:
-#   1. resolve server.json and launch its versioned npm package
-#        -> exercises postinstall: tarball download + sha256 verification
-#   2. drive `orbit mcp serve` over stdio with a JSON-RPC handshake
-#      (initialize + tools/list) and assert at least one `orbit.*` tool
-#      appears in the response.
+#   1. launch the versioned package and check `orbit --version`
+#        (the published package's postinstall downloads the release tarball
+#        and checks its sha256; --local-binary-check skips npm)
+#   2. `orbit init`, reject an embedded credential, then `orbit workspace init`
+#   3. drive `orbit mcp serve` over stdio (initialize, notifications/initialized,
+#      tools/list, and tools/call) and assert orbit_-prefixed wire names,
+#      including orbit_workspace_list
 #
 # Pass: exit 0. Fail: non-zero with the relevant stderr captured.
 # Supported: macOS arm64 / x86_64, Linux x86_64 / arm64. Not Windows.

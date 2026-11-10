@@ -139,7 +139,10 @@ def materialize(repo, corpus, sources):
         start = raw.find("\n" + heading + "\n")
         if start < 0:
             raise ValueError(f"{target}: missing {heading}")
-        end = raw.find("\n## ", start + len(heading) + 2)
+        # `start` is the newline before the heading. Search from the heading's
+        # own terminating newline so an immediately following `## ` heading is
+        # the end of this section, not missed until end of file.
+        end = raw.find("\n## ", start + len(heading) + 1)
         if end < 0:
             end = len(raw)
         # JSON keeps human text as data; escape fences and HTML delimiters.

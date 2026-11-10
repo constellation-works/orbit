@@ -108,6 +108,30 @@ class RelativeImportTests(unittest.TestCase):
         self.assertIn("tag_instructions.rs", result.stderr)
         self.assertNotIn("dependency direction guard passed", result.stdout)
 
+    def test_failed_workspace_dependency_listing_does_not_pass(self):
+        cargo = self.root / "bin" / "cargo"
+        cargo.write_text(
+            "#!/bin/sh\n"
+            "count_file=\"$GUARD_TEST_CARGO_COUNT\"\n"
+            "count=0\n"
+            "if [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\n"
+            "count=$((count + 1))\n"
+            "printf '%s\\n' \"$count\" > \"$count_file\"\n"
+            "if [ \"$count\" -ge 2 ]; then\n"
+            "  echo \"metadata unavailable\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "exec cat \"$GUARD_TEST_METADATA\"\n"
+        )
+        cargo.chmod(0o755)
+        count_file = self.root / "cargo-count"
+        env = dict(self.env, GUARD_TEST_CARGO_COUNT=str(count_file))
+        result = subprocess.run(["bash", str(self.guard)], env=env,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("workspace dependency listing failed", result.stdout + result.stderr)
+        self.assertNotIn("dependency direction guard passed", result.stdout)
+
     def test_missing_scan_paths_fail_closed(self):
         for relative in ("task", "contracts", "automation"):
             with self.subTest(path=relative):
