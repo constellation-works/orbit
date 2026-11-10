@@ -141,26 +141,26 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | M1–M4 are built behind the disabled-by-default gate; next run the M5 memory-on vs memory-off experiment | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110) | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
+| [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 
-### Designing (5)
+### Designing (4)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
-| [Model Ranking](./design/model-ranking/1_overview.md) | Daniel reviews the design; then file the R1 data tasks (CI attribution, recovery fault) | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
@@ -238,7 +238,7 @@ a conservative title/status fallback.
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment. | Draft | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment. | Accepted | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
@@ -251,7 +251,7 @@ a conservative title/status fallback.
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Implemented | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
-| [Model Ranking](./design/model-ranking/1_overview.md) | Proposed single holistic ranking of implementer models: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with tie bands ordered by cost. | Draft | claude |
+| [Model Ranking](./design/model-ranking/1_overview.md) | Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by cost. CI and recovery measures are not yet scored. | Accepted | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution. | Accepted | claude |
 | [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Implemented | codex |

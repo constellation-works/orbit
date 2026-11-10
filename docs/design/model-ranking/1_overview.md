@@ -1,15 +1,15 @@
 ---
 title: Model Ranking — Overview
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
-status: Draft
-stage: designing
-next: "Daniel reviews the design; then file the R1 data tasks (CI attribution, recovery fault)"
+last_updated: 2026-11-10
+last_validated: 2026-11-10
+status: Accepted
+stage: building
+next: "R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run"
 feature: model-ranking
 doc_role: overview
 type: design
-summary: "Proposed single holistic ranking of implementer models: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with tie bands ordered by cost."
+summary: "Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by cost. CI and recovery measures are not yet scored."
 tags: [model-ranking, agent-scorecards]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
@@ -58,7 +58,7 @@ Daniel asked for one holistic ranking inside Orbit itself.
 
 ## 3. At a Glance
 
-| | Agent scorecards (today) | Model ranking (proposed) |
+| | Agent scorecards (today) | Model ranking (built through R3) |
 |---|---|---|
 | Row | crew × model | model (crews pooled) |
 | Roles | orchestrator, implementer, reviewer, pilot | implementer only; the other roles keep their boards |
@@ -67,8 +67,16 @@ Daniel asked for one holistic ranking inside Orbit itself.
 | Output | strict rank with one-sided smoothing | score, interval, tie band; cost orders within a band |
 | Window | 30 days ending now (or `--until`) | 30 days ending at a settled cutoff (default 14 days before `until`) |
 
+**Built so far.** R1 records implementer-caused CI failures by cause and the fault of each
+final recovery ([ORB-23300], [ORB-23301]). R2 computes the ranking, `orbit agents rank` and
+`GET /api/agents/rank` ([ORB-23302]), and the Analytics › Agents Rank tab shows it
+([ORB-23303]). R3's replay recommended a wider band threshold, adopted at 95%
+([ORB-23304], [ORB-23839]). CI failures, final recoveries and tool-call errors are not yet
+scored. The four-week shadow run (R4) has no open task: [ORB-23305] was rejected on
+2026-11-09.
+
 The ranking reads the scorecard's attribution and expectation machinery. It adds two
-recorded facts that Orbit doesn't keep today: which CI failures the implementer caused, and
+recorded facts that Orbit didn't keep before R1: which CI failures the implementer caused, and
 whose fault each final recovery was. See [2_design.md](2_design.md) and the reasoning in
 [4_decisions.md](4_decisions.md).
 
@@ -78,5 +86,12 @@ whose fault each final recovery was. See [2_design.md](2_design.md) and the reas
 - [ORB-23066] — `--until` on the scorecards, used for the settled window
 - [ORB-23277] — server-derived model on every MCP tool audit event, needed for tool-call errors by model
 - [ORB-21789] — escaped regressions scored for implementers, deduplicated against pre-landing reviews
+- [ORB-23300] — R1: records implementer-caused CI failures by cause
+- [ORB-23301] — R1: records fault and evidence on final-recovery decisions
+- [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`
+- [ORB-23303] — the dashboard Rank tab and per-tier score-against-cost chart
+- [ORB-23304] — R3: season-0 calibration and the component replay
+- [ORB-23305] — R4 freeze and snapshot task, rejected 2026-11-09
+- [ORB-23839] — adopts the 95% tie-band threshold
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

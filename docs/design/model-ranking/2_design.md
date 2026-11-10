@@ -3,11 +3,11 @@ title: Model Ranking — Design
 owner: claude
 last_updated: 2026-11-10
 last_validated: 2026-11-09
-status: Draft
+status: Accepted
 feature: model-ranking
 doc_role: design
 type: design
-summary: "Proposed design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by cost within a band."
+summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by cost within a band."
 tags: [model-ranking, agent-scorecards]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/landing/checks/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
@@ -295,7 +295,7 @@ change starts a new season (§4.2).
   - per row: score, interval, band, cost ratio, per-measure actual, expected, residual and
     contribution, units, eligibility and the effort split;
   - per board: the season's scales and weights, and whether the board is qualified.
-- **Dashboard:** Analytics › Agents opens on a **Rank** tab. Its summary strip reports
+- **Dashboard:** Analytics › Agents opens on a **Rank** tab ([ORB-23303]). Its summary strip reports
   **Ranked**, **Tasks scored**, **Not scored**, and **Measures live**. The refined rank table
   groups eligible models by rank and shows the score, p10–p90 interval, cost per task, task
   count, and landed rate; a row's chevron opens its per-measure breakdown. Ineligible models
@@ -349,15 +349,18 @@ change starts a new season (§4.2).
   the frontier from those points. The weekly snapshot is later work.
 - **Band threshold.** 95%, adopted 2026-11-10 (Daniel · [ORB-23839]), following
   the R3 shadow recommendation in §4.4; this supersedes R2's 80% rule.
+- **Still unmeasured at HEAD.** CI failures, final recoveries and tool-call errors are not
+  scored. [ORB-23304] (R3) changed no ranking code. Tool-call errors stay unmeasured although
+  [ORB-23277] now attributes each tool audit row to a model; see [ORB-23914].
 
 ## 7. Validation and rollout
 
 | Phase | Work | Exit |
 |---|---|---|
-| R1 | Record CI failures by cause (§5.1) and recovery fault (§5.2); [ORB-23277] lands | Each new record type covers at least 80% of the events in a 14-day sample |
-| R2 | Compute the ranking, CLI and API; calibrate season-0 scales | It reproduces the scorecard's expectations to within rounding on the shared terms |
-| R3 | Replay 8–12 settled weeks, adding one component at a time: model pooling, then each new measure, then noise scaling, then two-sided shrinkage | A readout of what moves the result; weights stable under ±50% perturbation, or the readout widens the bands |
-| R4 | Run in shadow beside the scorecard and the MVP for 4 weeks, publishing both | Daniel adopts or amends |
+| R1 | Record CI failures by cause (§5.1) and recovery fault (§5.2); [ORB-23277] lands. Built: [ORB-23300], [ORB-23301], [ORB-23277] | Each new record type covers at least 80% of the events in a 14-day sample. Not yet shown |
+| R2 | Compute the ranking, CLI and API; calibrate season-0 scales. Built: [ORB-23302] | It reproduces the scorecard's expectations to within rounding on the shared terms |
+| R3 | Replay 8–12 settled weeks, adding one component at a time: model pooling, then each new measure, then noise scaling, then two-sided shrinkage. Built: [ORB-23304] (readout only) | A readout of what moves the result; weights stable under ±50% perturbation, or the readout widens the bands |
+| R4 | Run in shadow beside the scorecard and the MVP for 4 weeks, publishing both. No open task: [ORB-23305] (freeze code) was rejected 2026-11-09 | Daniel adopts or amends |
 | R5 | The MVP note and the public site switch to the frozen ranking | — |
 
 ## 8. Out of scope
@@ -373,9 +376,14 @@ change starts a new season (§4.2).
 ## Task References
 
 - [ORB-23297] — designs the model ranking (this document)
+- [ORB-23300] — R1: records implementer-caused CI failures by cause
+- [ORB-23303] — the dashboard Rank tab and per-tier value chart
+- [ORB-23305] — R4 freeze and snapshot task, rejected 2026-11-09
+- [ORB-23914] — proposed task to wire the tool-call errors measure (divergence from §5.3 and §6.1)
 - [ORB-23066] — `--until` on the scorecards
 - [ORB-23277] — server-derived model on MCP tool audit events
 - [ORB-23301] — records fault and evidence on final-recovery decisions, with the weekly audit
+- [ORB-23838] — requires minimum support for implementer review terms
 - [ORB-21789] — size-adjusted escaped regressions for implementers
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
 - [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`

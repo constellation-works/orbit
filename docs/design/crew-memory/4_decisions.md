@@ -1,9 +1,9 @@
 ---
 title: Crew Memory — Decisions
 owner: claude
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-11-09
-status: Draft
+status: Accepted
 feature: crew-memory
 doc_role: decisions
 type: design
@@ -146,5 +146,6 @@ On a narrow screen the sub-tab uses the Frictions inline accordion instead of th
 - [ORB-10736] — retired the native project-learning subsystem
 - [ORB-23644] — adds the read-only Knowledge › Memory dashboard sub-tab
 - [ORB-12718] — kept `.orbit/` untracked, including leftover learnings
+- [ORB-23687] — orders the recent proposal board so decided proposals stay ahead of expiries
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

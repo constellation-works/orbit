@@ -1,9 +1,9 @@
 ---
 title: Crew Memory — Vision
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-10
 last_validated: 2026-11-08
-status: Draft
+status: Accepted
 feature: crew-memory
 doc_role: vision
 type: design

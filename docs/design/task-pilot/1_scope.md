@@ -1,7 +1,7 @@
 ---
 title: "Task pilot — assessment persistence"
 owner: orbit
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 status: Draft
 feature: task-pilot
 doc_role: scope
@@ -13,9 +13,9 @@ next: "—"
 
 # Task pilot — assessment persistence
 
-A pilot still decides selectors, crew, complexity and admission using the same
-assessment schema. Apply stores the complete existing audit object, including
-`assessment`, applied material, holds, recheck basis and run identity, as the task
+[ORB-23677] stores the assessment as a task artifact and leaves a one-line comment. A pilot still
+decides selectors, crew, complexity and admission using the same assessment schema. Apply stores
+the complete existing audit object, including `assessment`, applied material, holds, recheck basis and run identity, as the task
 artifact `pilot/assessment-<operation-id>.json`. The operation id makes replays
 reuse one artifact without colliding with a later assessment from the same run.
 
@@ -40,7 +40,8 @@ fails resolution; it never selects an older ready verdict as a substitute. Read
 projections (task list, task show and the dashboard list) degrade that one task's
 readout to a `pilot_assessment_unavailable` finding and keep serving every other
 task. Drain admission, re-pilot and attention still fail closed on the same
-resolution.
+resolution. The dashboard warnings path, which had aborted the whole list on one
+missing artifact, was corrected to degrade per task by [ORB-23707].
 
 All assessment consumers resolve the reference, including attention, warning
 holds and admission, preparation and drain reuse, requirement edit tracking,
@@ -66,4 +67,7 @@ the release, consumer and remaining-record retirement checks in
 
 ## Task References
 
-- ORB-23677 — move pilot assessments into task artifacts and retain compact receipts.
+- [ORB-23677] — move pilot assessments into task artifacts and retain compact receipts.
+- [ORB-23707] — makes the dashboard pilot-warnings readout degrade per task when an artifact is missing.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

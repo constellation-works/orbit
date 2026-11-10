@@ -3,7 +3,7 @@ title: Model Ranking — Decisions
 owner: claude
 last_updated: 2026-11-10
 last_validated: 2026-11-09
-status: Draft
+status: Accepted
 feature: model-ranking
 doc_role: decisions
 type: design
@@ -228,6 +228,7 @@ shrinkage, the within-tier bootstrap, bands and cost ordering are unchanged.
 ## Task References
 
 - [ORB-23297] — designs the model ranking (this folder)
+- [ORB-21789] — ran the backtest that found crew explains little beyond task size
 - [ORB-23672] — admits single-tier models and flags them
 - [ORB-23304] — R3 calibration and replay readout; recommends wider bands for shadow evaluation
 - [ORB-23839] — adopts the 95% tie-band threshold
