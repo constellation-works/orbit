@@ -34,15 +34,6 @@ impl PrincipalClass {
             Self::Agent => "agent",
         }
     }
-
-    /// The ceiling a token of this class gets when none is named, matching
-    /// the lease policy's per-class priority ceilings.
-    pub fn default_max_priority(self) -> LeasePriorityCeiling {
-        match self {
-            Self::Human => LeasePriorityCeiling::High,
-            Self::Agent => LeasePriorityCeiling::Normal,
-        }
-    }
 }
 
 impl FromStr for PrincipalClass {
