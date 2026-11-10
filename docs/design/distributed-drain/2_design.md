@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-10
 last_validated: 2026-11-05
 status: Draft
 feature: distributed-drain
@@ -1316,7 +1316,8 @@ repair is already spent (a repair claim, or a task that already returned to the 
 repair), a `candidate` failure stops for a requeue instead of leaving the task in `review` [ORB-16890]:
 the stop revokes the handoff's authority, settles the claim `revoked` with a kept candidate that
 carries the stop's reason (`landing_stop`), returns the task to `backlog` and records
-`landing_repair_requeued`. The task's next claim resumes that candidate as a `landing` repair whose
+`landing_repair_requeued`. The landing run is held as `delivery_landing_repair_requeue`
+rather than failed, and that hold is not resumed. The task's next claim resumes that candidate as a `landing` repair whose
 prompt names the failed check and its signature, publishes its own pull request rather than adopting
 the stopped one, and closes the stopped one once its own is open. After two requeues since the last
 `landing_repair_exhausted`, the next such stop settles the claim `failed`, still keeping the

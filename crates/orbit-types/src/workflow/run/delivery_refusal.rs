@@ -53,6 +53,11 @@ pub enum DeliveryRefusal {
     /// pushed, and the one re-trigger completion requested for that head
     /// produced none either. The task stays in review; no repair is spent.
     CheckRunsAbsent,
+    /// A required check failed because of the candidate after its one
+    /// automatic repair was spent. The claim ends and the task returns to
+    /// the backlog with the candidate kept, or blocks once the landing
+    /// repair budget is spent. The held run is not resumed.
+    LandingRepairRequeue,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -85,6 +90,7 @@ impl DeliveryRefusal {
             Self::VisualReviewUnresolved => "delivery_visual_review_unresolved",
             Self::CheckRepairActivityAbsent => "delivery_check_repair_activity_absent",
             Self::CheckRunsAbsent => "delivery_check_runs_absent",
+            Self::LandingRepairRequeue => "delivery_landing_repair_requeue",
         }
     }
 
@@ -110,6 +116,7 @@ impl DeliveryRefusal {
             "delivery_visual_review_unresolved" => Some(Self::VisualReviewUnresolved),
             "delivery_check_repair_activity_absent" => Some(Self::CheckRepairActivityAbsent),
             "delivery_check_runs_absent" => Some(Self::CheckRunsAbsent),
+            "delivery_landing_repair_requeue" => Some(Self::LandingRepairRequeue),
             _ => None,
         }
     }
@@ -167,6 +174,9 @@ impl DeliveryRefusal {
             }
             Self::CheckRunsAbsent => {
                 "Start the required checks on that head by hand, or push a new head, then start a new delivery attempt.".into()
+            }
+            Self::LandingRepairRequeue => {
+                "The automatic repair is spent, the claim ended, and the task returned to the backlog with this candidate kept (or it is blocked once the landing repair budget is spent). The next run repairs that candidate. Do not resume this held run.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()

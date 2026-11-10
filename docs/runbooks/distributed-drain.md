@@ -1917,7 +1917,9 @@ one. From then on:
   repair, or the task already returned to the backlog for a landing repair)
   does not leave the task in `review`. The owner ends the claim, keeps its
   candidate with the stop's reason, and returns the task to the backlog
-  with history event `landing_repair_requeued`. The task's next run resumes
+  with history event `landing_repair_requeued`. That landing run is held as
+  `delivery_landing_repair_requeue`, so it is not a failed run and it is not
+  resumed. The task's next run resumes
   that candidate and repairs it with the failed check and its
   signature in its prompt rather than implementing afresh. It opens its own
   pull request, which closes the old one. A task returns to the backlog at
