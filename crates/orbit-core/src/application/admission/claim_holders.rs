@@ -94,6 +94,9 @@ impl ClaimHolders {
     /// task on this answer rather than create a run that guard fails.
     /// A claim `no_diff_holder` names holds no context lock for other tasks,
     /// as in [`Self::extend_lock_holders`]; it still fences its own task.
+    /// With no such claim the answer is `None` before any selector is
+    /// canonicalized, since canonicalizing reads the workspace on disk; the
+    /// store's work-start guard returns early the same way.
     pub(crate) fn refusing_work_start(
         &self,
         task: &Task,
@@ -101,6 +104,12 @@ impl ClaimHolders {
         lock_modes: &FootprintLockModes,
         no_diff_holder: impl Fn(&str) -> bool,
     ) -> Option<(&ExecutionClaim, Vec<String>)> {
+        let mut claims = self
+            .by_task
+            .values()
+            .filter(|claim| claim.task_id == task.id || !no_diff_holder(&claim.task_id))
+            .peekable();
+        claims.peek()?;
         let footprint = task
             .context_files
             .iter()
@@ -108,10 +117,6 @@ impl ClaimHolders {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let claims = self
-            .by_task
-            .values()
-            .filter(|claim| claim.task_id == task.id || !no_diff_holder(&claim.task_id));
         let claim = claim_refusing_work_start(claims, &footprint, lock_modes)?;
         let overlapping = footprint
             .into_iter()
