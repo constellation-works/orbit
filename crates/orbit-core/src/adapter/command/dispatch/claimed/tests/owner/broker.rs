@@ -348,7 +348,8 @@ fn the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox() {
     let input = json!({"id": TASK});
 
     // Not a coordination tool, or no remote owner: the existing route.
-    assert!(fixture.call(None, "orbit.search", json!({})).is_none());
+    assert!(!crate::runtime::is_coordination_tool("orbit.codebase"));
+    assert!(fixture.call(None, "orbit.codebase", json!({})).is_none());
     let local_owner = WorkerInvocation {
         owner_machine_id: FOLLOWER.into(),
         ..fixture.binding.clone()

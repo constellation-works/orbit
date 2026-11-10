@@ -484,9 +484,10 @@ fn a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through
         .list_audit_events(None, Some(GET.to_string()), None, None, 20)
         .unwrap();
     assert!(
-        rows.iter().all(|row| row.brokered
-            && row.task_id.as_deref() == Some(TASK)
-            && row.activity_id.as_deref() == Some(FINAL_RECOVERY_ACTIVITY)),
+        !rows.is_empty()
+            && rows.iter().all(|row| row.brokered
+                && row.task_id.as_deref() == Some(TASK)
+                && row.activity_id.as_deref() == Some(FINAL_RECOVERY_ACTIVITY)),
         "the broker audits each read for the recovering activity: {rows:?}"
     );
 }

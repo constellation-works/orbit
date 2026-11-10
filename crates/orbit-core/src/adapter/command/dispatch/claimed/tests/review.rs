@@ -583,10 +583,12 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
         .runtime
         .list_audit_events(None, None, None, None, 50)
         .unwrap();
+    let brokered: Vec<_> = rows.iter().filter(|row| row.brokered).collect();
     assert!(
-        rows.iter()
-            .filter(|row| row.brokered)
-            .all(|row| row.status != AuditEventStatus::Success),
+        !brokered.is_empty()
+            && brokered
+                .iter()
+                .all(|row| row.status != AuditEventStatus::Success),
         "every refusal is audited as one: {rows:?}"
     );
 }
