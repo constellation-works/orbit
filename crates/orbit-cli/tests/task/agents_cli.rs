@@ -1358,6 +1358,193 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
                 invoke("pilot", "model-pilot", None);
             }
         }
+        // A launch event that records the effort directly, with no argv:
+        // the recorded effort alone is evidence for its invocation.
+        let recorded_id = runtime
+            .add_task(TaskAddParams {
+                title: "backfill recorded effort".into(),
+                description: "dispatch effort backfill fixture".into(),
+                plan: "implement the change".into(),
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &recorded_id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                Some("claude".into()),
+                Some("model-fixture".into()),
+            )
+            .unwrap();
+        let recorded_run = "jrun-backfill-recorded";
+        let finished = Utc::now();
+        let started = finished - chrono::Duration::hours(1);
+        store
+            .upsert_job_run_for_workspace(
+                &workspace,
+                &JobRun {
+                    build: None,
+                    run_id: recorded_run.into(),
+                    job_id: "task_pr_pipeline".into(),
+                    attempt: 1,
+                    state: JobRunState::Success,
+                    scheduled_at: started,
+                    created_at: started,
+                    started_at: Some(started),
+                    finished_at: Some(finished),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({ "task_ids": [recorded_id] })),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: Some("recorded-crew".into()),
+                    crew_model: Some("model-fixture".into()),
+                    steps: Vec::new(),
+                    executed_on: None,
+                },
+                None,
+            )
+            .unwrap();
+        store
+            .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                workspace_id: workspace.clone(),
+                event_id: format!("v2evt-{recorded_run}-0"),
+                source: "fixture".into(),
+                schema_version: 1,
+                event_type: "cli.invocation.started".into(),
+                ts: Utc::now() - chrono::Duration::seconds(60),
+                run_id: recorded_run.into(),
+                agent_identity: "system".into(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: json!({
+                    "body_kind": "cli_invocation_started",
+                    "provider": "claude",
+                    "model": "model-fixture",
+                    "reasoning_effort": "low",
+                })
+                .to_string(),
+            })
+            .unwrap();
+        runtime
+            .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: recorded_run.into(),
+                account: None,
+                activity_id: "implement_one".into(),
+                agent: "claude".into(),
+                provider: None,
+                model: Some("model-fixture".into()),
+                task_ids: vec![recorded_id],
+                trace: orbit_types::telemetry::InvocationTrace {
+                    duration_ms: 60_000,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        // A run whose agent launched at high effort but whose invocation
+        // never completed: no invocation exists, so the backfill records
+        // the launch itself, proven to its step by the audit intervals.
+        let launch_id = runtime
+            .add_task(TaskAddParams {
+                title: "backfill launch only".into(),
+                description: "dispatch effort backfill fixture".into(),
+                plan: "implement the change".into(),
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &launch_id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                Some("claude".into()),
+                Some("model-fixture".into()),
+            )
+            .unwrap();
+        let launch_run = "jrun-backfill-launch-only";
+        let launch_finished = Utc::now();
+        let launch_started = launch_finished - chrono::Duration::hours(1);
+        store
+            .upsert_job_run_for_workspace(
+                &workspace,
+                &JobRun {
+                    build: None,
+                    run_id: launch_run.into(),
+                    job_id: "task_pr_pipeline".into(),
+                    attempt: 1,
+                    state: JobRunState::Failed,
+                    scheduled_at: launch_started,
+                    created_at: launch_started,
+                    started_at: Some(launch_started),
+                    finished_at: Some(launch_finished),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({ "task_ids": [launch_id] })),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: Some("launch-crew".into()),
+                    crew_model: Some("model-fixture".into()),
+                    steps: Vec::new(),
+                    executed_on: None,
+                },
+                None,
+            )
+            .unwrap();
+        let step_event =
+            |seq: usize, event_type: &str, body: serde_json::Value, at: chrono::DateTime<Utc>| {
+                store
+                    .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: format!("v2evt-{launch_run}-{seq}"),
+                        source: "fixture".into(),
+                        schema_version: 1,
+                        event_type: event_type.into(),
+                        ts: at,
+                        run_id: launch_run.into(),
+                        agent_identity: "system".into(),
+                        parent_event_id: None,
+                        workspace_path: None,
+                        payload_json: body.to_string(),
+                    })
+                    .unwrap();
+            };
+        step_event(
+            0,
+            "step.started",
+            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+            Utc::now() - chrono::Duration::hours(2),
+        );
+        step_event(
+            1,
+            "cli.invocation.started",
+            json!({
+                "body_kind": "cli_invocation_started",
+                "provider": "claude",
+                "model": "model-fixture",
+                "argv_redacted": ["claude", "--model", "model-fixture", "--effort", "high"],
+            }),
+            Utc::now() - chrono::Duration::hours(1),
+        );
+        step_event(
+            2,
+            "step.finished",
+            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+            Utc::now() - chrono::Duration::minutes(30),
+        );
     }
 
     let rows = || {
@@ -1388,7 +1575,7 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
     assert_eq!(
         before,
         vec![
-            ("model-fixture @ effort unknown".to_string(), 7),
+            ("model-fixture @ effort unknown".to_string(), 9),
             ("model-fixture @ low".to_string(), 1),
         ],
         "only the dispatch-time identity is known before the backfill"
@@ -1396,30 +1583,34 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let report = &report["dispatch_effort_backfill"];
-    assert_eq!(report["examined"], 8, "{report}");
-    assert_eq!(report["recorded"], 6, "{report}");
+    assert_eq!(report["examined"], 9, "{report}");
+    assert_eq!(report["recorded"], 7, "{report}");
     assert_eq!(report["no_launch_event"], 1, "{report}");
     assert_eq!(report["conflicting"], 1, "{report}");
+    assert_eq!(report["launch_only_recorded"], 1, "{report}");
+    assert_eq!(report["launch_only_unmatched"], 10, "{report}");
 
     let after = rows();
     assert_eq!(
         after,
         vec![
             ("model-fixture @ effort unknown".to_string(), 2),
-            ("model-fixture @ high".to_string(), 2),
-            ("model-fixture @ low".to_string(), 1),
+            ("model-fixture @ high".to_string(), 3),
+            ("model-fixture @ low".to_string(), 2),
             ("model-fixture @ medium".to_string(), 1),
             ("model-fixture @ provider default".to_string(), 1),
             ("model-fixture @ xhigh".to_string(), 1),
         ],
-        "each flag form is attributed; no launch and disagreeing launches stay unknown, \
-         and the dispatch-time identity keeps its own effort"
+        "each flag form is attributed, the recorded-effort-only launch and the \
+         launch-only run are recovered; no launch and disagreeing launches stay \
+         unknown, and the dispatch-time identity keeps its own effort"
     );
 
     let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let again = &again["dispatch_effort_backfill"];
     assert_eq!(again["examined"], 2, "{again}");
     assert_eq!(again["recorded"], 0, "{again}");
+    assert_eq!(again["launch_only_recorded"], 0, "{again}");
     assert_eq!(rows(), after, "a second run changes nothing");
 
     let _authority = orbit_common::test_env::unset(
