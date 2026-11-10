@@ -83,15 +83,17 @@ PR head ref (`refs/pull/<number>/head`) can briefly report the previous
 published head. Completion retries only that recorded SHA, checking each read
 with `git ls-remote origin refs/pull/<number>/head`. A PR head ref already at
 the new candidate lets stale metadata settle. A PR head ref still at the
-recorded previous head also settles, but only while `git ls-remote origin
-refs/heads/<task branch>` independently names the new candidate; a ref seen at
-the candidate that later regresses is refused. It makes at most three re-reads
-at the configured poll interval, capped at 60 seconds and one quarter of the
-completion wait budget. `merge.stale_head_observations` records the lag on
-successful delivery. An unrelated SHA, a missing or moved remote ref, an absent
-or different task branch ref, an unknown, empty or candidate-equal previous
-head, a failed `ls-remote`, or an exhausted bound (including a PR head ref
-still at the previous head) still refuses with `delivery_evidence_stale` (or
+recorded previous head, or briefly absent, also settles, but only while `git
+ls-remote origin refs/heads/<task branch>` independently names the new
+candidate; a ref seen at the candidate that later regresses is refused. It
+makes at most three re-reads at the configured poll interval, capped at 60
+seconds and one quarter of the completion wait budget.
+`merge.stale_head_observations` records the lag on successful delivery. An
+unrelated SHA, a moved remote ref, an absent remote ref whose task branch is
+missing or names another commit, an absent or different task branch ref, an
+unknown, empty or candidate-equal previous head, a failed `ls-remote`, or an
+exhausted bound (including a PR head ref still at the previous head or absent)
+still refuses with `delivery_evidence_stale` (or
 `review_gate_stale` when only the review pin applies), leaving the task in
 review. Completion must observe the exact candidate in PR metadata before
 sending the unchanged SHA-conditioned merge request; waiting never extends the

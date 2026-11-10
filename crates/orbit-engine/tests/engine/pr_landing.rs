@@ -256,7 +256,7 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
     isolated(
         "previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads",
         |sandbox| {
-            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
+            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_missing_branch_missing remote_missing_branch_at_previous remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
                 assert_previous_head_refusal(sandbox, case, false);
             }
         },
@@ -288,6 +288,22 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin(sandbox: &P
         assert_eq!(fx.status_reads() - before, pull_ref_old_reads + 2);
         assert_landed_exactly(&fx, &host, &candidate, "candidate");
     }
+}
+/// Regression for ORB-23811: right after Orbit's own replacement push, `refs/pull/<N>/head` can be momentarily absent while the task branch already names the candidate. That absence is lag, so completion polls until the ref settles on the candidate.
+fn previous_published_head_absent_pull_ref_settles_with_exact_merge_pin(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    let input = fx.republished_completion_input(&host);
+    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+    assert_eq!(fx.remote_tip(BRANCH), candidate, "branch ref is replaced");
+    fx.script_heads(&[&fx.candidate, &candidate], Some(&candidate));
+    fx.write_forge("remote-heads", format!("absent\n{candidate}\n"));
+    let before = fx.status_reads();
+    let completed = action_ok(&host, "pr_complete", &input);
+    assert_eq!(completed["merge"]["stale_head_observations"], 1);
+    assert_eq!(completed["merge"]["waited_seconds"], 5);
+    assert_eq!(fx.status_reads() - before, 3);
+    assert_landed_exactly(&fx, &host, &candidate, "candidate");
 }
 /// Both lag observers are fail-closed: only the known previous head may be
 /// retried, while the task branch is still at the candidate and within bounds.
@@ -351,8 +367,22 @@ fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
             metadata.push(fx.base_sha.clone());
             (2, "delivery_evidence_stale")
         }
+        // An absent pull ref with the task branch at the candidate is lag
+        // (ORB-23811), so it polls until the bounded wait is spent.
         "remote_missing" => {
             remote = None;
+            input["max_wait_seconds"] = json!(240);
+            (4, "delivery_evidence_stale")
+        }
+        // Without independent branch evidence an absent pull ref refuses at once.
+        "remote_missing_branch_missing" => {
+            remote = None;
+            fx.remote_git(&["update-ref", "-d", &format!("refs/heads/{BRANCH}")]);
+            (1, "delivery_evidence_stale")
+        }
+        "remote_missing_branch_at_previous" => {
+            remote = None;
+            fx.remote_git(&["update-ref", &format!("refs/heads/{BRANCH}"), &fx.candidate]);
             (1, "delivery_evidence_stale")
         }
         "remote_moved_after_old" => {
@@ -6456,7 +6486,11 @@ status() {
             remote_head=$(sed -n "${head_read}p" "$forge/remote-heads")
             [ -n "$remote_head" ] || remote_head=$(tail -n 1 "$forge/remote-heads")
             [ "$remote_head" != current ] || remote_head=$(head_sha)
-            git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+            if [ "$remote_head" = absent ]; then
+                git --git-dir="$remote" update-ref -d refs/pull/42/head
+            else
+                git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+            fi
         fi
     fi
     merged_at=null
@@ -7226,10 +7260,17 @@ fn pull_ref_pins_and_identity() {
     isolated("pull_ref_pins_and_identity", |sandbox| {
         run_rows(
             sandbox,
-            &[(
-                "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
-                previous_published_head_pull_ref_lag_settles_with_exact_merge_pin as fn(&Path),
-            )],
+            &[
+                (
+                    "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
+                    previous_published_head_pull_ref_lag_settles_with_exact_merge_pin as fn(&Path),
+                ),
+                (
+                    "previous_published_head_absent_pull_ref_settles_with_exact_merge_pin",
+                    previous_published_head_absent_pull_ref_settles_with_exact_merge_pin
+                        as fn(&Path),
+                ),
+            ],
         );
         pull_ref_identity_refusals(sandbox);
     });
