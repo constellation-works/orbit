@@ -68,29 +68,27 @@ pub(super) fn render_backend_profile(
             .collect(),
         PluginBackend::Mcp(_) => vec![None],
     };
-    let environments = environment_tools
-        .into_iter()
-        .map(|tool| PluginRenderedEnvironment {
-            variables: backend
-                .spec()
-                .child_environment(&context, &workspace_text, tool.as_deref())
-                .into_iter()
-                .map(|(name, value)| {
-                    // This is only the diagnostic projection: the backend's
-                    // launch environment retains its admitted values. Mask by
-                    // name even for short values that generic text scrubbing
-                    // leaves readable, and scrub aliases in other variables.
-                    let value = if is_sensitive_env_name(&name) {
-                        "[REDACTED_ENV]".to_string()
-                    } else {
-                        redact_all(&value)
-                    };
-                    (name, value)
-                })
-                .collect(),
-            tool,
-        })
-        .collect();
+    let mut environments = Vec::new();
+    for tool in environment_tools {
+        let variables = backend
+            .spec()
+            .child_environment(&context, &workspace_text, tool.as_deref())?
+            .into_iter()
+            .map(|(name, value)| {
+                // This is only the diagnostic projection: the backend's
+                // launch environment retains its admitted values. Mask by
+                // name even for short values that generic text scrubbing
+                // leaves readable, and scrub aliases in other variables.
+                let value = if is_sensitive_env_name(&name) {
+                    "[REDACTED_ENV]".to_string()
+                } else {
+                    redact_all(&value)
+                };
+                (name, value)
+            })
+            .collect();
+        environments.push(PluginRenderedEnvironment { variables, tool });
+    }
     let paths = |items: Vec<PathBuf>| {
         items
             .into_iter()

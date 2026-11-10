@@ -210,6 +210,14 @@ impl PluginBackendSpec {
                 ),
             }
         }
+        // The host's link directory for the granted names, so the child's
+        // `PATH` lookup of a declared name can see the link. A link adds no
+        // executable of its own: it resolves to the recorded file granted above.
+        if let Some(dir) = self.granted_program_dir()
+            && !read.contains(&dir)
+        {
+            read.push(dir);
+        }
         // The child's own state tree, re-allowed inside the denied
         // `state/plugins/` on every profile: the one directory the standard
         // gives a plugin for durable state stays readable to it and to no
@@ -335,12 +343,15 @@ impl PluginBackendSpec {
     /// even if present in the parent environment (`validate_structure`
     /// refuses them at the manifest too; this is the defense-in-depth
     /// boundary for a manifest loaded before that check existed).
+    ///
+    /// Materializes the program links first (`materialize_program_links`), so
+    /// the `PATH` it names exists whenever it is returned.
     pub fn child_environment(
         &self,
         ctx: &ToolContext,
         cwd: &str,
         tool_name: Option<&str>,
-    ) -> Vec<(String, String)> {
+    ) -> Result<Vec<(String, String)>, OrbitError> {
         let env_pass = if self.granted(PluginGrant::EnvPass) {
             self.permissions.env_pass.as_slice()
         } else {
@@ -351,23 +362,13 @@ impl PluginBackendSpec {
             None => allowlisted_child_env(env_pass, &[]),
         };
         // Granted declared programs are discoverable by name whatever the
-        // caller's `PATH`: prepend each still-granted program's parent
-        // directory (deduplicated). A program whose recorded path is no
-        // longer granted adds nothing.
-        let mut granted_dirs: Vec<PathBuf> = Vec::new();
-        for status in self.program_statuses() {
-            if status.granted()
-                && let Some(parent) = status.path.as_deref().and_then(Path::parent)
-                && !parent.as_os_str().is_empty()
-                && !granted_dirs.iter().any(|dir| dir == parent)
-            {
-                granted_dirs.push(parent.to_path_buf());
-            }
-        }
-        let path_override = if granted_dirs.is_empty() {
-            None
-        } else {
-            let mut path_dirs = granted_dirs;
+        // caller's `PATH`: prepend the host's program link directory, which
+        // holds one link per still-granted name pointing at its recorded file.
+        // A program whose recorded path is no longer granted gets no link, so
+        // it adds nothing. The directory is not the recorded file's parent,
+        // because a name reached through a symlink is not in that parent.
+        let path_override = if let Some(program_dir) = self.materialize_program_links()? {
+            let mut path_dirs = vec![program_dir];
             if let Some(existing) = env_pairs
                 .iter()
                 .find(|(key, _)| key == "PATH")
@@ -382,6 +383,8 @@ impl PluginBackendSpec {
             std::env::join_paths(&path_dirs)
                 .ok()
                 .map(|joined| joined.to_string_lossy().into_owned())
+        } else {
+            None
         };
         let mut set = |key: &str, value: String| upsert_env(&mut env_pairs, key, value);
         if let Some(path) = path_override {
@@ -415,7 +418,7 @@ impl PluginBackendSpec {
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
         set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));
-        env_pairs
+        Ok(env_pairs)
     }
 
     /// `permissions.orbit_tools` ∩ the `orbit_tools` grant ∩ the caller's own

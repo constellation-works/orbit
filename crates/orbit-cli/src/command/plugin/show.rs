@@ -161,9 +161,15 @@ impl Execute for PluginShowArgs {
                         || "-".to_string(),
                         |path| path.to_string_lossy().into_owned(),
                     ),
-                    match &program.problem {
-                        None => "yes".to_string(),
-                        Some(problem) => format!("no ({problem})"),
+                    match (&program.problem, &program.resolves_to) {
+                        (Some(problem), _) => format!("no ({problem})"),
+                        (None, None) => "yes".to_string(),
+                        (None, Some(current)) => format!(
+                            "yes, but `{}` now resolves to {}; re-run `orbit plugin enable {}`",
+                            program.name,
+                            current.display(),
+                            plugin.name,
+                        ),
                     },
                 ]);
             }

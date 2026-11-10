@@ -29,8 +29,8 @@ pub use backend::{
     ORBIT_PRODUCT_MARKER, PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR,
     PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection, PluginProgramStatus,
     PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation, PluginSecretSource,
-    RenderedFsRoots, orbit_product_markers_above_roots, plugin_grant_witness_relative,
-    program_statuses, render_fs_roots, resolve_declared_programs,
+    RenderedFsRoots, mark_resolution_drift, orbit_product_markers_above_roots,
+    plugin_grant_witness_relative, program_statuses, render_fs_roots, resolve_declared_programs,
 };
 pub use build::{
     PLUGIN_BUILD_DENIED_ENV, PLUGIN_BUILD_DENIED_ENV_PREFIXES, PLUGIN_BUILD_DIR_PREFIX,
