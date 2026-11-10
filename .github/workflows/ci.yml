@@ -45,14 +45,17 @@ env:
   # Check job's wait read this value; the literal "Test shard k/N" jobs must
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
-  # Six count partitions run on six test runners. The build runner
+  # Twelve count partitions run on twelve test runners. The build runner
   # publishes the archive, then proves exact-once coverage and runs doctests;
   # it no longer delays a partition behind that post-upload work. Literal
   # "Test shard k/N" names and the agent-main ruleset remain unchanged.
   # [ORB-21420] Replaying two full runs' logged test durations, a sixth
   # partition cut the slowest partition's summed test time by 27-30%
   # (docs/design-patterns/test_strategy.md).
-  NEXTEST_PARTITIONS: "8"
+  # Full-run partition 2 spent 144 s on 501 tests, with 859.8 summed test
+  # seconds and a 58.8 s longest case (run 42757620515). Four more runners
+  # target that CPU-bound tail and add four downloads of the same archive.
+  NEXTEST_PARTITIONS: "12"
   # The nextest transfer travels as this many artifacts, which each shard
   # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
   # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
@@ -246,14 +249,14 @@ jobs:
   # the workspace tests once and archives them (on an `affected:` PR, only the
   # affected crates' build set); NEXTEST_SHARDS "Test shard" jobs run nextest
   # from that archive, one count partition each, in parallel, as do the "Test
-  # extra partition" and "Test partition 2", 6, 7 and 8 jobs. On an
+  # extra partition" and "Test partition 2" and 6–12 jobs. On an
   # `affected:` PR every partition runs only
   # the affected and always-run crates' tests (ALWAYS_RUN in
   # scripts/ci-test-affected.py). [ORB-20394] "CI guardrails" runs the
   # repository guards and self-tests on its own runner beside the build. "Check
   # / Clippy / Test" runs formatting, production Clippy, documentation, an
   # Apple-target type-check and the supply-chain gate, then waits for the
-  # build, every shard and the guardrails. It is the job the 400-second
+  # build, every shard and both guardrails jobs. It is the job the 400-second
   # budget measures. The type-check does not add a job or a required check.
   ci:
     needs: [pr-state, scope]
@@ -490,7 +493,10 @@ jobs:
                   sys.argv += ["--job", f"Test shard {shard}/{os.environ['NEXTEST_SHARDS']}"]
               sys.argv += ["--job", "Test extra partition", "--job", "Test partition 2",
                            "--job", "Test partition 6", "--job", "Test partition 7",
-                           "--job", "Test partition 8", "--job", "CI guardrails"]
+                           "--job", "Test partition 8", "--job", "Test partition 9",
+                           "--job", "Test partition 10", "--job", "Test partition 11",
+                           "--job", "Test partition 12", "--job", "CI guardrails",
+                           "--job", "CI QA guardrails"]
               exec(compile(producer_bytes, producer, "exec"),
                    {"__name__": "__main__", "__file__": producer,
                     "__package__": "", "__spec__": None, "__cached__": None,
@@ -537,7 +543,7 @@ jobs:
             "event_sha=${EVENT_SHA:-} pr_head_sha=${PR_HEAD_SHA:-} tested_sha=${tested_sha}"
           exit 0
 
-  # [ORB-20394] Repository guards and self-tests (ci-guardrails.sh --guards),
+  # [ORB-20394] Repository guards and self-tests (ci-guardrails.sh --guards-core),
   # on their own runner beside the test build instead of in series before the
   # Check job's wait. They build no workspace target. Check / Clippy / Test
   # awaits this job, so a guard failure still fails the required check.
@@ -883,7 +889,73 @@ jobs:
         run: |
           set -euo pipefail
           TIMEFORMAT='guardrails_seconds=%R'
-          time ./scripts/ci-guardrails.sh --guards
+          time ./scripts/ci-guardrails.sh --guards-core
+
+      # CI runners report bounded provenance only. The host-owned
+      # `ci_failure_sweep_pipeline` queries GitHub and is the sole authority
+      # that may create durable Orbit remediation tasks. [ORB-11383]
+      - name: Report CI failure for host sweep
+        if: failure()
+        env:
+          WORKFLOW: ${{ format('{0}', github.workflow) }}
+          EVENT: ${{ format('{0}', github.event_name) }}
+          JOB: ${{ format('{0}', github.job) }}
+          REF: ${{ format('{0}', github.ref_name) }}
+          EVENT_SHA: ${{ format('{0}', github.sha) }}
+          PR_HEAD_SHA: ${{ format('{0}', github.event.pull_request.head.sha) }}
+          RUN_ID: ${{ format('{0}', github.run_id) }}
+          RUN_ATTEMPT: ${{ format('{0}', github.run_attempt) }}
+        run: |
+          # This step must never change the job conclusion. `github.sha` can
+          # be a PR merge SHA, so retain it separately from both the PR head
+          # and the commit the runner actually checked out.
+          set +e
+          tested_sha="unavailable"
+          if command -v git >/dev/null 2>&1; then
+            candidate="$(git rev-parse HEAD 2>/dev/null)"
+            if [ -n "$candidate" ]; then
+              tested_sha="$candidate"
+            fi
+          fi
+          run_url="${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${RUN_ID:-}"
+          printf '%s\n' \
+            "CI failure reported for host-owned ci_failure_sweep_pipeline; durable filing happens only on the Orbit host." \
+            "workflow=${WORKFLOW:-} event=${EVENT:-} job=${JOB:-} ref=${REF:-}" \
+            "run_id=${RUN_ID:-} run_attempt=${RUN_ATTEMPT:-} run_url=${run_url}" \
+            "event_sha=${EVENT_SHA:-} pr_head_sha=${PR_HEAD_SHA:-} tested_sha=${tested_sha}"
+          exit 0
+
+  # The QA process fixture was the guard pool's longest member (386 s in
+  # run 42757620515). Give it a separate standard runner so it and the
+  # dependency-direction suite do not contend for the same four CPUs.
+  # Check awaits both jobs, including failures. This adds one runner per full
+  # or affected run, with no additional workspace build or archive download.
+  guardrails-qa:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: CI QA guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Use the same base and complete history as the core guardrails job.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+
+      - name: Run CI QA guardrails
+        env:
+          CI_SELF_TESTS: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
+          CI_TEST_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          TIMEFORMAT='qa_guardrails_seconds=%R'
+          time ./scripts/ci-guardrails.sh --guards-qa
 
       # CI runners report bounded provenance only. The host-owned
       # `ci_failure_sweep_pipeline` queries GitHub and is the sole authority
@@ -1143,7 +1215,7 @@ jobs:
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
   # SHARD names the job (its JUnit report and the shard-1 sandbox gate);
   # PARTITION is the count partition it runs. "Test extra partition" runs
-  # partition 5 and each "Test partition k" job runs partition k (2, 6, 7, 8),
+  # partition 5 and each "Test partition k" job runs partition k (2, 6–12),
   # so the shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
   # agent-main's ruleset requires these exact names: renaming a shard, or
   # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
@@ -1517,8 +1589,10 @@ jobs:
 
   # [ORB-22077] Replaying the 2026-11-04 cohort's logged durations, an eighth
   # count partition cut the slowest partition's test time by 35-57 s on core and
-  # full selections. A ninth or tenth gains little more: the longest single test
-  # (96-136 s) then bounds the partition. Check awaits these literal jobs too.
+  # full selections. That cohort had a 96–136 s longest single test. The
+  # current full-run profile has a 58.8 s longest case in the last partition;
+  # revisit its CPU tail with twelve runners and the same exact-once proof.
+  # Check awaits these literal jobs too.
   test-partition-7:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
@@ -1545,4 +1619,60 @@ jobs:
     env:
       SHARD: "partition-8"
       PARTITION: "8"
+    steps: *test-shard-steps
+
+  test-partition-9:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 9
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-9"
+      PARTITION: "9"
+    steps: *test-shard-steps
+
+  test-partition-10:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-10"
+      PARTITION: "10"
+    steps: *test-shard-steps
+
+  test-partition-11:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 11
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-11"
+      PARTITION: "11"
+    steps: *test-shard-steps
+
+  test-partition-12:
+    needs: [pr-state, scope]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 12
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SHARD: "partition-12"
+      PARTITION: "12"
     steps: *test-shard-steps
