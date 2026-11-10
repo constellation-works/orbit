@@ -228,6 +228,7 @@ shrinkage, the within-tier bootstrap, bands and cost ordering are unchanged.
 ## Task References
 
 - [ORB-23297] — designs the model ranking (this folder)
+- [ORB-21789] — ran the backtest that found crew explains little beyond task size
 - [ORB-23672] — admits single-tier models and flags them
 - [ORB-23304] — R3 calibration and replay readout; recommends wider bands for shadow evaluation
 - [ORB-23839] — adopts the 95% tie-band threshold

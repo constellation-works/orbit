@@ -1,11 +1,11 @@
 ---
 title: Crew Memory — Overview
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
-status: Draft
+last_updated: 2026-11-10
+last_validated: 2026-11-10
+status: Accepted
 stage: building
-next: "M1–M4 are built behind the disabled-by-default gate; next run the M5 memory-on vs memory-off experiment"
+next: "M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110)"
 feature: crew-memory
 doc_role: overview
 type: design
@@ -55,7 +55,7 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 | Operator CLI (`orbit memory show\|history\|export\|write\|reset\|copy`) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-cli/src/command/memory.rs` | [ORB-23113] |
 | Agent tools (`orbit.memory.*` for dreaming runs) | `crates/orbit-core/src/application/crew_memory/agent.rs` | [ORB-23115] |
 | Global-memory proposal review | `crates/orbit-core/src/application/crew_memory/proposals.rs` | [ORB-23116] |
-| Memory-on vs memory-off experiment and conclusion (planned M5) | `docs/design/crew-memory/2_design.md` §7 | — |
+| Memory-on vs memory-off experiment: shadow started 2026-11-08 (exp-57f1ef67); live and conclusion pending (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
 
 ## Task References
 
@@ -64,8 +64,10 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 - [ORB-23114] — builds slice M2: memory overlay, capture, envelope delivery and readout strata
 - [ORB-23115] — builds slice M3: dreaming, evidence packs and scoped agent tools
 - [ORB-23116] — builds slice M4: global proposal review and expiry
+- [ORB-23117] — starts the M5 memory-on vs memory-off experiment in shadow mode
+- [ORB-23110] — the ws_orbit on-call orchestration that carries the M5 live and conclusion handoff
 - [ORB-10736] — retired the native project-learning subsystem
 
-M5 runs and concludes the memory-on vs memory-off experiment; adoption remains undecided.
+M5 runs and concludes the memory-on vs memory-off experiment: shadow started by [ORB-23117], with live and conclusion pending. Adoption remains undecided.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
