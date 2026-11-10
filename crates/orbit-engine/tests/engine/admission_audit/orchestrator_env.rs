@@ -40,8 +40,13 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     );
     let audit_root = temp.path().join("audit");
     let audit = persisted_writer(&audit_root, "job-agent-tools", "grok:grok-build");
-    let host = TestHost::with_command(script.display().to_string())
-        .with_additional_tools(&["orbit.workflow.run.show", "orbit.workflow.run.list"]);
+    let host = TestHost::with_command(script.display().to_string()).with_additional_tools(&[
+        "orbit.workflow.run.show",
+        "orbit.workflow.run.list",
+        "orbit.run:observe",
+        "orbit.run:list",
+        "orbit.decision:list",
+    ]);
     let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(10));
     spec.tool_disallow_list = Some(Vec::new());
 
@@ -78,6 +83,9 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
         .expect("effective activity tools");
     assert!(effective_tools.contains(&"orbit.workflow.run.show".to_string()));
     assert!(effective_tools.contains(&"orbit.workflow.run.list".to_string()));
+    assert!(effective_tools.contains(&"orbit.run:observe".to_string()));
+    assert!(effective_tools.contains(&"orbit.run:list".to_string()));
+    assert!(effective_tools.contains(&"orbit.decision:list".to_string()));
 
     let provider_input = persisted_blobs(&audit_root)
         .read(&stdin_blob_ref)
@@ -97,6 +105,18 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     );
     assert!(
         !tools.contains(&serde_json::json!("orbit.workflow.run.list")),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.run:observe")),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.run:list")),
+        "{tools:?}"
+    );
+    assert!(
+        tools.contains(&serde_json::json!("orbit.decision:list")),
         "{tools:?}"
     );
     assert!(
