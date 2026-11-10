@@ -995,6 +995,48 @@ fn repairable_tool_findings_and_expected_denials_remain_advisory() {
     assert_admission(&workspace, &task, None);
 }
 
+/// [ORB-23900] A criterion that needs an owner sign-off recorded is flagged as
+/// operator-only, and a criterion that only mentions a decision in docs is not.
+fn owner_sign_off_criterion_is_flagged_as_operator_only() {
+    for (criterion, flagged) in [
+        (
+            "The owner signs off the retry policy before the task merges.",
+            true,
+        ),
+        (
+            "Record the operator sign-off as a decision before promotion.",
+            true,
+        ),
+        ("The design doc records the retry decision.", false),
+        (
+            "The docs describe how the operator decision flow works.",
+            false,
+        ),
+    ] {
+        let (workspace, task) = fresh_validation(criterion);
+        assess(&workspace, &task, None);
+        let audit = last_audit(&workspace, &task);
+        let sign_off_findings = audit["assessment"]["validation_tool_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| {
+                warning
+                    .as_str()
+                    .unwrap()
+                    .contains("requires an owner or operator sign-off to be recorded")
+            })
+            .count();
+        assert_eq!(
+            sign_off_findings,
+            usize::from(flagged),
+            "{criterion}: {audit}"
+        );
+        assert!(audit["operator_validation_hold"].is_null(), "{audit}");
+        assert_admission(&workspace, &task, None);
+    }
+}
+
 const RESERVED_FINDING: &str = "a governed operation reserved for the";
 
 fn reserved_findings(workspace: &Workspace, task: &Task) -> usize {
@@ -2099,6 +2141,7 @@ crate::scenario_table!(
     operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision_scenarios,
     operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision,
     repairable_tool_findings_and_expected_denials_remain_advisory,
+    owner_sign_off_criterion_is_flagged_as_operator_only,
     changed_criteria_make_the_pilot_validation_assessment_stale,
     legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit,
     operator_validation_hold_is_retained_when_warnings_exceed_cap,

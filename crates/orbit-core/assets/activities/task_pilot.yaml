@@ -716,6 +716,19 @@ spec:
       `invoke` when meeting the criterion means running the tool; that
       becomes an operator validation handoff. When unsure, use `invoke`. A
       mention you leave out holds the task as `invoke` does.
+    - **Owner sign-off.** `orbit.decision.submit` is operator-only: governance
+      refuses it to agent sessions. An implementation lane is granted
+      `orbit.decision` list, show and raise only, so no implementing agent can
+      record an owner decision or sign-off. When a criterion needs an owner or
+      operator sign-off or approval recorded (for example "the owner signs off"
+      or "record the operator sign-off"), never describe the lane as able to
+      record it, and never say the lane can submit a decision. Return a
+      `utility_warnings` object with `holds_promotion: true` that names the
+      criterion number, quotes the sign-off requirement, and asks for an
+      explicit operator handoff or a criterion rewrite. Do not recommend
+      changing an allowlist to grant the lane submit. A criterion that only
+      mentions a decision in docs, with no sign-off requirement, is not
+      reported here.
     - **Contract existence.** Inventory every concrete contract required by
       the description and criteria: tools, tool output fields, schema fields,
       port methods, config sections and authority requirements. Check the
