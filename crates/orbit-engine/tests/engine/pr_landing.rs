@@ -6863,7 +6863,10 @@ if [ -f "$forge/infrastructure" ]; then
         "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
         "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
         "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
-        "run view") cat "$forge/infra-log"; exit ;;
+        "run view")
+            # A planted marker hangs the job-log read until the supervisor kills it.
+            if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
+            cat "$forge/infra-log"; exit ;;
         "run rerun")
             [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
             mode=$(cat "$forge/infrastructure")

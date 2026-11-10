@@ -594,6 +594,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
         .get("deadline_ms")
         .map(|_| super::super::super::completion_deadline::Deadline::from_input(input))
         .transpose()?;
+    let last_timeout = std::cell::Cell::new(DEFAULT_TIMEOUT_MS);
     let read = github_cli::read_run_log_guarded(
         &requests,
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
@@ -601,11 +602,17 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
         &|request| {
             let mut request = request.clone();
             if let Some(deadline) = deadline {
-                request.timeout_ms = Some(deadline.remaining()?);
+                let timeout = deadline.remaining()?;
+                last_timeout.set(timeout);
+                request.timeout_ms = Some(timeout);
             }
             Ok(request)
         },
-    )?;
+    )
+    .map_err(|error| match deadline {
+        Some(deadline) => deadline.type_killed_read(error, last_timeout.get()),
+        None => error,
+    })?;
     if let Some(deadline) = deadline {
         super::super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;

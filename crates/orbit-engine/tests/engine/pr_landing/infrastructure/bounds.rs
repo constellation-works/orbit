@@ -501,6 +501,65 @@ fn deadline_arriving_during_read_holds_instead_of_failing_the_read() {
     );
 }
 
+/// The deadline arriving during the prerequisite job-log read kills that read;
+/// it is the typed budget expiry, like any other read the deadline ends.
+#[test]
+fn deadline_arriving_during_job_log_read_holds_instead_of_failing_the_read() {
+    isolated(
+        "infrastructure::bounds::deadline_arriving_during_job_log_read_holds_instead_of_failing_the_read",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                let now = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+                let clock = std::rc::Rc::clone(&now);
+                let forge = fx.forge.clone();
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(60);
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    move || clock.get(),
+                    move |_, _| {
+                        // After the first completed read, leave 2s of the 60s budget
+                        // and hang the job-log read past it.
+                        if !forge.join("infra-log-hang").exists() {
+                            fs::write(forge.join("infra-log-hang"), "").unwrap();
+                            now.set(1_058_000);
+                        }
+                    },
+                    || {
+                        orbit_engine::test_support::with_vcs_retry_wait(
+                            |_| {},
+                            || action(&host, "pr_complete", &input),
+                        )
+                    },
+                );
+                let error = result.expect_err("the hanging log read outlives the deadline");
+                assert!(
+                    matches!(
+                        &error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            message,
+                        } if message.contains("completion deadline expired")
+                            && !message.contains("process timed out")
+                    ),
+                    "a log read killed by the deadline is the typed budget expiry: {error:?}"
+                );
+                assert!(fx.merge_requests().is_empty());
+            });
+        },
+    );
+}
+
 #[test]
 fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
     isolated(
