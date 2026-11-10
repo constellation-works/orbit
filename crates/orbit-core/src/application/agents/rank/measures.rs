@@ -91,7 +91,7 @@ pub(super) const MEASURES: [Measure; MEASURE_COUNT] = [
         weight: 5.0,
         units: "tool calls",
         sign: -1.0,
-        unrecorded: Some("tool audit events are not attributed to a model yet"),
+        unrecorded: Some("tool audit attribution is not available to the ranking yet"),
         definition: "Orbit tool calls in the row's implementing activities classed expected or denied.",
     },
 ];
