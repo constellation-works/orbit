@@ -541,7 +541,8 @@ prices:
 # refuses a lower tier) from Codex's session rollout or Claude's partial
 # message stream. Claude pairs starting input buckets with final output by
 # request ID and requires message completion and a terminal result. Missing
-# final usage, JSON-only output and truncated captures leave usage unknown.
+# final output or nonzero cache-creation totals without TTL buckets,
+# JSON-only output and truncated captures leave usage unknown.
 # Without per-request usage the derived cost is exact only when the totals
 # stay below the threshold; otherwise it is unknown (null), never estimated.
 # Grok output reports totals only.

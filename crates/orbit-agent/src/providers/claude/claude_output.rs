@@ -150,7 +150,7 @@ pub(crate) fn claude_long_prompt_requests(
         .into_values()
         .filter(|request| !request.excluded && request.usage.may_reach_long_prompt_floor())
         .map(|request| {
-            if !request.started || !request.stopped {
+            if !request.started || !request.stopped || !request.cache_ttl_split_complete {
                 return None;
             }
             Some(TokenUsage {
@@ -166,6 +166,7 @@ struct ClaudeRequestUsage {
     excluded: bool,
     started: bool,
     stopped: bool,
+    cache_ttl_split_complete: bool,
     final_output: Option<u64>,
 }
 
@@ -180,8 +181,8 @@ fn record_request_start(
     let excluded = model
         .zip(request_model)
         .is_some_and(|(model, request)| base_model(model) != base_model(request));
-    let usage = if excluded {
-        TokenUsage::default()
+    let (usage, cache_ttl_split_complete) = if excluded {
+        (TokenUsage::default(), true)
     } else {
         let fields = message.get("usage")?.as_object()?;
         // Missing buckets are not zero: they cannot bound the prompt.
@@ -207,13 +208,22 @@ fn record_request_start(
         {
             return None;
         }
-        usage
+        let cache_creation_split_present = fields
+            .get("cache_creation")
+            .and_then(Value::as_object)
+            .is_some_and(|split| {
+                split.contains_key("ephemeral_5m_input_tokens")
+                    || split.contains_key("ephemeral_1h_input_tokens")
+            });
+        let cache_ttl_split_complete = cache_creation_split_present || usage.cache_create == 0;
+        (usage, cache_ttl_split_complete)
     };
     if let Some(request) = requests.get_mut(id) {
         if request.usage != usage || request.excluded != excluded {
             return None;
         }
         request.started |= started;
+        request.cache_ttl_split_complete |= cache_ttl_split_complete;
     } else {
         requests.insert(
             id.to_string(),
@@ -222,6 +232,7 @@ fn record_request_start(
                 excluded,
                 started,
                 stopped: false,
+                cache_ttl_split_complete,
                 final_output: None,
             },
         );

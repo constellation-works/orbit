@@ -94,6 +94,27 @@ fn claude_final_usage_prices_recorded_requests_and_refuses_incomplete_evidence()
     let json_only = original.last().unwrap().to_string();
     assert_eq!(read(&json_only), None);
     assert_eq!(price(&expected, read(&json_only).as_deref()), None);
+
+    let mut missing_cache_ttl_split = original.clone();
+    for frame in &mut missing_cache_ttl_split {
+        let usage = if frame["type"] == "assistant" {
+            frame["message"]["usage"].as_object_mut()
+        } else if frame["type"] == "stream_event" && frame["event"]["type"] == "message_start" {
+            frame["event"]["message"]["usage"].as_object_mut()
+        } else {
+            None
+        };
+        if let Some(usage) = usage {
+            usage.remove("cache_creation");
+        }
+    }
+    let incomplete_cache_usage = read(&capture(&missing_cache_ttl_split));
+    assert_eq!(incomplete_cache_usage, None, "missing cache TTL split");
+    assert_eq!(
+        price(&expected, incomplete_cache_usage.as_deref()),
+        None,
+        "unknown cache TTL buckets must not produce a derived tier price"
+    );
     assert_eq!(
         provider_long_prompt_requests("claude", STREAM.as_bytes(), false, None, Some(MODEL), now),
         None
