@@ -15,7 +15,7 @@ use orbit_types::tool::{
     McpIdRoute, McpToolDefinitionError, McpToolScope, TOOL_FAMILIES, ToolParam, ToolSchema,
     tool_family,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 struct TestTool(&'static str);
 
@@ -147,16 +147,19 @@ fn task_write_schemas_advertise_priority_and_complexity_values() {
             .find(|definition| definition.schema.name == tool_name)
             .unwrap_or_else(|| panic!("{tool_name} is advertised"));
         let schema = orbit_common::protocol::tool_schema::tool_input_schema(&definition.schema);
-        assert_eq!(
-            schema["properties"]["priority"]["enum"],
-            json!(["low", "medium", "high", "critical"]),
-            "{tool_name} priority must enumerate every accepted value"
-        );
-        assert_eq!(
-            schema["properties"]["complexity"]["enum"],
-            json!(["low", "medium", "hard", "xhard"]),
-            "{tool_name} complexity must enumerate every assignable value"
-        );
+        for (field, values) in [
+            ("priority", &["low", "medium", "high", "critical"][..]),
+            ("complexity", &["low", "medium", "hard", "xhard"][..]),
+        ] {
+            let description = schema["properties"][field]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool_name} {field} description is advertised"));
+            assert_eq!(
+                description.split('|').collect::<Vec<_>>(),
+                values,
+                "{tool_name} {field} description must list every accepted value"
+            );
+        }
     }
 
     let show = definitions
