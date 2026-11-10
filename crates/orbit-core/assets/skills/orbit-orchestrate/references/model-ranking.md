@@ -136,7 +136,7 @@ Scores on an unqualified board are descriptive, not a ranking.
 
 On a qualified board, models whose scores are not distinguishable
 share a band. A model starts a new band only when the model above it
-beats it in at least 80% of the paired bootstrap draws
+beats it in at least 95% of the paired bootstrap draws
 (`paired_probabilities` in JSON). Bands take dense ranks — `1`, `2`,
 `3` however many models share a band — and a shared band is labelled
 with `=`, such as `2=`. Resampling is within each model's own tiers,
