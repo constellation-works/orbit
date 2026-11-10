@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getSelectedWorkspaces, workspaceDisplayName, findRegisteredHost } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getSelectedWorkspaces, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -17,6 +17,32 @@ let holdDrainAnnouncement = false;
 let drainScopeGeneration = 0;
 let aggregateDrainHost = null;
 let aggregateDrainWorkspace = null;
+const aggregateDrainScopes = new WeakMap();
+const PULL_OWNER_UNAVAILABLE = "The owner's host and workspace are unavailable. Reload the page before starting a pull window.";
+
+// A card selection is a separate visit from the rail's host/workspace. Polls
+// keep that visit; switching either select retires actions and readbacks.
+function resetAggregateDrainSelection() {
+  drainScopeGeneration += 1;
+  operationsState.lastAutoDrain = null;
+  announcedDrainState = null;
+  clearDrainChrome();
+  clearStartCard("auto-drain-quick-start");
+  feedback("auto-drain-operation-feedback", "", "");
+}
+
+function aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable) {
+  const host = findRegisteredHost(hostName)?.local ? "" : hostName;
+  const revision = getWorkspaceRevision();
+  const refusal = hostWriteRefusal(host, connection?.forward_writes) || (checkoutUnavailable ? PULL_OWNER_UNAVAILABLE : "");
+  return {
+    workspace, host, hostName, refusal,
+    isCurrent: () => generation === drainScopeGeneration && revision === getWorkspaceRevision()
+      && isAggregateView() && aggregateDrainWorkspace === workspace.id && aggregateDrainHost === hostName,
+    writeRefusal: () => refusal,
+    path: path => `${host ? `/api/on/${encodeURIComponent(host)}` : "/api"}/${path.slice("/api/".length)}?workspace=${encodeURIComponent(workspace.id)}`,
+  };
+}
 // The card's chosen workspace and host survive a reload like the dock's other
 // selections. Storage can refuse; the in-memory choice then serves this page,
 // and a remembered value that no longer exists falls back to the defaults.
@@ -155,7 +181,7 @@ function autoDrainWindow(payload) {
 function autoDrainFoot(payload) {
   const { live, capacity, phase, pulling } = autoDrainPhase(payload);
   const runId = pulling ? live.pullRunId : phase === "idle" ? "" : capacity.drain_status_run_id || live.runId;
-  if (isAggregateView() && !runId) return null;
+  if (isAggregateView() && !runId && !drainCheckout(payload).replica) return null;
   const meta = el("div", { class: "drain-foot-meta" });
   meta.id = "auto-drain-run";
   if (runId) meta.appendChild(runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)));
@@ -168,8 +194,8 @@ function autoDrainFoot(payload) {
     }));
   }
   return el("div", { class: "drain-foot" }, [
-    el("div", { class: "drain-foot-row" }, [meta, isAggregateView() ? null : autoDrainStopButton(payload)]),
-    isAggregateView() ? null : autoDrainStopNote(payload),
+    el("div", { class: "drain-foot-row" }, [meta, autoDrainStopButton(payload)]),
+    autoDrainStopNote(payload),
   ]);
 }
 
@@ -315,7 +341,8 @@ function autoDrainApprovals(approvals) {
 // tints the hint amber. The hint sits outside the <label>, so pressing it never
 // focuses or toggles the control.
 function renderAutoDrain(payload, generation = drainScopeGeneration) {
-  if (generation !== drainScopeGeneration) return;
+  const scope = isAggregateView() ? aggregateDrainScopes.get(payload) : null;
+  if (generation !== drainScopeGeneration || scope?.isCurrent() === false) return;
   operationsState.lastAutoDrain = payload;
   // This independent host card is not the aggregate board's readiness snapshot.
   setDrainReadiness(isAggregateView() ? {} : payload);
@@ -326,7 +353,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   const focusKey = document.activeElement?.dataset?.drainFocus;
   body.textContent = "";
   renderAutoDrainHead(payload);
-  const reasons = autoDrainReasons(payload);
+  const reasons = autoDrainReasons(payload, scope?.refusal);
   const holds = [
     autoDrainThrottleLine(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
@@ -348,7 +375,6 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     autoDrainQueued(payload),
   ].filter(Boolean));
   if (isAggregateView()) {
-    clearStartCard("auto-drain-quick-start");
     // The card reads a host independently of the rail. Its existing links
     // must carry that displayed scope too, including modified/new-tab clicks.
     for (const anchor of body.querySelectorAll("a[href]")) {
@@ -360,7 +386,9 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
       anchor.href = url.href;
       anchor.addEventListener("click", event => event.stopImmediatePropagation(), { capture: true });
     }
-  } else renderAutoDrainStart(payload, reasons);
+  }
+  if (!isAggregateView() || scope) renderAutoDrainStart(payload, reasons);
+  else clearStartCard("auto-drain-quick-start");
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
 }
 
@@ -429,7 +457,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
           rememberAggregateWorkspace(workspaceSelect.value);
           // Changing the workspace resets the host to its owner.
           rememberAggregateHost(null);
-          clearDrainChrome();
+          resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
         $("auto-drain-phase").before(workspaceSelect);
@@ -452,7 +480,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
         select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
         select.addEventListener("change", () => {
           rememberAggregateHost(select.value);
-          clearDrainChrome();
+          resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
         $("auto-drain-phase").before(select);
@@ -469,14 +497,41 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       select.value = aggregateDrainHost || "";
       if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
       const row = (fleet.items || []).find(item => item.host === aggregateDrainHost && item.workspace_id === aggregateDrainWorkspace);
-      if (row?.error) throw new Error(row.error);
-      if (!row || row.pending || !LIVE_DRAIN_PHASES.includes(row.phase)) return { capacity: { drain_phase: "idle" } };
-      // Explicitly address even the serving host, so the rail's remote host
-      // cannot accidentally rewrite this independent card's request.
-      return fetchJson(`/api/on/${encodeURIComponent(aggregateDrainHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(aggregateDrainWorkspace)}`);
+      const chosenWorkspace = options.find(option => option.id === aggregateDrainWorkspace);
+      const chosenHost = aggregateDrainHost;
+      let checkoutUnavailable = !row || row.pending;
+      // Idle hosts need readiness too: checkout/owner information and policy
+      // are required to start the same window their concrete board would.
+      const unavailable = () => ({ capacity: { drain_phase: "idle" }, replica: true,
+        start_options: { checkout: "replica", workspace_id: chosenWorkspace.id, pull_refusal: PULL_OWNER_UNAVAILABLE } });
+      const [connection, readiness] = await Promise.all([
+        findRegisteredHost(chosenHost)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(chosenHost)}/connection`),
+        checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(chosenHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(chosenWorkspace.id)}`)
+          .catch(error => {
+            // Only a replica reads as an unavailable owner; an owner whose
+            // workspace is inactive keeps the error its readiness returned.
+            if (error.code !== "workspace_unavailable" || !row?.owner_machine_id) throw error;
+            checkoutUnavailable = true;
+            return unavailable();
+          }),
+      ]);
+      if (!guard()) return null;
+      const scope = aggregateDrainScope(chosenWorkspace, chosenHost, connection, generation, checkoutUnavailable);
+      // A failed connection read must never leave a usable forwarded control.
+      if (connection && !connection.reachable) throw new Error(connection.error?.message || "Host unavailable");
+      aggregateDrainScopes.set(readiness, scope);
+      return readiness;
     }, payload => {
       if (guard() && payload) renderAutoDrain(payload, generation);
-    }, "auto-drain-phase-label");
+    }, "auto-drain-phase-label").catch(error => {
+      if (guard()) {
+        // Retire any retained controls too: a failed connection/readiness
+        // refresh cannot leave a write enabled with stale authority.
+        resetAggregateDrainSelection();
+        for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
+      }
+      throw error;
+    });
   }
   const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
   const params = new URLSearchParams();
@@ -504,6 +559,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
 
 
 configureOperationsDrainControls({
+  scope: payload => isAggregateView() ? aggregateDrainScopes.get(payload) : null,
   render: renderAutoDrain,
   fetch: () => {
     // Action refreshes replace the shared snapshot just like a poll. Keep

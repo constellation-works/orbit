@@ -31,8 +31,7 @@ export function autoDrainLiveWindow(payload) {
 }
 
 // The status card and Start card share workspace and authority refusals.
-export function autoDrainReasons(payload) {
-  const workspaceReason = workspaceReadOnlyReason();
+export function autoDrainReasons(payload, workspaceReason = workspaceReadOnlyReason()) {
   return {
     submit: workspaceReason,
     complete: workspaceReason || (drainCheckout(payload).replica

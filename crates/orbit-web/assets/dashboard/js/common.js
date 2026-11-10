@@ -125,10 +125,11 @@ export function setHostWrites(capability) {
 
 /// Why a write to the selected host cannot be sent, or "" when it can. The
 /// forward refuses an unsafe method without the operator session; write
-/// controls show this reason instead of failing on click.
-export function hostWriteRefusal() {
-  if (!currentHost || !hostWrites || hostWrites.authorized !== false) return "";
-  return `Read-only on ${currentHost}: ${hostWrites.reason || "this dashboard session cannot forward writes"}`;
+/// controls show this reason instead of failing on click. Independent cards
+/// may supply their own host and its connection capability.
+export function hostWriteRefusal(host = currentHost, writes = hostWrites) {
+  if (!host || !writes || writes.authorized !== false) return "";
+  return `Read-only on ${host}: ${writes.reason || "this dashboard session cannot forward writes"}`;
 }
 
 /// Switch the host every API call goes to; the serving host's own name or id
@@ -1221,7 +1222,8 @@ export function listItems(payload) {
 
 // A supplied visit pins both host and workspace, including the serving host
 // whose unprefixed path must not be rewritten for a later host selection.
-// Expired visits cannot begin another request.
+// Expired visits cannot begin another request. An independent card may also
+// provide writeRefusal for its captured host instead of the rail's host.
 export function requestJson(path, method, body, visit) {
   if (visit && !visit.isCurrent()) {
     const error = new Error("The host or workspace changed before the request began");
@@ -1238,7 +1240,8 @@ export function requestJson(path, method, body, visit) {
     opts.body = JSON.stringify(body);
   }
   const target = visit ? visit.path(path) : withWorkspace(path);
-  const refusal = target.startsWith("/api/on/") && method !== "GET" ? hostWriteRefusal() : "";
+  const refusal = target.startsWith("/api/on/") && method !== "GET"
+    ? (visit?.writeRefusal ? visit.writeRefusal() : hostWriteRefusal()) : "";
   if (refusal) {
     const error = new Error(refusal);
     error.code = "authorization_denied";

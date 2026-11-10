@@ -1,6 +1,6 @@
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { revealDockStart } from './log-tail.js';
-import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, pinnedInfoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, pinnedInfoHint, postJson, requestJson, reviewLayerText, submissionNoticeLines } from './common.js';
 import { $, autoDrainNumber, feedback, operationsState, pendingOperations, selectedWorkspace } from './operations-shared.js';
 import { autoDrainAdmissionHold, autoDrainCounts, autoDrainLiveWindow, autoDrainPhase, autoDrainReasons } from './operations-drain-capacity.js';
 
@@ -8,6 +8,24 @@ let drainControlCallbacks = null;
 
 export function configureOperationsDrainControls(callbacks) {
   drainControlCallbacks = callbacks;
+}
+
+// Only All workspaces supplies an independent card scope. Concrete boards
+// keep their existing selected-workspace visit and host form.
+function autoDrainControlScope(payload = operationsState.lastAutoDrain) {
+  return drainControlCallbacks.scope?.(payload);
+}
+
+function autoDrainControlReasons(payload) {
+  return autoDrainReasons(payload, autoDrainControlScope(payload)?.refusal);
+}
+
+function autoDrainControlVisit(payload) {
+  return autoDrainControlScope(payload) || captureWorkspaceVisit();
+}
+
+function autoDrainControlWorkspace(payload) {
+  return autoDrainControlScope(payload)?.workspace || selectedWorkspace();
 }
 
 // The Tasks dock's Start card.
@@ -24,7 +42,7 @@ const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as 
 const autoDrainFormsByHost = new Map();
 
 function autoDrainHostForm() {
-  const key = getHost() || "";
+  const key = autoDrainControlScope()?.host ?? getHost() ?? "";
   let form = autoDrainFormsByHost.get(key);
   if (!form) {
     const defaults = { duration: "1h", concurrency: null, complete: false, approveProposed: false, autoFix: false, review: "" };
@@ -363,7 +381,9 @@ function autoDrainReviewControl(payload, reasons) {
 
 // A replica starts a pull from its owner; an owner starts its own backlog.
 function autoDrainStartRefusal(payload) {
-  const checkout = drainCheckout(payload, selectedWorkspace()?.id);
+  const scope = autoDrainControlScope(payload);
+  if (scope?.refusal) return scope.refusal;
+  const checkout = drainCheckout(payload, autoDrainControlWorkspace(payload)?.id);
   return checkout.replica ? checkout.pullRefusal || (!checkout.ownerHost || !checkout.workspaceId && !checkout.pullSelector
     ? "The owner's host and workspace are unavailable. Reload the page before starting a pull window."
     : "") : "";
@@ -372,8 +392,9 @@ function autoDrainStartRefusal(payload) {
 // Why Start is off, in one place so typing in the concurrency field can
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
-  const reasons = autoDrainReasons(payload);
-  return Boolean(reasons.submit || autoDrainStartRefusal(payload))
+  const reasons = autoDrainControlReasons(payload);
+  return autoDrainControlScope(payload)?.isCurrent() === false
+    || Boolean(reasons.submit || autoDrainStartRefusal(payload))
     || pendingOperations.has("auto-drain:start")
     || !autoDrainDurationValid()
     || !autoDrainConcurrencyValid()
@@ -385,7 +406,7 @@ function autoDrainStartBlocked(payload) {
 
 function autoDrainStartButton(payload, form) {
   const key = "auto-drain:start";
-  const reasons = autoDrainReasons(payload);
+  const reasons = autoDrainControlReasons(payload);
   const pending = pendingOperations.has(key);
   const startHours = autoDrainDurationHours();
   const startLabel = startHours !== null ? `${startHours}h` : autoDrainHostForm().duration;
@@ -401,9 +422,9 @@ function autoDrainStartButton(payload, form) {
   form.syncDuration?.();
   form.syncConcurrency?.();
   button.addEventListener("click", async () => {
-    const visit = captureWorkspaceVisit();
-    if (autoDrainStartBlocked(payload)) return;
-    const workspace = selectedWorkspace();
+    const visit = autoDrainControlVisit(payload);
+    if (!visit.isCurrent() || autoDrainStartBlocked(payload)) return;
+    const workspace = autoDrainControlWorkspace(payload);
     const checkout = drainCheckout(payload, workspace?.id);
     const counts = autoDrainCounts(payload);
     // A bare valid number ("15" without blur) still submits "<n>h".
@@ -440,7 +461,9 @@ function autoDrainStartButton(payload, form) {
         : { for_duration: duration, complete: autoDrainHostForm().complete, approve_proposed: approveProposed, auto_fix: autoFix };
       if (!checkout.replica && review) body.review = review;
       if (autoDrainHostForm().concurrency) body.concurrency = Number(autoDrainHostForm().concurrency);
-      const result = await postJson(visit.path("/api/workflows/auto"), body);
+      const result = autoDrainControlScope(payload)
+        ? await requestJson("/api/workflows/auto", "POST", body, visit)
+        : await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
@@ -546,7 +569,7 @@ export function autoDrainStopButton(payload) {
   const mode = autoDrainStopMode(payload);
   if (mode === "none") return null;
   const key = "auto-drain:stop";
-  const reasons = autoDrainReasons(payload);
+  const reasons = autoDrainControlReasons(payload);
   const live = autoDrainLiveWindow(payload);
   const copy = autoDrainStopCopy(payload);
   const pending = pendingOperations.has(key);
@@ -560,9 +583,9 @@ export function autoDrainStopButton(payload) {
   button.setAttribute("aria-label", pending ? copy.busy : copy.aria);
   button.disabled = Boolean(reasons.stop) || pending;
   button.addEventListener("click", async () => {
-    const visit = captureWorkspaceVisit();
-    if (pendingOperations.has(key)) return;
-    const workspace = selectedWorkspace();
+    const visit = autoDrainControlVisit(payload);
+    if (!visit.isCurrent() || reasons.stop || pendingOperations.has(key)) return;
+    const workspace = autoDrainControlWorkspace(payload);
     const targets = autoDrainStopTargets(live);
     const windowLine = targets.length ? `Window: ${targets.join(" and ")} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
     if (!window.confirm(`${copy.confirm}\n\n${windowLine}`)) return;
@@ -570,7 +593,9 @@ export function autoDrainStopButton(payload) {
     feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Sending completed task results…");
     drainControlCallbacks.render(payload);
     try {
-      const result = await postJson(visit.path("/api/workflows/auto/stop"), {});
+      const result = autoDrainControlScope(payload)
+        ? await requestJson("/api/workflows/auto/stop", "POST", {}, visit)
+        : await postJson(visit.path("/api/workflows/auto/stop"), {});
       if (!visit.isCurrent()) return;
       const coordinators = Array.isArray(result?.coordinators) ? result.coordinators : [];
       const remaining = coordinators.reduce((sum, change) => sum + (Array.isArray(change?.remaining_children) ? change.remaining_children.length : 0), 0);
@@ -606,7 +631,7 @@ export function autoDrainStopButton(payload) {
 export function autoDrainStopNote(payload) {
   const mode = autoDrainStopMode(payload);
   if (mode === "none") return null;
-  const reasons = autoDrainReasons(payload);
+  const reasons = autoDrainControlReasons(payload);
   if (mode === "stop" && !reasons.stop) return null;
   return el("div", {
     class: reasons.stop ? "operation-control-note drain-stop-note disabled-reason" : "operation-control-note drain-stop-note",
@@ -636,7 +661,13 @@ export function renderAutoDrainStart(payload, reasons) {
   const body = $("auto-drain-quick-start-body");
   if (!card || !body) return;
   body.textContent = "";
-  card.hidden = Boolean(reasons.submit);
+  const scope = autoDrainControlScope(payload);
+  card.hidden = Boolean(reasons.submit) && !scope;
+  const title = $("auto-drain-quick-start-title");
+  const pullTitle = scope && drainCheckout(payload).replica ? `Start pulling on ${scope.hostName}` : "";
+  if (title) title.textContent = pullTitle || "Start a window";
+  const toggle = $("auto-drain-start-toggle");
+  if (toggle) toggle.textContent = pullTitle || "Start another window";
   if (card.hidden) return;
   const { phase, pulling } = autoDrainPhase(payload);
   card.classList.toggle("drain-start-live", pulling || phase !== "idle");

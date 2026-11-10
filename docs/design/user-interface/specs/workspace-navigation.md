@@ -7,13 +7,14 @@ last_validated: 2026-11-09
 
 # Spec: Workspace Navigation Across Hosts
 
-> **Proposed, not implemented.** This spec describes the target. Until it ships,
-> [2_design.md](../2_design.md) describes the dashboard as it is.
+> **Partly implemented.** The host × All workspaces drain controls in §4 reuse
+> the existing dashboard. Catalog, scope, host facets and host navigation below
+> remain proposed; [2_design.md](../2_design.md) describes the dashboard as it is.
 
 The dashboard navigates by logical workspace, never by host and workspace together. Each
 workspace appears once, its requests go to the host that owns it, and the hosts that hold a
-replica checkout of it appear as drain capacity on the owner's board. One scope, a set of
-workspaces plus the time window, applies to every view.
+replica checkout of it remain selectable in the All workspaces Auto-drain card.
+One scope, a set of workspaces plus the time window, applies to every view.
 
 ## Why This Exists
 
@@ -74,8 +75,8 @@ jobs of these four workspaces" has to visit four boards.
 3. A mutation is always sent with an explicit `workspace` and to that workspace's owner.
    There is no ambient host.
 4. `?host=` no longer selects a board. A link carrying `?host=H&workspace=W` normalizes in
-   place: to `?workspace=W` when H owns W, and to `?workspace=W` with the Drain dock open on
-   H's lane when H is a capacity host of W. The remembered host is discarded.
+   place: to `?workspace=W` when H owns W, and to All workspaces with the Drain dock
+   selecting W and H when H is a capacity host of W. The remembered host is discarded.
 5. The host registry routes (`/api/hosts…`) stay on the serving host, as today.
 
 ## 3. Scope
@@ -110,32 +111,38 @@ jobs of these four workspaces" has to visit four boards.
    uses the scope's workspace when the scope has one. Otherwise the control asks for a
    workspace from the scope's members before it enables its submit button. It never guesses.
 
-## 4. Capacity lanes
+## 4. Drain windows under All workspaces
 
-With one workspace in scope, the Auto-drain card in the Tasks dock gains a Hosts list with one
-row (a lane) per host that can run the workspace: the owner first, then each capacity host in
-host-file order. The rest of the card is unchanged.
+The host × **All workspaces** view reuses the existing Auto-drain card's
+workspace and host selects, **Start a window** card and **Stop** control. It
+adds no Hosts list, lane controls, fields, markup or styles. A concrete
+host/workspace board, including a replica board, stays as it is.
 
-1. A lane reads `GET /api/workflows/auto/readiness` for the workspace on its own host,
-   through the forward for a remote host.
-2. A lane shows the host name, its role (owner or follower), the phase (Idle, Draining,
-   Winding down, Pull drain or Read-only) and used and ceiling leaf slots. It is the row the
-   Fleet drains card already uses.
-3. The owner's Start, Stop and run link stay where they are today: the card's foot and the
-   Start a window card. A follower lane carries **Start** or **Stop**. Start on a follower
-   lane opens the Start a window card for that host, with the same fields, and posts the same
-   start request to that host, where a replica checkout pulls from the owner. The server
-   contract is unchanged and is the one `orbit run auto --pull` validates.
-4. **Stop** on a lane posts `POST /api/workflows/auto/stop` to that lane's host and keeps
-   today's confirmation text. **Send pending results** stays on the lane it applies to.
-5. A lane whose host refuses a start (`start_options.pull_refusal`, missing owner routing)
-   shows the refusal and disables Start. A lane whose host does not answer shows
-   **unreachable** and offers no controls.
-6. A lane's run link opens the run on the host that executes it.
-7. With more than one workspace in scope the Fleet drains card shows one row per workspace,
-   and the row's existing detail line names each host's phase and slots. Selecting a row
-   narrows the scope to that workspace; it does not switch host. The per-host tabs are
-   removed.
+1. The Auto-drain card's workspace select is limited to the rail's selected
+   workspaces. Its host select lists the workspace's owner first, then the
+   followers holding a replica. Both selections survive reloads; changing
+   workspace resets the host to its owner.
+2. The card reads `GET /api/on/<host>/workflows/auto/readiness?workspace=<id>`
+   for the chosen pair, including when Idle. It shows that host's window,
+   capacity, checkout and start policy rather than an aggregate of the hosts.
+3. **Start a window** keeps the concrete board's fields and confirmation.
+   An owner start posts its usual body to `/api/workflows/auto` for the serving
+   owner, or `/api/on/<owner>/workflows/auto` otherwise, explicitly qualified
+   by workspace. A follower's card says **Start pulling on <host>** and posts
+   `{pull: <workspace>, host: <owner>, for_duration: <duration>}` plus any
+   explicit concurrency to `/api/on/<follower>/workflows/auto`.
+4. The existing **Stop** posts to `workflows/auto/stop` on the same host for
+   the same workspace, with the existing owner or pull-drain confirmation.
+   **Send pending results** stays on the replica it applies to. Start and Stop
+   refresh readiness from that selected host; changing the selection retires
+   earlier actions' readbacks.
+5. A host that refuses forwarded writes disables Start and Stop with
+   `hostWriteRefusal`'s existing wording. A follower missing the replica or
+   owner routing disables Start with the replica board's existing
+   unavailable-owner message. No refused start is posted.
+6. Existing run links address the chosen host and workspace. The separate
+   **Fleet** tab retains its per-host tabs and rows, which switch host and
+   workspace as today.
 
 ## 5. Host as a facet
 
@@ -143,7 +150,7 @@ host-file order. The rest of the card is unchanged.
    host filter beside the workspace filter.
 2. The run-detail route carries the executing host, so a link to a follower's run resolves
    through the forward without changing the scope.
-3. The rail's drain reading counts live lanes across the scope (`2 live`), on every view.
+3. The rail's drain reading counts live windows across the scope (`2 live`), on every view.
 
 ## 6. Hosts page
 
@@ -163,15 +170,17 @@ The first delivered step is deliberately smaller than the catalog phase below:
 on one host, the rail workspace dropdown becomes a persisted, URL-addressed
 checkbox multi-select (one tick keeps the existing board; multiple ticks narrow
 All workspaces task rows and counts). All workspaces gains an owner-first
-Auto-drain host select and a separate Fleet dock tab. It adds no All hosts entry,
-catalog or owner routing, and does not collapse follower workspaces. This step
-precedes and replaces the original phase 1 for now; the remaining phases below
-are future work.
+Auto-drain host select and a separate Fleet dock tab. Its existing Start a
+window card and Stop control then start and stop the chosen pair, including
+follower pull drains, before replica entries leave the workspace dropdown.
+This step adds no All hosts entry, catalog or owner routing, and does not
+collapse follower workspaces. It precedes the original catalog phase 1; the
+revised phase 2 below describes the drain controls that build on it.
 
 | Phase | Change | Removes |
 |---|---|---|
 | 1 | Catalog and owner routing (§1, §2 rules 1 to 3 and 5). The host picker gains **All hosts** as its first and default entry, which shows the catalog. Choosing one host still shows that host's own board, as today, so a follower's pull drain stays reachable. | Duplicate workspace entries in the default view. |
-| 2 | Capacity lanes (§4), the host facet (§5) and `?host=` normalization (§2 rule 4). The picker's single-host entries no longer open a board. | The need to open a follower board. |
+| 2 | Reuse Start a window and Stop for the workspace/host selected in the All workspaces Auto-drain card (§4), including follower pull drains. No new controls, styles or mocks; concrete boards stay unchanged. Replica entries can then leave the workspace dropdown. The host facet (§5) and `?host=` normalization (§2 rule 4) remain later work. | The need to open a follower board to start or stop a pull drain. |
 | 3 | Multi-workspace scope in every view (§3). | The aggregate placeholder. |
 | 4 | Hosts page; the host picker is removed (§6). | Host as a navigation level. |
 
@@ -180,26 +189,20 @@ endpoint and each list view.
 
 ## Mocks
 
-**Change as little as possible.** The dashboard's current look is settled. Each change in
-phases 1 and 2 is made inside a component that already exists, with its existing markup and
-classes, and everything around it stays as it is. New CSS is limited to the four rules shown
-in mock 2.1.
+The earlier phase-2 Hosts-list design and its mocks are dropped. The drain
+window change in §4 reuses the current Start a window card and Auto-drain Stop
+control; it needs no mocks or new CSS. The historical files under
+[`../references/mocks/`](../references/mocks/) are not implementation direction
+for this phase. Catalog and host-facet work remains proposed.
 
-The mocks in [`../references/mocks/`](../references/mocks/) are subsections, not whole
-screens. Each file shows one component as it is today beside the proposed change. The markup
-is copied from the running dashboard and the files link the dashboard's own stylesheets from
-`crates/orbit-web/assets/dashboard/css`, so open them from a checkout. The data is
-illustrative.
+The catalog mocks remain references for future phase 1:
 
 | Mock | Component | Change | New CSS |
 |---|---|---|---|
 | [1.1](../references/mocks/1-1-pickers.html) | Host select and workspace listbox in the rail | Host gains All hosts; the workspace listbox lists each workspace once under owner group labels; unreachable and loading entries | None |
 | [1.2](../references/mocks/1-2-owner-unreachable.html) | Tasks list empty state | The replica empty state, reworded for an unreachable owner | None |
-| [2.1](../references/mocks/2-1-drain-card-hosts.html) | Auto-drain card and Start a window card | A Hosts list of fleet rows between the slot bar and the foot; follower rows carry Start or Stop; the Start card names the host | Four rules |
-| [2.2](../references/mocks/2-2-fleet-drains.html) | Fleet drains card | Host tabs removed; one row per workspace; the detail line names each host | None |
 
-Not mocked: the host column and filter on Jobs and Leases (§5). They follow the same rule
-when they are built.
+The host column and filter on Jobs and Leases (§5) are not mocked.
 
 ## Concerns and Honest Limitations
 
@@ -209,12 +212,13 @@ when they are built.
   can change as rows arrive.
 - **The serving host must reach the owner.** A serving host that can reach only a follower
   shows that workspace as owner unreachable, where today it could show the follower's board
-  and its pull drain controls. The capacity lane for a reachable follower still works.
+  and its pull drain controls. A reachable follower remains selectable for a
+  pull drain under All workspaces.
 - **Saved scopes are per browser.** They do not follow the operator to another machine.
 
 ## Open Questions
 
-1. Which follower-run facts does the owner already record? A lane's run link and the host
+1. Which follower-run facts does the owner already record? The drain card's run link and the host
    facet need the executing host on run and lease rows. If the owner holds only the claim,
    Jobs has to merge the capacity hosts' run lists into the owner's.
 2. Should saved scopes live in the serving host's configuration so they are shared across
@@ -229,8 +233,8 @@ when they are built.
 ## Acceptance
 
 - With 3 registered hosts and 12 logical workspaces, the picker lists 12 entries.
-- A pull drain on any capacity host can be started and stopped from the owner's Tasks dock
-  without changing host.
+- A pull drain on any capacity host can be started and stopped under All workspaces
+  using the existing Start a window card and Auto-drain Stop, without opening a replica board.
 - `?workspace=a,b` shows rows from both workspaces in Tasks, Jobs, Leases and Automation, and
   a row action reaches the row's own workspace on its owner.
 - An unreachable owner is named on the view and its rows are absent; no replica store is read.
