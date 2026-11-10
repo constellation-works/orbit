@@ -446,7 +446,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The 19 seeded definitions
+## The 21 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -769,6 +769,19 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   files at most one `proposed` rubric-revision task. It never changes a
   recorded decision. Seasons read `season-0` until model ranking records
   them.
+
+- **`regression-label-audit`** (`medium`) — weekly. Re-labels 10
+  `regression_from` links from the last 7 days that another model family
+  filed, blind to the filer's labels and to any model, provider or crew
+  name of the filer or of the culprit's implementer or reviewer. It uses
+  the same family skip and field restriction as `recovery-fault-audit`:
+  `created_by` and `created_by_model` only to skip its own family, and the
+  evidence packet is the filing and culprit tasks' title, description,
+  criteria and context files. Sample size and period are definition fields
+  in the brief. Each run attaches `regression-label-audit.json` with the
+  second escape, nature and severity and per-field agreement, and the
+  execution summary reports the sample's disagreement rate for each field.
+  It never edits a regression link, a scorecard or a rank.
 
 - **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,
