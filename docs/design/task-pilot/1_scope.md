@@ -13,9 +13,9 @@ next: "—"
 
 # Task pilot — assessment persistence
 
-Shipped by [ORB-23677], a pilot still decides selectors, crew, complexity and admission using the same
-assessment schema. Apply stores the complete existing audit object, including
-`assessment`, applied material, holds, recheck basis and run identity, as the task
+[ORB-23677] stores the assessment as a task artifact and leaves a one-line comment. A pilot still
+decides selectors, crew, complexity and admission using the same assessment schema. Apply stores
+the complete existing audit object, including `assessment`, applied material, holds, recheck basis and run identity, as the task
 artifact `pilot/assessment-<operation-id>.json`. The operation id makes replays
 reuse one artifact without colliding with a later assessment from the same run.
 
@@ -69,3 +69,5 @@ the release, consumer and remaining-record retirement checks in
 
 - [ORB-23677] — move pilot assessments into task artifacts and retain compact receipts.
 - [ORB-23707] — makes the dashboard pilot-warnings readout degrade per task when an artifact is missing.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

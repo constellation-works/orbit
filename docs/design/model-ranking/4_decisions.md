@@ -3,7 +3,7 @@ title: Model Ranking — Decisions
 owner: claude
 last_updated: 2026-11-10
 last_validated: 2026-11-09
-status: Draft
+status: Accepted
 feature: model-ranking
 doc_role: decisions
 type: design

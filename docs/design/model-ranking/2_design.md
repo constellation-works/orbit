@@ -3,11 +3,11 @@ title: Model Ranking — Design
 owner: claude
 last_updated: 2026-11-10
 last_validated: 2026-11-09
-status: Draft
+status: Accepted
 feature: model-ranking
 doc_role: design
 type: design
-summary: "Proposed design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by cost within a band."
+summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by cost within a band."
 tags: [model-ranking, agent-scorecards]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/landing/checks/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
@@ -357,7 +357,7 @@ change starts a new season (§4.2).
 
 | Phase | Work | Exit |
 |---|---|---|
-| R1 | Record CI failures by cause (§5.1) and recovery fault (§5.2); [ORB-23277] lands. Built: [ORB-23300], [ORB-23301], [ORB-23277] | Each new record type covers at least 80% of the events in a 14-day sample. Not yet shown; [ORB-23839] keeps it open |
+| R1 | Record CI failures by cause (§5.1) and recovery fault (§5.2); [ORB-23277] lands. Built: [ORB-23300], [ORB-23301], [ORB-23277] | Each new record type covers at least 80% of the events in a 14-day sample. Not yet shown |
 | R2 | Compute the ranking, CLI and API; calibrate season-0 scales. Built: [ORB-23302] | It reproduces the scorecard's expectations to within rounding on the shared terms |
 | R3 | Replay 8–12 settled weeks, adding one component at a time: model pooling, then each new measure, then noise scaling, then two-sided shrinkage. Built: [ORB-23304] (readout only) | A readout of what moves the result; weights stable under ±50% perturbation, or the readout widens the bands |
 | R4 | Run in shadow beside the scorecard and the MVP for 4 weeks, publishing both. No open task: [ORB-23305] (freeze code) was rejected 2026-11-09 | Daniel adopts or amends |

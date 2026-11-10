@@ -3,7 +3,7 @@ title: Model Ranking — Overview
 owner: claude
 last_updated: 2026-11-10
 last_validated: 2026-11-10
-status: Draft
+status: Accepted
 stage: building
 next: "R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run"
 feature: model-ranking
