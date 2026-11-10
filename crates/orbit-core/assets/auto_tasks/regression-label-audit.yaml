@@ -197,7 +197,7 @@ template:
             sys.exit("refusing: run packet again after a replacement")
         for key in keys:
             filing, culprit = key.split("|")
-            relations = tool(a, "orbit.task.show", id=filing, fields=["relations"]).get("relations", [])
+            relations = tool(a, "orbit.task.show", id=filing, fields=["id", "relations"]).get("relations", [])
             rec = next((r for r in relations if r.get("type") == "regression_from" and r.get("target") == culprit), {}).get("regression") or {}
             agree = {}
             for f in LABELS:

@@ -5362,6 +5362,33 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "#!/usr/bin/env python3",
+        "## Agreement",
+        "## Definition fields",
+        "## Helper",
+        "## Persist",
+        "## Re-label",
+        "## Sample",
+        "## Stay blind"
+      ],
+      "digest": "8e0a9b14a9304521d897f7e371a2cc09ea120db658a91eafa77ecd961662cd6f",
+      "revision": "e5c81df5281f8a13752a8b9383ef24e3cec70c5f",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "regression-label-audit",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "run-failure-patterns": [
