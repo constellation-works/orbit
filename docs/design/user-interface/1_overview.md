@@ -98,6 +98,7 @@ partial coverage. No recursive federation or workspace writes are performed.
 | Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `lib.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
+| Workspace navigation across hosts (proposed) | `./specs/workspace-navigation.md` | One entry per logical workspace, owner routing, follower capacity lanes and a multi-workspace scope. Not implemented. |
 | Dashboard implementation | [crates/orbit-web/src/serve.rs](../../../crates/orbit-web/src/serve.rs), [assets.rs](../../../crates/orbit-web/src/assets.rs), [state/](../../../crates/orbit-web/src/state/), [api/](../../../crates/orbit-web/src/api/) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
 
 ## Task References
