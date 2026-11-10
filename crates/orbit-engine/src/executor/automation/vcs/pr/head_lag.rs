@@ -82,6 +82,11 @@ impl HeadLag {
         };
         let remote_sha = remote_ref_sha(workspace_path, &reference, pr_number, error_code)?;
         let ref_lags = remote_sha.as_deref() != Some(candidate);
+        let lag_description = if remote_sha.is_none() {
+            format!("pull ref '{reference}' is absent")
+        } else {
+            "remote head still names the previous head".to_string()
+        };
         if !ref_lags {
             self.pull_ref_settled_at = Some(candidate.to_string());
         }
@@ -113,8 +118,8 @@ impl HeadLag {
                     head_lag_error(
                         error_code,
                         format!(
-                            "{error_code}: pull request #{pr_number} remote head still names the \
-                         previous head and the task branch is unknown; the task stays in review"
+                            "{error_code}: pull request #{pr_number} {lag_description} and the task \
+                         branch is unknown; the task stays in review"
                         ),
                     )
                 })?;
@@ -124,9 +129,9 @@ impl HeadLag {
                 return Err(head_lag_error(
                     error_code,
                     format!(
-                        "{error_code}: pull request #{pr_number} remote head still names the previous \
-                     head and branch '{branch}' {branch_sha:?} is not the pinned candidate \
-                     '{candidate}'; the task stays in review"
+                        "{error_code}: pull request #{pr_number} {lag_description} and branch \
+                     '{branch}' {branch_sha:?} is not the pinned candidate '{candidate}'; the task \
+                     stays in review"
                     ),
                 ));
             }
@@ -144,8 +149,8 @@ impl HeadLag {
                 return Err(head_lag_error(
                     error_code,
                     format!(
-                        "{error_code}: pull request #{pr_number} remote head still names the previous \
-                     head after the bounded wait; the task stays in review"
+                        "{error_code}: pull request #{pr_number} {lag_description} after the bounded \
+                     wait; the task stays in review"
                     ),
                 ));
             }

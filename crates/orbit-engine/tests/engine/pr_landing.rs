@@ -257,7 +257,7 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
     isolated(
         "previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads",
         |sandbox| {
-            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_missing_branch_missing remote_missing_branch_at_previous remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
+            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_missing_branch_unknown remote_missing_branch_missing remote_missing_branch_at_previous remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
                 assert_previous_head_refusal(sandbox, case, false);
             }
         },
@@ -375,6 +375,12 @@ fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
             input["max_wait_seconds"] = json!(240);
             (4, "delivery_evidence_stale")
         }
+        "remote_missing_branch_unknown" => {
+            remote = None;
+            input.as_object_mut().unwrap().remove("head");
+            fx.write_forge("pr-head", "");
+            (1, "delivery_evidence_stale")
+        }
         // Without independent branch evidence an absent pull ref refuses at once.
         "remote_missing_branch_missing" => {
             remote = None;
@@ -449,7 +455,61 @@ fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
     }
     let before = fx.status_reads();
     let error = action_err(&host, "pr_complete", &input);
-    assert!(error.to_string().contains(error_code), "{case}: {error}");
+    let message = error.to_string();
+    assert!(message.contains(error_code), "{case}: {message}");
+    match case {
+        "remote_missing" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent after the bounded wait"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_missing" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent and branch"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_unknown" => {
+            assert!(
+                message.contains(
+                    "pull ref 'refs/pull/42/head' is absent and the task branch is unknown"
+                ),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_at_previous" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent and branch"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "persistent" | "persistent_after_metadata" | "time_cap" if pull => assert!(
+            message.contains("remote head still names the previous head after the bounded wait"),
+            "{case}: previous-head diagnosis changed: {message}"
+        ),
+        "branch_missing" | "branch_at_previous" if pull => assert!(
+            message.contains("remote head still names the previous head and branch"),
+            "{case}: previous-head diagnosis changed: {message}"
+        ),
+        _ => {}
+    }
     assert_eq!(fx.status_reads() - before, expected_reads, "{case}");
     assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
 }
