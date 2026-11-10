@@ -160,7 +160,12 @@ pub(super) fn finalize_attention_item(
     use AttentionSeverity as S;
     let base = match item.kind {
         AttentionKind::Blocked => S::High,
-        AttentionKind::ReviewWaiting if item.detail["waiting_on"] == "approval" => S::Low,
+        AttentionKind::ReviewWaiting
+            if item.detail["waiting_on"] == "approval"
+                || item.detail["waiting_on"] == "completion_hold" =>
+        {
+            S::Low
+        }
         _ => S::Medium,
     };
     let bumps = super::ATTENTION_AGE_BUMP_HOURS
@@ -211,6 +216,40 @@ pub(super) fn finalize_attention_item(
         }
     }
     item.fingerprint = cursor::attention_fingerprint(&item, state);
+    item
+}
+fn review_hold_attention_item(
+    subject: &Subject<'_>,
+    kind: AttentionKind,
+    hold: &crate::application::job::ReviewHold,
+) -> AttentionItem {
+    let mut item = subject.item(
+        kind,
+        hold.since,
+        &hold.reason,
+        json!({
+            "waiting_on": hold.kind.as_str(),
+            "code": hold.code,
+            "rule": hold.rule,
+            "field": hold.field,
+            "pattern": hold.pattern,
+            "matched": hold.matched,
+            "pr_number": hold.pr_number,
+            "run_id": hold.run_id,
+        }),
+        AttentionNext {
+            summary: hold.next_summary.clone(),
+            tool: None,
+            input: None,
+            command: hold.next_command(&subject.workspace.id, &subject.task.id),
+            needs: vec![],
+            also: vec![subject.show_next()],
+        },
+    );
+    item.refs["run_id"] = json!(hold.run_id);
+    if let Some(number) = &hold.pr_number {
+        item.refs["pr_number"] = json!(number);
+    }
     item
 }
 fn derive_subject_kind(
@@ -380,77 +419,94 @@ fn derive_subject_kind(
             if task.status != TaskStatus::Review {
                 return Ok(None);
             }
-            let Some(artifact) = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)? else {
-                // No certificate yet: the review has not settled (not run, still
-                // running, or in owner landing). A status or approval request alone
-                // cannot prove settlement, so this is not waiting and not a read failure.
-                return Ok(None);
-            };
-            let certificate: ReviewCertificate = serde_json::from_slice(&artifact.content)
-                .map_err(|error| {
-                    OrbitError::Execution(format!("decode review certificate: {error}"))
-                })?;
-            let Some(ledger) = runtime
-                .review_store()?
-                .review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?
-            else {
-                return Err(OrbitError::Execution(
-                    "review certificate has no lineage ledger; settlement cannot be verified"
-                        .into(),
-                ));
-            };
-            if ledger.attempts.iter().any(|attempt| {
-                matches!(attempt.state, ReviewAttemptState::Open)
-                    || attempt.reviewer_running.is_some()
-            }) {
-                return Ok(None);
-            }
-            let Some(latest) = ledger.latest_attempt() else {
-                return Ok(None);
-            };
-            if latest.attempt_id != certificate.attempt_id
-                || !matches!(latest.state, ReviewAttemptState::Settled { .. })
-            {
-                return Ok(None);
-            }
-            let waiting_on =
-                if !certificate.verdict.passed() && ledger.remaining_at(subject.now).seconds == 0 {
+            if let Some(hold) = runtime.current_review_hold(task, history)? {
+                let state = json!({
+                    "waiting_on": hold.kind.as_str(),
+                    "run_id": hold.run_id,
+                    "code": hold.code,
+                    "rule": hold.rule,
+                    "matched": hold.matched,
+                });
+                (
+                    review_hold_attention_item(subject, kind, &hold),
+                    state,
+                    false,
+                )
+            } else {
+                let Some(artifact) = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
+                else {
+                    // No certificate yet: the review has not settled (not run, still
+                    // running, or in owner landing). A status or approval request alone
+                    // cannot prove settlement, so this is not waiting and not a read failure.
+                    return Ok(None);
+                };
+                let certificate: ReviewCertificate = serde_json::from_slice(&artifact.content)
+                    .map_err(|error| {
+                        OrbitError::Execution(format!("decode review certificate: {error}"))
+                    })?;
+                let Some(ledger) = runtime
+                    .review_store()?
+                    .review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?
+                else {
+                    return Err(OrbitError::Execution(
+                        "review certificate has no lineage ledger; settlement cannot be verified"
+                            .into(),
+                    ));
+                };
+                if ledger.attempts.iter().any(|attempt| {
+                    matches!(attempt.state, ReviewAttemptState::Open)
+                        || attempt.reviewer_running.is_some()
+                }) {
+                    return Ok(None);
+                }
+                let Some(latest) = ledger.latest_attempt() else {
+                    return Ok(None);
+                };
+                if latest.attempt_id != certificate.attempt_id
+                    || !matches!(latest.state, ReviewAttemptState::Settled { .. })
+                {
+                    return Ok(None);
+                }
+                let waiting_on = if !certificate.verdict.passed()
+                    && ledger.remaining_at(subject.now).seconds == 0
+                {
                     "review_budget"
                 } else if certificate.verdict.passed() {
                     "approval"
                 } else {
                     return Ok(None);
                 };
-            let next = if waiting_on == "approval" {
-                AttentionNext {
-                    summary: "Approve the settled review".into(),
-                    tool: None,
-                    input: None,
-                    command: format!(
-                        "orbit --workspace '{}' task update {} --approve",
-                        subject.workspace.id, task.id
-                    ),
-                    needs: vec![],
-                    also: vec![subject.show_next()],
-                }
-            } else {
-                AttentionNext {
-                    summary: "Reset the exhausted review budget".into(),
-                    tool: Some("orbit.task.review_reset".into()),
-                    input: Some(json!({"id": task.id, "workspace": subject.workspace.id})),
-                    command: format!(
-                        "orbit --workspace '{}' task review-reset {} --lineage '<lineage>' --reason '<reason>'",
-                        subject.workspace.id, task.id
-                    ),
-                    needs: vec!["lineage_key".into(), "reason".into()],
-                    also: vec![subject.show_next()],
-                }
-            };
-            let reason = certificate
-                .escalation
-                .as_deref()
-                .unwrap_or_else(|| certificate.verdict.as_str());
-            (subject.item(kind, certificate.issued_at, reason, json!({"waiting_on": waiting_on, "lineage": certificate.lineage_key, "review_id": certificate.attempt_id}), next), json!({"waiting_on": waiting_on, "review_id": certificate.attempt_id}), false)
+                let next = if waiting_on == "approval" {
+                    AttentionNext {
+                        summary: "Approve the settled review".into(),
+                        tool: None,
+                        input: None,
+                        command: format!(
+                            "orbit --workspace '{}' task update {} --approve",
+                            subject.workspace.id, task.id
+                        ),
+                        needs: vec![],
+                        also: vec![subject.show_next()],
+                    }
+                } else {
+                    AttentionNext {
+                        summary: "Reset the exhausted review budget".into(),
+                        tool: Some("orbit.task.review_reset".into()),
+                        input: Some(json!({"id": task.id, "workspace": subject.workspace.id})),
+                        command: format!(
+                            "orbit --workspace '{}' task review-reset {} --lineage '<lineage>' --reason '<reason>'",
+                            subject.workspace.id, task.id
+                        ),
+                        needs: vec!["lineage_key".into(), "reason".into()],
+                        also: vec![subject.show_next()],
+                    }
+                };
+                let reason = certificate
+                    .escalation
+                    .as_deref()
+                    .unwrap_or_else(|| certificate.verdict.as_str());
+                (subject.item(kind, certificate.issued_at, reason, json!({"waiting_on": waiting_on, "lineage": certificate.lineage_key, "review_id": certificate.attempt_id}), next), json!({"waiting_on": waiting_on, "review_id": certificate.attempt_id}), false)
+            }
         }
         _ => return Ok(None),
     };

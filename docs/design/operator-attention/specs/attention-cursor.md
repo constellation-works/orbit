@@ -38,7 +38,7 @@ sorted keys and no insignificant whitespace.
 | `pilot_hold` | hold classification, the hold's history operation id, the folded decision request id |
 | `blocked` | `blocked_at`, `basis`, the escalation comment's time, the folded decision request id |
 | `decision_open` | request id (a re-raised request is a new item) |
-| `review_waiting` | `waiting_on` and the settling review's id |
+| `review_waiting` | `waiting_on` and the settling review's id, or for a hold the run id, the delivery code or completion rule, and the matched value |
 | `run_failed` | run id and state |
 | `run_stuck` | run id and whether the cause is a dead owner or the wall-clock bound |
 | `claim_stale` | claim id, phase and the set of diagnostics that hold |

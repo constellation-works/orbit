@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::drain_summary::{
-    pass_refusal_line, pass_throttle_line, pass_waiting_lines, summarize_drain_leaves,
+    held_review_leaf, pass_refusal_line, pass_throttle_line, pass_waiting_lines,
+    summarize_drain_leaves,
 };
 use super::format::{
     WaitingTaskFormatter, format_backlog_exclusion_lines, format_root_cause_lines,
@@ -128,9 +129,12 @@ pub(crate) fn run_show_payload(
     // Who holds the locks a waiting run is blocked on, read live: the run
     // only persists the selectors.
     let lock_holders = waiting_lock_holders(runtime, &run, state.as_ref());
-    let mut drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
-        read.show(runtime, child_run_id).ok()
-    });
+    let mut drain_summary = summarize_drain_leaves(
+        &run,
+        state.as_ref(),
+        |child_run_id| read.show(runtime, child_run_id).ok(),
+        |leaf| held_review_leaf(runtime, leaf),
+    );
     if let Some(summary) = drain_summary.as_mut() {
         for leaf in &mut summary.failed_leaves {
             leaf.resume_run_id = leaf_resume_target(runtime, &leaf.run_id, read);

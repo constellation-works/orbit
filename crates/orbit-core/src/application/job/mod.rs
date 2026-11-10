@@ -22,6 +22,7 @@ pub(crate) mod pipeline;
 pub(crate) mod pipeline_actions;
 mod pr_repair;
 mod resume;
+mod review_hold;
 mod review_hook;
 mod run;
 #[cfg(feature = "test-support")]
@@ -84,6 +85,7 @@ pub use pipeline::{
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;
+pub use review_hold::{ReviewHold, ReviewHoldKind};
 pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;
 pub(crate) use run::running_run_has_verified_owner;
