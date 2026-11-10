@@ -130,6 +130,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
     "held_provider_failure",
     "held_upgrade_pending",
     "held_child_timeout",
+    "held_owner_signoff",
 ];
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.

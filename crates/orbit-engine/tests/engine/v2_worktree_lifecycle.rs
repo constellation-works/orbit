@@ -985,6 +985,21 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
     assert_held_candidate_resumes_carried("validate", "held_child_timeout");
 }
 
+/// An owner-signoff hold resumes its implement-step candidate for the
+/// implementer to finish instead of starting fresh.
+fn a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair() {
+    let preserved = PreservedCandidate::feature();
+    preserved.preserve_decision("implement_one", "held_owner_signoff");
+    preserved.host.set_status(RESUME_TASK, TaskStatus::Backlog);
+
+    let (setup, resumed) = preserved.resumed();
+    assert_resumed("held_owner_signoff", &resumed, "resumed_repaired", true);
+    assert_eq!(resumed["repair"]["trigger"], "implementation");
+    assert_eq!(resumed["source_sha"], preserved.candidate);
+    assert_eq!(read(workspace(&setup).join("feature.txt")), "feature\n");
+    assert_resume_recorded(&preserved, "resumed_repaired");
+}
+
 /// The task's next run resumes a candidate whose failed run's handoff at
 /// `failed_step_id` recorded `decision`, as carried work.
 fn assert_held_candidate_resumes_carried(failed_step_id: &str, decision: &str) {
@@ -4706,6 +4721,7 @@ worktree_families! {
         a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
         a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
         a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
+        a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair,
         a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
     ],
     worktree_contracts_4: [
