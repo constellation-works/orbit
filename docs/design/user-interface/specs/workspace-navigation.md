@@ -8,7 +8,10 @@ last_validated: 2026-11-09
 # Spec: Workspace Navigation Across Hosts
 
 > **Partly implemented.** The host × All workspaces drain controls in §4 reuse
-> the existing dashboard. Catalog, scope, host facets and host navigation below
+> the existing dashboard, and the rail's workspace dropdown now offers only the
+> workspaces the selected host owns (`checkout_role` on each `/api/workspaces`
+> row; no role counts as owned), so a follower's replica checkout has no board
+> on any host. Catalog, scope, host facets and host navigation below
 > remain proposed; [2_design.md](../2_design.md) describes the dashboard as it is.
 
 The dashboard navigates by logical workspace, never by host and workspace together. Each
@@ -178,6 +181,11 @@ follower pull drains, before replica entries leave the workspace dropdown.
 This step adds no All hosts entry, catalog or owner routing, and does not
 collapse follower workspaces. It precedes the original catalog phase 1; the
 revised phase 2 below describes the drain controls that build on it.
+Replica entries have since left the workspace dropdown: it offers only the
+selected host's owned workspaces, the All workspaces aggregate and the
+Auto-drain card's workspace select follow that owned list (its host select
+still lists follower hosts), and a remembered or linked replica falls back
+to the host's owned workspaces.
 
 | Phase | Change | Removes |
 |---|---|---|
