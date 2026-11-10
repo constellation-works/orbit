@@ -165,6 +165,9 @@ impl DeliveryRefusal {
             Self::CheckRepairActivityAbsent => {
                 "Adding step_failure_recovery and retrying the same head holds again as delivery_repair_dispatched; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run.".into()
             }
+            Self::CheckRunsAbsent => {
+                "Start the required checks on that head by hand, or push a new head, then start a new delivery attempt.".into()
+            }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()
             }
