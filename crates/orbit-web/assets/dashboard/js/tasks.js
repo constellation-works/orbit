@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
@@ -317,30 +317,42 @@ function takeTaskActionNotice(context) {
   }
   return notice;
 }
-// ORB-15216: a pull replica holds no tasks of its own; they live on its owner
-// host. The serving host's `/api/hosts` row lists each checkout's role, so this
-// reads what the host picker already has. A remote host's row lists checkouts
-// only after a probe, so replicas on a remote host are not named here.
+// A host that owns nothing never selects a replica board. Its `/api/workspaces`
+// rows still name each replica's owner, and Tasks points there instead.
 function replicaOwner() {
-  const workspaceId = getWorkspace();
-  if (!workspaceId) return null;
-  const row = getHost() ? findRegisteredHost(getHost()) : getRegisteredHosts().find((host) => host.local);
-  const checkout = (row?.workspaces || []).find((workspace) => workspace.id === workspaceId);
-  if (checkout?.role !== "replica") return null;
-  const owner = findRegisteredHost(checkout.owner_machine_id);
-  return {
-    name: owner ? owner.name : checkout.owner_machine_id || "an unknown host",
-    // Only a registered remote host has an entry in the picker to switch to.
-    switchable: Boolean(owner && !owner.local),
-  };
+  if (getWorkspace()) return null;
+  const replicas = getUnownedReplicas();
+  if (!replicas.length) return null;
+  const ownerIds = [];
+  for (const replica of replicas) {
+    const id = replica.owner_machine_id;
+    if (id && !ownerIds.includes(id)) ownerIds.push(id);
+  }
+  if (ownerIds.length !== 1) {
+    return {
+      name: ownerIds.length ? "" : "an unknown host",
+      switchable: false,
+      several: ownerIds.length > 1,
+    };
+  }
+  const owner = findRegisteredHost(ownerIds[0]);
+  const name = owner ? owner.name : ownerIds[0];
+  const selected = getHost();
+  // The serving host's picker value is empty, so it is a switch target only
+  // while a remote follower is selected. A remote owner is switchable from
+  // any other host.
+  const switchable = Boolean(owner) && (owner.local ? Boolean(selected) : owner.name !== selected);
+  return { name, switchable, several: false };
 }
 
 function showOnOwnerButton(name) {
-  const button = el("button", { class: "ghost", type: "button", text: `Show on ${name}` });
+  const button = el("button", { class: "show-on-owner", type: "button", text: `Show on ${name}` });
   button.addEventListener("click", () => {
     const picker = document.getElementById("host-select");
     if (!picker) return;
-    picker.value = name;
+    const owner = findRegisteredHost(name);
+    // The serving host's option value is empty; remotes use their registered name.
+    picker.value = owner && owner.local ? "" : name;
     picker.dispatchEvent(new Event("change"));
   });
   return button;
@@ -531,9 +543,14 @@ export function renderTasks(tasks, context) {
   if (filtered.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
+    const replicaText = !replica
+      ? defaultText
+      : replica.several
+        ? "This host owns no workspaces; its checkouts are replicas of more than one owner."
+        : `This host owns no workspaces; its checkouts are replicas of ${replica.name}.`;
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
+      el("div", { class: "text", text: replicaText }),
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncTaskNotices([notice, ...buildFoldedStatusNotices(new Set(), context)].filter(Boolean));

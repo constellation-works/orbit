@@ -1268,3 +1268,19 @@ main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; wid
   background: var(--warn-wash);
   font-size: 11px;
 }
+
+/* The owner switch on a host that owns no workspaces. One line of reason sits
+   above it in the empty state; the control is the recovery path. */
+.empty-state .show-on-owner {
+  margin-top: 16px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: 600 13px var(--font-sans);
+  cursor: pointer;
+}
+.empty-state .show-on-owner:hover { border-color: var(--accent); color: var(--accent); }
+.empty-state .show-on-owner:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

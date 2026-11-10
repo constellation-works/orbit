@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -1303,6 +1303,28 @@ function navigateTaskPage(direction) {
 }
 
 function fetchAndRenderTasks({ includeCrews = true } = {}) {
+  // A host that owns nothing has no board to open. Skip the task read — it
+  // would hit the server default, which may be a replica or no workspace at
+  // all — and let the empty state name the owner.
+  if (!isAggregateView() && !getWorkspace() && getUnownedReplicas().length) {
+    const sequence = ++taskFetchSequence;
+    taskPageLoading = false;
+    taskPageError = null;
+    const empty = { items: [], total: 0, limit: 0, truncated: false };
+    return requestPanel("tasks-body", "unowned-replicas", () => Promise.resolve([empty, null]), ([payload]) => {
+      if (sequence !== taskFetchSequence) return;
+      cacheCrewPayload({ crews: [] });
+      lastTasks = listItems(payload);
+      lastTasksMeta = {
+        total: payload.total,
+        limit: payload.limit,
+        truncated: payload.truncated,
+        offset: 0,
+        next_cursor: null,
+      };
+      renderTaskList(lastTasks, taskContext());
+    });
+  }
   // In global mode with the aggregate ("All workspaces") view selected, pull
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
@@ -1403,6 +1425,8 @@ async function initWorkspaceSelector() {
     entries = await fetchJson("/api/workspaces");
   } catch (e) {
     console.error(e);
+    // A failed list must not keep the previous host's replica owner on screen.
+    if (hostRevision === getHostRevision()) setUnownedReplicas([]);
     return false;
   }
   // A host switch while the list was in flight retired it: the next host's
@@ -1413,6 +1437,9 @@ async function initWorkspaceSelector() {
   // the dropdown, the aggregate and every reader of this list follow the
   // owned subset; a row with no role counts as owned.
   dashboardWorkspaces = ownedWorkspaces(entries);
+  // A host that owns nothing still lists replica checkouts here. Tasks names
+  // their owner from these rows; the picker below keeps only the owned subset.
+  setUnownedReplicas(dashboardWorkspaces.length === 0 ? entries : []);
   // Names, picker order and workspace colours, before the picker is built
   // from them.
   setWorkspaceNames(dashboardWorkspaces);
