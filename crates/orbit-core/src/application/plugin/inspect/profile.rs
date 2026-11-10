@@ -70,9 +70,12 @@ pub(super) fn render_backend_profile(
     };
     let mut environments = Vec::new();
     for tool in environment_tools {
+        // Project the launch environment without writing program links. A
+        // same-namespace checkout must not change what an installed backend
+        // already resolves through its `PATH`.
         let variables = backend
             .spec()
-            .child_environment(&context, &workspace_text, tool.as_deref())?
+            .diagnostic_child_environment(&context, &workspace_text, tool.as_deref())?
             .into_iter()
             .map(|(name, value)| {
                 // This is only the diagnostic projection: the backend's

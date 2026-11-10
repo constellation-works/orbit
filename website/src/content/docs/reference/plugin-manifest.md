@@ -29,7 +29,8 @@ The scaffold creates `demo/.orbit-plugin/` with an executable Python backend,
 a `status` tool, a dashboard panel, a skill, an auto-task template and conformance
 cases. It requests no additional permissions. You need Python 3 to run its backend.
 `validate` checks the source without installing or running the backend; `--render`
-also shows the effective sandbox profile and child environment. Run it from the
+also shows the effective sandbox profile and child environment without creating,
+repointing or removing an installed plugin's program links. Run it from the
 registered workspace, or pass `--workspace <selector>`, to inspect that workspace's
 configuration. Outside a workspace it uses host configuration.
 

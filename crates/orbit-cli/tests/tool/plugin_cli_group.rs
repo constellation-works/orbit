@@ -1398,6 +1398,289 @@ fn rendered_validation_redacts_credentials_without_changing_backend_environment(
     assert!(marker.exists(), "the actual call must execute the backend");
 }
 
+/// `orbit plugin validate <source> --render` projects a speculative backend for
+/// the source namespace. That projection must not create, repoint or prune the
+/// program links an installed backend's `PATH` already names, including when
+/// the source resolves the same program to another file or drops
+/// `requires.programs`.
+#[cfg(unix)]
+#[test]
+fn rendered_validation_keeps_installed_program_links() {
+    let fixture = Fixture::new();
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let installed_bin = fixture.home.join("bin-installed");
+    let alternate_bin = fixture.home.join("bin-alternate");
+    let installed_program = installed_bin.join("keptprog");
+    let alternate_program = alternate_bin.join("keptprog");
+    write_executable(&installed_program, "#!/bin/sh\nprintf 'kept-program\\n'\n");
+    write_executable(
+        &alternate_program,
+        "#!/bin/sh\nprintf 'alternate-program\\n'\n",
+    );
+    let recorded = installed_program
+        .canonicalize()
+        .expect("canonical recorded program");
+    let alternate = alternate_program
+        .canonicalize()
+        .expect("canonical alternate program");
+    assert_ne!(
+        recorded, alternate,
+        "the two program files must be distinct so a repoint is observable"
+    );
+    let install_path = format!("{}:{inherited_path}", installed_bin.display());
+    let alternate_path = format!("{}:{inherited_path}", alternate_bin.display());
+
+    let source = fixture.source("linkkeep");
+    let source_arg = source.to_str().expect("utf8 source");
+    write_status_plugin(
+        &source,
+        "linkkeep",
+        "  requires:\n    programs: [keptprog]\n",
+    );
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let manifest_text = std::fs::read_to_string(&manifest).expect("read installed manifest");
+    std::fs::write(
+        &manifest,
+        manifest_text.replace("    type: exec\n", "    type: exec\n    sandbox: none\n"),
+    )
+    .expect("request an unsandboxed installed backend");
+    fixture
+        .orbit()
+        .env("PATH", &install_path)
+        .args([
+            "plugin",
+            "add",
+            source_arg,
+            "--enable",
+            "--grant",
+            "unsandboxed",
+        ])
+        .assert()
+        .success();
+    fixture
+        .orbit_as_operator()
+        .env("PATH", &install_path)
+        .args(["linkkeep", "status", "--format", "json"])
+        .assert()
+        .success();
+
+    let link = fixture
+        .home
+        .join(".orbit/plugins/.programs/linkkeep/keptprog");
+    assert_installed_program_unchanged(&link, &recorded);
+
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[execution.env]\npass = [\"SERVICE_API_TOKEN\", \"SERVICE_PASSWORD\", \"SERVICE_REGION\"]\n",
+    )
+    .expect("admit synthetic environment in the fixture workspace");
+    let workspace = fixture.work.to_str().expect("utf8 workspace");
+    let credentials = [
+        ("SERVICE_API_TOKEN", "synthetic-service-credential-a8b92c6d"),
+        ("SERVICE_PASSWORD", "xy"),
+    ];
+    let retarget = fixture.home.join("plugin-sources/linkkeep-retarget");
+    let dropped = fixture.home.join("plugin-sources/linkkeep-dropped");
+    let retarget_marker = fixture.home.join("retarget-backend-ran");
+    let dropped_marker = fixture.home.join("dropped-backend-ran");
+    write_rendered_program_source(
+        &retarget,
+        "  requires:\n    programs: [keptprog]\n  permissions:\n    env_pass: [SERVICE_API_TOKEN, SERVICE_PASSWORD, SERVICE_REGION]\n",
+        &retarget_marker,
+    );
+    write_rendered_program_source(
+        &dropped,
+        "  permissions:\n    env_pass: [SERVICE_API_TOKEN, SERVICE_PASSWORD, SERVICE_REGION]\n",
+        &dropped_marker,
+    );
+
+    for (source, marker, programs_on_path) in [
+        (&retarget, &retarget_marker, true),
+        (&dropped, &dropped_marker, false),
+    ] {
+        for format in ["plain", "json"] {
+            let rendered = render_plugin_source(
+                &fixture,
+                source,
+                &alternate_path,
+                workspace,
+                format,
+                &credentials,
+            );
+            for bytes in [&rendered.stdout, &rendered.stderr] {
+                assert!(
+                    !String::from_utf8_lossy(bytes).contains(credentials[0].1),
+                    "{format} inspection must not disclose an admitted credential"
+                );
+            }
+            if format == "json" {
+                let rendered = stdout_json(&rendered);
+                assert_rendered_program_environment(&rendered, workspace, &link, programs_on_path);
+            } else {
+                let text = String::from_utf8_lossy(&rendered.stdout);
+                for name in ["SERVICE_API_TOKEN", "SERVICE_PASSWORD"] {
+                    assert!(text.contains(&format!("{name}=[REDACTED_ENV]")), "{text}");
+                }
+                assert!(text.contains("SERVICE_REGION=fixture-east"), "{text}");
+                assert!(
+                    text.contains(&format!("ORBIT_WORKSPACE_ROOT={workspace}")),
+                    "{text}"
+                );
+                assert!(text.contains("ORBIT_PLUGIN=linkkeep"), "{text}");
+                let path_line = text
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("PATH="))
+                    .unwrap_or_else(|| panic!("plain render must show PATH: {text}"));
+                assert_rendered_path(path_line, &link, programs_on_path);
+            }
+            assert!(
+                !marker.exists(),
+                "rendered validation must not execute the alternate backend"
+            );
+        }
+        assert_installed_program_unchanged(&link, &recorded);
+    }
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, body: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("program directory");
+    }
+    std::fs::write(path, body).expect("write program");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod program");
+}
+
+#[cfg(unix)]
+fn write_rendered_program_source(source: &Path, extra_spec: &str, marker: &Path) {
+    write_status_plugin(source, "linkkeep", extra_spec);
+    let marker = marker.display();
+    write_executable(
+        &source.join(".orbit-plugin/bin/backend.sh"),
+        &format!("#!/bin/sh\n: > '{marker}'\nprintf '{{\"ok\":true,\"output\":{{}}}}\\n'\n"),
+    );
+}
+
+#[cfg(unix)]
+fn render_plugin_source(
+    fixture: &Fixture,
+    source: &Path,
+    path_env: &str,
+    workspace: &str,
+    format: &str,
+    credentials: &[(&str, &str)],
+) -> std::process::Output {
+    fixture
+        .orbit()
+        .env("PATH", path_env)
+        .env(credentials[0].0, credentials[0].1)
+        .env(credentials[1].0, credentials[1].1)
+        .env("SERVICE_REGION", "fixture-east")
+        .args([
+            "plugin",
+            "validate",
+            source.to_str().expect("utf8 source"),
+            "--render",
+            "--workspace",
+            workspace,
+            "--format",
+            format,
+        ])
+        .success_output()
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_installed_program_unchanged(link: &Path, recorded: &Path) {
+    assert_eq!(
+        std::fs::read_link(link).expect("installed program link"),
+        recorded,
+        "rendered validation must not repoint or remove the installed program link"
+    );
+    let output = std::process::Command::new(link)
+        .output()
+        .expect("run the installed program through its link");
+    assert!(
+        output.status.success(),
+        "installed program link must stay executable: {output:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "kept-program",
+        "the installed link must still run the recorded program"
+    );
+    let mut names = std::fs::read_dir(link.parent().expect("link directory"))
+        .expect("read program link directory")
+        .map(|entry| {
+            entry
+                .expect("link directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["keptprog".to_string()],
+        "rendered validation must not add or remove program links"
+    );
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_rendered_program_environment(
+    rendered: &Value,
+    workspace: &str,
+    link: &Path,
+    programs_on_path: bool,
+) {
+    let profile = &rendered["rendered"];
+    assert_eq!(profile["workspace"], workspace);
+    let environment = &profile["environments"][0];
+    assert_eq!(environment["tool"], "linkkeep.status");
+    let variables = &environment["variables"];
+    assert_eq!(variables["SERVICE_API_TOKEN"], "[REDACTED_ENV]");
+    assert_eq!(variables["SERVICE_PASSWORD"], "[REDACTED_ENV]");
+    assert_eq!(variables["SERVICE_REGION"], "fixture-east");
+    assert_eq!(variables["ORBIT_WORKSPACE_ROOT"], workspace);
+    assert_eq!(variables["ORBIT_PLUGIN"], "linkkeep");
+    let path = variables["PATH"]
+        .as_str()
+        .unwrap_or_else(|| panic!("rendered PATH must be a string: {variables}"));
+    assert_rendered_path(path, link, programs_on_path);
+    let allowed = if programs_on_path { "keptprog" } else { "" };
+    assert_eq!(variables["ORBIT_PROC_ALLOWED_PROGRAMS"], allowed);
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_rendered_path(path: &str, link: &Path, programs_on_path: bool) {
+    let link_dir = link
+        .parent()
+        .expect("program link directory")
+        .to_string_lossy()
+        .into_owned();
+    let first = path
+        .trim()
+        .trim_start_matches("PATH=")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    if programs_on_path {
+        assert_eq!(
+            first, link_dir,
+            "a source that declares a granted program must project that link directory on PATH: {path}"
+        );
+    } else {
+        assert!(
+            !path.split(':').any(|dir| dir == link_dir),
+            "a source that drops requires.programs must not project the installed link directory: {path}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
