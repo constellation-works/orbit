@@ -160,6 +160,38 @@ can run the workspace: the owner's lane first, then each capacity host in host-f
 Phases 1 and 2 end the 36-board problem. Phase 3 is the largest: it changes each aggregate
 endpoint and each list view.
 
+## Mocks
+
+Static HTML mocks for phases 1 and 2 are in [`../references/mocks/`](../references/mocks/).
+Open a file in a browser at the stated width. They show layout, wording and states; the
+workspace names, slot counts, run IDs and times are illustrative. Where a mock and a rule in
+this spec disagree, the rule wins.
+
+| Mock | Width | Shows | Rules |
+|---|---|---|---|
+| [1.1](../references/mocks/1-1-tasks-all-hosts-catalog.html) | 1280 | Tasks under All hosts with the workspace catalog open | §1, §2 |
+| [1.2](../references/mocks/1-2-picker-states.html) | 1000 | Host picker default, catalog loading, an owner that does not answer, one host chosen | §1 rules 5 and 6, Phasing |
+| [1.3](../references/mocks/1-3-owner-unreachable.html) | 880 | The Tasks view when the owner is unreachable | §1 rule 5 |
+| [2.1](../references/mocks/2-1-drain-capacity-lanes.html) | 1280 | The Drain card with one lane per host and the pull-window form | §4 rules 1 to 4 |
+| [2.2](../references/mocks/2-2-lane-states.html) | 560 | Lane states: winding down, start refused, unreachable, pending results, read-only | §4 rules 4 and 5 |
+| [2.3](../references/mocks/2-3-all-workspaces-drains.html) | 1280 | All workspaces: drains grouped by workspace, one sub-row per host | §4 rule 7 |
+| [2.4](../references/mocks/2-4-jobs-host-filter.html) | 1280 | Jobs with a host column and host filter | §5 |
+| [2.5](../references/mocks/2-5-capacity-lanes-phone.html) | 390 | The capacity lanes at phone width | §4 |
+
+**Keep the current Tasks board CSS for the most part.** The mocks approximate the board,
+the rail and the dock; they are not a restyle. Build the new pieces from the classes the
+dashboard already has: the board's `.row`, `.group-header` and `.chip`, the dock's `.dock-*`,
+and the Drain card's `.drain-*` (its slot meter is `.drain-capacity`). Add CSS only for what is
+new: catalog entries in the workspace picker, a lane row, and a host sub-row under a workspace.
+
+Two things the mocks show that the rules above do not state:
+
+- When an owner does not answer, the catalog knows its workspaces only through other hosts'
+  replica rows. Workspaces that only the owner holds are not listed, and the picker says so
+  (mock 1.2).
+- The pull-window form on a follower lane offers window length and parallel tasks only
+  (mock 2.1). Check this against the start contract before building it; the contract decides.
+
 ## Concerns and Honest Limitations
 
 - **A scope spanning owners costs one request per owner per view.** With the three-request

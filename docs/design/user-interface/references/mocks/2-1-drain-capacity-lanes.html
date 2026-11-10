@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock 2.1: Drain card with one capacity lane per host</title>
+<!-- Static mock for docs/design/user-interface/specs/workspace-navigation.md. Data is illustrative. -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7aa7ff}a:hover{color:#a9c5ff}
+.o{font-family:'Geist',system-ui,sans-serif;font-size:14px;line-height:1.5;color:#e7eaee;background:#0b0d10}
+.o button{font:inherit;cursor:pointer}
+.m{font-family:'Geist Mono',ui-monospace,monospace}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;background:#0e1115;border-bottom:1px solid #22272e}
+.shell{display:flex;flex-wrap:wrap;align-items:stretch}
+.rail{flex:0 0 216px;box-sizing:border-box;padding:12px 8px;background:#0e1115;border-right:1px solid #22272e}
+.main{flex:999 1 560px;min-width:0;padding:16px;box-sizing:border-box;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.ov{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a3acb8}
+.sel{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid #22272e;background:#151920;color:#f2f4f7;font-size:13px;font-weight:500;text-align:left}
+.tab{display:flex;justify-content:space-between;padding:6px 10px;border-radius:7px;color:#c9d0d9;font-size:13px;text-decoration:none}
+.tab.on{background:#1a1f27;color:#f2f4f7}
+.card{background:#121519;border:1px solid #22272e;border-radius:10px}
+.badge{display:inline-block;font-size:11px;line-height:16px;padding:0 6px;border-radius:4px;background:#151920;border:1px solid #22272e;color:#c9d0d9;white-space:nowrap}
+.btn{font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid #2e343c;background:#151920;color:#e7eaee;white-space:nowrap}
+.btn.pri{background:#7aa7ff;border-color:#7aa7ff;color:#0b0d10;font-weight:600}
+.btn.stop{background:#150f0f;border-color:#3a2321;color:#ff9c90}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.row{display:grid;grid-template-columns:96px minmax(0,1fr) 84px;gap:12px;align-items:center;padding:8px 14px;border-top:1px solid #1b1f25;font-size:13px}
+.lane{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 132px auto;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid #1b1f25}
+.lane2{grid-column:1 / -1;font-size:12px;color:#a3acb8}
+.meter{display:flex;gap:3px}
+.meter i{flex:1 1 0;height:6px;border-radius:2px;background:#22272e}
+.meter i.f{background:#5cc8f0}
+.sub{display:inline-block;padding:10px 2px;margin-right:20px;font-size:13px;color:#a3acb8;text-decoration:none}
+.sub.on{color:#f2f4f7;border-bottom:2px solid #7aa7ff}
+.mut{color:#a3acb8}
+.fld{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;font-size:13px}
+.step{width:120px;box-sizing:border-box;padding:5px 10px;border-radius:6px;border:1px solid #22272e;background:#151920;color:#e7eaee;font:inherit;font-size:13px;text-align:center}
+</style>
+<style>html{background:#0b0d10}</style>
+</head>
+<body>
+<div class="o">
+  <header class="top">
+    <strong style="font-size: 16px; color: #f2f4f7">orbit</strong>
+    <span class="badge m">claude 41%</span>
+    <span class="badge m">codex 18%</span>
+    <span style="flex: 1 1 0"></span>
+    <button class="btn pri" type="button">New task</button>
+    <button class="btn" type="button">Notify</button>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" aria-label="Dashboard sections">
+      <div class="ov" style="padding: 0 4px 6px">Workspace</div>
+      <button class="sel" type="button" aria-haspopup="listbox">
+        <span>orbit</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span class="badge m">dk-server-2</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>
+      </button>
+      <div class="ov" style="padding: 20px 10px 4px">Work</div>
+      <a class="tab" href="#tasks"><span>Tasks</span><span class="m mut" style="font-size: 12px">31</span></a>
+      <a class="tab on" href="#drain"><span>Drain</span><span style="display: inline-flex; align-items: center; gap: 6px; color: #5cc8f0; font-size: 12px"><span class="dot" style="background: #5cc8f0"></span>2 live</span></a>
+      <a class="tab" href="#jobs"><span>Jobs</span><span class="m mut" style="font-size: 12px">5</span></a>
+      <a class="tab" href="#leases"><span>Leases</span></a>
+      <div class="ov" style="padding: 14px 10px 4px">Observe</div>
+      <a class="tab" href="#health"><span>Health</span></a>
+      <a class="tab" href="#analytics"><span>Analytics</span></a>
+      <div class="ov" style="padding: 14px 10px 4px">Manage</div>
+      <a class="tab" href="#automation"><span>Automation</span></a>
+      <a class="tab" href="#knowledge"><span>Knowledge</span></a>
+      <a class="tab" href="#plugins"><span>Plugins</span></a>
+      <a class="tab" href="#settings"><span>Settings</span></a>
+    </nav>
+
+    <main class="main">
+      <section class="card" style="flex: 1 1 320px; min-width: 0; overflow: hidden" aria-label="Tasks">
+        <div class="row" style="border-top: 0"><span class="ov">Task</span><span class="ov">Title</span><span class="ov">Status</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23853</span><span>Scribe session pass: windowed processing</span><span style="color: #5cc8f0">In progress</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23865</span><span>Dashboard: list each workspace once</span><span style="color: #5cc8f0">In progress</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23854</span><span>Granted programs reachable by name</span><span style="color: #8a94a3">Backlog</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23859</span><span>Ship host-health at low complexity</span><span style="color: #8a94a3">Backlog</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23849</span><span>Typed session links in a links field</span><span style="color: #8a94a3">Backlog</span></div>
+      </section>
+
+      <section style="flex: 1.4 1 520px; min-width: 0" aria-label="Tasks dock">
+        <div style="border-bottom: 1px solid #22272e; margin-bottom: 12px">
+          <a class="sub on" href="#drain">Drain</a><a class="sub" href="#locks">Locks held</a><a class="sub" href="#log">Log</a>
+        </div>
+
+        <div class="card" style="overflow: hidden; margin-bottom: 12px">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 12px 16px">
+            <h2 style="margin: 0; font-size: 14px; font-weight: 600; color: #f2f4f7">Capacity for orbit</h2>
+            <span class="mut" style="font-size: 12px">3 hosts can run it · 5 of 12 leaf slots in use</span>
+          </div>
+
+          <div class="lane">
+            <div><span class="m" style="color: #f2f4f7">dk-server-2</span> <span class="badge">Owner</span></div>
+            <div style="display: flex; align-items: center; gap: 6px; color: #5cc8f0; font-size: 13px"><span class="dot" style="background: #5cc8f0"></span>Draining</div>
+            <div><div class="meter" role="img" aria-label="3 of 5 leaf slots in use"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></div><div class="m mut" style="font-size: 11px; margin-top: 3px">3/5 slots</div></div>
+            <button class="btn stop" type="button">Stop</button>
+            <div class="lane2">Window ends <span class="m">06:10 UTC</span> · run <a class="m" href="#run">jrun-20261110-0410-t1</a> · usage pressure low</div>
+          </div>
+
+          <div class="lane">
+            <div><span class="m" style="color: #f2f4f7">dk-server-1</span> <span class="badge">Follower</span></div>
+            <div style="display: flex; align-items: center; gap: 6px; color: #5cc8f0; font-size: 13px"><span class="dot" style="background: #5cc8f0"></span>Pull drain</div>
+            <div><div class="meter" role="img" aria-label="2 of 4 leaf slots in use"><i class="f"></i><i class="f"></i><i></i><i></i></div><div class="m mut" style="font-size: 11px; margin-top: 3px">2/4 slots</div></div>
+            <button class="btn stop" type="button">Stop</button>
+            <div class="lane2">Pulling from <span class="m">dk-server-2</span> · window ends <span class="m">05:40 UTC</span> · run <a class="m" href="#run">jrun-20261110-0340-p2</a> · usage pressure medium</div>
+          </div>
+
+          <div class="lane" style="background: #0f1216">
+            <div><span class="m" style="color: #f2f4f7">mac-mini-1</span> <span class="badge">Follower</span> <span class="badge">Serving</span></div>
+            <div style="display: flex; align-items: center; gap: 6px; color: #a3acb8; font-size: 13px"><span class="dot" style="background: #8a94a3"></span>Idle</div>
+            <div><div class="meter" role="img" aria-label="0 of 3 leaf slots in use"><i></i><i></i><i></i></div><div class="m mut" style="font-size: 11px; margin-top: 3px">0/3 slots</div></div>
+            <button class="btn" type="button" aria-expanded="true">Start</button>
+            <div class="lane2">No pull window is live · usage pressure low</div>
+          </div>
+        </div>
+
+        <div class="card" style="padding: 12px 16px">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap">
+            <h2 style="margin: 0; font-size: 14px; font-weight: 600; color: #f2f4f7">Start a pull window on <span class="m">mac-mini-1</span></h2>
+            <span class="mut" style="font-size: 12px">12 eligible on the owner · 4 waiting</span>
+          </div>
+          <div class="fld"><label for="len">Window length</label><input class="step m" id="len" type="text" value="1h"></div>
+          <div class="fld"><label for="par">Parallel tasks</label><input class="step m" id="par" type="text" value="3"></div>
+          <p class="mut" style="margin: 4px 0 12px; font-size: 12px">Tasks stay claimed by <span class="m">dk-server-2</span>. Approval and review options are set on the owner's window and are not offered here.</p>
+          <div style="display: flex; gap: 8px; justify-content: flex-end">
+            <button class="btn" type="button">Cancel</button>
+            <button class="btn pri" type="button">Start pull drain</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>

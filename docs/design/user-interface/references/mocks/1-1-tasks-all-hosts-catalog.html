@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock 1.1: Tasks under All hosts with the workspace catalog open</title>
+<!-- Static mock for docs/design/user-interface/specs/workspace-navigation.md. Data is illustrative. -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7aa7ff}a:hover{color:#a9c5ff}
+.o{font-family:'Geist',system-ui,sans-serif;font-size:14px;line-height:1.5;color:#e7eaee;background:#0b0d10}
+.o button{font:inherit;cursor:pointer}
+.m{font-family:'Geist Mono',ui-monospace,monospace}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;background:#0e1115;border-bottom:1px solid #22272e}
+.shell{display:flex;flex-wrap:wrap;align-items:stretch}
+.rail{flex:0 0 216px;box-sizing:border-box;padding:12px 8px;background:#0e1115;border-right:1px solid #22272e;position:relative}
+.main{flex:999 1 560px;min-width:0;padding:16px;box-sizing:border-box}
+.ov{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a3acb8}
+.sel{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid #22272e;background:#151920;color:#f2f4f7;font-size:13px;font-weight:500;text-align:left}
+.sel.open{border-color:#7aa7ff}
+.tab{display:block;padding:6px 10px;border-radius:7px;color:#c9d0d9;font-size:13px;text-decoration:none}
+.tab.on{background:#1a1f27;color:#f2f4f7}
+.card{background:#121519;border:1px solid #22272e;border-radius:10px}
+.badge{display:inline-block;font-size:11px;line-height:16px;padding:0 6px;border-radius:4px;background:#151920;border:1px solid #22272e;color:#c9d0d9;white-space:nowrap}
+.btn{font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #2e343c;background:#151920;color:#e7eaee}
+.btn.pri{background:#7aa7ff;border-color:#7aa7ff;color:#0b0d10;font-weight:600}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;border:1px solid #22272e;background:#121519;font-size:12px;color:#c9d0d9}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.row{display:grid;grid-template-columns:96px minmax(0,1fr) 88px 72px;gap:12px;align-items:center;padding:8px 14px;border-top:1px solid #1b1f25;font-size:13px}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;padding:6px 10px;border:0;border-radius:6px;background:transparent;color:#e7eaee;font-size:13px;text-align:left}
+.opt.on{background:#1a1f27;color:#f2f4f7}
+.mut{color:#a3acb8}
+</style>
+<style>html{background:#0b0d10}</style>
+</head>
+<body>
+<div class="o">
+  <header class="top">
+    <strong style="font-size: 16px; color: #f2f4f7">orbit</strong>
+    <span class="badge m">claude 41%</span>
+    <span class="badge m">codex 18%</span>
+    <span style="flex: 1 1 0"></span>
+    <label style="display: flex; align-items: center; gap: 8px">
+      <span class="mut" style="font-size: 12px">Search</span>
+      <input type="text" placeholder="Search by ID or title" style="width: 200px; box-sizing: border-box; padding: 6px 10px; border-radius: 6px; border: 1px solid #22272e; background: #151920; color: #e7eaee; font: inherit; font-size: 13px">
+    </label>
+    <button class="btn pri" type="button">New task</button>
+    <button class="btn" type="button">Notify</button>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" aria-label="Dashboard sections">
+      <div class="ov" style="padding: 0 4px 6px">Host</div>
+      <button class="sel" type="button" aria-haspopup="listbox">
+        <span>All hosts</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <div class="ov" style="padding: 12px 4px 6px">Workspace</div>
+      <button class="sel open" type="button" aria-haspopup="listbox" aria-expanded="true">
+        <span>orbit</span>
+        <span style="display: flex; align-items: center; gap: 6px"><span class="badge m">dk-server-2</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>
+      </button>
+
+      <div class="card" role="listbox" aria-label="Workspaces" style="position: absolute; left: 8px; top: 132px; width: 336px; z-index: 5; padding: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.5)">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; padding: 2px 6px 8px">
+          <span style="font-size: 13px; font-weight: 600; color: #f2f4f7">12 workspaces</span>
+          <span class="mut" style="font-size: 12px">3 hosts read</span>
+        </div>
+        <button class="opt" type="button" role="option"><span>All workspaces</span><span class="mut" style="font-size: 12px">serving host only</span></button>
+
+        <div class="ov" style="padding: 10px 10px 4px">Owned by dk-server-2</div>
+        <button class="opt on" type="button" role="option" aria-selected="true"><span>orbit</span><span class="mut" style="font-size: 12px">+2 capacity hosts</span></button>
+        <button class="opt" type="button" role="option"><span>constellation</span><span class="mut" style="font-size: 12px">+1 capacity host</span></button>
+        <button class="opt" type="button" role="option"><span>orbit-office</span><span class="mut" style="font-size: 12px">+1 capacity host</span></button>
+        <button class="opt" type="button" role="option"><span>orbit-graph</span><span class="mut" style="font-size: 12px">+1 capacity host</span></button>
+        <button class="opt" type="button" role="option"><span>orbit-decision-mail</span><span class="mut" style="font-size: 12px">owner only</span></button>
+        <button class="opt" type="button" role="option"><span>nebula</span><span class="mut" style="font-size: 12px">+1 capacity host</span></button>
+        <button class="opt" type="button" role="option"><span>marketing</span><span class="mut" style="font-size: 12px">owner only</span></button>
+        <button class="opt" type="button" role="option"><span>satellites</span><span class="mut" style="font-size: 12px">+1 capacity host</span></button>
+        <button class="opt" type="button" role="option"><span>scribe</span><span class="mut" style="font-size: 12px">owner only</span></button>
+
+        <div class="ov" style="padding: 10px 10px 4px">Owned by mac-mini-1 (serving)</div>
+        <button class="opt" type="button" role="option"><span>orbit-research</span><span class="mut" style="font-size: 12px">owner only</span></button>
+        <button class="opt" type="button" role="option"><span>office-constellation</span><span class="mut" style="font-size: 12px">owner only</span></button>
+        <button class="opt" type="button" role="option"><span>observatory</span><span class="mut" style="font-size: 12px">owner only</span></button>
+      </div>
+
+      <div class="ov" style="padding: 20px 10px 4px">Work</div>
+      <a class="tab on" href="#tasks">Tasks</a>
+      <a class="tab" href="#drain">Drain</a>
+      <a class="tab" href="#jobs">Jobs</a>
+      <a class="tab" href="#leases">Leases</a>
+      <div class="ov" style="padding: 14px 10px 4px">Observe</div>
+      <a class="tab" href="#health">Health</a>
+      <a class="tab" href="#analytics">Analytics</a>
+      <div class="ov" style="padding: 14px 10px 4px">Manage</div>
+      <a class="tab" href="#automation">Automation</a>
+      <a class="tab" href="#knowledge">Knowledge</a>
+      <a class="tab" href="#plugins">Plugins</a>
+      <a class="tab" href="#settings">Settings</a>
+    </nav>
+
+    <main class="main">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px">
+        <span class="chip"><span class="dot" style="background: #5cc8f0"></span>In progress <span class="m">4</span></span>
+        <span class="chip"><span class="dot" style="background: #b794f6"></span>Review <span class="m">2</span></span>
+        <span class="chip"><span class="dot" style="background: #ff7a6b"></span>Blocked <span class="m">1</span></span>
+        <span class="chip"><span class="dot" style="background: #f2b24c"></span>Proposed <span class="m">6</span></span>
+        <span class="chip"><span class="dot" style="background: #8a94a3"></span>Backlog <span class="m">18</span></span>
+        <span style="flex: 1 1 0"></span>
+        <span class="mut" style="font-size: 12px">orbit is owned by <span class="m" style="color: #c9d0d9">dk-server-2</span>, read through the forward</span>
+      </div>
+
+      <div class="card" style="overflow: hidden">
+        <div class="row" style="border-top: 0">
+          <span class="ov">Task</span><span class="ov">Title</span><span class="ov">Status</span><span class="ov">Size</span>
+        </div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23853</span><span>Scribe session pass: windowed processing and plain transcript headers</span><span style="color: #5cc8f0">In progress</span><span class="mut">hard</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23854</span><span>Make each granted program reachable by its declared name</span><span style="color: #8a94a3">Backlog</span><span class="mut">medium</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23859</span><span>Ship host-health at low complexity</span><span style="color: #8a94a3">Backlog</span><span class="mut">low</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23849</span><span>Typed session links in a new links field</span><span style="color: #8a94a3">Backlog</span><span class="mut">medium</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23865</span><span>Dashboard: list each workspace once and route to its owner</span><span style="color: #f2b24c">Proposed</span><span class="mut">hard</span></div>
+        <div class="row"><span class="m" style="font-size: 12px">ORB-23866</span><span>Dashboard: run follower pull drains from the owner's Drain card</span><span style="color: #f2b24c">Proposed</span><span class="mut">hard</span></div>
+      </div>
+
+      <p class="mut" style="margin: 16px 0 0; font-size: 12px; max-width: 70ch">Each workspace appears once. The badge names its owner, and the second column says how many other hosts hold a replica checkout and can run a pull drain for it.</p>
+    </main>
+  </div>
+</div>
+</body>
+</html>
