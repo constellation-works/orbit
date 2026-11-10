@@ -1847,3 +1847,233 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
         "{covered:?}"
     );
 }
+
+/// An unreadable launch at a dispatch row's own time stays that row's closest
+/// sibling. The row keeps the effort recorded at dispatch, and a readable
+/// launch of the same step, provider and model thirty seconds later is
+/// recorded from its own evidence. A second migrate writes nothing new.
+#[test]
+fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row",
+    ) {
+        return;
+    }
+    use orbit_types::identity::ReasoningEffort;
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let workspace;
+    let dispatch_at;
+    let run_id = "jrun-backfill-unreadable-sibling";
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        workspace = runtime.workspace_id().unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        let task_id = runtime
+            .add_task(TaskAddParams {
+                title: "backfill unreadable sibling".into(),
+                description: "dispatch effort backfill fixture".into(),
+                plan: "implement the change".into(),
+                complexity: TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        runtime
+            .update_task_with_identity(
+                &task_id,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+                Some("claude".into()),
+                Some("model-fixture".into()),
+            )
+            .unwrap();
+        let now = Utc::now();
+        store
+            .upsert_job_run_for_workspace(
+                &workspace,
+                &JobRun {
+                    build: None,
+                    run_id: run_id.into(),
+                    job_id: "task_pr_pipeline".into(),
+                    attempt: 1,
+                    state: JobRunState::Failed,
+                    scheduled_at: now,
+                    created_at: now,
+                    started_at: Some(now),
+                    finished_at: Some(now + chrono::Duration::seconds(50)),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({ "task_ids": [task_id] })),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: Some("review-crew".into()),
+                    crew_model: Some("model-fixture".into()),
+                    steps: Vec::new(),
+                    executed_on: None,
+                },
+                None,
+            )
+            .unwrap();
+        store
+            .begin_agent_execution(
+                &workspace,
+                run_id,
+                "implement_one",
+                "claude",
+                Some("model-fixture"),
+                &orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some("review-crew".into()),
+                    reasoning_effort: Some(ReasoningEffort::Low),
+                },
+            )
+            .unwrap();
+        dispatch_at = store.agent_executions(&workspace, run_id).unwrap()[0].started_at;
+        let audit = |event_id: &str, event_type: &str, at, payload: serde_json::Value| {
+            store
+                .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                    workspace_id: workspace.clone(),
+                    event_id: format!("v2evt-{run_id}-{event_id}"),
+                    source: "fixture".into(),
+                    schema_version: 1,
+                    event_type: event_type.into(),
+                    ts: at,
+                    run_id: run_id.into(),
+                    agent_identity: "system".into(),
+                    parent_event_id: None,
+                    workspace_path: None,
+                    payload_json: payload.to_string(),
+                })
+                .unwrap();
+        };
+        audit(
+            "step-start",
+            "step.started",
+            dispatch_at - chrono::Duration::seconds(1),
+            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+        );
+        audit(
+            "unreadable",
+            "cli.invocation.started",
+            dispatch_at,
+            json!({
+                "body_kind": "cli_invocation_started",
+                "provider": "claude",
+                "model": "model-fixture",
+                "reasoning_effort": "low",
+                "argv_redacted": ["claude", "--effort", "[REDACTED]"],
+            }),
+        );
+        audit(
+            "later-high",
+            "cli.invocation.started",
+            dispatch_at + chrono::Duration::seconds(30),
+            json!({
+                "body_kind": "cli_invocation_started",
+                "provider": "claude",
+                "model": "model-fixture",
+                "reasoning_effort": "high",
+                "argv_redacted": ["claude", "--effort", "high"],
+            }),
+        );
+        audit(
+            "step-end",
+            "step.finished",
+            dispatch_at + chrono::Duration::seconds(50),
+            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+        );
+    }
+
+    let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    let report = &report["dispatch_effort_backfill"];
+    assert_eq!(report["examined"], 0, "{report}");
+    assert_eq!(report["recorded"], 0, "{report}");
+    assert_eq!(report["launch_only_recorded"], 1, "{report}");
+    assert_eq!(report["launch_only_unreadable"], 1, "{report}");
+    assert_eq!(report["launch_only_no_step"], 0, "{report}");
+    assert_eq!(report["launch_only_no_provider"], 0, "{report}");
+    assert_eq!(report["launch_only_unmatched"], 1, "{report}");
+    assert_eq!(report["recorded_by_effort"]["high"], 1, "{report}");
+    assert!(
+        report["recorded_by_effort"].get("low").is_none(),
+        "the unreadable launch must not be recorded at an inferred effort: {report}"
+    );
+
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root).unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let rows = store.agent_executions(&workspace, run_id).unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let low = rows
+        .iter()
+        .find(|row| row.identity.reasoning_effort == Some(ReasoningEffort::Low))
+        .expect("dispatch row");
+    assert!(low.backfill.is_none(), "{low:?}");
+    assert_eq!(low.started_at, dispatch_at, "{low:?}");
+    let high = rows
+        .iter()
+        .find(|row| row.identity.reasoning_effort == Some(ReasoningEffort::High))
+        .expect("readable launch row");
+    assert_eq!(
+        high.started_at,
+        dispatch_at + chrono::Duration::seconds(30),
+        "{high:?}"
+    );
+    let high_events = high
+        .backfill
+        .as_ref()
+        .expect("readable launch is backfilled")
+        .event_ids
+        .as_slice();
+    assert_eq!(
+        high_events,
+        [format!("v2evt-{run_id}-later-high")].as_slice(),
+        "{high:?}"
+    );
+    assert!(
+        rows.iter().all(|row| {
+            row.backfill.as_ref().is_none_or(|backfill| {
+                !backfill
+                    .event_ids
+                    .iter()
+                    .any(|event_id| event_id.ends_with("-unreadable"))
+            })
+        }),
+        "an unreadable launch is never assigned an effort: {rows:?}"
+    );
+
+    let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    let again = &again["dispatch_effort_backfill"];
+    assert_eq!(again["examined"], 0, "{again}");
+    assert_eq!(again["recorded"], 0, "{again}");
+    assert_eq!(again["launch_only_recorded"], 0, "{again}");
+    assert_eq!(again["launch_only_unreadable"], 1, "{again}");
+    assert_eq!(again["launch_only_unmatched"], 1, "{again}");
+    let quiet = store.agent_executions(&workspace, run_id).unwrap();
+    assert_eq!(quiet.len(), 2, "{quiet:?}");
+    assert_eq!(quiet[0].id, rows[0].id, "{quiet:?}");
+    assert_eq!(quiet[1].id, rows[1].id, "{quiet:?}");
+    assert!(quiet[0].backfill.is_none(), "{quiet:?}");
+    assert_eq!(
+        quiet[0].identity.reasoning_effort,
+        Some(ReasoningEffort::Low),
+        "{quiet:?}"
+    );
+}
