@@ -417,7 +417,8 @@ fn orbit(work: &Path, home: &Path) -> assert_cmd::Command {
     command
         .current_dir(work)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        .env("RUST_LOG", "off");
     command
 }
 

@@ -131,9 +131,11 @@ fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched
     assert_eq!(beta_added["entry"]["name"], "build-box", "{beta_added}");
     assert_eq!(beta_added["entry"]["task_prefix"], "BE", "{beta_added}");
     let written = fs::read_to_string(fleet.hosts_file()).expect("hosts.toml");
+    let alpha_at = written.find("name = \"alpha\"");
+    let build_box_at = written.find("name = \"build-box\"");
     assert!(
-        written.find("name = \"alpha\"") < written.find("name = \"build-box\""),
-        "entries are written sorted by name: {written}"
+        matches!((alpha_at, build_box_at), (Some(alpha), Some(build_box)) if alpha < build_box),
+        "both entries must be present and sorted by name: alpha={alpha_at:?} build-box={build_box_at:?}\n{written}"
     );
 }
 
