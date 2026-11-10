@@ -691,11 +691,11 @@ Only the global file, and only when it is absent (or under `--force`):
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
   |---|---|---|---|---|
-  | codex + claude | `["haiku", "luna"]` | `["terra", "sonnet"]` | `["sol", "opus"]` | `["opus", "astra"]` |
+  | codex + claude | `["haiku", "luna"]` | `["terra", "sonnet"]` | `["sol", "opus"]` | `["fable", "astra"]` |
   | codex only | `["luna"]` | `["terra"]` | `["sol"]` | `["astra"]` |
-  | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
+  | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["fable"]` |
 
-  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["terra", "sonnet", "grok", "muse-wonder"]`, `hard = ["sol", "opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["terra", "sonnet", "grok", "muse-wonder"]`, `hard = ["sol", "opus", "argon", "muse-wonder-full"]` and `xhard = ["fable", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
 - these [purpose pools](#purpose-crew-pools), each keeping only the members whose crew is enabled: `review = ["sol", "sonnet", "muse-wonder", "grok", "opus@medium"]`, `task_pilot = ["luna@high", "haiku@high", "muse-spark@high"]`, `failure_recovery = ["luna", "haiku", "muse-spark", "grok"]`, `auto_fix = ["luna", "haiku", "muse-spark"]`, `final_recovery = ["sol", "muse-wonder", "opus@medium"]`, `baseline_red_repair = ["terra", "sonnet", "muse-wonder", "grok"]` and `pre_landing_review = ["luna", "haiku", "muse-spark"]`. A pool left empty is omitted and keeps its earlier route, except `final_recovery`, written as `[]` (final recovery off) so it never falls back to a crew this host does not run. `sweep_tasks` and `pilot_warning_triage` are not written;
 - `experiments.enabled = true`, `workflow.crew_selection = "static"`, `workflow.unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`, `workflow.mid_run_steering.enabled = true` and `workflow.task_pilot_freshness.material_fields = ["description", "criteria"]`;
 - when init creates this machine's identity, `machine.auto_concurrency.mode = "enforce"` beside it, unless already set. An existing machine keeps its mode.
@@ -1262,12 +1262,14 @@ provider = "antigravity"
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
-| `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
+| `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`claude-fable-5-2`) | `opus` |
 | `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-6.1-terra`), `luna` (`gpt-6-luna`) | `astra` |
 | `antigravity` | `agy` | `gemini-flash` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `gemini-flash` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
 | `muse` | `muse` | `muse-spark` (`muse-spark-1.3`), `muse-wonder` (`muse-wonder-1.0`), `muse-wonder-full` (`muse-wonder-full-1.0`) | `muse-spark` |
+
+`opus`, `sonnet` and `haiku` are Claude CLI aliases, so they follow the installed CLI's current release. `fable` is pinned to the Fable 5.2 model id, because the CLI's `fable` alias can trail the newest Fable model (CLI 2.1.319 resolves it to `claude-fable-5-1`).
 
 **Reasoning effort.** Choose capability with the model, then tune `effort` within it.
 

@@ -19,9 +19,11 @@
 //! ## Aliases vs. version pins
 //!
 //! The Claude CLI accepts the unversioned `opus`/`sonnet`/`haiku` aliases and resolves
-//! them to the current flagship, so the CLI defaults never drift. codex,
-//! gemini, and grok use provider-specific version pins because no stable
-//! unversioned aliases are available for those CLIs.
+//! them to the current flagship, so the CLI defaults never drift. The Fable
+//! crew is pinned instead: the CLI's `fable` alias moves only with a CLI
+//! release, so it can trail the newest Fable model. codex, gemini, and grok
+//! use provider-specific version pins because no stable unversioned aliases
+//! are available for those CLIs.
 
 /// Default "strong" Claude model: the unversioned `opus` CLI alias.
 pub const CLAUDE_DEFAULT_STRONG: &str = "opus";
@@ -34,8 +36,10 @@ pub const CLAUDE_DEFAULT_WEAK: &str = "sonnet";
 /// `claude-haiku-5-5`).
 pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 
-/// Claude CLI alias used by the standard Fable crew.
-pub const CLAUDE_FABLE_MODEL: &str = "fable";
+/// Claude model used by the standard Fable crew: Fable 5.2, pinned by id.
+/// Claude CLI 2.1.318 and 2.1.319 resolve the `fable` alias to
+/// `claude-fable-5-1` and serve `claude-fable-5-2` only when it is named.
+pub const CLAUDE_FABLE_MODEL: &str = "claude-fable-5-2";
 
 /// Codex model used by the standard Sol crew.
 pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";

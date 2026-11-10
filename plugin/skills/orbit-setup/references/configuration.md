@@ -1192,7 +1192,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 `workflow.provider_limit_budgets` / `provider_limit_overrides` may name it
 (`opus-credits:200usd/30d`).
 
-`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
+`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, and `fable` pinned to `claude-fable-5-2`;
 Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`;
 Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
 no built-in Gemini CLI crew; the `cursor`, `pi`, and `opencode` lanes were [retired](providers.md#provider-identity-and-resolution)), with `enabled = true` on the crews whose
@@ -1202,8 +1202,8 @@ host, `gemini-flash` on an Antigravity host). Interactive init offers the enable
 writes the recommendation. Init does not write a `custom` or `system` crew
 table, nor a system-crew key. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
-(Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `terra` /
-`sol` / `astra`; both: `haiku, luna` / `terra, sonnet` / `sol, opus` / `opus, astra`;
+(Claude only: `haiku` / `sonnet` / `opus` / `fable`; Codex only: `luna` / `terra` /
+`sol` / `astra`; both: `haiku, luna` / `terra, sonnet` / `sol, opus` / `fable, astra`;
 grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored
