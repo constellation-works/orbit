@@ -1197,10 +1197,22 @@ on.
   to open that role; the Not scored entry does not link.
 - **The ranking** lists one row per model and recorded reasoning effort, labelled `model @ effort`
   with the crews that contributed its units as secondary detail, with a rate per 100 units
-  of work for each term and the score. A rendered effort shows its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
+  of work for each term, the score, and its p10–p90 interval. A rendered effort shows its wire name (`low`, `medium`, `high`, `xhigh`, `max`);
   a null effort is the **provider default** and unrecorded work is its own **effort unknown** row per model.
   Two efforts of one model are two rows, however many crews ran them. Rows with fewer than 10 units are greyed,
   unranked, and listed last.
+- **The p10–p90 interval** on each ranked Implementers, Reviewers, and Pilots row is a sampling band for that row's own evidence:
+  the 10th and 90th percentiles of 1,000 resamples of the row's own units, drawn with replacement from a fixed seed
+  so the same facts always give the same band, each resample rescored with fleet expectations and the fleet average held fixed;
+  term-specific denominator units are resampled alongside their units, and smoothing stays unchanged. A narrow band means the score is stable
+  under the row's own mix of work; the band never changes the score, the rank, smoothing, or minimum support.
+  Rows with no rank show no interval: below-support rows and unjudged rows (Reviewers rows with no judged unit yet,
+  whose score is null). Implementer tier views show scores by tier with no interval, because the band describes
+  the all-tier score. A Pilots row's settled-only warning tasks (settled assessments on tasks outside its assessed
+  cohort) resample as a second stratum beside its assessed units, so the band covers the same warning evidence as
+  the score without changing the row's units, point score, or support rule. This band is not the **Rank** tab's
+  p10–p90 interval (within-tier resampling on that board) nor the Wilson 95% interval on the **Regression rate by
+  change size** chart buckets.
 - **The detail column** shows the selected row: its score, its raw score and
   the fleet average (a row above the average is pulled down toward it, the
   more the less work backs it; a row below keeps its raw score), how each
