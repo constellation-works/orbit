@@ -1,8 +1,8 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getServingHost, getHost } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
-import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
+import { loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
@@ -15,10 +15,12 @@ let holdDrainAnnouncement = false;
 // Bumped on every host or workspace reset. A readiness read captures the value
 // it started with and will not paint after a newer scope has taken the card.
 let drainScopeGeneration = 0;
+let aggregateDrainHost = null;
+let aggregateDrainWorkspace = null;
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
   updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
-  paintRailDrainReading({
+  if (!isAggregateView()) paintRailDrainReading({
     phase: pulling ? "pulling" : phase,
     used: capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs ?? null,
     ceiling: capacity.max_active_leaf_runs ?? null,
@@ -28,7 +30,7 @@ function renderAutoDrainHead(payload) {
   if (card) {
     card.dataset.drainState = pulling ? "pulling" : phase;
     const title = card.querySelector('.drain-title');
-    if (title) title.textContent = 'Auto-drain';
+    if (title) title.textContent = isAggregateView() ? 'Auto-draining' : 'Auto-drain';
   }
   const pill = $("auto-drain-phase");
   if (pill) pill.dataset.drainState = pulling ? "pulling" : phase;
@@ -37,7 +39,7 @@ function renderAutoDrainHead(payload) {
   const text = $("auto-drain-phase-label");
   if (text) {
     text.textContent = pulling ? pullLabel
-      : phase === "idle" ? (workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
+      : phase === "idle" ? (!isAggregateView() && workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
   }
   // The window's deadline sits beside its phase; the pill already says when
   // admissions have stopped.
@@ -97,6 +99,7 @@ function autoDrainWindow(payload) {
 function autoDrainFoot(payload) {
   const { live, capacity, phase, pulling } = autoDrainPhase(payload);
   const runId = pulling ? live.pullRunId : phase === "idle" ? "" : capacity.drain_status_run_id || live.runId;
+  if (isAggregateView() && !runId) return null;
   const meta = el("div", { class: "drain-foot-meta" });
   meta.id = "auto-drain-run";
   if (runId) meta.appendChild(runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)));
@@ -109,8 +112,8 @@ function autoDrainFoot(payload) {
     }));
   }
   return el("div", { class: "drain-foot" }, [
-    el("div", { class: "drain-foot-row" }, [meta, autoDrainStopButton(payload)]),
-    autoDrainStopNote(payload),
+    el("div", { class: "drain-foot-row" }, [meta, isAggregateView() ? null : autoDrainStopButton(payload)]),
+    isAggregateView() ? null : autoDrainStopNote(payload),
   ]);
 }
 
@@ -151,7 +154,7 @@ function autoDrainQueuedRow(payload, drain) {
   const head = el("div", { class: "drain-queued-head" }, [
     runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)),
     el("span", { class: "drain-queued-state", text: capacity.drain_run_id ? "Waiting for the live window" : "Waiting for its slot" }),
-    autoDrainQueuedCancel(payload, runId),
+    isAggregateView() ? null : autoDrainQueuedCancel(payload, runId),
   ]);
   const crews = Array.isArray(drain.allowed_crews) && drain.allowed_crews.length ? drain.allowed_crews.join(", ") : "all crews";
   const facts = el("div", { class: "drain-queued-facts" }, [
@@ -258,7 +261,8 @@ function autoDrainApprovals(approvals) {
 function renderAutoDrain(payload, generation = drainScopeGeneration) {
   if (generation !== drainScopeGeneration) return;
   operationsState.lastAutoDrain = payload;
-  setDrainReadiness(payload);
+  // This independent host card is not the aggregate board's readiness snapshot.
+  setDrainReadiness(isAggregateView() ? {} : payload);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds both cards; keep keyboard focus on the
@@ -274,7 +278,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     drainCrewNote(payload),
     drainPilotNote(payload),
   ].filter(Boolean);
-  if (reasons.submit) {
+  if (reasons.submit && !isAggregateView()) {
     body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
     renderAutoDrainStart(payload, reasons);
     return;
@@ -287,7 +291,20 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     autoDrainFoot(payload),
     autoDrainQueued(payload),
   ].filter(Boolean));
-  renderAutoDrainStart(payload, reasons);
+  if (isAggregateView()) {
+    clearStartCard("auto-drain-quick-start");
+    // The card reads a host independently of the rail. Its existing links
+    // must carry that displayed scope too, including modified/new-tab clicks.
+    for (const anchor of body.querySelectorAll("a[href]")) {
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin || !aggregateDrainWorkspace) continue;
+      url.searchParams.set("host", aggregateDrainHost);
+      url.searchParams.set("workspace", aggregateDrainWorkspace);
+      url.searchParams.delete("workspaces");
+      anchor.href = url.href;
+      anchor.addEventListener("click", event => event.stopImmediatePropagation(), { capture: true });
+    }
+  } else renderAutoDrainStart(payload, reasons);
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
 }
 
@@ -321,13 +338,15 @@ function clearDrainChrome() {
 registerOperationsReset(() => {
   drainScopeGeneration += 1;
   announcedDrainState = null;
+  aggregateDrainHost = null;
+  aggregateDrainWorkspace = null;
+  $("auto-drain-host")?.remove();
   clearDrainChrome();
   updateDrainIndicators("idle", "idle");
   repaintRailDrainFromFleet();
   clearStartCard("auto-drain-quick-start");
 });
 
-configureOperationsFleetCallbacks({ updateDrainIndicators, clearStartCard });
 function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) {
   const generation = drainScopeGeneration;
   const workspace = selectedWorkspace();
@@ -335,9 +354,46 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     const token = ++operationsState.aggregateFleetToken;
     const revision = getWorkspaceRevision();
     const guard = () => generation === drainScopeGeneration && token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
-    return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } }), payload => {
-      if (!guard()) return;
-      paintAggregateFleet(payload);
+    return requestPanel("auto-drain-body", `aggregate:${aggregateDrainHost || "owner"}`, async () => {
+      const fleet = await loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } });
+      if (!guard()) return null;
+      paintAggregateFleet(fleet);
+      const hosts = getRegisteredHosts();
+      const serving = getServingHost()?.name;
+      const localRows = fleet.items.filter(row => row.host === (getHost() || serving));
+      const owner = localRows.find(row => row.owner_machine_id)?.owner_machine_id || getHost() || serving;
+      const ordered = [...hosts].sort((a, b) => Number(b.name === owner || b.machine_id === owner) - Number(a.name === owner || a.machine_id === owner));
+      if (!aggregateDrainHost || !ordered.some(host => host.name === aggregateDrainHost)) aggregateDrainHost = ordered[0]?.name || owner;
+      let select = $("auto-drain-host");
+      if (!select) {
+        select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
+        select.addEventListener("change", () => {
+          aggregateDrainHost = select.value;
+          clearDrainChrome();
+          fetchAndRenderAutoDrain().catch(error => console.error(error));
+        });
+        $("auto-drain-phase").before(select);
+      }
+      const signature = JSON.stringify(ordered.map(host => host.name));
+      if (select.dataset.hosts !== signature) {
+        select.replaceChildren(...ordered.map(host => el("option", { value: host.name, text: host.name })));
+        select.dataset.hosts = signature;
+      }
+      select.value = aggregateDrainHost;
+      const rows = fleet.items.filter(row => row.host === aggregateDrainHost);
+      const failed = rows.find(row => row.error);
+      const live = rows.filter(row => !row.error && ["draining", "pulling", "winding_down"].includes(row.phase))
+        .sort((a, b) => (b.running_tasks || 0) - (a.running_tasks || 0));
+      aggregateDrainWorkspace = live[0]?.workspace_id || null;
+      if (!live.length) {
+        if (failed) throw new Error(failed.error);
+        return { capacity: { drain_phase: "idle" } };
+      }
+      // Explicitly address even the serving host, so the rail's remote host
+      // cannot accidentally rewrite this independent card's request.
+      return fetchJson(`/api/on/${encodeURIComponent(aggregateDrainHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(live[0].workspace_id)}`);
+    }, payload => {
+      if (guard() && payload) renderAutoDrain(payload, generation);
     }, "auto-drain-phase-label");
   }
   const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";

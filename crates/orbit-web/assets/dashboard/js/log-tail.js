@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router to select the Drain, Locks held or Log view.
 
-import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
 
 const $ = (id) => document.getElementById(id);
@@ -51,7 +51,7 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "locks", "log"];
+const DOCK_MODES = ["drain", "fleet", "locks", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -137,6 +137,21 @@ export function fitLogPanelToViewport() {
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
+  if (isAggregateView() && !$("dock-tab-fleet")) {
+    const tab = el("button", { type: "button", role: "tab", class: "dock-seg", id: "dock-tab-fleet", "aria-selected": "false", "aria-controls": "dock-pane-fleet", text: "Fleet" });
+    tab.dataset.mode = "fleet";
+    tab.tabIndex = -1;
+    tab.addEventListener("click", () => chooseDockMode("fleet"));
+    $("dock-tab-locks").before(tab);
+    const pane = el("div", { class: "dock-pane", id: "dock-pane-fleet", role: "tabpanel", "aria-labelledby": "dock-tab-fleet" }, [
+      el("section", { class: "panel drain-card" }, [el("header", {}, [el("h2", { class: "drain-title", text: "Fleet drains" })]), el("div", { class: "body", id: "fleet-drains-body" })]),
+    ]);
+    pane.dataset.pane = "fleet";
+    $("dock-pane-drain").after(pane);
+  } else if (!isAggregateView()) {
+    $("dock-tab-fleet")?.remove();
+    $("dock-pane-fleet")?.remove();
+  }
   const modes = dockModes();
   const mode = shownDockMode();
   const card = mode === "locks" ? mode : null;
@@ -155,11 +170,11 @@ function applyDockMode() {
 }
 
 function dockModes() {
-  return DOCK_MODES;
+  return isAggregateView() ? DOCK_MODES : DOCK_MODES.filter(mode => mode !== "fleet");
 }
 
 function shownDockMode() {
-  return logPanelPrefs.dockMode;
+  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
 }
 
 export function chooseDockMode(mode) {

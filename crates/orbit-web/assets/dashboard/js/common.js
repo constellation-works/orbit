@@ -12,6 +12,23 @@ export const ALL_WORKSPACES_TOKEN = "all";
 const linkedWorkspace = params.get("workspace") || null;
 let aggregateLinked = linkedWorkspace === ALL_WORKSPACES_TOKEN;
 let currentWorkspace = aggregateLinked ? null : linkedWorkspace;
+let selectedWorkspaces = params.getAll("workspaces");
+
+export function getSelectedWorkspaces() {
+  return currentWorkspace ? [currentWorkspace] : [...selectedWorkspaces];
+}
+
+export function setSelectedWorkspaces(ids) {
+  const next = [...new Set(ids)].sort();
+  if (!next.length) return;
+  const workspace = next.length === 1 ? next[0] : null;
+  if (workspace === currentWorkspace && JSON.stringify(next) === JSON.stringify(selectedWorkspaces)) return;
+  selectedWorkspaces = next;
+  currentWorkspace = workspace;
+  aggregateLinked = !workspace;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
+}
 
 /// True when the address asked for the aggregate view and no concrete
 /// workspace has been chosen since.
@@ -190,8 +207,10 @@ export function onWorkspaceChange(listener) {
 
 export function setWorkspace(id) {
   const next = id || null;
+  const selectionChanged = !next && selectedWorkspaces.length > 0;
+  selectedWorkspaces = next ? [next] : [];
   if (next) aggregateLinked = false;
-  if (next === currentWorkspace) return;
+  if (next === currentWorkspace && !selectionChanged) return;
   currentWorkspace = next;
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
@@ -237,7 +256,7 @@ export function getRememberedWorkspace() {
 
 export function rememberWorkspace() {
   try {
-    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || ALL_WORKSPACES_TOKEN);
+    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || (selectedWorkspaces.length ? JSON.stringify(selectedWorkspaces) : ALL_WORKSPACES_TOKEN));
   } catch (_) {
     // Storage refusal only disables remembering the choice.
   }
@@ -325,7 +344,7 @@ export function notifyScopeChange() {
 // popstate).
 function addressScopeKey() {
   const query = new URLSearchParams(window.location.search);
-  return `${query.get("host")}|${query.get("workspace")}|${query.get("window")}`;
+  return `${query.get("host")}|${query.get("workspace")}|${query.getAll("workspaces").join(",")}|${query.get("window")}`;
 }
 
 let addressScope = addressScopeKey();
@@ -336,6 +355,8 @@ export function persistScopeToUrl() {
   const url = new URL(window.location.href);
   if (currentHost) url.searchParams.set("host", currentHost);
   else url.searchParams.delete("host");
+  url.searchParams.delete("workspaces");
+  if (!currentWorkspace) for (const id of selectedWorkspaces) url.searchParams.append("workspaces", id);
   if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
   else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
   else url.searchParams.delete("workspace");
@@ -675,6 +696,7 @@ function scopedHref(hash, { host, workspace }) {
   if (host) query.set("host", host);
   if (workspace) query.set("workspace", workspace);
   else if (isAggregateView() || isAggregateLinked()) query.set("workspace", ALL_WORKSPACES_TOKEN);
+  if (!workspace) for (const id of selectedWorkspaces) query.append("workspaces", id);
   query.set("window", currentWindow);
   const search = query.toString();
   return `${search ? `?${search}` : ""}${hash}`;
@@ -731,6 +753,7 @@ export function restoreScopeFromUrl() {
     // address's intent until discovery decides whether this host can aggregate.
     aggregateLinked = true;
     setWorkspace(null);
+    if (query.getAll("workspaces").length) setSelectedWorkspaces(query.getAll("workspaces"));
   } else if (linked) {
     setWorkspace(linked);
   }

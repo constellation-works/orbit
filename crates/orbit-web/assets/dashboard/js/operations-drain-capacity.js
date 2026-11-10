@@ -96,9 +96,8 @@ export function autoDrainTimeLeft(endsAt) {
 }
 
 export function updateDrainIndicators(phase, label) {
-  const aggregate = isAggregateView();
-  const indicatorPhase = aggregate ? "fleet" : phase;
-  const indicatorLabel = aggregate ? "Fleet drains" : label;
+  const indicatorPhase = phase;
+  const indicatorLabel = label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
   if (tab) {
@@ -110,7 +109,7 @@ export function updateDrainIndicators(phase, label) {
     tab.setAttribute("aria-label", `${name}: ${indicatorLabel}`);
     tab.title = indicatorLabel;
   }
-  if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
+  if (tabState) tabState.textContent = phase === "winding_down" ? label : "";
 }
 
 // The card and dock tab describe the selected workspace.
@@ -123,7 +122,7 @@ export function autoDrainPhase(payload) {
     : phase === "winding_down" ? "Winding down" : "idle";
   // A replica's pull drain has its own indicator; the owner's phase stays
   // "idle" here, so the header and the announcement below keep their wording.
-  const pulling = phase === "idle" && Boolean(live.pullRunId) && !workspaceSelectionReason();
+  const pulling = phase === "idle" && Boolean(live.pullRunId) && (isAggregateView() || !workspaceSelectionReason());
   const pullLabel = live.pullAdmissionsStopped ? "Pull drain · admissions stopped" : "Pull drain";
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
