@@ -50,6 +50,9 @@ pub(crate) const PR_CLOSE: &str = "pr.close";
 pub(crate) const PR_REQUIRED_CHECKS: &str = "pr.required_checks";
 /// [ORB-15956] Merge the base's current tip into a pull request's branch.
 pub(crate) const PR_UPDATE_BRANCH: &str = "pr.update_branch";
+/// [ORB-23812] Re-request hosted checks on a pull request head the forge
+/// started no workflow run for, without changing the head.
+pub(crate) const PR_RETRIGGER_CHECKS: &str = "pr.retrigger_checks";
 /// [ORB-15956] The hosted CI jobs that ran on one commit.
 pub(crate) const CI_COMMIT_JOBS: &str = "ci.commit_jobs";
 /// [ORB-15956] One failed job's bounded failed-step log.

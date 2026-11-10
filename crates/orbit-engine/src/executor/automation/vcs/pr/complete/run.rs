@@ -116,6 +116,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
             input,
             &workspace_path,
             &pr_number,
+            &task_ids,
             auto_fix.as_ref(),
             hold_check.as_ref(),
         )? {
@@ -259,6 +260,7 @@ fn held_without_merge<H: RuntimeHost + ?Sized>(
             &watch_input,
             workspace_path,
             pr_number,
+            task_ids,
             Some(&auto_fix),
             None,
         )? {

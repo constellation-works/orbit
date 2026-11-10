@@ -16,6 +16,7 @@ use super::super::auto_fix::{
 use super::super::delivery::{DeliveryEvidence, DeliveryPin, UnreportedChecks};
 use super::super::head_lag::HeadLag;
 use super::super::merge::PermittedMerge;
+use super::absent_check_runs::AbsentCheckRuns;
 use super::ci_rerun_hold::CiRerunHold;
 use super::drive_phases::PollDriver;
 use super::reviewed::reviewed_head_sha;
@@ -60,6 +61,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
+    task_ids: &[String],
     auto_fix: Option<&AutoFix>,
     hold_check: Option<&CompletionHoldCheck>,
 ) -> Result<Delivery, OrbitError> {
@@ -69,6 +71,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         input,
         workspace_path,
         pr_number,
+        task_ids,
         auto_fix,
         hold_check,
         &mut diagnostic,
@@ -90,11 +93,14 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     result
 }
 
+// One argument per poll-driver input; the public entry keeps its own list.
+#[allow(clippy::too_many_arguments)]
 fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
+    task_ids: &[String],
     auto_fix: Option<&AutoFix>,
     hold_check: Option<&CompletionHoldCheck>,
     diagnostic: &mut Option<
@@ -196,6 +202,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         input,
         workspace_path,
         pr_number,
+        task_ids,
         auto_fix,
         diagnostic,
         max_wait_seconds,
@@ -214,6 +221,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         unsettled_polls,
         unreported,
         ci_rerun_hold,
+        absent_check_runs: AbsentCheckRuns::default(),
         auto_merge_requested,
         merge_requested,
         requested_landed_commit,

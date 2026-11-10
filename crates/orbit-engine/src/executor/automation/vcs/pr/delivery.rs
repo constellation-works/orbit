@@ -346,6 +346,9 @@ pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     /// Observations waited on while the provider merge state lagged
     /// behind checks that had already passed.
     lagging_blocked_polls: u32,
+    /// [ORB-23812] The last observation found no run, queued or otherwise,
+    /// of any check current branch policy requires on the head.
+    no_required_check_run: bool,
 }
 
 impl UnreportedChecks {
@@ -356,7 +359,16 @@ impl UnreportedChecks {
             policy_observation: json!({"state":"not_collected"}),
             unsettled_polls: 0,
             lagging_blocked_polls: 0,
+            no_required_check_run: false,
         }
+    }
+
+    /// [ORB-23812] Whether the last observation of a BLOCKED head found
+    /// readable branch policy requiring checks, and no report at all (not
+    /// even queued or pending) of any of them. A head whose required checks
+    /// are pending, queued, failed or reported skipped is never this state.
+    pub(in crate::executor::automation::vcs) fn no_required_check_run(&self) -> bool {
+        self.no_required_check_run
     }
 
     /// Whether the last observation waits for checks readable policy names.
@@ -494,6 +506,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     deadline_ms: Option<u64>,
 ) -> Result<PrMergeState, CheckWaitRefusal> {
     unreported.last = UnreportedWait::None;
+    unreported.no_required_check_run = false;
     unreported.required_observation = json!({"state":"not_collected"});
     unreported.policy_observation = json!({"state":"not_collected"});
     let state = classify_pr_state(status);
@@ -696,6 +709,10 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
             }
         }
         Ok(assessment) => {
+            unreported.no_required_check_run = assessment.every_required_missing
+                && assessment.pending.is_empty()
+                && assessment.failed.is_empty()
+                && required.checks.is_empty();
             unreported.last = if assessment.missing.is_empty() {
                 UnreportedWait::Pending(assessment.pending)
             } else {
@@ -731,6 +748,9 @@ struct PolicyRequiredAssessment {
     /// Policy-required checks the head reported failed. A failed gate
     /// keeps its existing recovery or stop, never a merge-state wait.
     failed: Vec<String>,
+    /// Policy requires at least one check, and the head reported none of
+    /// them in any state [ORB-23812].
+    every_required_missing: bool,
 }
 
 /// The checks current branch policy requires that the observed head has not
@@ -775,10 +795,25 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
         })
         .collect::<Result<_, _>>()?;
     let (pending, failed) = pending_policy_required_checks(&gates, &missing);
+    let required: Vec<&str> = gates["required"]
+        .as_array()
+        .map(|gates| {
+            gates
+                .iter()
+                .filter_map(|gate| gate["context"].as_str())
+                .filter(|context| !context.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let every_required_missing = !required.is_empty()
+        && required
+            .iter()
+            .all(|context| missing.iter().any(|name| name == context));
     Ok(PolicyRequiredAssessment {
         missing,
         pending,
         failed,
+        every_required_missing,
     })
 }
 

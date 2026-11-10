@@ -95,6 +95,7 @@ fi
 if [ -f "$forge/legacy-state" ]; then
     rollup="$rollup,"'{"__typename":"StatusContext","context":"external-ci","state":"SUCCESS","isRequired":true}'
 fi
+[ ! -f "$forge/closed" ] || state=CLOSED
 if [ -f "$forge/merged" ]; then
     state=MERGED; merge_state=UNKNOWN
     merged_at='"2026-10-15T08:00:00Z"'
@@ -118,6 +119,15 @@ case "$1 ${2:-}" in
         else
             printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":%s,"statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$review_json" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug"
         fi ;;
+    # [ORB-23812] A check re-trigger closes and reopens the pull request;
+    # `checks-on-reopen` makes the reopened head report its required check.
+    'pr close')
+        printf 'close\n' >> "$forge/mutations"
+        touch "$forge/closed" ;;
+    'pr reopen')
+        printf 'reopen\n' >> "$forge/mutations"
+        rm -f "$forge/closed"
+        [ ! -f "$forge/checks-on-reopen" ] || touch "$forge/base-applied" ;;
     'repo view') printf '{"nameWithOwner":"%s"}\n' "$slug" ;;
     'api graphql')
         case "$*" in
