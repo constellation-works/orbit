@@ -72,11 +72,11 @@ impl Deadline {
 impl Deadline {
     /// Type a failed read that a caller ran with its own per-request timeouts.
     /// `last_timeout` is the timeout the final request carried. A read killed
-    /// by the timeout (its error names the kill) below the per-read cap, or at
+    /// by the timeout (a typed `ProcessTimeout`, never its text) below the per-read cap, or at
     /// the cap once the deadline has arrived, is the typed expiry; any other
     /// failure, including a kill at the cap with budget left, is unchanged.
     pub(super) fn type_killed_read(self, error: OrbitError, last_timeout: u64) -> OrbitError {
-        let killed = error.to_string().contains("process timed out");
+        let killed = matches!(error, OrbitError::ProcessTimeout { .. });
         if killed && (last_timeout < DEFAULT_TIMEOUT_MS || self.remaining().is_err()) {
             expired()
         } else {
