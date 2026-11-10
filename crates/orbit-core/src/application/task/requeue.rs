@@ -80,14 +80,6 @@ use orbit_types::workflow::SourceRepairBinding;
 /// Status event of an operator's requeue of a blocked task.
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
 
-/// A source-repair refusal whose cause is the run's state, not the pull
-/// request's checks. Telling the operator to requeue again cannot succeed
-/// while the delivery is still running or is not a stopped failed delivery.
-fn run_state_blocks_source_repair(message: &str) -> bool {
-    message.contains("is still running, so it cannot be repaired")
-        || message.contains("not a conclusively stopped failed delivery")
-}
-
 /// How a refused requeue offers to start over instead: the supported operator
 /// CLI discard route, or the discard option of a blocked task's requeue, which
 /// the dashboard and the CLI's `orbit task requeue` carry. `orbit.task.update`
@@ -790,7 +782,10 @@ impl OrbitRuntime {
             return authenticated
                 .map(Some)
                 .map_err(|error| match error.job_validation_message() {
-                    Some(refusal) if run_state_blocks_source_repair(&refusal) => {
+                    // A refusal whose cause is the run's state, not the pull
+                    // request's checks: requeuing again cannot succeed while the
+                    // delivery is running or is not a stopped failed delivery.
+                    Some(refusal) if error.source_repair_run_state_refusal().is_some() => {
                         OrbitError::InvalidInput(format!(
                             "{refusal}. Nothing was changed. To {discard_hint}."
                         ))

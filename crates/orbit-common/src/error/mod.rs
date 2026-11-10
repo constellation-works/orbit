@@ -9,7 +9,7 @@ pub use kinds::{
     DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
     ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
     PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
-    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;
