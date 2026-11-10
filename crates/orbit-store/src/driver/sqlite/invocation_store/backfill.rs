@@ -10,7 +10,7 @@ use super::executions::StoredAgentExecutionIdentity;
 use crate::Store;
 use crate::contracts::{
     AgentExecutionBackfill, InvocationLaunchEvent, UnidentifiedInvocationLaunch,
-    UnrecordedLaunchGroup,
+    UnrecordedLaunchGroup, UnrecordedLaunchOmissions,
 };
 
 /// The audit event that records each provider launch and its rendered argv.
@@ -183,14 +183,16 @@ impl Store {
         Ok(true)
     }
 
-    /// Launches of workspace runs that no launch record covers yet, grouped
-    /// by the step whose audit interval contains the launch. A launch in no
-    /// step interval, or in more than one, is not grouped: its step cannot
-    /// be proven, so it stays effort unknown rather than being guessed.
+    /// Launches of workspace runs, grouped by the step whose audit interval
+    /// contains the launch, then by provider and model. Each launch in a
+    /// group is recorded on its own. A launch in no step interval, or in
+    /// more than one, is not grouped: its step cannot be proven. A launch
+    /// that names no provider is not grouped either. Both are counted in
+    /// the omissions rather than guessed.
     pub fn list_unrecorded_launch_groups(
         &self,
         workspace_id: &str,
-    ) -> Result<(Vec<UnrecordedLaunchGroup>, usize), OrbitError> {
+    ) -> Result<(Vec<UnrecordedLaunchGroup>, UnrecordedLaunchOmissions), OrbitError> {
         let conn = self.read()?;
         let crews: std::collections::HashMap<String, Option<String>> = {
             let mut stmt = conn
@@ -232,7 +234,7 @@ impl Store {
             .map_err(sqlite_store_error)?;
         drop(runs_stmt);
         let mut groups: Vec<UnrecordedLaunchGroup> = Vec::new();
-        let mut unmatched = 0usize;
+        let mut omissions = UnrecordedLaunchOmissions::default();
         for run_id in run_ids {
             let Some(crew) = crews.get(&run_id) else {
                 continue;
@@ -311,11 +313,11 @@ impl Store {
                     })
                     .collect();
                 let [only] = containing.as_slice() else {
-                    unmatched += 1;
+                    omissions.no_step += 1;
                     continue;
                 };
                 let Some(provider) = launch.provider.clone() else {
-                    unmatched += 1;
+                    omissions.no_provider += 1;
                     continue;
                 };
                 let key = (&only.step_id, &provider, &launch.model);
@@ -341,18 +343,26 @@ impl Store {
                 }
             }
         }
-        Ok((groups, unmatched))
+        Ok((groups, omissions))
     }
 
-    /// Record a launch record for a run whose invocation never completed.
-    /// Returns false, writing nothing, when a launch record already covers
-    /// the same run, step and model, so running a backfill again changes
-    /// nothing.
+    /// Record one launch of a run whose invocation never completed.
+    ///
+    /// Returns false, writing nothing, when a row already covers this
+    /// launch. A backfilled row covers it when its provenance lists this
+    /// launch's event and either lists no other event or is stamped with
+    /// this launch's start (an older row that merged several launches
+    /// covers only the launch it was stamped with). A dispatch-time row,
+    /// which has no provenance, covers the one sibling launch of the same
+    /// run, step, provider and model whose start is within `tolerance` and
+    /// is the closest to the row. A later launch of the same step is its
+    /// own row, and running the backfill again writes nothing new.
     pub fn record_backfilled_launch_execution(
         &self,
         workspace_id: &str,
         group: &UnrecordedLaunchGroup,
-        launched_at: DateTime<Utc>,
+        launch: &InvocationLaunchEvent,
+        tolerance: chrono::Duration,
         identity: &AgentExecutionIdentity,
         backfill: &AgentExecutionBackfill,
     ) -> Result<bool, OrbitError> {
@@ -370,17 +380,33 @@ impl Store {
         let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         let tx = conn.transaction().map_err(sqlite_store_error)?;
-        let covered: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM agent_executions \
-                 WHERE workspace_id = ?1 AND run_id = ?2 AND activity_id = ?3 \
-                   AND model IS ?4)",
-                rusqlite::params![workspace_id, run_id, activity_id, model],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_store_error)?;
-        if covered {
-            return Ok(false);
+        let existing = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT identity_json, started_at FROM agent_executions \
+                     WHERE workspace_id = ?1 AND run_id = ?2 AND activity_id = ?3 \
+                       AND provider = ?4 AND model IS ?5",
+                )
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![workspace_id, run_id, activity_id, provider, model],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)?
+        };
+        for (identity_json, started_at) in &existing {
+            if launch_row_covers(
+                identity_json,
+                started_at,
+                launch,
+                &group.launches,
+                tolerance,
+            )? {
+                return Ok(false);
+            }
         }
         tx.execute(
             "INSERT INTO agent_executions(workspace_id, run_id, activity_id, provider, model, identity_json, started_at)
@@ -392,13 +418,82 @@ impl Store {
                 provider,
                 model,
                 json,
-                launched_at.to_rfc3339()
+                launch.started_at.to_rfc3339()
             ],
         )
         .map_err(sqlite_store_error)?;
         tx.commit().map_err(sqlite_store_error)?;
         Ok(true)
     }
+}
+
+/// Whether one stored row already covers `launch`.
+fn launch_row_covers(
+    identity_json: &str,
+    started_at: &str,
+    launch: &InvocationLaunchEvent,
+    siblings: &[InvocationLaunchEvent],
+    tolerance: chrono::Duration,
+) -> Result<bool, OrbitError> {
+    let stored: StoredAgentExecutionIdentity = serde_json::from_str(identity_json)
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let row_started = crate::parse_timestamp(started_at).map_err(sqlite_store_error)?;
+    if let Some(backfill) = &stored.backfill {
+        return Ok(backfill_row_covers_launch(backfill, row_started, launch));
+    }
+    Ok(dispatch_row_covers_launch(
+        row_started,
+        launch,
+        siblings,
+        tolerance,
+    ))
+}
+
+/// A backfilled row covers the launch it lists when that list is this
+/// launch alone, or when the row was stamped with this launch's start.
+/// A row that lists several launches covers only the one it was stamped
+/// with, so the others can be recorded on their own.
+fn backfill_row_covers_launch(
+    backfill: &AgentExecutionBackfill,
+    row_started: DateTime<Utc>,
+    launch: &InvocationLaunchEvent,
+) -> bool {
+    if !backfill
+        .event_ids
+        .iter()
+        .any(|event_id| event_id == &launch.event_id)
+    {
+        return false;
+    }
+    backfill.event_ids.len() == 1 || row_started == launch.started_at
+}
+
+/// A dispatch-time row has no launch event. It covers the closest sibling
+/// launch within `tolerance`, one row to one launch. Equal distances keep
+/// the earlier start, then the lower event id.
+fn dispatch_row_covers_launch(
+    row_started: DateTime<Utc>,
+    launch: &InvocationLaunchEvent,
+    siblings: &[InvocationLaunchEvent],
+    tolerance: chrono::Duration,
+) -> bool {
+    let distance = (row_started - launch.started_at).abs();
+    if distance > tolerance {
+        return false;
+    }
+    siblings.iter().all(|other| {
+        if other.event_id == launch.event_id {
+            return true;
+        }
+        let other_distance = (row_started - other.started_at).abs();
+        if other_distance > tolerance || other_distance > distance {
+            return true;
+        }
+        if other_distance < distance {
+            return false;
+        }
+        (other.started_at, other.event_id.as_str()) >= (launch.started_at, launch.event_id.as_str())
+    })
 }
 
 /// One step's audit interval in a run: `step.started` to its `step.finished`.
