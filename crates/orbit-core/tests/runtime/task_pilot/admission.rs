@@ -1024,7 +1024,7 @@ fn owner_sign_off_criterion_is_flagged_as_operator_only() {
                 warning
                     .as_str()
                     .unwrap()
-                    .contains("requires an owner sign-off to be recorded")
+                    .contains("requires an owner or operator sign-off to be recorded")
             })
             .count();
         assert_eq!(

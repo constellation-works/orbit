@@ -81,7 +81,7 @@ const SIGN_OFF_AUTHORITIES: &[&str] = &["owner", "operator"];
 /// Finding for a criterion that needs an owner or operator sign-off recorded.
 /// No implementing lane can record it: `orbit.decision.submit` is operator-only
 /// and governance refuses it to agent sessions.
-const OWNER_SIGN_OFF_FINDING: &str = "acceptance criterion requires an owner sign-off to be recorded, which no implementing agent can record: `orbit.decision.submit` is operator-only and governance refuses it to agent sessions, so route this validation to an explicit operator handoff instead of expecting the implementing agent to record the decision";
+const OWNER_SIGN_OFF_FINDING: &str = "acceptance criterion requires an owner or operator sign-off to be recorded, which no implementing agent can record: `orbit.decision.submit` is operator-only and governance refuses it to agent sessions, so route this validation to an explicit operator handoff instead of expecting the implementing agent to record the decision";
 
 /// The execution lane a task's validation criteria have to be feasible in.
 ///
