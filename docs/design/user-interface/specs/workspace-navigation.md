@@ -47,9 +47,13 @@ jobs of these four workspaces" has to visit four boards.
    workspace binding already holds both; the list response must expose them.
 3. Rows are merged by logical workspace ID. A catalog entry holds the workspace ID and name,
    the owner host, and the capacity hosts.
-4. The workspace picker lists each catalog entry once, grouped under its owner's name. It
-   stays the native select it is today; the groups are `optgroup` labels. A replica checkout
-   never produces its own entry.
+4. The workspace picker lists each catalog entry once, grouped under its owner's name. It is
+   the checkbox listbox the dashboard ships today, a multi-select, not a native select. Each
+   owner's entries sit in a `role="group"` labelled with the owner's name, and a non-selectable
+   label row shows that name above them; the label row is not a `role="option"`, so it cannot
+   be ticked. The shipped listbox is flat, so the owner rows arrive with the catalog. The host
+   picker is the one that stays a native select. A replica checkout never produces its own
+   entry.
 5. A workspace whose owner is not registered on the serving host, or does not answer, stays in
    the picker marked **owner unreachable**. Its views show that state. The dashboard does not
    read the replica's local store in its place.
@@ -189,7 +193,7 @@ illustrative.
 
 | Mock | Component | Change | New CSS |
 |---|---|---|---|
-| [1.1](../references/mocks/1-1-pickers.html) | Host and workspace selects in the rail | Host gains All hosts; the workspace menu lists each workspace once under `optgroup` owner labels; unreachable and loading entries | None |
+| [1.1](../references/mocks/1-1-pickers.html) | Host select and workspace listbox in the rail | Host gains All hosts; the workspace listbox lists each workspace once under owner group labels; unreachable and loading entries | None |
 | [1.2](../references/mocks/1-2-owner-unreachable.html) | Tasks list empty state | The replica empty state, reworded for an unreachable owner | None |
 | [2.1](../references/mocks/2-1-drain-card-hosts.html) | Auto-drain card and Start a window card | A Hosts list of fleet rows between the slot bar and the foot; follower rows carry Start or Stop; the Start card names the host | Four rules |
 | [2.2](../references/mocks/2-2-fleet-drains.html) | Fleet drains card | Host tabs removed; one row per workspace; the detail line names each host | None |

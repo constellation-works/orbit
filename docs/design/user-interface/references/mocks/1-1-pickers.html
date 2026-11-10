@@ -35,64 +35,60 @@
 </head>
 <body class="mock-page">
 <h1 class="mock-title">Mock 1.1: Host and workspace pickers</h1>
-<p class="mock-note">Both pickers stay the native selects they are today, with the same classes and no new CSS. The change is in their options. The menus are drawn by the operating system, so they are listed as text.</p>
-<div class="mock-pair"><div class="mock-col"><p class="mock-label">Today</p><div class="mock-stage mock-rail"><nav class="rail" aria-label="Dashboard sections"><div class="rail-host" id="rail-host"><label class="rail-scope-label" for="host-select">Host</label><div class="host-picker-control"><select class="workspace-select host-select" aria-label="Host" id="host-select"><option selected>mac-mini-1</option><option>dk-server-1</option><option>dk-server-2</option></select><span class="host-serving-badge">Serving</span></div></div><div class="rail-workspace" id="rail-workspace"><select class="workspace-select" title="Workspace" aria-label="Workspace" id="workspace-select"><option>All workspaces</option><option selected>orbit</option><option>kvDB</option><option>dsearch</option><option>monodev</option><option>local-data-platform</option><option>nebula</option><option>observatory</option><option>orbit-graph</option><option>orbit-research</option><option>orbit-office</option><option>office-constellation</option></select></div></nav></div><div class="mock-menu">Host menu
+<p class="mock-note">The host picker stays the native select it is today. The workspace picker is the checkbox listbox the dashboard ships: the Today column copies its markup, and the Proposed column adds owner group labels with no new CSS. The host menu is drawn by the operating system and the workspace listbox by the dashboard, so both are listed as text; [x] marks a ticked workspace.</p>
+<div class="mock-pair"><div class="mock-col"><p class="mock-label">Today</p><div class="mock-stage mock-rail"><nav class="rail" aria-label="Dashboard sections"><div class="rail-host" id="rail-host"><label class="rail-scope-label" for="host-select">Host</label><div class="host-picker-control"><select class="workspace-select host-select" aria-label="Host" id="host-select"><option selected>mac-mini-1</option><option>dk-server-1</option><option>dk-server-2</option></select><span class="host-serving-badge">Serving</span></div></div><div class="rail-workspace" id="rail-workspace"><div class="workspace-picker"><button type="button" class="workspace-select" title="Workspace" aria-label="Workspace" aria-haspopup="listbox" aria-expanded="false" aria-controls="workspace-options" id="workspace-select"><span>orbit</span></button><div class="workspace-options" id="workspace-options" role="listbox" aria-label="Workspaces" aria-multiselectable="true" hidden><div role="option" tabindex="-1" aria-selected="true" aria-disabled="true"><input type="checkbox" tabindex="-1" aria-hidden="true" checked>orbit</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">kvDB</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">dsearch</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">monodev</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">local-data-platform</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">nebula</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">observatory</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-graph</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-research</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-office</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">office-constellation</div></div></div></div></nav></div><div class="mock-menu">Host menu
   mac-mini-1
   dk-server-1
   dk-server-2
 
-Workspace menu (this host's checkouts)
-  All workspaces
-  orbit
-  kvDB
-  dsearch
-  monodev
-  local-data-platform
-  nebula
-  observatory
-  orbit-graph
-  orbit-research
-  orbit-office
-  office-constellation</div></div><div class="mock-col"><p class="mock-label new">Proposed</p><div class="mock-stage mock-rail"><nav class="rail" aria-label="Dashboard sections"><div class="rail-host" id="rail-host"><label class="rail-scope-label" for="host-select">Host</label><div class="host-picker-control"><select class="workspace-select host-select" aria-label="Host" id="host-select"><option selected>All hosts</option><option>mac-mini-1</option><option>dk-server-1</option><option>dk-server-2</option></select></div></div><div class="rail-workspace" id="rail-workspace"><select class="workspace-select" title="Workspace" aria-label="Workspace" id="workspace-select"><option>All workspaces</option><optgroup label="dk-server-2"><option selected>orbit</option><option>orbit-graph</option><option>constellation</option><option>constellation-site</option><option>nebula</option><option>observatory</option><option>marketing</option><option>satellites</option><option>scribe</option><option>orbit-decision-mail</option><option>orbit-office</option></optgroup><optgroup label="mac-mini-1"><option>orbit-research</option><option>office-constellation</option><option>kvDB</option><option>dsearch</option><option>monodev</option><option>local-data-platform</option></optgroup></select></div></nav></div><div class="mock-menu">Host menu
+Workspace listbox (this host's checkouts)
+  [x] orbit
+  [ ] kvDB
+  [ ] dsearch
+  [ ] monodev
+  [ ] local-data-platform
+  [ ] nebula
+  [ ] observatory
+  [ ] orbit-graph
+  [ ] orbit-research
+  [ ] orbit-office
+  [ ] office-constellation</div></div><div class="mock-col"><p class="mock-label new">Proposed</p><div class="mock-stage mock-rail"><nav class="rail" aria-label="Dashboard sections"><div class="rail-host" id="rail-host"><label class="rail-scope-label" for="host-select">Host</label><div class="host-picker-control"><select class="workspace-select host-select" aria-label="Host" id="host-select"><option selected>All hosts</option><option>mac-mini-1</option><option>dk-server-1</option><option>dk-server-2</option></select></div></div><div class="rail-workspace" id="rail-workspace"><div class="workspace-picker"><button type="button" class="workspace-select" title="Workspace" aria-label="Workspace" aria-haspopup="listbox" aria-expanded="false" aria-controls="workspace-options" id="workspace-select"><span>orbit</span></button><div class="workspace-options" id="workspace-options" role="listbox" aria-label="Workspaces" aria-multiselectable="true" hidden><div role="group" aria-label="dk-server-2"><div aria-hidden="true">dk-server-2</div><div role="option" tabindex="-1" aria-selected="true" aria-disabled="true"><input type="checkbox" tabindex="-1" aria-hidden="true" checked>orbit</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-graph</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">constellation</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">constellation-site</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">nebula</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">observatory</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">marketing</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">satellites</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">scribe</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-decision-mail</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-office</div></div><div role="group" aria-label="mac-mini-1"><div aria-hidden="true">mac-mini-1</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">orbit-research</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">office-constellation</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">kvDB</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">dsearch</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">monodev</div><div role="option" tabindex="-1" aria-selected="false" aria-disabled="false"><input type="checkbox" tabindex="-1" aria-hidden="true">local-data-platform</div></div></div></div></div></nav></div><div class="mock-menu">Host menu
   All hosts
   mac-mini-1
   dk-server-1
   dk-server-2
 
-Workspace menu (one entry per workspace)
-  All workspaces
+Workspace listbox (one entry per workspace, grouped by owner)
   dk-server-2
-    orbit
-    orbit-graph
-    constellation
-    constellation-site
-    nebula
-    observatory
-    marketing
-    satellites
-    scribe
-    orbit-decision-mail
-    orbit-office
+    [x] orbit
+    [ ] orbit-graph
+    [ ] constellation
+    [ ] constellation-site
+    [ ] nebula
+    [ ] observatory
+    [ ] marketing
+    [ ] satellites
+    [ ] scribe
+    [ ] orbit-decision-mail
+    [ ] orbit-office
   mac-mini-1
-    orbit-research
-    office-constellation
-    kvDB
-    dsearch
-    monodev
-    local-data-platform</div><ul class="mock-changes"><li>Host gains <strong>All hosts</strong> as its first and default option.</li><li>Under All hosts the workspace menu lists each workspace once, grouped by owner with native <code>optgroup</code> labels.</li><li>The Serving badge shows only when one host is chosen, as today.</li><li>Choosing one host keeps today's menu and board.</li></ul></div><div class="mock-col"><p class="mock-label new">Proposed: an owner does not answer</p><div class="mock-stage "></div><div class="mock-menu">Workspace menu
-  All workspaces
+    [ ] orbit-research
+    [ ] office-constellation
+    [ ] kvDB
+    [ ] dsearch
+    [ ] monodev
+    [ ] local-data-platform</div><ul class="mock-changes"><li>Host gains <strong>All hosts</strong> as its first and default option.</li><li>Under All hosts the workspace listbox lists each workspace once, grouped by owner under label rows. A label row is not an option and cannot be ticked.</li><li>The Serving badge shows only when one host is chosen, as today.</li><li>Choosing one host keeps today's menu and board.</li></ul></div><div class="mock-col"><p class="mock-label new">Proposed: an owner does not answer</p><div class="mock-stage "></div><div class="mock-menu">Workspace listbox
   dk-server-2 (unreachable)
-    orbit
-    nebula
-    orbit-graph
+    [x] orbit
+    [ ] nebula
+    [ ] orbit-graph
   mac-mini-1
-    orbit-research
-    office-constellation
-    kvDB
-    ...</div><ul class="mock-changes"><li>The group label says the owner is unreachable.</li><li>Only workspaces known from another host's replica are listed under it.</li></ul></div><div class="mock-col"><p class="mock-label new">Proposed: a host is still being read</p><div class="mock-stage "></div><div class="mock-menu">Workspace menu
-  All workspaces
+    [ ] orbit-research
+    [ ] office-constellation
+    [ ] kvDB
+    ...</div><ul class="mock-changes"><li>The group label says the owner is unreachable.</li><li>Only workspaces known from another host's replica are listed under it.</li></ul></div><div class="mock-col"><p class="mock-label new">Proposed: a host is still being read</p><div class="mock-stage "></div><div class="mock-menu">Workspace listbox
   dk-server-2
-    orbit
+    [x] orbit
     ...
   mac-mini-1
     ...
