@@ -183,21 +183,35 @@ impl PluginBackendSpec {
     ///
     /// The directory lives under `plugins/`, which the plugin may read but
     /// never write, so only this host call changes what a granted name runs.
+    ///
+    /// Concurrent calls (other threads, other Orbit processes, rendered
+    /// validation) share the directory, so the whole reconciliation runs under
+    /// one advisory lock on the namespace, bounded by the default lock
+    /// deadline (STD-03 §R6, §R7). Each writer stages under a name only it
+    /// owns, and pruning runs inside the same lock, so it never consumes a
+    /// staging link another writer still needs.
     pub(crate) fn materialize_program_links(&self) -> Result<Option<PathBuf>, OrbitError> {
         let programs = self.linkable_programs();
         let dir = self.program_link_dir();
-        let wanted: Vec<&str> = programs.iter().map(|(name, _)| name.as_str()).collect();
-        if programs.is_empty() {
-            remove_program_links_except(&dir, &wanted)?;
+        if programs.is_empty() && !dir.exists() {
+            // Nothing to publish and nothing to prune; do not create the
+            // namespace (or its lock file) for a plugin with no program links.
             return Ok(None);
         }
-        orbit_common::fs::io::create_private_dir_all(&dir)
-            .map_err(|error| link_error(&dir, &error))?;
-        for (name, target) in &programs {
-            replace_program_link(&dir, name, target)?;
-        }
-        remove_program_links_except(&dir, &wanted)?;
-        Ok(Some(dir))
+        orbit_common::fs::io::with_exclusive_file_lock(&dir, "plugin program links", || {
+            let wanted: Vec<&str> = programs.iter().map(|(name, _)| name.as_str()).collect();
+            if programs.is_empty() {
+                remove_program_links_except(&dir, &wanted)?;
+                return Ok(None);
+            }
+            orbit_common::fs::io::create_private_dir_all(&dir)
+                .map_err(|error| link_error(&dir, &error))?;
+            for (name, target) in &programs {
+                replace_program_link(&dir, name, target)?;
+            }
+            remove_program_links_except(&dir, &wanted)?;
+            Ok(Some(dir.clone()))
+        })
     }
 }
 
@@ -209,16 +223,23 @@ fn link_error(path: &Path, error: &std::io::Error) -> OrbitError {
 }
 
 /// Point `dir/name` at `target`, replacing whatever link was there. The new
-/// link is staged beside it and renamed over, so a child never sees a missing
-/// name in between.
+/// link is staged beside it under a writer-unique name and renamed over, so a
+/// child never sees a missing name in between. The caller holds the namespace
+/// lock.
 #[cfg(unix)]
 fn replace_program_link(dir: &Path, name: &str, target: &Path) -> Result<(), OrbitError> {
     let link = dir.join(name);
     if std::fs::read_link(&link).is_ok_and(|current| current == target) {
         return Ok(());
     }
-    let staging = dir.join(format!(".{name}.staging"));
-    remove_path_if_present(&staging).map_err(|error| link_error(&staging, &error))?;
+    // A name only this writer uses, so a stale staging link from a crashed
+    // writer is never reused here, and pruning (under the same lock) clears it.
+    static STAGING_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let staging = dir.join(format!(
+        ".{name}.staging.{}.{}",
+        std::process::id(),
+        STAGING_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::os::unix::fs::symlink(target, &staging).map_err(|error| link_error(&staging, &error))?;
     std::fs::rename(&staging, &link).map_err(|error| {
         let _ = std::fs::remove_file(&staging);

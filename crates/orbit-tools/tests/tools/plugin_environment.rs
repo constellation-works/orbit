@@ -605,3 +605,126 @@ fn bare_program_name_reaching_another_file_is_reported_and_not_followed() {
         "the name's new file is reported, not followed"
     );
 }
+
+/// Overlapping calls for one plugin namespace share the host's link directory.
+/// A call that arrives while another reconciles it must wait for that writer
+/// (bounded advisory lock), then both get a usable `PATH` link; a staging link
+/// left by a crashed writer is pruned rather than reused.
+#[test]
+fn overlapping_child_environment_calls_serialize_program_link_publication() {
+    let temp = tempfile::tempdir().expect("fixture root");
+    let root = temp.path().canonicalize().expect("physical root");
+    let program = root.join("aliasprog");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").expect("write program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("executable program");
+    let grants = PluginGrantSet::from_grants([PluginGrant::Unsandboxed]);
+    let spec = Arc::new(PluginBackendSpec {
+        provenance: PluginProvenance {
+            name: "link-race".into(),
+            version: "1.0.0".into(),
+            manifest_digest: "fixture".into(),
+            grants: grants.to_recorded(),
+        },
+        plugin_root: root.clone(),
+        state_dir: root.join("state"),
+        global_root: root.join("global"),
+        command: root.join("unused"),
+        args: Vec::new(),
+        timeout_ms: Some(5_000),
+        sandbox: PluginSandbox::None,
+        permissions: PluginPermissions::default(),
+        programs: vec!["aliasprog".into()],
+        program_paths: std::collections::BTreeMap::from([("aliasprog".into(), program.clone())]),
+        config: Default::default(),
+        grants,
+        secrets: Default::default(),
+    });
+    let link_dir = root
+        .join("global")
+        .join("plugins")
+        .join(".programs")
+        .join("link-race");
+    // A crashed writer's leftover staging link.
+    std::fs::create_dir_all(&link_dir).expect("link dir");
+    std::os::unix::fs::symlink(&program, link_dir.join(".aliasprog.staging.1.1"))
+        .expect("stale staging link");
+    let ctx = ToolContext {
+        cwd: Some(root.to_string_lossy().into_owned()),
+        workspace_root: Some(root.clone()),
+        proc_spawn_environment: Some(vec![("PATH".into(), "/usr/bin:/bin".into())]),
+        ..Default::default()
+    };
+
+    // Another writer owns the namespace lock: both calls queue behind it.
+    let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+    let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+    let holder_dir = link_dir.clone();
+    let holder = std::thread::spawn(move || {
+        orbit_common::fs::io::with_exclusive_file_lock::<_, std::io::Error, _>(
+            &holder_dir,
+            "test holder",
+            || {
+                held_tx.send(()).expect("announce lock");
+                hold_rx.recv().expect("release signal");
+                Ok(())
+            },
+        )
+        .expect("hold namespace lock");
+    });
+    held_rx.recv().expect("lock held");
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let callers: Vec<_> = (0..2)
+        .map(|_| {
+            let spec = Arc::clone(&spec);
+            let ctx = ctx.clone();
+            let done_tx = done_tx.clone();
+            let cwd = root.to_string_lossy().into_owned();
+            std::thread::spawn(move || {
+                done_tx
+                    .send(spec.child_environment(&ctx, &cwd, None))
+                    .expect("report result");
+            })
+        })
+        .collect();
+    assert!(
+        done_rx
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a call must wait while another writer holds the namespace lock"
+    );
+    hold_tx.send(()).expect("release lock");
+    holder.join().expect("holder thread");
+    for _ in 0..2 {
+        let env = done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("call finished after the lock was released")
+            .expect("valid grant yields a child environment");
+        let path = env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.as_str())
+            .expect("PATH");
+        assert!(
+            path.starts_with(&format!("{}:", link_dir.display())),
+            "link dir prepended: {path}"
+        );
+    }
+    for caller in callers {
+        caller.join().expect("caller thread");
+    }
+    assert_eq!(
+        std::fs::read_link(link_dir.join("aliasprog")).expect("published link"),
+        program
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&link_dir)
+        .expect("read link dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(
+        leftovers,
+        vec![std::ffi::OsString::from("aliasprog")],
+        "stale staging link pruned, no other entries"
+    );
+}
