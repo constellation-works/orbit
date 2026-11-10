@@ -33,6 +33,7 @@ mod config_set_root;
 mod deployment_gc;
 #[cfg(unix)]
 mod doctor_confirm;
+mod doctor_providers_tool_telemetry;
 mod doctor_runtime;
 mod generation_root;
 mod git_fixture_isolation;
