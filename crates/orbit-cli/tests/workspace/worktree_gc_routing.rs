@@ -243,6 +243,13 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // needing to fabricate a backdated run record.
     zero_worktree_gc_age_floor(&home);
     enable_worktree_gc_routine(&workspace_b);
+    // Every new workspace seeds its own enabled hourly (`35 * * * *`)
+    // worktree_gc routine, and the zeroed floor above makes A's fixture
+    // worktree eligible for it too. A run straddling hh:35 used to fire A's
+    // own routine between the two sweeps and legitimately reap A's worktree,
+    // failing the cross-workspace assertion below (ORB-23775). Only B's
+    // routine may dispatch here.
+    disable_worktree_gc_routine(&workspace_a);
     let routine_path = workspace_b.orbit_dir.join("routines/worktree_gc.yaml");
     let routine_definition = fs::read(&routine_path).unwrap();
     let pipeline_path = home.join(".orbit/resources/jobs/worktree_gc_pipeline.yaml");
@@ -292,6 +299,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     // wall clock to cross a boundary.
     let baseline = fire_sweep();
     routine_runs.retain_sweep(&baseline);
+    assert_routine_not_fired(&baseline, "worktree-gc-workspace-a");
     assert!(
         routine_report(&baseline, "worktree-gc-workspace-b").is_some(),
         "sweep never evaluated workspace B's worktree_gc routine: {baseline}"
@@ -301,6 +309,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
 
     let fired = fire_sweep();
     routine_runs.retain_sweep(&fired);
+    assert_routine_not_fired(&fired, "worktree-gc-workspace-a");
     let report = routine_report(&fired, "worktree-gc-workspace-b").unwrap_or_else(|| {
         panic!(
             "sweep never evaluated workspace B's worktree_gc routine on the second pass: {fired}"
@@ -399,6 +408,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         make_routine_due(&home, "worktree-gc-workspace-b");
         let repeated = fire_sweep();
         routine_runs.retain_sweep(&repeated);
+        assert_routine_not_fired(&repeated, "worktree-gc-workspace-a");
         let report = routine_report(&repeated, "worktree-gc-workspace-b").unwrap();
         assert!(
             matches!(
@@ -612,6 +622,30 @@ fn enable_worktree_gc_routine(workspace: &Workspace) {
         .replace("enabled: false", "enabled: true")
         .replace("cron: \"35 * * * *\"", "cron: \"* * * * *\"");
     fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn disable_worktree_gc_routine(workspace: &Workspace) {
+    let path = workspace.orbit_dir.join("routines/worktree_gc.yaml");
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let updated = content.replace("enabled: true", "enabled: false");
+    assert!(
+        updated.contains("enabled: false"),
+        "expected an `enabled:` flag to disable in {}",
+        path.display()
+    );
+    fs::write(&path, updated).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+/// A routine the fixture disabled must never dispatch, or its own run could
+/// reap the worktree the cross-workspace assertion protects.
+fn assert_routine_not_fired(sweep_report: &Value, routine_name: &str) {
+    let report = routine_report(sweep_report, routine_name)
+        .unwrap_or_else(|| panic!("sweep never evaluated routine {routine_name}: {sweep_report}"));
+    assert_eq!(
+        report["reason"], "disabled_in_definition",
+        "routine {routine_name} must stay disabled so only workspace B's routine dispatches: {report}"
+    );
 }
 
 fn routine_report<'a>(sweep_report: &'a Value, routine_name: &str) -> Option<&'a Value> {
