@@ -124,6 +124,8 @@ whose recorded role is a model label. The existing `role=<label>` Events filter
 still matches the exact stored role. A
 failure-incident drill-down adds `status=non_success`, which includes both
 `failure` and `denied`; Events shows these filters as removable scope chips.
+A tool, execution-id or profile filter is a removable scope chip too; removing
+it re-queries without that filter.
 The rows are raw evidence, so several rows can belong to one counted incident.
 
 Family and combined-status filters compose with the other Events filters and

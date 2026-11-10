@@ -162,6 +162,14 @@ function renderScopeChips() {
     if (windowLabel !== getWindow()) chip.classList.add("independent");
     host.appendChild(chip);
   }
+  if (auditFilter.tool) {
+    const chip = scopeChip("tool", auditFilter.tool, () => {
+      auditFilter.tool = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove tool filter: ${auditFilter.tool}`;
+    host.appendChild(chip);
+  }
   if (auditFilter.role) {
     const chip = scopeChip("actor", auditActorLabel(auditFilter.role), () => {
       auditFilter.role = null;
@@ -175,6 +183,22 @@ function renderScopeChips() {
       auditFilter.agent_family = null;
       window.location.hash = buildAuditHash();
     }));
+  }
+  if (auditFilter.execution_id) {
+    const chip = scopeChip("execution", auditFilter.execution_id, () => {
+      auditFilter.execution_id = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove execution filter: ${auditFilter.execution_id}`;
+    host.appendChild(chip);
+  }
+  if (auditFilter.profile) {
+    const chip = scopeChip("profile", auditFilter.profile, () => {
+      auditFilter.profile = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove profile filter: ${auditFilter.profile}`;
+    host.appendChild(chip);
   }
   if (auditFilter.status) {
     host.appendChild(scopeChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {

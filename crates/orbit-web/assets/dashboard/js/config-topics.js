@@ -349,8 +349,13 @@ function drawerNode(payload, context) {
   if (session.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
   let field;
   if ((row.options || []).length) {
+    const options = row.options;
+    // An unset choice has an empty draft, but a select shows its first option.
+    // Copy that option into the draft so Save and the CLI hint match the display.
+    if (session.text === '') session.text = options[0];
     field = el('select', { class: 'config-input' });
-    for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
+    for (const o of options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
+    field.value = session.text;
     field.addEventListener('change', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   } else if (row.allowed?.kind === 'range' && (row.value_type === 'integer' || row.value_type === 'number')) {
     field = el('input', { class: 'config-input mono', type: 'number' });

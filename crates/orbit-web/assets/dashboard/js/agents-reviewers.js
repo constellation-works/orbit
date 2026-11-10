@@ -1,8 +1,10 @@
 // Observe › Agents › Reviewers: the role panel, how each reviewer's settled
 // reviews turned out, plus the provisional banner and the `accepts often`
 // row tag. The outcomes are the rows' shown-not-scored `outcome_*` stats; the
-// tag reads the `accepts_often` stat, an accept rate 10 or more points above
-// the other reviewers on the same tiers. Neither enters the score. `how` adds
+// tag reads the `accepts_often` stat, the tier-compared accept rate
+// (`compared_accept_rate`) 10 or more points above the other reviewers on
+// tiers they also judged. The tooltip quotes that rate, not the all-reviews
+// `accept_rate`. Neither enters the score. `how` adds
 // how a review job's filed findings are judged and what an unjudged row is
 // to "How the score works". Every node is built with `el()`.
 
@@ -85,12 +87,12 @@ function banner({ scorecard }) {
 
 function rowTags(row) {
   if (statValue(row, "accepts_often") !== true) return [];
-  const rate = statValue(row, "accept_rate");
+  const rate = statValue(row, "compared_accept_rate");
   const peers = statValue(row, "peer_accept_rate");
   const tag = el("span", {
     class: "agents-tag agents-tag-accepts-often",
     text: "accepts often",
-    title: `Accepts ${rate}% of reviews; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
+    title: `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
   });
   tag.dataset.tag = "accepts_often";
   return [tag];

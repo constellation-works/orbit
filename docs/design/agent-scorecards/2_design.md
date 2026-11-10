@@ -540,7 +540,7 @@ Failed fixes and incomplete reviews:
 Shown, not scored (each row's `stats`):
 
 - review gate settlements and review job runs that filed findings;
-- accept rate, the share of gate settlements that passed (`accept` or `accept_with_fixes`), and the peers' accept rate on the same tiers. The peers' rate is the rate the other reviewers had on each of the row's task tiers (complexity, or unassessed), averaged over the row's reviews. A row 10 or more points above it has `accepts_often` true and is tagged `accepts often`.
+- accept rate, the share of gate settlements that passed (`accept` or `accept_with_fixes`); the accept rate on tiers any other reviewer also judged (`compared_accept_rate`); and the peers' accept rate on those same tiers. Tiers no peer reviewed are left out of both compared rates, so the compared rate can differ from the all-reviews accept rate. A row whose compared rate is 10 or more points above the peers' rate has `accepts_often` true and is tagged `accepts often`. The tag's tooltip quotes those two compared rates.
 - the five verdict outcomes below;
 - median review minutes, from the settlement's reviewer runtime;
 - the row's provisional count (the row's `provisional` field).

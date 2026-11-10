@@ -584,6 +584,16 @@ fn stats(row: &Row<'_>, peers: Option<PeerComparison>) -> Vec<Stat> {
                 Value::Null
             },
         ),
+        // The rate `accepts_often` compares: reviews on tiers any other
+        // reviewer also judged. Tiers with no peer verdict are left out, so
+        // this can differ from `accept_rate`.
+        stat(
+            "compared_accept_rate",
+            "Accept rate on tiers peers also reviewed (%)",
+            peers
+                .as_ref()
+                .map_or(Value::Null, |peers| percent(peers.observed)),
+        ),
         stat(
             "peer_accept_rate",
             "Peers' accept rate on the same tiers (%)",
