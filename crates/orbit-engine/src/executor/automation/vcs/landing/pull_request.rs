@@ -72,12 +72,14 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             return Err(landing_timeout(
                 host,
                 context,
-                number,
-                max_wait_seconds,
-                &context.owed_hosted_checks,
-                &unreported,
-                &diagnostic,
-                waiting_for_checks,
+                LandingTimeout {
+                    number,
+                    max_wait_seconds,
+                    owed: &context.owed_hosted_checks,
+                    unreported: &unreported,
+                    diagnostic: &diagnostic,
+                    waiting_for_checks,
+                },
             )?);
         }
         let status = if max_wait_seconds == 0 {
@@ -581,12 +583,14 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                     return Err(landing_timeout(
                         host,
                         context,
-                        number,
-                        max_wait_seconds,
-                        &context.owed_hosted_checks,
-                        &unreported,
-                        &diagnostic,
-                        waiting_for_checks,
+                        LandingTimeout {
+                            number,
+                            max_wait_seconds,
+                            owed: &context.owed_hosted_checks,
+                            unreported: &unreported,
+                            diagnostic: &diagnostic,
+                            waiting_for_checks,
+                        },
                     )?);
                 }
                 if updated_head.is_some() {
@@ -599,12 +603,14 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                             return Err(landing_timeout(
                                 host,
                                 context,
-                                number,
-                                max_wait_seconds,
-                                &context.owed_hosted_checks,
-                                &unreported,
-                                &diagnostic,
-                                waiting_for_checks,
+                                LandingTimeout {
+                                    number,
+                                    max_wait_seconds,
+                                    owed: &context.owed_hosted_checks,
+                                    unreported: &unreported,
+                                    diagnostic: &diagnostic,
+                                    waiting_for_checks,
+                                },
                             )?);
                         }
                         let delay = poll_interval_seconds
@@ -630,12 +636,14 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                     return Err(landing_timeout(
                         host,
                         context,
-                        number,
-                        max_wait_seconds,
-                        &context.owed_hosted_checks,
-                        &unreported,
-                        &diagnostic,
-                        waiting_for_checks,
+                        LandingTimeout {
+                            number,
+                            max_wait_seconds,
+                            owed: &context.owed_hosted_checks,
+                            unreported: &unreported,
+                            diagnostic: &diagnostic,
+                            waiting_for_checks,
+                        },
                     )?);
                 }
                 let observed =
@@ -759,12 +767,14 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             return Err(landing_timeout(
                 host,
                 context,
-                number,
-                max_wait_seconds,
-                waiting,
-                &unreported,
-                &diagnostic,
-                waiting_for_checks,
+                LandingTimeout {
+                    number,
+                    max_wait_seconds,
+                    owed: waiting,
+                    unreported: &unreported,
+                    diagnostic: &diagnostic,
+                    waiting_for_checks,
+                },
             )?);
         }
         let sleep_seconds = poll_interval_seconds.min(max_wait_seconds - waited_seconds);
@@ -773,17 +783,29 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What a landing wait observed when its deadline passed.
+struct LandingTimeout<'a> {
+    number: u64,
+    max_wait_seconds: u64,
+    owed: &'a [String],
+    unreported: &'a UnreportedChecks,
+    diagnostic: &'a Value,
+    waiting_for_checks: bool,
+}
+
 fn landing_timeout<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &LandingPass,
-    number: u64,
-    max_wait_seconds: u64,
-    owed: &[String],
-    unreported: &UnreportedChecks,
-    diagnostic: &Value,
-    waiting_for_checks: bool,
+    timeout: LandingTimeout<'_>,
 ) -> Result<OrbitError, OrbitError> {
+    let LandingTimeout {
+        number,
+        max_wait_seconds,
+        owed,
+        unreported,
+        diagnostic,
+        waiting_for_checks,
+    } = timeout;
     let mut waiting = if owed.is_empty() {
         String::new()
     } else {

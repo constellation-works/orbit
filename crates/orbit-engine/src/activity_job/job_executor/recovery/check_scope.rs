@@ -179,7 +179,18 @@ pub(super) fn bind(
                          no scope record was written, so no edit is explained",
                     ));
                 }
-                record_no_edit_rerun(ctx, step, failure, task, &owner_run, pr, &head, &admitted)?;
+                record_no_edit_rerun(
+                    ctx,
+                    step,
+                    failure,
+                    NoEditRerunTarget {
+                        task,
+                        owner_run: &owner_run,
+                        pr,
+                        head: &head,
+                    },
+                    &admitted,
+                )?;
                 return Ok(CheckScopeBind::NoEdit);
             }
             Err(error) => return Err(refused(error)),
@@ -242,21 +253,31 @@ pub(super) fn bind(
     Ok(CheckScopeBind::Bound)
 }
 
+/// The task, owner run, pull request and failed head a no-edit repair reruns.
+struct NoEditRerunTarget<'a> {
+    task: &'a str,
+    owner_run: &'a str,
+    pr: &'a str,
+    head: &'a str,
+}
+
 /// Record a no-edit repair durably before the retry, so the completion
 /// watcher reruns the failed checks once on this head instead of admitting
 /// another repair or holding as a duplicate. The admitted attempt already
 /// spent one auto-fix attempt for the head.
-#[allow(clippy::too_many_arguments)]
 fn record_no_edit_rerun(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     failure: &str,
-    task: &str,
-    owner_run: &str,
-    pr: &str,
-    head: &str,
+    target: NoEditRerunTarget<'_>,
     admitted: &orbit_types::workflow::PrAutoFixAttempt,
 ) -> Result<(), RecoveryCommitRefusal> {
+    let NoEditRerunTarget {
+        task,
+        owner_run,
+        pr,
+        head,
+    } = target;
     let record = PrAutoFixNoEditRerun {
         pr_number: pr.to_string(),
         head_sha: head.to_string(),

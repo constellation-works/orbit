@@ -7,6 +7,17 @@ pub(crate) struct DeferredApprovalEffects {
     note: Option<String>,
 }
 
+/// The caller-supplied parts of an approval, shared by the locked and
+/// deferred-effects bodies.
+struct ApprovalRequest {
+    note: Option<String>,
+    decision: Option<TaskDecision>,
+    comment: Option<String>,
+    agent: Option<String>,
+    model: Option<String>,
+    guard_run_ownership: bool,
+}
+
 impl OrbitRuntime {
     /// Move a task to backlog through the approval body when its current
     /// state is proposed, otherwise through the ordinary governed update.
@@ -81,7 +92,17 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
-        self.approve_task_locked(id, note, None, comment, agent, model, false)
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent,
+                model,
+                guard_run_ownership: false,
+            },
+        )
     }
 
     /// Trusted approval of [`Self::approve_task`] that also records
@@ -94,7 +115,17 @@ impl OrbitRuntime {
         note: Option<String>,
         decision: Option<TaskDecision>,
     ) -> Result<Task, OrbitError> {
-        self.approve_task_locked(id, note, decision, None, None, None, false)
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision,
+                comment: None,
+                agent: None,
+                model: None,
+                guard_run_ownership: false,
+            },
+        )
     }
 
     /// Operator approval (`orbit task update --approve` and the dashboard).
@@ -110,29 +141,21 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
-        self.approve_task_locked(id, note, None, comment, agent, model, true)
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent,
+                model,
+                guard_run_ownership: true,
+            },
+        )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn approve_task_locked(
-        &self,
-        id: &str,
-        note: Option<String>,
-        decision: Option<TaskDecision>,
-        comment: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        guard_run_ownership: bool,
-    ) -> Result<Task, OrbitError> {
-        let (result, effects) = self.approve_task_deferring_effects(
-            id,
-            note,
-            decision,
-            comment,
-            agent,
-            model,
-            guard_run_ownership,
-        )?;
+    fn approve_task_locked(&self, id: &str, request: ApprovalRequest) -> Result<Task, OrbitError> {
+        let (result, effects) = self.approve_task_deferring_effects(id, request)?;
         self.run_deferred_approval_effects(effects);
         Ok(result)
     }
@@ -148,7 +171,17 @@ impl OrbitRuntime {
         note: Option<String>,
         comment: Option<String>,
     ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
-        self.approve_task_deferring_effects(id, note, None, comment, None, None, true)
+        self.approve_task_deferring_effects(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent: None,
+                model: None,
+                guard_run_ownership: true,
+            },
+        )
     }
 
     /// Run the effects an approval deferred until its caller released the
@@ -162,17 +195,19 @@ impl OrbitRuntime {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn approve_task_deferring_effects(
         &self,
         id: &str,
-        note: Option<String>,
-        decision: Option<TaskDecision>,
-        comment: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        guard_run_ownership: bool,
+        request: ApprovalRequest,
     ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
+        let ApprovalRequest {
+            note,
+            decision,
+            comment,
+            agent,
+            model,
+            guard_run_ownership,
+        } = request;
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
         if comment

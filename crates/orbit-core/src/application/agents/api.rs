@@ -66,9 +66,11 @@ impl OrbitRuntime {
             &self.agent_scan()?,
             role,
             query,
-            crew,
-            model,
-            effort,
+            DetailRowSelector {
+                crew,
+                model,
+                effort,
+            },
             Duration::ZERO,
             surface,
         )
@@ -290,9 +292,11 @@ pub fn agent_detail(
         facts,
         role,
         query,
-        crew,
-        model,
-        None,
+        DetailRowSelector {
+            crew,
+            model,
+            effort: None,
+        },
         cache_ttl,
         AgentDetailSurface::Dashboard,
     )
@@ -313,25 +317,36 @@ pub fn agent_detail_with_effort(
         facts,
         role,
         query,
-        crew,
-        model,
-        effort,
+        DetailRowSelector {
+            crew,
+            model,
+            effort,
+        },
         cache_ttl,
         AgentDetailSurface::Dashboard,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The crew, model and effort that pick one row of an agent detail request.
+struct DetailRowSelector<'a> {
+    crew: &'a str,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+}
+
 fn agent_detail_for_surface(
     facts: &AgentFacts,
     role: AgentRole,
     query: &AgentQuery,
-    crew: &str,
-    model: Option<&str>,
-    effort: Option<&str>,
+    selector: DetailRowSelector<'_>,
     cache_ttl: Duration,
     surface: AgentDetailSurface,
 ) -> Result<Value, OrbitError> {
+    let DetailRowSelector {
+        crew,
+        model,
+        effort,
+    } = selector;
     let crew = crew.trim();
     if crew.is_empty() {
         return Err(OrbitError::InvalidInput("crew is required".to_string()));

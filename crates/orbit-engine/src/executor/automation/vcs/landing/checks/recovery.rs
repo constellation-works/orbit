@@ -446,15 +446,17 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     }
     if !waiter_logs.is_empty() {
         fold_dependency_waiters(
-            host,
-            workspace,
-            context,
-            pr,
-            head,
-            base,
+            &DependencyAuthScope {
+                host,
+                workspace,
+                context,
+                pr,
+                head,
+                base,
+                deadline_ms: recovery.deadline_ms,
+            },
             &waiter_logs,
             &mut jobs,
-            recovery.deadline_ms,
             &mut recovery.dependency_auth,
         );
     }
@@ -796,21 +798,27 @@ fn dependency_ids_in_log(log: &str) -> Vec<u64> {
         .unwrap_or_default()
 }
 
+/// What authenticating a waiter's dependency record reads through the
+/// provider adapter: the landing's host, checkout, candidate, PR, head and
+/// accepted base, bounded by one deadline.
+struct DependencyAuthScope<'a, H: RuntimeHost + ?Sized> {
+    host: &'a H,
+    workspace: &'a std::path::Path,
+    context: &'a HandoffLandingContext,
+    pr: u64,
+    head: &'a str,
+    base: &'a str,
+    deadline_ms: u64,
+}
+
 /// Fold authenticated dependency waiters into the jobs they name: a waiter
 /// whose only diagnostic is an authenticated dependency record takes no
 /// class of its own, so the aggregate class comes from its dependencies.
 /// An unauthenticated or malformed record keeps its classified class.
-#[allow(clippy::too_many_arguments)]
 fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &std::path::Path,
-    context: &HandoffLandingContext,
-    pr: u64,
-    head: &str,
-    base: &str,
+    scope: &DependencyAuthScope<'_, H>,
     waiter_logs: &[(u64, String)],
     jobs: &mut [FailedJob],
-    deadline_ms: u64,
     dependency_auth: &mut BTreeMap<(u64, u64), Option<Vec<u64>>>,
 ) {
     let waiter_ids: BTreeSet<u64> = waiter_logs.iter().map(|(id, _)| *id).collect();
@@ -847,18 +855,8 @@ fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
             let dependency_ids = match dependency_auth.get(&(run_id, *waiter_id)) {
                 Some(cached) => cached.clone(),
                 None => {
-                    let authenticated = authenticated_dependency_ids(
-                        host,
-                        workspace,
-                        context,
-                        pr,
-                        head,
-                        base,
-                        run_id,
-                        *waiter_id,
-                        jobs,
-                        deadline_ms,
-                    );
+                    let authenticated =
+                        authenticated_dependency_ids(scope, run_id, *waiter_id, jobs);
                     dependency_auth.insert((run_id, *waiter_id), authenticated.clone());
                     authenticated
                 }
@@ -913,19 +911,21 @@ fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
 /// Authenticate one waiter's dependency record through the same adapter the
 /// rerun planner uses, returning the dependency job ids it names. Any
 /// failure — malformed, forged or unproven closure — returns `None`.
-#[allow(clippy::too_many_arguments)]
 fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &std::path::Path,
-    context: &HandoffLandingContext,
-    pr: u64,
-    head: &str,
-    base: &str,
+    scope: &DependencyAuthScope<'_, H>,
     run_id: u64,
     waiter_id: u64,
     jobs: &[FailedJob],
-    deadline_ms: u64,
 ) -> Option<Vec<u64>> {
+    let DependencyAuthScope {
+        host,
+        workspace,
+        context,
+        pr,
+        head,
+        base,
+        deadline_ms,
+    } = *scope;
     let roots: Vec<orbit_types::workflow::CiRerunRoot> = jobs
         .iter()
         .filter(|job| {
