@@ -388,12 +388,15 @@ fn turns_to_edit_trend(
                 .or_default()
                 .record(contribution);
         }
-        if let Some(wanted) = filters.provider.as_deref()
-            && let Some(first) = first
-            && first.agent != wanted
-        {
-            other_provider += 1;
-            continue;
+        if let Some(wanted) = filters.provider.as_deref() {
+            match first {
+                Some(first) if first.agent == wanted => {}
+                Some(_) => {
+                    other_provider += 1;
+                    continue;
+                }
+                None => continue,
+            }
         }
         let cohort = if filters.tags.is_empty() {
             "all"
