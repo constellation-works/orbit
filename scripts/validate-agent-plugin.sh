@@ -381,8 +381,6 @@ skills_root = plugin_root / "skills"
 orbit_skill = skills_root / "orbit"
 if not orbit_skill.is_dir():
     errors.append("plugin/skills/orbit is missing")
-else:
-    validate_skill_frontmatter(orbit_skill)
 if skills_root.is_dir():
     for skill_dir in sorted(path for path in skills_root.iterdir() if path.is_dir()):
         validate_skill_frontmatter(skill_dir)
