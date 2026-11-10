@@ -632,7 +632,9 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         .iter()
         .filter(|gate| !gate_present(gate, checks, statuses))
         .collect();
+    let failed_workflow_runs =
+        super::failed_workflow::failed_workflow_evidence(deadline, workspace, &current)?;
     Ok(
-        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses}),
+        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses,"failed_workflow_runs":failed_workflow_runs}),
     )
 }

@@ -44,7 +44,10 @@ pub(crate) fn prepare(
         }),
         BlockedRecoveryPreparation::Ready(prepared) => {
             let checkout = prepared.checkout.to_string_lossy().to_string();
-            json!({
+            let candidate_workflow_failure = prepared
+                .error_message
+                .contains(orbit_types::workflow::PR_CANDIDATE_WORKFLOW_FAILURE_MARKER);
+            let mut output = json!({
                 "proceed": true,
                 "episode": episode.to_json(),
                 "recovery": {
@@ -57,11 +60,15 @@ pub(crate) fn prepare(
                     "error_message": prepared.error_message,
                     "base_ref": prepared.base_ref,
                     "base_sha": prepared.base_sha,
-                    "decisions": BACKSTOP_DECISIONS,
+                    "decisions": BACKSTOP_DECISIONS.iter().filter(|kind| !(candidate_workflow_failure && **kind == "rerun_ci")).collect::<Vec<_>>(),
                     "lane_contract": BACKSTOP_LANE_CONTRACT,
                     "retained_candidate": prepared.retained_candidate.to_json(),
                 },
-            })
+            });
+            if candidate_workflow_failure {
+                output["recovery"]["workflow_run_failure"] = json!({"classification":"candidate_owned","evidence":output["recovery"]["error_message"]});
+            }
+            output
         }
     })
 }

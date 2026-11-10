@@ -4,6 +4,7 @@ mod dependency_record;
 mod dispatch;
 mod emission;
 mod evidence;
+mod failed_workflow;
 mod input;
 mod pr;
 mod prerequisite;

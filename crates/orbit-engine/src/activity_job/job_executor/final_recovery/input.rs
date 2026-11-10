@@ -1,4 +1,6 @@
-use orbit_types::workflow::{FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision};
+use orbit_types::workflow::{
+    FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, PR_CANDIDATE_WORKFLOW_FAILURE_MARKER,
+};
 
 use super::super::*;
 use super::types;
@@ -59,6 +61,7 @@ pub(super) fn final_recovery_input(
     error_message: &str,
 ) -> Result<FinalRecoveryInput, String> {
     let step = &job.steps[step_index];
+    let candidate_workflow_failure = error_message.contains(PR_CANDIDATE_WORKFLOW_FAILURE_MARKER);
     let mut input = serde_json::json!({
         "task_id": task_id,
         "run_id": ctx.run_id,
@@ -81,9 +84,12 @@ pub(super) fn final_recovery_input(
         // second resume of itself.
         "decisions": FinalRecoveryDecision::KINDS
             .iter()
-            .filter(|kind| **kind != "resume_run")
+            .filter(|kind| **kind != "resume_run" && !(candidate_workflow_failure && **kind == "rerun_ci"))
             .collect::<Vec<_>>(),
     });
+    if candidate_workflow_failure {
+        input["workflow_run_failure"] = serde_json::json!({"classification":"candidate_owned","evidence":input["error_message"]});
+    }
     recovery::evidence::inject_final_recovery_evidence(ctx, &mut input)?;
     if let JobV2StepBody::Target(target) = &step.body {
         let completion = matches!(&target.spec, ActivityV2Spec::Deterministic(spec)

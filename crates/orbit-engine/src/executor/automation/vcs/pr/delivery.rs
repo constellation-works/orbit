@@ -349,6 +349,8 @@ pub(in crate::executor::automation::vcs) struct UnreportedChecks {
     /// [ORB-23812] The last observation found no run, queued or otherwise,
     /// of any check current branch policy requires on the head.
     no_required_check_run: bool,
+    /// Adapter-verified workflow failures whose protected checks never ran.
+    pub(super) failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
 }
 
 impl UnreportedChecks {
@@ -360,6 +362,7 @@ impl UnreportedChecks {
             unsettled_polls: 0,
             lagging_blocked_polls: 0,
             no_required_check_run: false,
+            failed_workflow_runs: Vec::new(),
         }
     }
 
@@ -507,6 +510,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
 ) -> Result<PrMergeState, CheckWaitRefusal> {
     unreported.last = UnreportedWait::None;
     unreported.no_required_check_run = false;
+    unreported.failed_workflow_runs.clear();
     unreported.required_observation = json!({"state":"not_collected"});
     unreported.policy_observation = json!({"state":"not_collected"});
     let state = classify_pr_state(status);
@@ -643,6 +647,15 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         return Ok(state);
     }
     let missing = unreported_required_checks(host, workspace, pr, status, deadline_ms);
+    if let Ok(assessment) = &missing
+        && !assessment.failed_workflow_runs.is_empty()
+    {
+        unreported.failed_workflow_runs = assessment.failed_workflow_runs.clone();
+        return Ok(PrMergeState::Blocked(
+            super::workflow_failure::failed_workflow_diagnosis(&assessment.failed_workflow_runs[0])
+                .into(),
+        ));
+    }
     unreported.policy_observation = match &missing {
         Ok(assessment) => json!({"state":"collected", "missing_checks":
             super::diagnostics::collection(&assessment.missing, |name| super::diagnostics::text(name)),
@@ -737,6 +750,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
 /// What current branch policy still owes on the observed head, from the
 /// same authenticated current-gates read a base update is held to.
 struct PolicyRequiredAssessment {
+    failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
     /// Policy-required checks the head has not reported at all.
     missing: Vec<String>,
     /// Policy-required checks the head reported still running, with no
@@ -810,6 +824,14 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
             .iter()
             .all(|context| missing.iter().any(|name| name == context));
     Ok(PolicyRequiredAssessment {
+        failed_workflow_runs: gates
+            .get("failed_workflow_runs")
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|error| format!("unreadable failed workflow evidence: {error}"))
+            })
+            .transpose()?
+            .unwrap_or_default(),
         missing,
         pending,
         failed,

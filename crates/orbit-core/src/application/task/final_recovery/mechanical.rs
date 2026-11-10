@@ -229,6 +229,27 @@ impl OrbitRuntime {
                     blockers.head_sha
                 ));
             }
+            if history
+                .iter()
+                .filter(|entry| {
+                    entry.event == orbit_types::workflow::PR_CANDIDATE_WORKFLOW_FAILED_EVENT
+                })
+                .filter_map(|entry| entry.note.as_deref())
+                .filter_map(|note| {
+                    serde_json::from_str::<orbit_types::workflow::PrInfrastructureEvidence>(note)
+                        .ok()
+                })
+                .any(|evidence| {
+                    evidence.head_sha == head_sha
+                        && evidence
+                            .failed_workflow_run()
+                            .is_some_and(|failure| failure.candidate_owned)
+                })
+            {
+                return Err(format!(
+                    "{STEP} refused: head {head_sha} has a candidate-owned workflow failure before any jobs were created; repair the workflow instead of rerunning CI"
+                ));
+            }
             if blockers.failed_required_checks.is_empty() {
                 return Err(format!(
                     "{STEP} refused: no required check failed on head {head_sha} of #{number}"

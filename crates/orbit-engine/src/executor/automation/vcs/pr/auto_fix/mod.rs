@@ -94,5 +94,5 @@ pub(crate) use published_head::{
 pub(super) use read_deferral::{defer_throttled_read, owed_read_wait};
 pub(super) use verdict::{
     BlockedStopReason, BlockedVerdict, UNSETTLED_BLOCKED_POLLS, blocked_verdict,
-    hold_auto_fix_stop, stopped, stopped_by,
+    check_repair_handoff, hold_auto_fix_stop, stopped, stopped_by,
 };
