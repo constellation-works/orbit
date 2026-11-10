@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
 
+mod tool_telemetry;
+
 /// `orbit doctor` — workspace-level self-diagnostics [ORB-10005].
 #[derive(Args)]
 #[command(
@@ -559,6 +561,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
     // the executor of the provider each concerns.
     let limit_findings = orbit_cmd::provider_limit_findings(runtime);
     let mut values = Vec::with_capacity(defs.len());
+    let mut telemetry_notes: Vec<String> = Vec::new();
     let mut table = Table::new(vec![
         Column::new("EXECUTOR").fixed(),
         Column::new("TYPE").fixed(),
@@ -568,6 +571,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("READY").fixed(),
         Column::new("BWRAP").fixed(),
         Column::new("LIMITS").fixed(),
+        Column::new("TOOLS").fixed(),
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
@@ -624,6 +628,20 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         ]
         .into_iter()
         .find(|status| limits.iter().any(|row| row.status == *status));
+        // Whether the effective args yield tool-call traces, independent of
+        // whether the binary or sandbox is available.
+        let telemetry = tool_telemetry::classify(def);
+        // Only a row the operator can act on gets prose under the table; the
+        // rest stay in the TOOLS column and the JSON `tool_telemetry` object.
+        if let (Some(cause), Some(remediation)) =
+            (telemetry.cause.as_deref(), telemetry.remediation.as_deref())
+        {
+            telemetry_notes.push(format!(
+                "{} tool telemetry {}: {cause} {remediation}",
+                def.name,
+                telemetry.label()
+            ));
+        }
         values.push(json!({
             "name": def.name,
             "executor_type": def.executor_type.to_string(),
@@ -639,6 +657,7 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "sandbox_wrapper_path": wrapper.map(|(_, probe)| probe.trusted_path.as_str()),
             "sandbox_wrapper_version": wrapper.and_then(|(_, probe)| probe.version.as_deref()),
             "allow_fallback": def.allow_fallback,
+            "tool_telemetry": telemetry.to_json(),
             "provider_limits": limits
                 .iter()
                 .map(|row| orbit_cmd::doctor_row_json(row))
@@ -665,10 +684,16 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                 || "-".to_string(),
                 |status| status_label(status).to_string(),
             ),
+            telemetry.label(),
             launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);
     }
-    Ok(Payload::list(values, table).into())
+    let mut blocks = vec![Block::table(table)];
+    blocks.extend(telemetry_notes.into_iter().map(Block::notice));
+    let records = values.clone();
+    Ok(Payload::blocks(Value::Array(values), blocks)
+        .with_records(records)
+        .into())
 }
 
 fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
