@@ -1424,7 +1424,7 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 (187.5, 225.0),
                 false,
             );
-            assert_excluded(&series(&claude, "medium", "all")["total"], 2, 1);
+            assert_excluded(&series(&claude, "medium", "all")["total"], 2, 0);
             assert_scored(
                 &series(&claude, "low", "all")["total"],
                 1,
@@ -1433,11 +1433,11 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 true,
             );
             assert_eq!(claude["available_providers"], body["available_providers"]);
-            assert_eq!(claude["coverage"]["tasks"], 9);
+            assert_eq!(claude["coverage"]["tasks"], 8);
             assert_eq!(claude["coverage"]["measured"], 6);
             assert_eq!(claude["coverage"]["empty_trace"], 1);
             assert_eq!(claude["coverage"]["no_detectable_edit"], 1);
-            assert_eq!(claude["coverage"]["no_invocation"], 1);
+            assert_eq!(claude["coverage"]["no_invocation"], 0);
 
             let low_only = turns_body(&server, "since=24h&complexity=low");
             assert_eq!(low_only["coverage"]["tasks"], 2);
@@ -1464,13 +1464,14 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                 (0.0, 0.0),
                 false,
             );
-            assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 1);
-            assert_eq!(nobody["coverage"]["tasks"], 1);
+            assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 0);
+            assert_eq!(nobody["coverage"]["tasks"], 0);
+            assert_eq!(nobody["coverage"]["no_invocation"], 0);
             assert_eq!(
                 nobody["coverage"]["tasks"].as_u64().unwrap()
                     + nobody["excluded_other_provider"].as_u64().unwrap(),
-                12,
-                "provider exclusion plus the retained no-invocation category reconciles"
+                11,
+                "provider exclusion keeps only tasks whose first invocation used another provider"
             );
 
             for query in [
@@ -1488,6 +1489,90 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
                     "{query}: {message}"
                 );
             }
+        },
+    );
+}
+
+#[test]
+fn turns_to_edit_provider_filter_excludes_unattributed_tasks() {
+    isolated(
+        "metrics_trends::turns_to_edit_provider_filter_excludes_unattributed_tasks",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let task_a = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let task_b = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let task_unattributed =
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+
+            let closed_at = {
+                let base = (now - Duration::hours(2)).timestamp();
+                DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)
+                    .expect("pinned close time is representable")
+            };
+            for task in [&task_a, &task_b, &task_unattributed] {
+                close_at(&fixture, task, TaskStatus::Done, closed_at);
+            }
+
+            record_implement(
+                &fixture,
+                "run-a",
+                &task_a,
+                "implement_one",
+                "provider-a",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Read", 50), tool_call(2, "Edit", 20)],
+            );
+            record_implement(
+                &fixture,
+                "run-b",
+                &task_b,
+                "implement_one",
+                "provider-b",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Read", 40), tool_call(2, "Edit", 10)],
+            );
+
+            let server = fixture.server(false);
+
+            // Unfiltered request reports every unattributed task once as no_invocation
+            let unfiltered = turns_body(&server, "since=24h");
+            assert_eq!(unfiltered["coverage"]["tasks"], 3);
+            assert_eq!(unfiltered["coverage"]["measured"], 2);
+            assert_eq!(unfiltered["coverage"]["no_invocation"], 1);
+
+            // provider=provider-a returns only provider-a tasks in coverage and series
+            let a_res = turns_body(&server, "since=24h&provider=provider-a");
+            assert_eq!(a_res["excluded_other_provider"], 1);
+            assert_eq!(a_res["coverage"]["tasks"], 1);
+            assert_eq!(a_res["coverage"]["measured"], 1);
+            assert_eq!(a_res["coverage"]["no_invocation"], 0);
+
+            let providers = a_res["available_providers"].as_array().unwrap();
+            let prov_a = providers
+                .iter()
+                .find(|p| p["provider"] == "provider-a")
+                .expect("provider-a in available_providers");
+            assert_eq!(a_res["coverage"], prov_a["coverage"]);
+            assert_eq!(a_res["coverage"]["tasks"], prov_a["tasks"]);
+
+            let med_a = series(&a_res, "medium", "all");
+            assert_eq!(med_a["total"]["tasks"], 1);
+            assert_eq!(med_a["total"]["n"], 1);
+            assert_eq!(med_a["total"]["excluded_no_invocation"], 0);
+            assert_eq!(a_res["total"]["tasks"], 1);
+            assert_eq!(a_res["total"]["n"], 1);
+            assert_eq!(a_res["total"]["excluded_no_invocation"], 0);
+
+            // provider=nobody has 0 tasks in coverage
+            let nobody = turns_body(&server, "since=24h&provider=nobody");
+            assert_eq!(nobody["excluded_other_provider"], 2);
+            assert_eq!(nobody["coverage"]["tasks"], 0);
+            assert_eq!(nobody["coverage"]["no_invocation"], 0);
+            let med_nobody = series(&nobody, "medium", "all");
+            assert_eq!(med_nobody["total"]["tasks"], 0);
+            assert_eq!(med_nobody["total"]["n"], 0);
+            assert_eq!(med_nobody["total"]["excluded_no_invocation"], 0);
         },
     );
 }
