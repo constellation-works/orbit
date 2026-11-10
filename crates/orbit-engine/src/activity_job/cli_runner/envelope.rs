@@ -1,7 +1,7 @@
 use orbit_agent::{AgentResponseStatus, ParsedStdout};
 use orbit_common::governance::authorization::governed_tool;
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::tool::{ExecutionResult, McpCapability};
+use orbit_types::tool::{ExecutionResult, McpCapability, tool_policy_operations};
 use orbit_types::workflow::CrewMemoryBlock;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
@@ -67,12 +67,20 @@ pub(super) fn cli_agent_envelope_json(
 /// Keep the advertised tool list aligned with the capability held by the
 /// managed agent. The activity allowlist is still enforced separately, and
 /// ungoverned tools remain visible as before.
+///
+/// An effective tool may name a family action (`orbit.run:observe`), whose
+/// governed operation (`orbit.workflow.run.observe`) is what the catalog
+/// keys on, so resolve through [`tool_policy_operations`] first: a tool is
+/// hidden when any operation it covers is governed without the agent
+/// capability.
 fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
     effective_tools
         .iter()
         .filter(|tool| {
-            governed_tool(tool)
-                .is_none_or(|operation| operation.allowed.contains(&McpCapability::Agent))
+            tool_policy_operations(tool).iter().all(|operation| {
+                governed_tool(operation)
+                    .is_none_or(|governed| governed.allowed.contains(&McpCapability::Agent))
+            })
         })
         .map(String::as_str)
         .collect()

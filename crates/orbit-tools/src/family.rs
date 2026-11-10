@@ -15,7 +15,7 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
     McpIdRouteDeclaration, TOOL_ACTION_FIELD, TOOL_MODE_FIELD, ToolFamily, ToolFamilyAction,
-    ToolParam, ToolSchema, tool_family, tool_family_of_operation,
+    ToolParam, ToolSchema, tool_family, tool_family_action,
 };
 use serde_json::{Value, json};
 
@@ -457,9 +457,11 @@ pub(crate) fn check_family_action_fields(
     )))
 }
 
-/// The refusal for a call naming an operation instead of its family.
+/// The refusal for a call naming an operation instead of its family, or a
+/// `family:action` name instead of the family call: neither is a tool, and
+/// both are answered with the family call that reaches the operation.
 pub(crate) fn operation_is_not_a_tool(operation: &str) -> Option<OrbitError> {
-    let (family, action) = tool_family_of_operation(operation)?;
+    let (family, action) = tool_family_action(operation)?;
     Some(OrbitError::not_found_with_guidance(
         orbit_common::NotFoundKind::Tool,
         operation,

@@ -146,6 +146,57 @@ fn a_family_action_keeps_its_operations_own_mode_field() {
 }
 
 #[test]
+fn a_family_action_name_is_refused_with_the_family_call_guidance() {
+    let registry = registry();
+    for name in ["orbit.run:observe", "orbit.workflow.run.observe"] {
+        let error = registry
+            .resolve_tool_call(name, json!({}))
+            .expect_err("a family action name is not a tool");
+        let message = error.to_string();
+        assert!(
+            message.contains(name),
+            "{name}: refusal must name the called name: {message}"
+        );
+        assert!(
+            message.contains("(call orbit.run with action \"observe\")"),
+            "{name}: refusal must name the family call: {message}"
+        );
+        let error = registry
+            .refuse_family_operation_name(name)
+            .expect_err("a family action name is not a tool");
+        assert!(
+            error
+                .to_string()
+                .contains("(call orbit.run with action \"observe\")"),
+            "{name}: refusal must name the family call: {error}"
+        );
+    }
+    // An unknown action of a known family keeps the generic refusal path.
+    assert!(
+        registry
+            .resolve_tool_call("orbit.run:bogus", json!({}))
+            .is_ok(),
+        "an unknown family action is not a known family action name"
+    );
+
+    // Executing the colon name directly is refused the same way, and no
+    // route is added for it.
+    let error = registry
+        .execute(
+            "orbit.run:observe",
+            &ToolContext::default(),
+            json!({ "id": "jrun-1" }),
+        )
+        .expect_err("a family action name is not an executable tool");
+    assert!(
+        error
+            .to_string()
+            .contains("(call orbit.run with action \"observe\")"),
+        "execute refusal must name the family call: {error}"
+    );
+}
+
+#[test]
 fn every_family_action_with_required_fields_is_covered() {
     let registry = registry();
     for family in TOOL_FAMILIES {

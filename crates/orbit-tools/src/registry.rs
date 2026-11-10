@@ -128,8 +128,9 @@ impl ToolRegistry {
     /// Resolve a caller-named tool to what the registry executes: a family
     /// call becomes its action's operation and that operation's input, after
     /// the action and the fields it requires are checked. A family
-    /// operation's own name is refused as an unknown tool naming the family
-    /// call. Any other name is returned unchanged.
+    /// operation's own name, or a `family:action` name, is refused as an
+    /// unknown tool naming the family call. Any other name is returned
+    /// unchanged.
     pub fn resolve_tool_call(
         &self,
         name: &str,
@@ -147,9 +148,9 @@ impl ToolRegistry {
         Ok((name.to_string(), input))
     }
 
-    /// Refuse a family operation's own name where a caller names a tool
-    /// (`orbit tool show`, `enable`, `disable`): it is reached only as an
-    /// action of its family.
+    /// Refuse a family operation's own name, or a `family:action` name,
+    /// where a caller names a tool (`orbit tool show`, `enable`, `disable`):
+    /// it is reached only as an action of its family.
     pub fn refuse_family_operation_name(&self, name: &str) -> Result<(), OrbitError> {
         operation_is_not_a_tool(name).map_or(Ok(()), Err)
     }
@@ -307,6 +308,13 @@ impl ToolRegistry {
         if is_family(name) && self.families.contains_key(name) {
             let (operation, input) = self.resolve_tool_call(name, input)?;
             return self.execute(&operation, ctx, input);
+        }
+        // A `family:action` name is a policy entry, not a tool: refuse it
+        // with the family call, as `resolve_tool_call` does.
+        if name.contains(':')
+            && let Some(error) = operation_is_not_a_tool(name)
+        {
+            return Err(error);
         }
         let tool = self.tools.get(name).ok_or_else(|| {
             crate::tool_suggestions::unknown_tool_error(
