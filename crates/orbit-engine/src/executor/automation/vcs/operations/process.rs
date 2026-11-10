@@ -177,7 +177,7 @@ pub(in crate::executor::automation::vcs) fn execute(
 }
 
 /// Run one VCS process and return its outcome, failed or not.
-pub(super) fn run_vcs_process(
+pub(in crate::executor::automation::vcs) fn run_vcs_process(
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
@@ -211,7 +211,7 @@ pub(super) fn run_vcs_process(
     run_process(&request, &NoSandbox)
 }
 
-pub(super) fn succeeded(
+pub(in crate::executor::automation::vcs) fn succeeded(
     result: orbit_exec::ExecutionResult,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {

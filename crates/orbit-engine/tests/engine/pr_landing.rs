@@ -6842,7 +6842,10 @@ if [ -f "$forge/infrastructure" ]; then
             case "$2" in
                 *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
                 *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
-                *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
+                *'/actions/runs?head_sha='*)
+                    # A planted marker hangs this read until the supervisor kills it.
+                    if [ -f "$forge/infra-runs-hang" ]; then sleep 30; fi
+                    cat "$forge/infra-runs-$phase"; exit ;;
                 *'/contents/'*) cat "$forge/infra-contents"; exit ;;
             esac ;;
     esac
