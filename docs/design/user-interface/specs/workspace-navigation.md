@@ -150,6 +150,15 @@ can run the workspace: the owner's lane first, then each capacity host in host-f
 
 ## Phasing
 
+The first delivered step is deliberately smaller than the catalog phase below:
+on one host, the rail workspace dropdown becomes a persisted, URL-addressed
+checkbox multi-select (one tick keeps the existing board; multiple ticks narrow
+All workspaces task rows and counts). All workspaces gains an owner-first
+Auto-drain host select and a separate Fleet dock tab. It adds no All hosts entry,
+catalog or owner routing, and does not collapse follower workspaces. This step
+precedes and replaces the original phase 1 for now; the remaining phases below
+are future work.
+
 | Phase | Change | Removes |
 |---|---|---|
 | 1 | Catalog and owner routing (§1, §2 rules 1 to 3 and 5). The host picker gains **All hosts** as its first and default entry, which shows the catalog. Choosing one host still shows that host's own board, as today, so a follower's pull drain stays reachable. | Duplicate workspace entries in the default view. |

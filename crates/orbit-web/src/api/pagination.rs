@@ -25,6 +25,7 @@ pub(super) struct TaskCursor {
 }
 
 pub(super) struct TaskPageQuery {
+    pub(super) workspaces: Vec<String>,
     statuses: Vec<TaskStatus>,
     no_statuses: bool,
     pilot_warnings: bool,
@@ -42,6 +43,7 @@ pub(super) struct TaskPageQuery {
 impl Default for TaskPageQuery {
     fn default() -> Self {
         Self {
+            workspaces: Vec::new(),
             statuses: Vec::new(),
             no_statuses: false,
             pilot_warnings: false,
@@ -63,6 +65,7 @@ impl TaskPageQuery {
         let mut query = Self::default();
         for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
             match key.as_ref() {
+                "workspaces" => query.workspaces.push(value.into_owned()),
                 "pilot" => query.pilot_warnings = value == "warnings",
                 "status" => query.parse_statuses(&value)?,
                 "tag" | "tags" => query.tags.extend(split_values(&value).map(str::to_string)),
@@ -207,6 +210,12 @@ impl TaskPageQuery {
         }
         if let Some(origin) = self.origin {
             key["origin"] = json!(origin.as_str());
+        }
+        if !self.workspaces.is_empty() {
+            let mut workspaces = self.workspaces.clone();
+            workspaces.sort();
+            workspaces.dedup();
+            key["workspaces"] = json!(workspaces);
         }
         key.to_string()
     }

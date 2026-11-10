@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -1067,7 +1067,7 @@ function wireTaskIdResolver() {
     rememberWorkspace();
     persistScopeToUrl();
     const selector = $("workspace-select");
-    if (selector) selector.value = workspaceId;
+    if (selector) buildWorkspaceSelector();
     return true;
   }
 
@@ -1269,6 +1269,7 @@ function resetTaskPagination() {
 
 function tasksListPath(base = "/api/tasks", detailId = null, includeRuns = false) {
   const sp = new URLSearchParams();
+  if (base === "/api/tasks/all") for (const id of getSelectedWorkspaces()) sp.append("workspaces", id);
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
     sp.set("status", STATUS_ORDER.filter((s) => activeStatuses.has(s)).join(","));
   } else if (activeStatuses.size === 0) {
@@ -1435,6 +1436,14 @@ async function initWorkspaceSelector() {
   const linkedIsServable = (wasAggregate && !linked) || servable(linked);
   if (!linkedIsServable) {
     const remembered = getRememberedWorkspace();
+    let rememberedIds = [];
+    try { if (remembered?.startsWith("[")) rememberedIds = JSON.parse(remembered).filter(servable); } catch { /* Ignore invalid storage. */ }
+    if (rememberedIds.length) {
+      setSelectedWorkspaces(rememberedIds);
+      buildWorkspaceSelector();
+      persistScopeToUrl();
+      return true;
+    }
     let initial = remembered === ALL_WORKSPACES_TOKEN ? null : servable(remembered) ? remembered : undefined;
     if (initial === undefined) {
       const revision = getWorkspaceRevision();
@@ -1463,38 +1472,72 @@ async function initWorkspaceSelector() {
   return true;
 }
 
+let workspacePickerUnsubscribe = null;
+
 function buildWorkspaceSelector() {
-  // ORB-17652: the select's only name source was its `title`, which assistive
-  // tech does not reliably expose. An `aria-label` names it in the
-  // accessibility tree at every width with no visual change to the rail
-  // (a visible label would reflow the compact phone layout), matching the
-  // host picker's programmatic "Host" name.
-  const select = el("select", { class: "workspace-select", title: "Workspace", "aria-label": "Workspace" });
+  workspacePickerUnsubscribe?.();
+  const active = dashboardWorkspaces.filter(ws => ws.status === "active");
+  const saved = getSelectedWorkspaces();
+  const valid = saved.filter(id => active.some(ws => ws.id === id));
+  const ids = valid.length ? valid : getWorkspace() ? [active[0]?.id].filter(Boolean) : active.map(ws => ws.id);
+  setSelectedWorkspaces(ids);
+  persistScopeToUrl();
+  const select = el("button", { type: "button", class: "workspace-select", title: "Workspace", "aria-label": "Workspace", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-controls": "workspace-options" });
   select.id = "workspace-select";
-
-  const allOption = el("option", { text: "All workspaces" });
-  allOption.value = "";
-  select.appendChild(allOption);
-
-  const current = getWorkspace() || "";
+  const label = el("span");
+  select.append(label);
+  const list = el("div", { id: "workspace-options", class: "workspace-options", role: "listbox", "aria-label": "Workspaces", "aria-multiselectable": "true" });
+  list.hidden = true;
+  const paint = () => {
+    const selected = getSelectedWorkspaces();
+    label.textContent = selected.length === 1 ? active.find(ws => ws.id === selected[0])?.name || selected[0] : "All workspaces";
+    for (const option of list.children) {
+      const checked = selected.includes(option.dataset.workspace);
+      option.setAttribute("aria-selected", String(checked));
+      option.querySelector("input").checked = checked;
+      option.setAttribute("aria-disabled", String(!active.some(ws => ws.id === option.dataset.workspace) || (checked && selected.length === 1)));
+    }
+  };
+  const close = () => { list.hidden = true; select.setAttribute("aria-expanded", "false"); };
+  const open = () => {
+    list.hidden = false;
+    const rect = select.getBoundingClientRect();
+    list.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - list.offsetWidth - 12))}px`;
+    list.style.top = `${rect.bottom + list.offsetHeight + 12 <= window.innerHeight ? rect.bottom + 4 : Math.max(12, rect.top - list.offsetHeight - 4)}px`;
+    select.setAttribute("aria-expanded", "true"); list.querySelector('[aria-selected="true"]')?.focus(); };
   for (const ws of dashboardWorkspaces) {
-    const active = ws.status === "active";
-    const label = active ? ws.name : `${ws.name} (unavailable)`;
-    const option = el("option", { text: label });
-    option.value = ws.id;
-    option.disabled = !active;
-    if (ws.id === current) option.selected = true;
-    select.appendChild(option);
+    const available = ws.status === "active";
+    const checkbox = el("input", { type: "checkbox", tabindex: "-1", "aria-hidden": "true" });
+    const option = el("div", { role: "option", tabindex: "-1", "aria-selected": "false", "aria-disabled": String(!available) }, [checkbox, ws.name + (available ? "" : " (unavailable)")]);
+    option.tabIndex = -1;
+    checkbox.tabIndex = -1;
+    option.dataset.workspace = ws.id;
+    const toggle = () => {
+      if (!available) return;
+      const selected = getSelectedWorkspaces();
+      if (selected.length === 1 && selected[0] === ws.id) return;
+      setSelectedWorkspaces(selected.includes(ws.id) ? selected.filter(id => id !== ws.id) : [...selected, ws.id]);
+      paint(); rememberWorkspace(); persistScopeToUrl(); refreshDashboard();
+    };
+    option.addEventListener("click", event => { event.preventDefault(); toggle(); option.focus(); });
+    option.addEventListener("keydown", event => {
+      const options = [...list.children];
+      let index = options.indexOf(option);
+      if (event.key === " " || event.key === "Enter") { event.preventDefault(); toggle(); }
+      else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        options[index].focus();
+      } else if (event.key === "Escape") { event.preventDefault(); close(); select.focus(); }
+    });
+    list.append(option);
   }
-  if (!current) allOption.selected = true;
-
-  select.addEventListener("change", () => {
-    setWorkspace(select.value);
-    rememberWorkspace();
-    persistScopeToUrl();
-    refreshDashboard();
-  });
-
+  select.addEventListener("click", () => list.hidden ? open() : close());
+  select.addEventListener("keydown", event => { if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); open(); } });
+  const picker = el("div", { class: "workspace-picker" }, [select, list]);
+  picker.addEventListener("focusout", event => { if (!picker.contains(event.relatedTarget)) close(); });
+  workspacePickerUnsubscribe = onWorkspaceChange(() => { if (select.isConnected) paint(); });
+  paint();
   const note = el("span", {
     class: "workspace-scope-note is-inactive",
     text: "Workspace filter inactive",
@@ -1508,7 +1551,7 @@ function buildWorkspaceSelector() {
   const host = $("rail-workspace");
   if (!host) return;
   host.innerHTML = "";
-  host.appendChild(select);
+  host.appendChild(picker);
   host.appendChild(note);
 }
 
@@ -1614,6 +1657,7 @@ function activeRefreshJobs({ poll = false } = {}) {
     return `${refreshLabel()} › ${button?.firstChild?.textContent.trim() || name}`;
   };
   if (aggregate) {
+    fitLogPanelToViewport();
     renderAggregatePlaceholders();
   } else if (slowReads) {
     add("Health summary", fetchAndRenderSummary(chrome?.summary));

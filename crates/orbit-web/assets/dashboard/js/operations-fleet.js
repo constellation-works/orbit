@@ -1,13 +1,6 @@
 import { el, getHost, getServingHost } from './common.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
-import { setDrainReadiness } from './drain-waits.js';
 import { $, operationsState, selectedWorkspace } from './operations-shared.js';
-
-let fleetOperationsCallbacks = null;
-
-export function configureOperationsFleetCallbacks(callbacks) {
-  fleetOperationsCallbacks = callbacks;
-}
 
 export function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
   const seen = peekFleetDrains();
@@ -16,25 +9,8 @@ export function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
 }
 
 export function paintAggregateFleet(payload) {
-  setDrainReadiness({});
-  fleetOperationsCallbacks.updateDrainIndicators('fleet', 'Fleet drains');
-  const card = $("auto-drain-panel");
-  if (card) {
-    card.dataset.drainState = 'fleet';
-    const title = card.querySelector('.drain-title');
-    if (title) title.textContent = 'Fleet drains';
-  }
-  const pill = $("auto-drain-phase");
-  if (pill) pill.dataset.drainState = 'fleet';
-  const dot = $("auto-drain-dot");
-  if (dot) dot.className = 'drain-dot';
-  const body = $("auto-drain-body");
+  const body = $("fleet-drains-body");
   if (body) replaceFleetDrains(body, payload, operationsState.context.selectFleetScope);
-  fleetOperationsCallbacks.clearStartCard("auto-drain-quick-start");
-  const label = $("auto-drain-phase-label");
-  if (label) label.textContent = "Fleet";
-  const when = $("auto-drain-when");
-  if (when) when.textContent = "";
 }
 
 const LIVE_DRAIN_PHASES = ["draining", "pulling", "winding_down"];
@@ -88,10 +64,7 @@ export function repaintRailDrainFromFleet() {
 function paintFleetSurfaces(payload) {
   const reading = railDrainReadingFromFleet(payload);
   if (reading) paintRailDrainReading(reading);
-  const card = $("auto-drain-panel");
-  if (card?.dataset.drainState !== "fleet") return;
-  const body = $("auto-drain-body");
-  if (body) replaceFleetDrains(body, payload, operationsState.context.selectFleetScope);
+  paintAggregateFleet(payload);
 }
 
 let fleetRefreshStarted = false;

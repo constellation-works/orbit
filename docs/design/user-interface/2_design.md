@@ -354,6 +354,8 @@ Steps show a loading skeleton until the detail read settles, a read error on fai
 The two-column desktop layout stacks below 900px, and routine/clock metadata collapses to one column below 600px so schedules, state labels, and controls remain scannable at 480–720px widths.
 
 The **Tasks dock** is the home of **Drain**, **Locks held** and **Log**.
+Under **All workspaces** it inserts **Fleet** immediately after **Drain**, with
+`fleet` supported in the remembered dock mode and `#tasks?dock=fleet`.
 It stays beside the task list and gives way to an open task. Below 1000px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
 (`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Locks held or Log
@@ -408,8 +410,12 @@ changing the host or workspace. An idle drain shows no reading; a live one shows
 a dot and words on every view at those widths: `3/5` slots in use,
 `pull`, `winding down`, `· held` while the host holds new tasks, or `2 live` under
 All workspaces. The Tasks view paints it from the drain card's reading and every
-other view from the fleet read. In All workspaces mode the status
-card shows fleet drains with one tab per host, live workspaces first, their
+other view from the fleet read. In All workspaces mode Drain shows the same
+Auto-drain body with a header ordered **Auto-draining**, host select, phase pill.
+The owner host is the first and default option, followed by followers. Reads of
+another host use `/api/on/<host>/...`; the live workspace window with the most
+running tasks wins, and no live window shows Idle. This card does not start a
+follower drain. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
 phase, leaf slots, eligible work, waits, holds and queued windows. Rows switch
 host and workspace. Its cache and cadence are shared with the rail reading.
 

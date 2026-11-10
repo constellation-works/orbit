@@ -517,13 +517,13 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
   if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
-    dockView = ["log", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
+    dockView = ["log", "fleet", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (head === "tasks" && ["drain", "auto-drain", "start", "locks", "log"].includes(dockView)) {
+  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log"].includes(dockView)) {
     dockView = dockView === "auto-drain" ? "drain" : dockView;
     query.set("dock", dockView);
     query.delete("dockMode");

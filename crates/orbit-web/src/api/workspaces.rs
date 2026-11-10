@@ -178,7 +178,11 @@ fn fleet_drain_row(
         pinned
             .runtime_for(&entry.id)
             .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
-            .and_then(|runtime| runtime.workspace_fleet_readiness(facts))
+            .and_then(|runtime| {
+                let mut payload = runtime.workspace_fleet_readiness(facts)?;
+                payload["owner_machine_id"] = json!(runtime.replica_owner_machine());
+                Ok(payload)
+            })
     } else {
         row["error"] = json!("workspace is unavailable");
         return row;
@@ -262,6 +266,14 @@ fn fleet_drain_row(
             row["pull_active"] = json!(capacity["pull_drain_run_id"].is_string());
             row["pull_admissions_stopped"] =
                 json!(capacity["pull_drain_admissions_stopped"] == true);
+            row["owner_machine_id"] = payload["owner_machine_id"].clone();
+            // Pull coordinators execute the local workspace's claimed leaves,
+            // rather than admitting owner workers into their own checkpoint.
+            row["running_tasks"] = if phase == "pulling" {
+                capacity["wrapper_leaf_runs"].clone()
+            } else {
+                capacity["running_admitted_workers"].clone()
+            };
             row["slots_used"] = capacity["active_leaf_runs"].clone();
             row["slots_ceiling"] = capacity["max_active_leaf_runs"].clone();
             row["eligible_count"] = json!(eligible);
@@ -297,8 +309,9 @@ fn fleet_drain_row(
 /// empty array when every source answered. Status/tag/type/search filters,
 /// limit, and cursor have the same semantics as `/api/tasks`; selection happens
 /// independently in each available workspace before one global
-/// `created_at DESC, id ASC` merge. `total` still sums only workspaces that
-/// answered.
+/// `created_at DESC, id ASC` merge. Repeated `workspaces` parameters narrow
+/// sources before selection and bind the cursor to that subset. `total` still
+/// sums only selected workspaces that answered.
 pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -629,7 +642,11 @@ fn all_tasks_json(
     // Each workspace's candidate keys are selected concurrently (its own
     // runtime and store); the fold below runs in pinned entry order, so
     // totals, candidates and `unavailable` keep their serial order.
-    let entries = pinned.entries();
+    let entries = pinned
+        .entries()
+        .iter()
+        .filter(|entry| query.workspaces.is_empty() || query.workspaces.contains(&entry.id))
+        .collect::<Vec<_>>();
     let selections = fan_out(entries.len(), |index| {
         let entry = &entries[index];
         if !entry.active {

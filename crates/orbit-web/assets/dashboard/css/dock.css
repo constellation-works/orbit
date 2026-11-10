@@ -379,3 +379,8 @@ span.lock-holder-id { color: var(--fg-soft); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The aggregate-only Fleet view reuses the existing panel and rows. */
+#side-dock[data-mode="fleet"] .dock-pane[data-pane="fleet"] { display: flex; }
+#dock-pane-fleet .panel > header { padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+#fleet-drains-body { min-height: 0; overflow: auto; padding: 16px 18px 18px; }

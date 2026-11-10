@@ -52,7 +52,18 @@ than one task holds, with a
 filter by task ID. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 
-With **All workspaces** selected, the Auto-drain card lists fleet drains,
+The rail workspace dropdown is a checkbox multi-select. One tick opens that
+workspace's unchanged board; two or more ticks open **All workspaces**, narrowing
+task rows and status-pill counts to that selection. The last tick cannot be
+removed. The URL and per-host browser preference retain the selection, dropping
+workspaces no longer available.
+
+With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**,
+**Locks held**, **Log**. Drain reuses the Auto-drain body, with an
+**Auto-draining** header followed by an owner-first host select and phase pill.
+The owner is selected by default; followers are readable through the host forward.
+The busiest live workspace window on that host is shown, or Idle when none is live.
+Aggregate controls remain read-only. Fleet holds the existing fleet drains card,
 one tab per host when more than one is registered (the chosen tab is
 remembered), with phase and
 used/ceiling leaf slots for each workspace. Live drains lead; eligible work,

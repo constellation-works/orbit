@@ -368,3 +368,5 @@
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
 
 .drain-backlog-forecast-scope { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }
+
+#auto-drain-host { min-width: 0; max-width: 140px; }
