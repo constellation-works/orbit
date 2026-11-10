@@ -149,6 +149,15 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     )) {
         return failure.into_result();
     }
+    // [ORB-23956] Nor can another agent record the owner approval this step
+    // is waiting on. The declared stop is a hold, so the original outcome
+    // and its message stay as the implementer left them.
+    if stops(orbit_types::workflow::is_owner_signoff_required(
+        failure.failure_code().as_ref().map(|code| code.as_str()),
+        Some(&failure.diagnostic()),
+    )) {
+        return failure.into_result();
+    }
     // [ORB-14258] Nor can it fix a required command the base itself fails;
     // the task is held until the command passes on a new base instead.
     if stops(orbit_types::workflow::is_baseline_red_failure(

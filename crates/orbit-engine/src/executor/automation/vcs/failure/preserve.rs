@@ -219,6 +219,32 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     }))
 }
 
+/// Leave a candidate whose implementer is waiting on recorded owner
+/// approval [ORB-23956].
+///
+/// The tree may still be dirty. Nothing is committed, pushed, or published.
+/// This handoff does not change task status: run finalization holds the run
+/// and blocks the coupled task with the declared message.
+pub(super) fn preserve_owner_signoff_candidate(
+    task_id: &str,
+    run_id: &str,
+    failed_step_id: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let (branch, head_sha) = candidate_head(workspace_path)?;
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "held_owner_signoff",
+        "task_id": task_id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "candidate_preserved": true,
+        "pr_created": false,
+    }))
+}
+
 /// Keep a candidate whose required validation could not run because a tool
 /// was missing [ORB-13987].
 ///

@@ -178,6 +178,16 @@ pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
 /// remaining classification reader, for those old records.
 pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
 
+/// Token a step failure carries when the implementer stopped because
+/// recorded owner approval is still missing. The run holds for the
+/// operator; another agent cannot record that approval. [ORB-23956]
+pub const OWNER_SIGNOFF_REQUIRED_ERROR_CODE: &str = "owner_signoff_required";
+
+/// `error.code=` fragment the step diagnostic writes for
+/// [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`], including the semicolon that
+/// closes the code. A handoff that sees only the step message matches this.
+const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str = "error.code=owner_signoff_required;";
+
 /// The typed code a step failure carries beside its message.
 ///
 /// Parsed once where a step failure is ingested — from the declared
@@ -193,6 +203,9 @@ pub enum StepFailureCode {
     /// A claimed leaf could not reach its task's owner
     /// ([`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`]).
     OwnerRouteUnavailable,
+    /// Recorded owner approval is still missing
+    /// ([`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`]). The run holds.
+    OwnerSignoffRequired,
     /// Any other agent- or host-declared code, preserved as declared.
     Other(String),
 }
@@ -204,6 +217,7 @@ impl StepFailureCode {
     pub fn parse(code: &str) -> Self {
         match code {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             other => Self::Other(other.to_string()),
         }
     }
@@ -213,6 +227,7 @@ impl StepFailureCode {
     pub fn as_str(&self) -> &str {
         match self {
             Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+            Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
             Self::Other(code) => code,
         }
     }
@@ -240,6 +255,7 @@ impl From<String> for StepFailureCode {
     fn from(code: String) -> Self {
         match code.as_str() {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             _ => Self::Other(code),
         }
     }
@@ -279,6 +295,20 @@ pub fn is_owner_route_unavailable(
             failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
         }),
     }
+}
+
+/// Whether a step stopped because recorded owner approval is still missing.
+///
+/// An `error_code` equal to [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`] decides.
+/// The diagnostic fragment is the fallback for a handoff that received only
+/// the step message: that message writes `error.code=owner_signoff_required;`
+/// and is not itself a typed code. This is not an owner-route failure.
+#[must_use]
+pub fn is_owner_signoff_required(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(OWNER_SIGNOFF_REQUIRED_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN)
+        })
 }
 
 /// Leads the failure Orbit raises when it refuses an implementer's handoff

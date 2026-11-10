@@ -449,8 +449,8 @@ impl DispatchError {
 
     /// The `error_code` the job's terminal failure handoff receives for this
     /// step error. A typed error names its own code; a validation-environment,
-    /// red-base, agent-blocker, upgrade or provider failure is classified from
-    /// its text; anything else is `pipeline_step_failed`.
+    /// red-base, agent-blocker, upgrade, owner-signoff or provider failure is
+    /// classified from its text; anything else is `pipeline_step_failed`.
     pub fn failure_code(&self) -> &'static str {
         use orbit_types::workflow as wf;
         if matches!(self, DispatchError::OwnerRouteUnavailable { .. }) {
@@ -479,6 +479,11 @@ impl DispatchError {
             _ if wf::is_upgrade_pending(None, Some(&text())) => wf::UPGRADE_PENDING_ERROR_CODE,
             _ if wf::failure_classification_text(&text()).contains(wf::STALLED_MARKER) => {
                 wf::STALLED_ERROR_CODE
+            }
+            // [ORB-23956] The typed step code rides on the outcome. This
+            // message token is what the failure handoff sees.
+            _ if wf::is_owner_signoff_required(None, Some(&text())) => {
+                wf::OWNER_SIGNOFF_REQUIRED_ERROR_CODE
             }
             // [ORB-14266] The handoff preserves the candidate for the next run.
             _ => wf::ProviderFailureClass::of(None, Some(&text()))

@@ -29,7 +29,8 @@ use super::ownership::{
 use super::preserve::{
     hold_baseline_red_candidate, hold_child_timeout_candidate, hold_provider_failure_candidate,
     hold_upgrade_pending_candidate, preserve_agent_blocked_candidate,
-    preserve_validation_environment_candidate, recorded_spec_digest,
+    preserve_owner_signoff_candidate, preserve_validation_environment_candidate,
+    recorded_spec_digest,
 };
 use super::review_gate::preserve_review_gate_candidate;
 use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
@@ -232,6 +233,15 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             error_message,
             &workspace_path,
         );
+    }
+
+    // [ORB-23956] The implementer stopped because owner approval is not
+    // recorded yet. That is a wait. Leave the worktree as the agent left it:
+    // do not abort a rebase, commit, push, or open a PR. Run finalization
+    // holds the run and blocks the task with the declared message, so this
+    // handoff does not write task status.
+    if orbit_types::workflow::is_owner_signoff_required(Some(error_code), Some(error_message)) {
+        return preserve_owner_signoff_candidate(&task.id, run_id, failed_step_id, &workspace_path);
     }
 
     let mut conflicting_paths = unmerged_paths(&workspace_path)?;

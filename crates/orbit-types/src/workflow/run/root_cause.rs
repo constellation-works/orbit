@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_agent};
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
-use super::state::{PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, is_provider_limit};
+use super::state::{
+    OWNER_SIGNOFF_REQUIRED_ERROR_CODE, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE,
+    is_owner_signoff_required, is_provider_limit,
+};
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
 /// Error code a held run's diagnostic step records when a before-landing
@@ -79,6 +82,11 @@ pub enum HeldFailure {
     ProviderCapacity,
     /// An implementer declared a blocker; the task awaits an operator.
     AgentBlocker,
+    /// Recorded owner approval is still missing
+    /// ([`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`]). The task waits for the
+    /// operator and the run does not fail. The declared message stays the
+    /// reason.
+    OwnerSignoffRequired,
     /// A typed fail-closed delivery decision left its candidate parked.
     DeliveryRefused(DeliveryRefusal),
 }
@@ -100,7 +108,12 @@ impl HeldFailure {
             || message.is_some_and(|message| {
                 failure_classification_text(message).contains(REVIEW_LANDING_DECISION_PENDING)
             });
-        pending.then_some(Self::DecisionPending)
+        if pending {
+            return Some(Self::DecisionPending);
+        }
+        // [ORB-23956] Recorded owner approval is still missing. The run holds
+        // and the declared message stays the reason.
+        is_owner_signoff_required(error_code, message).then_some(Self::OwnerSignoffRequired)
     }
 
     /// [`Self::of`] for an owner-local run, where capacity and usage limits
@@ -130,6 +143,7 @@ impl HeldFailure {
     pub fn error_code(self) -> &'static str {
         match self {
             Self::AgentBlocker => TASK_BLOCKED_BY_AGENT_ERROR_CODE,
+            Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
             Self::BaselineRed => BASELINE_RED_ERROR_CODE,
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
@@ -140,7 +154,8 @@ impl HeldFailure {
 
     /// The held run's diagnostic text for `message`, the failure it held on.
     /// A usage limit leads with the provider and the reset it reported, and
-    /// keeps the provider's own text after them.
+    /// keeps the provider's own text after them. Every other hold, including
+    /// a missing owner approval, keeps `message` unchanged.
     #[must_use]
     pub fn diagnostic(self, message: &str) -> String {
         if self != Self::ProviderLimit {

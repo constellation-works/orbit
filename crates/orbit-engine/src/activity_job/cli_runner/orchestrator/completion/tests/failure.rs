@@ -1,5 +1,7 @@
+use super::super::super::super::response_diagnostics::declared_failure_code;
 use orbit_types::workflow::{
-    ClaimFailureClass, STALLED_ERROR_CODE, STALLED_MARKER, TRANSIENT_FAILURE_MARKER,
+    ClaimFailureClass, HeldFailure, OWNER_SIGNOFF_REQUIRED_ERROR_CODE, STALLED_ERROR_CODE,
+    STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER, is_owner_route_unavailable,
 };
 use serde_json::json;
 
@@ -76,4 +78,54 @@ fn a_terminal_failure_frame_is_classified_after_an_undecodable_stdout_line() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// [ORB-23956] An implement step that declares `owner_signoff_required` is
+/// waiting for recorded owner approval. That stop is a hold, not a failed run.
+#[test]
+fn an_owner_signoff_required_envelope_holds_instead_of_failing_the_run() {
+    let declared = "The validated candidate awaits recorded owner approval.";
+    let envelope = format!(
+        r#"{{"schemaVersion":1,"status":"failed","result":{{}},"error":{{"code":"{OWNER_SIGNOFF_REQUIRED_ERROR_CODE}","message":"{declared}"}}}}"#
+    );
+    let parsed = orbit_agent::ParsedStdout::parse(&envelope);
+    let failure = parsed
+        .peek_declared_response_failure()
+        .expect("declared failure");
+    let code = declared_failure_code(Some(&failure)).expect("typed code from the envelope");
+    let parsed_code = StepFailureCode::parse(OWNER_SIGNOFF_REQUIRED_ERROR_CODE);
+
+    assert_eq!(code, parsed_code);
+    assert_eq!(code, StepFailureCode::OwnerSignoffRequired);
+    assert!(
+        !matches!(parsed_code, StepFailureCode::Other(_)),
+        "owner_signoff_required is a typed step code"
+    );
+    assert!(!parsed_code.is_owner_route_unavailable());
+    assert!(!is_owner_route_unavailable(
+        Some(&parsed_code),
+        Some(declared)
+    ));
+
+    let outcome = project_stdout("fixture", envelope.as_bytes(), true, false, false);
+    assert!(!outcome.success, "the implement step stopped");
+    assert_eq!(outcome.failure_code.as_ref(), Some(&code));
+    let message = outcome.message.expect("declared diagnostic");
+    assert!(message.contains(declared), "{message}");
+    assert!(
+        message.contains("error.code=owner_signoff_required;"),
+        "{message}"
+    );
+
+    // `HeldFailure::of_local` is what an owner-local run, including
+    // task_pr_pipeline, uses to store Held rather than Failed. The declared
+    // message is the hold reason.
+    let held = HeldFailure::of_local(Some(code.as_str()), Some(&message));
+    assert_eq!(held, Some(HeldFailure::OwnerSignoffRequired));
+    let held = held.expect("hold");
+    assert_eq!(held.error_code(), OWNER_SIGNOFF_REQUIRED_ERROR_CODE);
+    assert_eq!(held.diagnostic(&message), message);
+
+    let job_error = DispatchError::JobExecution(message);
+    assert_eq!(job_error.failure_code(), OWNER_SIGNOFF_REQUIRED_ERROR_CODE);
 }

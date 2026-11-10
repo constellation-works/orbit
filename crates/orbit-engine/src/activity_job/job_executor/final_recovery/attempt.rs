@@ -122,6 +122,15 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
              candidate was not judged",
         );
     }
+    // [ORB-23956] Nor can another agent record the owner approval the
+    // implementer is waiting on. The failure handoff leaves the candidate,
+    // and run finalization holds the task with the declared message.
+    if orbit_types::workflow::is_owner_signoff_required(
+        typed_code.as_ref().map(|code| code.as_str()),
+        Some(error_message),
+    ) {
+        return skip("recorded owner approval is still missing; another agent cannot record it");
+    }
     // A `worktree_setup` that could not find a dependency is not transient:
     // the dependency is either resolvable through its registered owner or
     // it is not, and re-running unchanged cannot change that answer. No
