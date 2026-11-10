@@ -477,6 +477,10 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
           chooseAggregateWorkspace(workspaceSelect.value);
           // Changing the workspace resets the host to its owner.
           chooseAggregateHost(null);
+          // The panel's scope key reads the shown selection, so the pick is
+          // shown now; the next paint resolves it the same way from storage.
+          aggregateDrainWorkspace = workspaceSelect.value || null;
+          aggregateDrainHost = null;
           resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
@@ -506,6 +510,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
           // workspace default cannot inherit this host.
           chooseAggregateWorkspace(aggregateDrainWorkspace);
           chooseAggregateHost(select.value);
+          aggregateDrainHost = select.value || null;
           resetAggregateDrainSelection();
           fetchAndRenderAutoDrain().catch(error => console.error(error));
         });
