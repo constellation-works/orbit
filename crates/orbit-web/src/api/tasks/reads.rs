@@ -67,7 +67,10 @@ use std::sync::Arc;
 /// than the first page do not disturb an existing continuation. Changing a
 /// task's `created_at`, ID, or filter membership while paging may move it across
 /// the boundary; clients that need a new live snapshot restart without a cursor.
-/// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
+/// The cross-workspace `/api/tasks/all` aggregate shares the filters and the
+/// envelope, but not this order: it cuts pages workspace by workspace in
+/// `/api/workspaces` order, and its cursor names the workspace it resumes in
+/// (see `list_all_tasks` in `api/workspaces.rs`).
 pub(in crate::api) async fn list_tasks(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
