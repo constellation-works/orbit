@@ -62,6 +62,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Run an Experiment</h3>
     <p>Compare control and treatment arms, read intervals and the verdict, and conclude without changing configuration automatically.</p>
   </a>
+  <a class="orbit-card" href="./crew-memory/">
+    <h3>Give Models a Memory</h3>
+    <p>Turn on crew memory, deliver per-model notes through a memory-arm experiment, review global proposals, and grant agents read access.</p>
+  </a>
 </div>
 
 ## Operate

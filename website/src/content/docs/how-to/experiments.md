@@ -136,6 +136,7 @@ refused everywhere.
 | `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Add or remove tools for the listed roles. It must add or remove at least one tool, and no tool may be in both lists. |
 | `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draw the implementing crew from this weighted pool instead of the usual draw. The pool must name at least one crew, no crew twice, each with a positive weight. |
 | `config` | `{"values": {key: value}, "roles": [...]}` | Set task-local configuration values for the listed roles. It must set at least one key, with a non-blank key. |
+| `memory` | `{"roles": [...], "global": bool}` | Deliver the crew's model memory to these roles; `global: true` adds shared memory. Roles default to `implement`; `global` to `false`. See [Give models a memory](../crew-memory/). |
 
 `roles` defaults to `["implement"]` on `skills`, `tools`, and `config`,
 and must name at least one role. A blank skill name, crew, tool, or config
@@ -242,7 +243,10 @@ that admission. The run records its intended overlay digest, actual crew and
 suppression; it does not rewrite enrollment or count the override as delivered.
 
 Experiments reserve the surfaces their arms touch — `instructions`,
-`skills`, `tools`, `crew`, `config` — counting retired arms too. A task a
+`skills`, `tools`, `crew`, `config`, `memory` — counting retired arms too.
+The `memory` surface has a single owner: one experiment per task may own
+it, and a task a second experiment would enroll on it is excluded for that
+experiment with a surface conflict. A task a
 second experiment would enroll on an occupied surface is instead excluded
 for that experiment with a surface conflict, and that exclusion is final
 for the task. Give overlapping treatments one experiment with more arms,
@@ -409,6 +413,18 @@ Read the warnings before the verdict:
 - **Historical explorer uptake.** Explorer delegation has been removed. Concluded
   experiment readouts retain their `tasks_with_explorer_call`,
   `tasks_explorer_unobserved` and `explorer_trace_incomplete` fields for audit.
+- **Memory arms.** A live memory arm delivers a `crew_memory` field in the
+  agent envelope (never inside `instruction`) with one fixed sentence in the
+  instruction chain saying the notes are data and that the task, its
+  criteria, the instructions and the repository's guidance take precedence;
+  a delivered block holds at most 9 KiB of note text, and a larger one is
+  refused. The readout reports `memory_strata` for a live arm (tasks grouped
+  by the ISO week of the revision their first dispatch received),
+  `memory_captures` and `memory_capture_strata` for a shadow arm (the
+  captured digests and revisions that were not delivered, grouped by
+  revision week), and the arm's `dreaming_overhead` (the dreaming tasks'
+  cost spread over the arm's priced tasks). See
+  [Give models a memory](../crew-memory/).
 
 ## Conclude or abandon
 
@@ -487,3 +503,5 @@ edit open and names each cleared field instead of saving. See
   verb and flag.
 - [Configuration](../../reference/config/) — `experiments.enabled` and
   `experiments.config_keys`.
+- [Give models a memory](../crew-memory/) — the `memory` overlay, write
+  rules, dreaming and proposal review.
