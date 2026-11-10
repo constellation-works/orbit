@@ -309,6 +309,39 @@ fn an_agent_attributed_answer_is_refused_and_changes_nothing() {
     );
 }
 
+/// A human escalation's block request offers only the requeue it asks for. It
+/// has no failure-handoff receipt, so handoff landing derives no `land` answer
+/// and leaves the request's risk tier reversible, with no pre-landing review.
+fn an_escalation_without_a_handoff_receipt_offers_no_land_answer() {
+    let fx = fixture();
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let listed = fx
+        .runtime
+        .list_decision_requests(None, Some(&task), false)
+        .unwrap()
+        .pop()
+        .expect("escalation opened a decision request");
+    let fetched = fx
+        .runtime
+        .get_decision_request(&listed.id)
+        .unwrap()
+        .unwrap();
+    for request in [listed, fetched] {
+        assert!(
+            request.answers.iter().all(|answer| answer.id != "land"),
+            "no receipt binds a candidate to land: {:?}",
+            request.answers
+        );
+        assert_eq!(
+            request.risk_tier,
+            orbit_types::task::DecisionRiskTier::Reversible,
+            "{request:?}"
+        );
+        assert_eq!(request.state, DecisionRequestState::Open);
+    }
+}
+
 crate::scenario_table!(
     final_recovery_cards,
     a_decide_decision_opens_one_request_with_summary_options_and_recommendation,
@@ -317,4 +350,5 @@ crate::scenario_table!(
     a_rewrite_only_option_edits_the_task_and_unblocks_it,
     a_split_option_files_a_linked_follow_up_and_narrows_the_task,
     an_agent_attributed_answer_is_refused_and_changes_nothing,
+    an_escalation_without_a_handoff_receipt_offers_no_land_answer,
 );

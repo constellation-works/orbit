@@ -68,11 +68,12 @@ impl OrbitRuntime {
                 continue;
             }
             if !accepted {
-                let receipt = self.handoff_receipt(task)?;
-                if !self.handoff_landing_review_ready(
-                    task,
-                    receipt.as_ref().map(|r| r.head_sha.as_str()),
-                )? {
+                // Landing merges a published failure handoff; without its receipt
+                // there is no candidate to land, so no `land` answer is derived.
+                let Some(receipt) = self.handoff_receipt(task)? else {
+                    continue;
+                };
+                if !self.handoff_landing_review_ready(task, Some(receipt.head_sha.as_str()))? {
                     continue;
                 }
             }
