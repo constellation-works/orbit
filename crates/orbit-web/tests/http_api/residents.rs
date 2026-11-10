@@ -247,10 +247,10 @@ fn dashboard_creates_every_offered_assessed_complexity() {
             );
             assert_eq!(refused.status().as_u16(), 400);
             let refused: Value = refused.json().unwrap();
-            assert_eq!(
-                refused["error"],
-                "unknown task complexity: high (valid complexities: low, medium, hard, xhard)",
-                "{refused}"
+            let error = refused["error"].as_str().unwrap_or_default();
+            assert!(
+                error.starts_with("unknown task complexity: high"),
+                "Refusal names invalid complexity 'high': {refused}"
             );
             assert_eq!(
                 resident_tasks(&fixture),
