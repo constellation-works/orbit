@@ -125,15 +125,31 @@ pub(in crate::application::agents) fn scan(
             BTreeMap::new()
         });
     let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
+    let workspace_id = runtime.stores().jobs().workspace_id().to_string();
     let invocations = runtime.sqlite_store()?.list_invocation_accounting_facts(
         &orbit_store::contracts::InvocationAccountingQuery {
-            workspace_id: Some(runtime.stores().jobs().workspace_id().to_string()),
+            workspace_id: Some(workspace_id.clone()),
             since: Some(horizon),
             until: computed_at,
         },
     )?;
+    // Launch records keep the effort of attempts whose invocation never
+    // completed; a failed read leaves those units effort-unknown rather
+    // than failing every scorecard, as the other telemetry reads do.
+    let launches = runtime
+        .sqlite_store()?
+        .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
+            workspace_id: Some(workspace_id),
+            since: Some(horizon),
+            until: computed_at,
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "agent scorecards: launch records unreadable");
+            Vec::new()
+        });
     Ok(AgentFacts {
         invocations: invocations.into(),
+        launches: launches.into(),
         computed_at,
         tasks_scanned,
         tasks: facts,

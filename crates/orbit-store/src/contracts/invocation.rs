@@ -198,6 +198,20 @@ pub struct ToolInvocationMetrics {
     pub total_result_bytes: u64,
 }
 
+/// Workspace and date window for launch-record reads, mirroring
+/// [`InvocationAccountingQuery`]: `until` is always exclusive and callers
+/// capture it before loading so one read is internally consistent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentExecutionQuery {
+    /// Restricts launches to the workspace they were recorded under. `None`
+    /// retains host-wide reads; rows recorded under another workspace never
+    /// match a workspace-scoped read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: DateTime<Utc>,
+}
+
 /// One agent launch, retained independently of its completion telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentExecutionRecord {
