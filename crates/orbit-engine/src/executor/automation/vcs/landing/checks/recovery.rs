@@ -128,8 +128,17 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     /// to the backlog for its next run to repair the candidate, with this
     /// evidence.
     Requeue(String),
-    /// Stop in review, with this evidence.
+    /// Stop in review and fail the run, with this evidence. A status that
+    /// reports no head or number has no jobs to read, so it fails here too. A
+    /// designed stay on a readable head — unclassified, inconclusive, or a
+    /// transient failure the rerun planner will not run again — is
+    /// [`Self::HoldInReview`].
     Stop(String),
+    /// The candidate stays in review and the run is held, not failed.
+    /// Unclassified evidence, inconclusive evidence, and a transient failure
+    /// that already used its one rerun are designed stays: nothing is
+    /// repaired, rerun, or updated.
+    HoldInReview(String),
     /// The provider rate-limited a job or log read: wait for its reset and
     /// read again, without classifying around the missing evidence.
     ReadDeferred(super::read_wait::ThrottledRead),
@@ -188,7 +197,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         )));
     };
     let unclassified = |why: String| {
-        CheckRecoveryStep::Stop(format!(
+        CheckRecoveryStep::HoldInReview(format!(
             "{reason}; the failure was not classified ({why}), so the candidate stays in review"
         ))
     };
@@ -660,7 +669,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 )))
             }
         }
-        CheckFailureClass::Transient => Ok(CheckRecoveryStep::Stop(evidence(
+        CheckFailureClass::Transient => Ok(CheckRecoveryStep::HoldInReview(evidence(
             "it failed again after its one rerun, so the candidate stays in review",
         ))),
         CheckFailureClass::Inherited
@@ -754,7 +763,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
             "the candidate is handed to one automatic repair",
         ))),
-        CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::Stop(evidence(
+        CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::HoldInReview(evidence(
             "its evidence could not be read in full, so nothing is rerun, updated or repaired \
              and the candidate stays in review",
         ))),

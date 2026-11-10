@@ -1,5 +1,6 @@
 //! One unreadable failed-job log must not void the readable jobs' class.
 use super::*;
+use orbit_types::workflow::DeliveryRefusal;
 
 const FAILING_COMMAND: &str = "test\tTests\terror: source failure at src/stable:1:1\n";
 
@@ -97,6 +98,16 @@ fn every_unreadable_failed_job_log_stays_unclassified() {
             let error = land_claimed_retry(&claimed)
                 .expect_err("no readable job decides, so the candidate stays in review");
             let message = error.to_string();
+            assert!(
+                matches!(
+                    error,
+                    OrbitError::DeliveryRefused {
+                        refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+                        ..
+                    }
+                ),
+                "every unreadable log holds the landing: {message}"
+            );
             assert!(
                 message.contains("was not classified"),
                 "every unreadable log stays unclassified: {message}"

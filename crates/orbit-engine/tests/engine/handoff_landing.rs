@@ -27,6 +27,7 @@ use orbit_engine::{
     HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, RuntimeHost,
     execute_deterministic_action, observe_candidate,
 };
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::automation::DirectLandingRequest;
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::{Value, json};
@@ -739,6 +740,10 @@ struct ForgeState {
     aggregate: Option<&'static str>,
     /// A required aggregate that fails only after recovery has been spent.
     after_recovery_aggregate: Option<&'static str>,
+    /// A failed rollup check no job answers and branch protection does not
+    /// require. It makes the rerun planner ineligible without outranking a
+    /// transient job.
+    extra_unanswered_check: bool,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
@@ -1037,6 +1042,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 ];
                 if state.aggregate.is_some() {
                     rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL", "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                }
+                if state.extra_unanswered_check {
+                    rollup.push(json!({"__typename": "CheckRun", "name": "optional", "workflowName": "Extra", "status": "COMPLETED", "conclusion": "FAILURE"}));
                 }
                 let pr = json!({"number": 42, "url": "https://github.com/owner/repository/pull/42", "state": if state.merged { "MERGED" } else { "OPEN" }, "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": state.head, "mergeStateStatus": merge_state, "reviewDecision": state.review_decision.unwrap_or(""), "mergeCommit": state.merged.then(|| json!({"oid": state.merge_commit.as_deref().unwrap_or("provider-merge")})), "statusCheckRollup": rollup});
                 Ok(json!({"pull_request": pr}))
@@ -3114,6 +3122,71 @@ fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
         &forge,
         &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
         "unreadable retry",
+    );
+}
+
+fn assert_held_in_review(error: OrbitError, case: &str, phrases: &[&str]) {
+    let message = error.to_string();
+    assert!(
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+                ..
+            }
+        ),
+        "{case}: the landing is held, not a failed run: {message}"
+    );
+    for phrase in phrases {
+        assert!(message.contains(phrase), "{case}: {message}");
+    }
+}
+
+/// An unreadable required-check log, and a transient failure the rerun
+/// planner will not run again, stay in review as a held run.
+#[test]
+fn an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing() {
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed_reading(1, 11, FakeLog::Unreadable));
+    assert_held_in_review(
+        land_now(&forge).expect_err("an unreadable log stays in review"),
+        "unreadable log",
+        &[
+            "the failure was not classified",
+            "the log of 'CI / clippy' could not be read",
+        ],
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "unreadable log",
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "unreadable log",
+    );
+
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
+    forge.state.lock().unwrap().extra_unanswered_check = true;
+    assert_held_in_review(
+        land_now(&forge).expect_err("a spent transient rerun stays in review"),
+        "spent transient",
+        &[
+            "classified `transient`",
+            "it failed again after its one rerun, so the candidate stays in review",
+        ],
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "spent transient",
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "spent transient",
     );
 }
 

@@ -1933,6 +1933,11 @@ one. From then on:
   changed from its base. Annotations on other files, or annotations that
   cannot be read or validated, are **inconclusive**. A failed optional check
   that no job answers keeps its previous handling.
+  An unclassified set (no readable job decided, including a failed required
+  check whose log could not be read), an inconclusive set, and a transient
+  set that has already used its one rerun (`failed again after its one
+  rerun`) hold the landing run as `delivery_check_evidence_inconclusive`.
+  The candidate stays in review.
 
   After a rerun or branch update, a stale failure for a job already acted
   on waits while replacement jobs register. That wait does not hide a
