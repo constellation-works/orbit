@@ -81,6 +81,12 @@ fn is_provider_frame(message: &str) -> bool {
 /// envelope frame; the caller validates it like any other envelope (frame,
 /// status/error consistency, exit alignment), so the recovery admits nothing
 /// the normal parser would refuse.
+///
+/// [ORB-23924] A retained Claude `result` is that terminal even when its
+/// `result` text is null or empty. The assistant-message reader skips such a
+/// frame and would otherwise return an earlier assistant envelope. Do not
+/// replace the retained terminal with that earlier text. Error, refusal, and
+/// timeout endings stay on the projection the caller already reads.
 fn truncated_terminal_envelope_message(
     provider: &str,
     protocol_bytes: &[u8],
@@ -92,11 +98,30 @@ fn truncated_terminal_envelope_message(
     {
         return None;
     }
+    if retained_claude_terminal_result(provider, answer_text) {
+        return None;
+    }
     let message = latest_assistant_message(provider, protocol_bytes)?;
     ParsedStdout::parse(&message)
         .peek_response_envelope()
         .is_some()
         .then_some(message)
+}
+
+/// Claude's answer projection is the last `result` line when the retained
+/// stream has one, and empty when it does not. A parsed `result` object is a
+/// terminal the turn already ended on.
+fn retained_claude_terminal_result(provider: &str, answer_text: &str) -> bool {
+    if provider != "claude" {
+        return false;
+    }
+    let text = answer_text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .is_some_and(|value| value.get("type").and_then(Value::as_str) == Some("result"))
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,

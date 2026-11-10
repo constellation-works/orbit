@@ -1,7 +1,7 @@
 ---
 type: runbook
 summary: Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state.
-last_validated: 2026-10-19
+last_validated: 2026-11-10
 tags: [contributors, executors, providers, testing]
 paths: ["crates/orbit-agent/**", "crates/orbit-core/assets/executors/**", "crates/orbit-core/src/application/executor.rs", "crates/orbit-core/src/adapter/engine_host/actions/cli_executor.rs", "crates/orbit-engine/src/activity_job/**"]
 related_features: [activity-job, policy-sandbox]
@@ -129,7 +129,7 @@ For a new deterministic default, add a `kind: Executor` resource with `executor_
 
 ## Output, errors, and lifecycle contract
 
-An agent exit status and its response envelope are independent evidence; both must be valid. The v2 path fails closed when the CLI exits non-zero even if stdout contains success-looking JSON. It also fails closed on missing terminal output, malformed protocol records, an error/aborted terminal event, missing response/completion envelope, and stale prompt echo. Provider normalization must retain only the documented terminal answer before the common envelope reader scans it. Antigravity accepts only a terminal `result` whose status is `SUCCESS`; Muse keeps only `payload.text` of a `run.terminal.completed` record whose wire-open `terminal` is `completed`, because its `turn.input.user` and `run.lifecycle.started` records echo the prompt verbatim.
+An agent exit status and its response envelope are independent evidence; both must be valid. The v2 path fails closed when the CLI exits non-zero even if stdout contains success-looking JSON. It also fails closed on missing terminal output, malformed protocol records, an error/aborted terminal event, missing response/completion envelope, and stale prompt echo. Provider normalization must retain only the documented terminal answer before the common envelope reader scans it. Claude reduces a message stream to its terminal `result`. A truncated capture that retained no `result` may complete from the final assistant message when that message is itself a valid response envelope. A retained `result`, including an exit-zero max-turns result or an empty result, stays the answer: an earlier assistant envelope does not replace it, and the turn fails closed when that terminal carries no envelope. Error, refusal, and timeout endings stay on their own failure paths. Antigravity accepts only a terminal `result` whose status is `SUCCESS`; Muse keeps only `payload.text` of a `run.terminal.completed` record whose wire-open `terminal` is `completed`, because its `turn.input.user` and `run.lifecycle.started` records echo the prompt verbatim.
 
 Set a wall-clock deadline through the agent activity or `local_shell` config and reuse the supervisor. Verify timeout cancellation and child-process cleanup rather than implementing a provider-specific timer. A normal local-shell non-zero exit is an activity failure unless `allow_nonzero_exit` is explicitly true; when true, its structured output still reports `success`, `exit_code`, `stderr`, `timed_out`, `timeout_ms`, `argv`, `cwd`, and `sandbox`.
 
@@ -140,7 +140,7 @@ Set a wall-clock deadline through the agent activity or `local_shell` config and
 | Discovery and seeding | Detected CLI creates the intended crew/executor; missing CLI produces the stable unavailable error; an existing custom definition and model pin survive seeding/sync. |
 | Identity and configuration | Canonical provider is retained when the model names another vendor; aliases/migrations are explicit; invalid or unsupported model/effort fails instead of falling back. |
 | argv, stdin, and cwd | Exact static and per-run argv; prompt/envelope bytes appear only on stdin; cwd is the intended temporary workspace; secrets are absent from argv, result, and diagnostics. |
-| Normal output and usage | Only the documented terminal frame reaches the completion parser; a successful envelope projects its result; usage is propagated only when the provider's retained terminal payload supports it. |
+| Normal output and usage | Only the documented terminal frame reaches the completion parser, except the truncated capture with no retained terminal result described above, which may use the final assistant message. A successful envelope projects its result; usage is propagated only when the provider's retained terminal payload supports it. A retained empty or max-turns terminal does not. |
 | Error evidence | Non-zero exit, zero-exit provider error, malformed JSON/JSONL, incomplete/stale terminal data, no terminal frame, and absent response/completion envelope each fail closed. |
 | Time and process lifecycle | Deadline returns a timeout failure, cancellation terminates the child process group, and no child remains after a test. |
 | Sandbox and state isolation | Fixture needs no live provider state; only the active provider state root is writable; activity profile restricts the disposable worktree; a shell executor has no agent-only authority. |
