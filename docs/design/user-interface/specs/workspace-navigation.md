@@ -47,8 +47,9 @@ jobs of these four workspaces" has to visit four boards.
    workspace binding already holds both; the list response must expose them.
 3. Rows are merged by logical workspace ID. A catalog entry holds the workspace ID and name,
    the owner host, and the capacity hosts.
-4. The workspace picker lists each catalog entry once, with the owner's name as a badge.
-   A replica checkout never produces its own entry.
+4. The workspace picker lists each catalog entry once, grouped under its owner's name. It
+   stays the native select it is today; the groups are `optgroup` labels. A replica checkout
+   never produces its own entry.
 5. A workspace whose owner is not registered on the serving host, or does not answer, stays in
    the picker marked **owner unreachable**. Its views show that state. The dashboard does not
    read the replica's local store in its place.
@@ -107,16 +108,19 @@ jobs of these four workspaces" has to visit four boards.
 
 ## 4. Capacity lanes
 
-With one workspace in scope, the Drain card in the Tasks dock shows one lane per host that
-can run the workspace: the owner's lane first, then each capacity host in host-file order.
+With one workspace in scope, the Auto-drain card in the Tasks dock gains a Hosts list with one
+row (a lane) per host that can run the workspace: the owner first, then each capacity host in
+host-file order. The rest of the card is unchanged.
 
 1. A lane reads `GET /api/workflows/auto/readiness` for the workspace on its own host,
    through the forward for a remote host.
 2. A lane shows the host name, its role (owner or follower), the phase (Idle, Draining,
-   Winding down, Pull drain or Read-only), used and ceiling leaf slots, holds, and the
-   host's usage pressure.
-3. **Start** on the owner's lane starts a drain there. **Start** on a follower lane posts the
-   same start request to that host, where a replica checkout pulls from the owner. The server
+   Winding down, Pull drain or Read-only) and used and ceiling leaf slots. It is the row the
+   Fleet drains card already uses.
+3. The owner's Start, Stop and run link stay where they are today: the card's foot and the
+   Start a window card. A follower lane carries **Start** or **Stop**. Start on a follower
+   lane opens the Start a window card for that host, with the same fields, and posts the same
+   start request to that host, where a replica checkout pulls from the owner. The server
    contract is unchanged and is the one `orbit run auto --pull` validates.
 4. **Stop** on a lane posts `POST /api/workflows/auto/stop` to that lane's host and keeps
    today's confirmation text. **Send pending results** stays on the lane it applies to.
@@ -124,9 +128,10 @@ can run the workspace: the owner's lane first, then each capacity host in host-f
    shows the refusal and disables Start. A lane whose host does not answer shows
    **unreachable** and offers no controls.
 6. A lane's run link opens the run on the host that executes it.
-7. With more than one workspace in scope the card shows the fleet drain table grouped by
-   workspace, with one sub-row per host. Selecting a row narrows the scope to that workspace;
-   it does not switch host. The per-host tabs are removed.
+7. With more than one workspace in scope the Fleet drains card shows one row per workspace,
+   and the row's existing detail line names each host's phase and slots. Selecting a row
+   narrows the scope to that workspace; it does not switch host. The per-host tabs are
+   removed.
 
 ## 5. Host as a facet
 
@@ -162,35 +167,26 @@ endpoint and each list view.
 
 ## Mocks
 
-Static HTML mocks for phases 1 and 2 are in [`../references/mocks/`](../references/mocks/).
-Open a file in a browser at the stated width. They show layout, wording and states; the
-workspace names, slot counts, run IDs and times are illustrative. Where a mock and a rule in
-this spec disagree, the rule wins.
+**Change as little as possible.** The dashboard's current look is settled. Each change in
+phases 1 and 2 is made inside a component that already exists, with its existing markup and
+classes, and everything around it stays as it is. New CSS is limited to the four rules shown
+in mock 2.1.
 
-| Mock | Width | Shows | Rules |
+The mocks in [`../references/mocks/`](../references/mocks/) are subsections, not whole
+screens. Each file shows one component as it is today beside the proposed change. The markup
+is copied from the running dashboard and the files link the dashboard's own stylesheets from
+`crates/orbit-web/assets/dashboard/css`, so open them from a checkout. The data is
+illustrative.
+
+| Mock | Component | Change | New CSS |
 |---|---|---|---|
-| [1.1](../references/mocks/1-1-tasks-all-hosts-catalog.html) | 1280 | Tasks under All hosts with the workspace catalog open | §1, §2 |
-| [1.2](../references/mocks/1-2-picker-states.html) | 1000 | Host picker default, catalog loading, an owner that does not answer, one host chosen | §1 rules 5 and 6, Phasing |
-| [1.3](../references/mocks/1-3-owner-unreachable.html) | 880 | The Tasks view when the owner is unreachable | §1 rule 5 |
-| [2.1](../references/mocks/2-1-drain-capacity-lanes.html) | 1280 | The Drain card with one lane per host and the pull-window form | §4 rules 1 to 4 |
-| [2.2](../references/mocks/2-2-lane-states.html) | 560 | Lane states: winding down, start refused, unreachable, pending results, read-only | §4 rules 4 and 5 |
-| [2.3](../references/mocks/2-3-all-workspaces-drains.html) | 1280 | All workspaces: drains grouped by workspace, one sub-row per host | §4 rule 7 |
-| [2.4](../references/mocks/2-4-jobs-host-filter.html) | 1280 | Jobs with a host column and host filter | §5 |
-| [2.5](../references/mocks/2-5-capacity-lanes-phone.html) | 390 | The capacity lanes at phone width | §4 |
+| [1.1](../references/mocks/1-1-pickers.html) | Host and workspace selects in the rail | Host gains All hosts; the workspace menu lists each workspace once under `optgroup` owner labels; unreachable and loading entries | None |
+| [1.2](../references/mocks/1-2-owner-unreachable.html) | Tasks list empty state | The replica empty state, reworded for an unreachable owner | None |
+| [2.1](../references/mocks/2-1-drain-card-hosts.html) | Auto-drain card and Start a window card | A Hosts list of fleet rows between the slot bar and the foot; follower rows carry Start or Stop; the Start card names the host | Four rules |
+| [2.2](../references/mocks/2-2-fleet-drains.html) | Fleet drains card | Host tabs removed; one row per workspace; the detail line names each host | None |
 
-**Keep the current Tasks board CSS for the most part.** The mocks approximate the board,
-the rail and the dock; they are not a restyle. Build the new pieces from the classes the
-dashboard already has: the board's `.row`, `.group-header` and `.chip`, the dock's `.dock-*`,
-and the Drain card's `.drain-*` (its slot meter is `.drain-capacity`). Add CSS only for what is
-new: catalog entries in the workspace picker, a lane row, and a host sub-row under a workspace.
-
-Two things the mocks show that the rules above do not state:
-
-- When an owner does not answer, the catalog knows its workspaces only through other hosts'
-  replica rows. Workspaces that only the owner holds are not listed, and the picker says so
-  (mock 1.2).
-- The pull-window form on a follower lane offers window length and parallel tasks only
-  (mock 2.1). Check this against the start contract before building it; the contract decides.
+Not mocked: the host column and filter on Jobs and Leases (§5). They follow the same rule
+when they are built.
 
 ## Concerns and Honest Limitations
 
@@ -213,6 +209,9 @@ Two things the mocks show that the rules above do not state:
 3. Do the Analytics views that are single-workspace today have a meaningful multi-workspace
    form (Cost, Metrics), or should all of Analytics stay single-workspace?
 4. Does the Hosts page replace Settings › Hosts outright, or link to it for host-file edits?
+5. What does the catalog show when two hosts each report the owner role for the same
+   workspace name? The Mac and dk-server-2 both list `orbit-graph`, `nebula` and
+   `observatory` that way today.
 
 ## Acceptance
 

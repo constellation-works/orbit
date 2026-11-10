@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Mock 1.2: Tasks when the owner is unreachable</title>
+<!-- Subsection mock for docs/design/user-interface/specs/workspace-navigation.md.
+     The markup in each .mock-stage is copied from the running dashboard and uses the
+     dashboard's own CSS. "Today" is unchanged; "Proposed" shows only the change. -->
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/base.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/shell.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/components.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/tasks.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/task-detail.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/markdown.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/runs.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/run-detail.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/dock.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/log-tail.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/audit.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/health.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/forecast.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/experiments.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/scoreboard.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/agents.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/knowledge.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/automation.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/drain.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/settings.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/plugins.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/leases.css">
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/notices.css">
+<link rel="stylesheet" href="mock.css">
+</head>
+<body class="mock-page">
+<h1 class="mock-title">Mock 1.2: Tasks when the owner is unreachable</h1>
+<p class="mock-note">The Tasks list already has an empty state for a replica checkout. The unreachable state reuses it with new words. No new CSS.</p>
+<div class="mock-pair"><div class="mock-col"><p class="mock-label">Today (replica checkout)</p><div class="mock-stage mock-list"><section class="panel"><div class="body"><div class="empty-state"><div class="icon">&#10023;</div><div class="text">This checkout is a pull replica of dk-server-2; its tasks live on the owner.</div><button class="ghost" type="button">Show on dk-server-2</button></div></div></section></div></div><div class="mock-col"><p class="mock-label new">Proposed (owner unreachable)</p><div class="mock-stage mock-list"><section class="panel"><div class="body"><div class="empty-state"><div class="icon">&#10023;</div><div class="text">orbit's tasks live on dk-server-2, which did not answer.</div><button class="ghost" type="button">Try again</button></div></div></section></div><ul class="mock-changes"><li>Same block, same classes.</li><li>Nothing is read from the local replica in the owner's place.</li></ul></div></div>
+</body>
+</html>
