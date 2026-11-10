@@ -508,7 +508,9 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
         findRegisteredHost(chosenHost)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(chosenHost)}/connection`),
         checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(chosenHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(chosenWorkspace.id)}`)
           .catch(error => {
-            if (error.code !== "workspace_unavailable") throw error;
+            // Only a replica reads as an unavailable owner; an owner whose
+            // workspace is inactive keeps the error its readiness returned.
+            if (error.code !== "workspace_unavailable" || !row?.owner_machine_id) throw error;
             checkoutUnavailable = true;
             return unavailable();
           }),
