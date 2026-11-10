@@ -21,7 +21,7 @@ mod execution;
 mod measures;
 mod query;
 mod render;
-mod sample;
+pub(super) mod sample;
 mod season;
 
 pub use self::compute::{agent_rank, agent_rank_calibration};

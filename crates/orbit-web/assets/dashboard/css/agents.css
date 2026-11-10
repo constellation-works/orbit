@@ -189,6 +189,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-score-col { min-width: 8rem; }
 .agents-score-col > .agents-bar { width: 88px; vertical-align: middle; }
 .agents-score-value { display: inline-block; min-width: 3.25rem; margin-left: 8px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; }
+.agents-score-interval { display: block; white-space: nowrap; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
 .agents-score-note { display: block; white-space: normal; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--warn-fg); }
 
 .agents-bar { position: relative; display: inline-block; height: 8px; border-radius: 2px; background: var(--hair); }

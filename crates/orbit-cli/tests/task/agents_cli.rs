@@ -154,13 +154,21 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     assert_eq!(scorecard["cache_ttl_seconds"], 0, "{scorecard}");
     let rows = scorecard["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{scorecard}");
-    // A plain record includes effort among six fixed columns, plus one per term.
-    let width = 5 + scorecard["terms"].as_array().unwrap().len();
+    // A plain record includes effort among seven fixed columns, plus one per term.
+    let width = 6 + scorecard["terms"].as_array().unwrap().len();
     let opus = rows.iter().find(|row| row["crew"] == "opus").unwrap();
     assert_eq!(opus["units"], 2, "{opus}");
     assert_eq!(opus["below_support"], false, "{opus}");
+    assert!(
+        opus["interval"].is_object(),
+        "ranked row needs an interval: {opus}"
+    );
     let sonnet = rows.iter().find(|row| row["crew"] == "sonnet").unwrap();
     assert_eq!(sonnet["below_support"], true, "one owned task is below 2");
+    assert!(
+        sonnet["interval"].is_null(),
+        "below-support row has no interval: {sonnet}"
+    );
     let tool = fixture.json(&[
         "tool",
         "run",
@@ -362,6 +370,14 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     assert!(
         records.iter().all(|fields| fields.len() == width),
         "every record has one field per column:\n{piped_stdout}"
+    );
+    assert_ne!(
+        records[0][5], "-",
+        "ranked rows show their interval:\n{piped_stdout}"
+    );
+    assert_eq!(
+        records[1][5], "-",
+        "below-support rows show no interval:\n{piped_stdout}"
     );
     let status = String::from_utf8_lossy(&piped.stderr);
     assert!(!status.is_empty(), "the summary stays on stderr:\n{status}");

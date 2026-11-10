@@ -10,7 +10,7 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
-    Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
@@ -286,6 +286,24 @@ pub(super) fn evaluate_implementers(
                 })
                 .collect(),
         );
+        row.sample_units = sample_units(
+            tasks.iter().map(|task| task.id.clone()),
+            TERMS,
+            &row.tallies,
+        );
+        let expectations_by_task: BTreeMap<&str, &TaskExpectation<'_>> = expectations
+            .iter()
+            .map(|task| (task.task.id.as_str(), task))
+            .collect();
+        for unit in &mut row.sample_units {
+            if let Some(task) = expectations_by_task.get(unit.id.as_str()) {
+                unit.expected.clone_from(&task.expected);
+                if task.reviewed {
+                    unit.denominator_terms
+                        .extend(REVIEW_TERM_UNITS.iter().map(|(term, _)| (*term, 1)));
+                }
+            }
+        }
         per_task.push(expectations);
     }
     Evaluated {
@@ -518,6 +536,7 @@ pub(super) fn compute_tallies<'a>(
         {
             tallies.entry("first_pass_accepts").or_default().add(
                 task,
+                &task.id,
                 1.0,
                 Some(Occurrence {
                     at: review.at,
@@ -537,7 +556,7 @@ pub(super) fn compute_tallies<'a>(
             tallies
                 .entry("weighted_landed")
                 .or_default()
-                .add(task, 1.0, None);
+                .add(task, &task.id, 1.0, None);
         }
         for charge in charges
             .get(task.id.as_str())
@@ -563,6 +582,7 @@ pub(super) fn compute_tallies<'a>(
             };
             tallies.entry(term).or_default().add(
                 task,
+                &task.id,
                 charge.severity_weight(),
                 Some(Occurrence {
                     at: charge.at,
@@ -685,6 +705,7 @@ fn row_input<'a>(
             .collect(),
         reviewed_units: Some(reviewed_units),
         unjudged: false,
+        sample_units: Vec::new(),
         crew: crews_of(facts, window, &row, tasks)
             .first()
             .cloned()

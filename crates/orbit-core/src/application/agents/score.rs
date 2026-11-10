@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::AgentRole;
 use super::facts::TaskFacts;
+use super::rank::sample::{Rng, percentile};
 
 /// Units of fleet-average evidence a row's score is blended with:
 /// `score = min(raw, (units × raw + K × fleet_average) ÷ (units + K))`.
@@ -31,6 +32,11 @@ pub(super) const SMOOTHING: f64 = 30.0;
 /// Zero reviewed deliveries stays unmeasured. Matches [`SMOOTHING`]; one named
 /// value for every surface, returned as `review_min_support`.
 pub(super) const REVIEW_MIN_SUPPORT: usize = 30;
+
+/// Resamples per ranked row's interval, and the seed every row's resample
+/// starts from, so the same facts give the same interval on every request.
+const INTERVAL_DRAWS: usize = 1000;
+const INTERVAL_SEED: u64 = 0x7363_6f72_6563_6976;
 
 /// One weighted term of a role's score.
 pub(super) struct Term {
@@ -62,6 +68,7 @@ pub(super) struct TaskTally<'a> {
 pub(super) struct Tally<'a> {
     count: f64,
     tasks: BTreeMap<&'a str, TaskTally<'a>>,
+    units: BTreeMap<String, f64>,
 }
 
 impl<'a> Tally<'a> {
@@ -75,6 +82,13 @@ impl<'a> Tally<'a> {
         self.tasks.values().map(|tally| (tally.task, tally.count))
     }
 
+    /// The term's count on each scored row unit, for score resampling.
+    pub(super) fn unit_counts(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.units
+            .iter()
+            .map(|(unit, count)| (unit.as_str(), *count))
+    }
+
     /// Each task behind the count with its count and the records behind it.
     pub(super) fn task_records(&self) -> impl Iterator<Item = (&TaskFacts, f64, &[Occurrence])> {
         self.tasks
@@ -82,8 +96,15 @@ impl<'a> Tally<'a> {
             .map(|tally| (tally.task, tally.count, tally.occurrences.as_slice()))
     }
 
-    pub(super) fn add(&mut self, task: &'a TaskFacts, count: f64, occurrence: Option<Occurrence>) {
+    pub(super) fn add(
+        &mut self,
+        task: &'a TaskFacts,
+        unit: &str,
+        count: f64,
+        occurrence: Option<Occurrence>,
+    ) {
         self.count += count;
+        *self.units.entry(unit.to_string()).or_default() += count;
         let entry = self
             .tasks
             .entry(task.id.as_str())
@@ -144,6 +165,10 @@ pub(super) struct RowInput<'a> {
     /// Terms rated per 100 of their own units; every other term is rated
     /// per 100 of `units`.
     pub(super) denominators: BTreeMap<&'static str, Denominator>,
+    /// Each row unit's observed counts, expectations and term-specific
+    /// denominator exposure. These are resampled for the interval; the row's
+    /// score still uses the aggregate fields above.
+    pub(super) sample_units: Vec<SampleUnit>,
     /// Tasks with a settled review behind them (implementers only):
     /// the population of the review terms' rates and expectations.
     /// Zero means unmeasured, with null rates and neutral contributions.
@@ -151,6 +176,46 @@ pub(super) struct RowInput<'a> {
     /// No unit of the row has been judged yet (reviewers only): it gets no
     /// score or rank, is listed last, and stays out of the fleet average.
     pub(super) unjudged: bool,
+}
+
+/// One row unit's contribution to the bootstrap sample.
+#[derive(Default)]
+pub(super) struct SampleUnit {
+    pub(super) id: String,
+    counts: BTreeMap<&'static str, f64>,
+    pub(super) expected: BTreeMap<&'static str, f64>,
+    pub(super) denominator_terms: BTreeMap<&'static str, usize>,
+}
+
+/// Build one sample unit for each unit in the row and attach its observed
+/// term counts from the tallies.
+pub(super) fn sample_units<'a>(
+    unit_ids: impl IntoIterator<Item = String>,
+    terms: &[Term],
+    tallies: &BTreeMap<&'static str, Tally<'a>>,
+) -> Vec<SampleUnit> {
+    let mut units: BTreeMap<String, SampleUnit> = unit_ids
+        .into_iter()
+        .map(|id| {
+            (
+                id.clone(),
+                SampleUnit {
+                    id,
+                    ..SampleUnit::default()
+                },
+            )
+        })
+        .collect();
+    for term in terms {
+        if let Some(tally) = tallies.get(term.key) {
+            for (id, count) in tally.unit_counts() {
+                if let Some(unit) = units.get_mut(id) {
+                    unit.counts.insert(term.key, count);
+                }
+            }
+        }
+    }
+    units.into_values().collect()
 }
 
 impl RowInput<'_> {
@@ -177,6 +242,9 @@ pub(super) struct Scored<'a> {
     score: f64,
     below_support: bool,
     rank: Option<usize>,
+    /// The 10th and 90th percentiles of the row's resampled score; set only
+    /// on ranked rows.
+    interval: Option<(f64, f64)>,
 }
 
 /// Score and order `rows`: rows meeting `min_support` first, best score
@@ -213,6 +281,7 @@ pub(super) fn score<'a>(
                 raw,
                 score: raw,
                 rank: None,
+                interval: None,
             }
         })
         .collect();
@@ -257,7 +326,100 @@ pub(super) fn score<'a>(
     {
         row.rank = Some(index + 1);
     }
+    if let Some(average) = fleet_average {
+        for row in scored.iter_mut().filter(|row| row.rank.is_some()) {
+            row.interval = resampled_interval(terms, &row.input, average);
+        }
+    }
     (fleet_average, scored)
+}
+
+/// A ranked row's interval: its own units are resampled with replacement,
+/// rescoring observed counts and expectations for those units against the
+/// fixed fleet references. Term-specific denominators are resampled with
+/// their units; smoothing and the fleet average stay fixed. The 10th and
+/// 90th percentiles of the draws bound it.
+fn resampled_interval(
+    terms: &[Term],
+    input: &RowInput<'_>,
+    fleet_average: f64,
+) -> Option<(f64, f64)> {
+    if input.units == 0 || input.sample_units.len() != input.units {
+        return None;
+    }
+    struct DrawUnit {
+        counts: Vec<f64>,
+        expected: Vec<f64>,
+        denominator_units: Vec<usize>,
+    }
+    let pool: Vec<_> = input
+        .sample_units
+        .iter()
+        .map(|unit| DrawUnit {
+            counts: terms
+                .iter()
+                .map(|term| unit.counts.get(term.key).copied().unwrap_or(0.0))
+                .collect(),
+            expected: terms
+                .iter()
+                .map(|term| unit.expected.get(term.key).copied().unwrap_or(0.0))
+                .collect(),
+            denominator_units: terms
+                .iter()
+                .map(|term| {
+                    if input.denominators.contains_key(term.key) {
+                        unit.denominator_terms.get(term.key).copied().unwrap_or(0)
+                    } else {
+                        1
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    let units = input.units as f64;
+    let mut rng = Rng::seeded(INTERVAL_SEED);
+    let mut sums = vec![0.0; terms.len()];
+    let mut expected_sums = vec![0.0; terms.len()];
+    let mut sampled_denominators = vec![0usize; terms.len()];
+    let mut scores = Vec::with_capacity(INTERVAL_DRAWS);
+    for _ in 0..INTERVAL_DRAWS {
+        sums.iter_mut().for_each(|sum| *sum = 0.0);
+        expected_sums.iter_mut().for_each(|sum| *sum = 0.0);
+        sampled_denominators.iter_mut().for_each(|count| *count = 0);
+        for _ in 0..input.units {
+            let unit = &pool[rng.below(pool.len())];
+            for index in 0..terms.len() {
+                sums[index] += unit.counts[index];
+                expected_sums[index] += unit.expected[index];
+                sampled_denominators[index] += unit.denominator_units[index];
+            }
+        }
+        let mut raw = if input.expected.is_some() { 100.0 } else { 0.0 };
+        for (index, term) in terms.iter().enumerate() {
+            let denominator = if input.denominators.contains_key(term.key) {
+                sampled_denominators[index]
+            } else {
+                input.units
+            };
+            if denominator == 0
+                || input
+                    .denominators
+                    .get(term.key)
+                    .is_some_and(|meta| denominator < meta.min_support)
+            {
+                continue;
+            }
+            let denominator = denominator as f64;
+            raw += term.weight
+                * (sums[index] * 100.0 / denominator - expected_sums[index] * 100.0 / denominator);
+        }
+        let blended = (units * raw + SMOOTHING * fleet_average) / (units + SMOOTHING);
+        scores.push(raw.min(blended));
+    }
+    Some((
+        percentile(&mut scores, 10.0)?,
+        percentile(&mut scores, 90.0)?,
+    ))
 }
 
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
@@ -312,6 +474,10 @@ impl Scored<'_> {
             "per_100": per_100,
             "raw": (!self.input.unjudged).then(|| number(self.raw)),
             "score": (!self.input.unjudged).then(|| number(self.score)),
+            "interval": self.interval.map(|(low, high)| json!({
+                "p10": number(low),
+                "p90": number(high),
+            })),
             "runs_without_model": self.input.runs_without_model,
             "provisional": self.input.provisional,
             "stats": self.input.stats.iter().map(|stat| json!({

@@ -222,6 +222,12 @@ Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below
 
 A row none of whose units has been judged yet is `unjudged` (reviewers only, §5.3). It has no rank and no score (`raw` and `score` are null), is greyed with an `unjudged` tag, is listed after every other row, and is left out of the fleet average, so rows waiting for an outcome neither rank at 0 nor drag the average down. A term with its own denominator (§4.1) has its own support: pilot calibration needs `min_support` placed tasks, while the pilots' warning terms independently need 10 settled assessments (`warning_min_support`).
 
+### 4.3a Score interval
+
+Every ranked row carries `interval`: `p10` and `p90`, the 10th and 90th percentiles of a resample of that row's own units. The row's units are drawn with replacement, 1,000 draws from a fixed seed, so the same facts always give the same interval. Each draw is rescored with the fleet references held as they are: the term expectations (§5), each term's own denominator (§4.1), the smoothing constant and the fleet average (§4.2). Only the row's units vary, the same unit-level resampling the model rank uses within tiers ([model ranking design §4.4](../model-ranking/2_design.md)); the ranking's own tier strata do not apply here. A unit with no tallied term count contributes zero, so the draws use the row's full `units`. The interval is a sampling band for the row's own evidence. Scores, ranks, smoothing and minimum support are unchanged by it.
+
+`interval` is null on a row with no rank: below support, unjudged, or a row with no units. A tier view's row (the dashboard's tier ranking) carries no interval, because the all-tier interval describes the all-tier score.
+
 ### 4.4 Windows and late evidence
 
 A role's **unit** decides window membership (§5). Problems count whenever they are recorded, so a regression filed after the window still counts against the work in it. For reviewers this is the expected case: a `review_missed` regression is usually filed days later. A review younger than the 30-day **miss lookback** is **provisional**, measured from the scan. The payload reports each row's provisional count and the window's total (`provisional` beside `rows`), and the view shows the banner from §1. Other roles report `provisional` as null.
@@ -636,7 +642,7 @@ GET /api/agents/implementers/size-curves?window=&complexity=&execution=&until=
 - `fleet_average`, over the judged rows;
 - `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' calibration and warning terms);
 - `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
-- `rows`, best first;
+- `rows`, best first; each ranked row has `interval` as `{p10, p90}` (§4.3a), or null when it has no rank;
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`;
 - implementers only: `execution_split` (§5.2).
 
@@ -700,7 +706,7 @@ weekly crew-memory evidence pack.
 
 The server keeps one scan per workspace runtime for five minutes, single-flight. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.
 
-Budget: under 2 s for a warm request and under 15 s for a cold scan on the `ws_orbit` workspace. Measured by the core track on 2026-10-19 with a release build on dk-server-2, over about 6,450 tasks: cold scans of 4.8 s and 5.6 s in two runs, and warm requests under 4 ms. No incremental index is needed. The Analytics › Codebase scan already exceeded 40 s on this workspace, which is why the budget was fixed up front.
+Budget: under 2 s for a warm request and under 15 s for a cold scan on the `ws_orbit` workspace. Measured by the core track on 2026-10-19 with a release build on dk-server-2, over about 6,450 tasks: cold scans of 4.8 s and 5.6 s in two runs, and warm requests under 4 ms. No incremental index is needed. The Analytics › Codebase scan already exceeded 40 s on this workspace, which is why the budget was fixed up front. The interval (§4.3a) adds 1,000 resamples per ranked row. A debug build's warm scorecard call over the synthetic 7,200-task fixture (6 crews × 5 tiers, 6 ranked rows) took 647 ms including fixture construction; no release build was measured on `ws_orbit`.
 
 ## 9. Testing
 

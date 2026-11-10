@@ -271,7 +271,7 @@ export ORBIT_FIXTURE_PROVENANCE="$scratch/fixture-provenance.json"
 export ORBIT_FIXTURE_LAUNCHER="$repo_root/scripts/visual-fixture-server.sh"
 if [ -n "$first_experiment" ]; then
   export ORBIT_FIXTURE_OVERLAY=experiment
-elif [ "$fixture" = "implementers-scorecard" ]; then
+elif [ "$fixture" = "implementers-scorecard" ] || [ "$fixture" = "agent-scorecards" ]; then
   export ORBIT_FIXTURE_OVERLAY=scorecard
 else
   export ORBIT_FIXTURE_OVERLAY=none

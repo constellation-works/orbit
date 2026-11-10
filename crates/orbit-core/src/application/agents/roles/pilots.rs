@@ -32,7 +32,7 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
-    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
@@ -555,6 +555,7 @@ fn row_input<'a>(
 ) -> RowInput<'a> {
     let mut denominators = warnings.denominators();
     let warning_stats = warnings.stats();
+    let settled_units = warnings.settled_units.clone();
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = warnings.tallies;
     let mut pilot = Score::default();
     let mut author = Score::default();
@@ -584,6 +585,7 @@ fn row_input<'a>(
             }
             tallies.entry("f1_lift").or_default().add(
                 task,
+                &task.id,
                 lift,
                 Some(Occurrence {
                     at: graded.at,
@@ -597,6 +599,7 @@ fn row_input<'a>(
             if assessed_tier == observed_tier {
                 tallies.entry("tier_calibration").or_default().add(
                     task,
+                    &task.id,
                     1.0,
                     Some(Occurrence {
                         at: graded.at,
@@ -609,6 +612,7 @@ fn row_input<'a>(
         for (path, contest) in &graded.costly {
             tallies.entry("costly_misses").or_default().add(
                 task,
+                &task.id,
                 1.0,
                 Some(Occurrence {
                     at: contest.at,
@@ -620,6 +624,7 @@ fn row_input<'a>(
         for wait in &graded.waits {
             tallies.entry("lock_wait_hours").or_default().add(
                 task,
+                &task.id,
                 wait.wait_ms as f64 / 3_600_000.0,
                 Some(Occurrence {
                     at: wait.started_at,
@@ -695,6 +700,23 @@ fn row_input<'a>(
         .collect();
     crews.extend(warnings.crews.iter().cloned());
     let crews: Vec<String> = crews.into_iter().collect();
+    let mut sample_units = sample_units(
+        assessed.iter().map(|(_, task)| task.id.clone()),
+        TERMS,
+        &tallies,
+    );
+    for unit in &mut sample_units {
+        if tiers.contains_key(unit.id.as_str()) {
+            unit.denominator_terms.insert("tier_calibration", 1);
+        }
+        if let Some(&settled) = settled_units.get(&unit.id) {
+            unit.denominator_terms.extend(
+                [CONFIRMED, DISMISSED, MISSED]
+                    .into_iter()
+                    .map(|term| (term, settled)),
+            );
+        }
+    }
     RowInput {
         escaped_regressions_fallback: None,
         crew: crews
@@ -712,6 +734,7 @@ fn row_input<'a>(
         reviewed_units: None,
         unjudged: false,
         denominators,
+        sample_units,
         stats: [
             stat(
                 "recall_percent",

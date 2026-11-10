@@ -665,9 +665,17 @@ async function main() {
         return;
       }
       const pathname = parsed.pathname;
-      if (req.method === 'GET' && overlay === 'scorecard' && pathname === '/api/agents/implementers/scorecard' && seed.scorecard) {
+      // Ranking routes: the implementers scorecard is the seed's `scorecard`;
+      // reviewers and pilots come from the seed's `scorecards` map.
+      const rankingRole = req.method === 'GET' && overlay === 'scorecard'
+        ? /^\/api\/agents\/(implementers|reviewers|pilots)\/scorecard$/.exec(pathname)?.[1]
+        : undefined;
+      const seededScorecard = rankingRole === 'implementers'
+        ? seed.scorecard ?? seed.scorecards?.implementers
+        : seed.scorecards?.[rankingRole];
+      if (rankingRole && seededScorecard) {
         const window = parsed.target.searchParams.get('window') || 'last500';
-        const body = Buffer.from(JSON.stringify({ ...seed.scorecard, window, requested_window: window }));
+        const body = Buffer.from(JSON.stringify({ ...seededScorecard, window, requested_window: window }));
         res.writeHead(200, {
           'content-type': 'application/json',
           'content-length': body.length,

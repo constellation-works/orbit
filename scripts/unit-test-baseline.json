@@ -211,6 +211,7 @@
         "application/agents/tests/api.rs::implementer_rows_use_launch_effort_when_invocation_never_completed",
         "application/agents/tests/api.rs::memory_evidence_charges_implementers_only_for_judged_implementation_faults",
         "application/agents/tests/api.rs::pilot_rows_keep_each_rounds_own_effort",
+        "application/agents/tests/api.rs::reviewer_interval_resamples_review_units_not_task_groups",
         "application/agents/tests/api.rs::reviewer_ranks_are_dense_over_ranked_rows",
         "application/agents/tests/api.rs::reviewer_rows_keep_each_settlements_own_effort",
         "application/agents/tests/api.rs::reviewer_rows_keep_re_review_settlements_own_effort",
