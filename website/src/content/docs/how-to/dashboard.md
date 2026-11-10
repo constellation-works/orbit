@@ -1686,7 +1686,9 @@ newest first. Select **Global proposals** to see open proposals and a collapsed
 
 The dashboard cannot accept or reject proposals or write memory. Use the
 [crew memory CLI commands](../../reference/cli/#crew-memory-experimental)
-to accept or reject a proposal or write memory.
+to accept or reject a proposal or write memory. To turn memory on and
+deliver it through an experiment, see
+[Give models a memory](../crew-memory/).
 
 ## Plugins
 
