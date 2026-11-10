@@ -37,14 +37,18 @@ impl Deadline {
             .map(Self)
             .ok_or_else(|| error("missing completion deadline"))
     }
-    pub(super) fn remaining(self) -> Result<u64, OrbitError> {
-        let remaining = self
-            .0
+    fn remaining_uncapped(self) -> Result<u64, OrbitError> {
+        self.0
             .checked_sub(now_ms()?)
             .filter(|ms| *ms > 0)
-            .ok_or_else(expired)?;
-        Ok(remaining.min(DEFAULT_TIMEOUT_MS))
+            .ok_or_else(expired)
     }
+    pub(super) fn remaining(self) -> Result<u64, OrbitError> {
+        Ok(self.remaining_uncapped()?.min(DEFAULT_TIMEOUT_MS))
+    }
+    /// Run one read bounded by the completion deadline. A read killed because
+    /// the deadline arrived is the typed expiry, not a failure of the read; a
+    /// read killed at the per-read cap while budget remains keeps its error.
     pub(super) fn execute(
         self,
         program: &str,
@@ -53,8 +57,14 @@ impl Deadline {
         label: &str,
     ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
         let timeout = self.remaining()?;
-        let result = process::execute(program, args, Some(workspace), timeout, label)?;
+        let result = process::run_vcs_process(program, args, Some(workspace), timeout)?;
         probe(label, timeout);
+        // A timeout below the per-read cap was set by the deadline itself; at
+        // the cap, only an arrived deadline explains the kill.
+        if result.timed_out && (timeout < DEFAULT_TIMEOUT_MS || self.remaining().is_err()) {
+            return Err(expired());
+        }
+        let result = process::succeeded(result, label)?;
         self.remaining()?;
         Ok(result)
     }
