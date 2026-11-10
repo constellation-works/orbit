@@ -8,8 +8,11 @@
 //! live pilot carries is held as `pilot_running` and never selected again
 //! while that pilot runs.
 //!
-//! Selection decides who is worth a pilot. A proposed task whose latest
-//! certified assessment came from an explicit or routine pilot, and is still
+//! Selection decides who is worth a pilot. A task assigned to a human crew
+//! is operator work: it is reported as `human_crew` and never selected, so
+//! this drain does not dispatch a pilot for it or record a hold. A proposed
+//! task whose latest certified assessment came from an explicit or routine
+//! pilot, and is still
 //! fresh, is approved here without another provider call. A drain child that
 //! stood down cannot claim that receipt as an unfinished approval. A stale
 //! one (its description or criteria changed after the assessment) is selected
@@ -153,6 +156,20 @@ pub(super) fn approval_snapshot(
                 findings,
             }
         };
+        // Operator work. Prepare excludes the same tasks; skipping them here
+        // keeps a drain from dispatching a pilot that can only exclude them
+        // and then record a hold the pilot must not write.
+        if let Some(human) = runtime.human_crew(task.crew.as_deref()) {
+            snapshot.held.push(held(
+                "human_crew",
+                Some(format!(
+                    "assigned to human crew `{}`; operator work the task pilot does not assess",
+                    human.name
+                )),
+                Vec::new(),
+            ));
+            continue;
+        }
         let disqualified =
             approval_disqualification(&task.tags, &task.context_files, task.complexity);
         if disqualified != Some(NO_AUTO_APPROVE_TAG)

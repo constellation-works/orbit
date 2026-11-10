@@ -129,6 +129,12 @@
 #   dispatched this exact run, then prepare partitions by live crew. A
 #   forged or ended drain's record, or a run it never dispatched, is
 #   refused like any other mixed bundle.
+# - A human task crew is operator work. Run start does not take that crew
+#   as this run's agent crew and does not fail the run. Prepare excludes
+#   those tasks, and the run keeps an agent crew (the first non-human task
+#   crew in a partition, otherwise `workflow.default_crew`). An explicit
+#   human crew on the run input is still refused. An approve-proposed drain
+#   does not select those tasks, so it never dispatches a pilot for them.
 
 schemaVersion: 2
 kind: Job

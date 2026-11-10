@@ -12,6 +12,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
+/// The shipped task-pilot job. Its recorded run crew is the agent that
+/// assesses tasks, not the crew a task is assigned to.
+const TASK_PILOT_JOB: &str = "task_pilot_pipeline";
+
 impl RuntimeKernel {
     pub fn resolve_crew_for_run_input(
         &self,
@@ -55,6 +59,11 @@ impl RuntimeKernel {
     ///
     /// `bundle` is the caller's authenticated answer to whether this run may
     /// name tasks whose crews differ; see [`BundleCrews`].
+    ///
+    /// A task-pilot job does not take a human task crew as its agent crew.
+    /// Prepare excludes those tasks, and the run keeps an agent crew instead
+    /// of failing at start. An explicit human crew on the run input is still
+    /// refused, and every other job still refuses a human task crew.
     pub fn record_run_crew_for_job(
         &self,
         run_id: &str,
@@ -62,7 +71,10 @@ impl RuntimeKernel {
         yaml_path: &Path,
         bundle: BundleCrews,
     ) -> Result<(), OrbitError> {
-        if self.job_definition_dispatches_agent(yaml_path) {
+        let dispatches_agent = self.job_definition_dispatches_agent(yaml_path);
+        if dispatches_agent && loaded_job_name(yaml_path).as_deref() == Some(TASK_PILOT_JOB) {
+            self.record_task_pilot_run_crew(run_id, input, bundle)?;
+        } else if dispatches_agent {
             self.record_run_crew_from_input(run_id, input, bundle)?;
         } else {
             let claimed = claimed_task_from_input(input)?;
@@ -70,6 +82,34 @@ impl RuntimeKernel {
             self.lookup_crew_for_task(run_input_crew_override(input), task_crew.as_deref())?;
         }
         Ok(())
+    }
+
+    /// The task-pilot run's agent crew. A human task crew is operator work:
+    /// it is not this run's crew, and it does not fail the run. Prepare
+    /// excludes those tasks. Any other agreed crew resolves as it does for
+    /// every job, including the claimed-leaf error.
+    fn record_task_pilot_run_crew(
+        &self,
+        run_id: &str,
+        input: &Value,
+        bundle: BundleCrews,
+    ) -> Result<Crew, OrbitError> {
+        let claimed = claimed_task_from_input(input)?;
+        let assigned = self.task_crew_from_run_input(input, claimed.as_ref(), bundle)?;
+        let crew = if self.is_human_crew(assigned.as_deref()) {
+            let task_crew = self.agent_task_crew_from_run_input(input, claimed.as_ref(), bundle)?;
+            self.resolve_crew_for_task(run_input_crew_override(input), task_crew.as_deref())?
+        } else {
+            self.resolve_crew_for_run_input(input, bundle)?
+        };
+        tracing::info!(
+            run_id,
+            resolved_crew = %crew.name,
+            crew_model = %crew.assignment.model,
+            "crew resolved for run",
+        );
+        self.stores().jobs().record_job_run_crew(run_id, &crew)?;
+        Ok(crew)
     }
 
     /// Whether the job at `yaml_path` can dispatch an agent. A definition that
@@ -167,6 +207,33 @@ impl RuntimeKernel {
         claimed: Option<&ClaimedTaskSnapshot>,
         bundle: BundleCrews,
     ) -> Result<Option<String>, OrbitError> {
+        self.agreed_task_crew(input, claimed, bundle, false)
+    }
+
+    /// [`Self::task_crew_from_run_input`], ignoring human task crews.
+    ///
+    /// A task pilot uses this only after the unfiltered agreement is itself a
+    /// human crew. Human crews then neither become the run's agent crew nor
+    /// count as a disagreement, so an all-human bundle resolves with no task
+    /// crew and a partition whose first crew is human keeps the first agent
+    /// crew. A mixed bundle that already failed closed stays failed: this
+    /// walk does not replace that result.
+    fn agent_task_crew_from_run_input(
+        &self,
+        input: &Value,
+        claimed: Option<&ClaimedTaskSnapshot>,
+        bundle: BundleCrews,
+    ) -> Result<Option<String>, OrbitError> {
+        self.agreed_task_crew(input, claimed, bundle, true)
+    }
+
+    fn agreed_task_crew(
+        &self,
+        input: &Value,
+        claimed: Option<&ClaimedTaskSnapshot>,
+        bundle: BundleCrews,
+        skip_human_task_crews: bool,
+    ) -> Result<Option<String>, OrbitError> {
         let mut agreed: Option<Option<String>> = None;
         for task_id in task_ids_for_crew_resolution(input) {
             if !is_valid_orb_task_id(&task_id) {
@@ -190,6 +257,11 @@ impl RuntimeKernel {
                     None => continue,
                 },
             };
+            // A human crew is operator work. When this walk is choosing a
+            // task pilot's agent crew, that assignment is not a vote.
+            if skip_human_task_crews && self.is_human_crew(crew.as_deref()) {
+                continue;
+            }
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
@@ -407,6 +479,14 @@ fn hook_dispatches_agent(name: Option<&str>, resolved: Option<&ActivityV2>) -> b
         Some(activity) => matches!(activity.spec, ActivityV2Spec::AgentLoop(_)),
         None => name.is_some(),
     }
+}
+
+/// `metadata.name` of the job at `yaml_path`, when the file loads.
+fn loaded_job_name(yaml_path: &Path) -> Option<String> {
+    let yaml = std::fs::read_to_string(yaml_path).ok()?;
+    orbit_engine::activity_job::load_job_asset(&yaml)
+        .ok()
+        .map(|job| job.name)
 }
 
 /// The run input's explicit `crew`, when it names one.

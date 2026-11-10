@@ -451,7 +451,9 @@ so does giving it the name of an agent crew. A human crew:
 - is never admitted. Drains and pull followers skip its tasks, even under
   `--allow-crew` naming it, and `orbit run readiness` reports each one with
   reason `human_crew`;
-- is never assessed by the task pilot, which records nothing on its tasks;
+- is never assessed by the task pilot, which records nothing on its tasks.
+  A task-pilot run that includes one still runs on an agent crew and leaves
+  the task out, and an approve-proposed drain does not select it;
 - is never drawn. `default_crew`, the crew pools, `purpose_crews` and
   experiment arms may not name it, and a redraw never picks it;
 - is closed only by you. An agent's `orbit.task.update` cannot move its task
