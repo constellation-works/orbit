@@ -11,9 +11,12 @@ enum ReleasedSettlementKind {
     Release,
 }
 
+// The settlement record as owners before the reported effort read it: no
+// `reasoning_effort` field, and no refusal of unknown ones.
 #[derive(serde::Deserialize)]
 struct ReleasedSettlement {
     kind: ReleasedSettlementKind,
+    crew_model: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -93,10 +96,22 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
         serde_json::from_value(serde_json::to_value(&states[0]).unwrap()).unwrap();
     assert_eq!(projected.settlement, state.settlement);
     // Keep the released vocabulary operational as well: both existing kinds
-    // still settle through the public boundary and remain readable by old clients.
-    for (key, kind) in [
-        ("legacy-fail", ReleasedSettlementKind::Fail),
-        ("legacy-release", ReleasedSettlementKind::Release),
+    // still settle through the public boundary and remain readable by old
+    // clients, including with the follower's reported effort [ORB-23825]: a
+    // wire name, the provider default (`null`), or none, as an older follower
+    // reports.
+    for (key, kind, effort) in [
+        (
+            "legacy-fail",
+            ReleasedSettlementKind::Fail,
+            Some(Some("high".to_string())),
+        ),
+        (
+            "legacy-release",
+            ReleasedSettlementKind::Release,
+            Some(None),
+        ),
+        ("legacy-unreported", ReleasedSettlementKind::Fail, None),
     ] {
         delivery.owner.create_task_in(key, &[key]);
         let claim = delivery.owner.pull(&owner_request(key)).claim.unwrap();
@@ -105,7 +120,12 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
             claim.claim_id.clone(),
             claim.executed_on.machine_id,
             None,
-        );
+        )
+        .with_attribution(ClaimAttribution {
+            crew_model: Some("reported-model".into()),
+            reasoning_effort: effort.clone(),
+            ..ClaimAttribution::default()
+        });
         let evidence = ClaimEvidence {
             summary: Some("existing settlement remains readable".into()),
             ..Default::default()
@@ -121,9 +141,24 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
             .execution_claim_state(&claim.claim_id)
             .unwrap()
             .unwrap();
-        let legacy: ReleasedLifecycle =
-            serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
-        assert_eq!(legacy.settlement.unwrap().kind, kind);
+        let settlement = record.settlement.as_ref().unwrap();
+        assert_eq!(settlement.reasoning_effort, effort, "{key}");
+        let encoded = serde_json::to_value(&record).unwrap();
+        match &effort {
+            None => assert!(
+                encoded["settlement"].get("reasoning_effort").is_none(),
+                "an unreported effort stays absent: {encoded}"
+            ),
+            Some(effort) => assert_eq!(
+                encoded["settlement"]["reasoning_effort"],
+                serde_json::json!(effort),
+                "{encoded}"
+            ),
+        }
+        let legacy: ReleasedLifecycle = serde_json::from_value(encoded).unwrap();
+        let legacy = legacy.settlement.unwrap();
+        assert_eq!(legacy.kind, kind);
+        assert_eq!(legacy.crew_model.as_deref(), Some("reported-model"));
     }
 }
 

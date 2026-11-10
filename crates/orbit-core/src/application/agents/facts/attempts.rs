@@ -57,6 +57,7 @@ pub(super) fn implementation_runs(
                             crew: run.resolved_crew.clone(),
                             model: run.crew_model.clone(),
                             run_id: Some(run.run_id.to_string()),
+                            reported_effort: None,
                         },
                     });
             }
@@ -91,7 +92,9 @@ pub(super) fn runner(
 /// `pulled_by` note names, from `pulled` by claim, and the pulling run that
 /// note names. Without a record, or a field it lacks, the crew falls back to
 /// the one task history had assigned by the attempt's start (else the task's
-/// crew when history records no assignment) and the model stays unknown.
+/// crew when history records no assignment) and the model stays unknown. The
+/// record's reported reasoning effort rides along for the effort lookup's
+/// fallback; it is never derived from this owner's crew configuration.
 pub(super) fn assigned_runner(
     task: &Task,
     history: &[TaskHistoryEntry],
@@ -124,6 +127,7 @@ pub(super) fn assigned_runner(
         crew: settled.and_then(|runner| runner.crew.clone()).or(crew),
         model: settled.and_then(|runner| runner.model.clone()),
         run_id: field("/run_context/run_id"),
+        reported_effort: settled.and_then(|runner| runner.reported_effort.clone()),
     }
 }
 

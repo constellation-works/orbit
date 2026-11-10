@@ -115,6 +115,7 @@ impl Assessment {
                 activity_id: run.and_then(|run| run.activity_id.as_deref()),
                 after: None,
                 until: None,
+                reported: None,
             },
         );
         model_effort_key(run.and_then(|run| run.model.as_deref()), effort)

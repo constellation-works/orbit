@@ -17,6 +17,8 @@ mod scan;
 mod task;
 
 pub(crate) use attempts::task_execution_modes;
+pub(in crate::application::agents) use invocations::AgentInvocationFacts;
+pub(in crate::application::agents) use launches::AgentLaunchFacts;
 pub use model::{AgentFacts, ExecutionMode, Problem};
 pub(in crate::application::agents) use model::{
     Attempt, Finding, FindingState, Record, RegressionLink, RejectOutcome, Review, SCAN_DAYS,

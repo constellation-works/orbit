@@ -57,6 +57,10 @@ pub struct LeafSettlement {
     pub crew: Option<String>,
     /// The model the leaf's crew resolved to, when its follower reported it.
     pub crew_model: Option<String>,
+    /// The leaf's reasoning effort, when its follower reported it: the wire
+    /// name, or `null` for the provider default. Absent when unreported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<Option<String>>,
     pub failed_step_id: Option<String>,
     /// Bounded, and as the leaf reported it: unredacted.
     pub reason: Option<String>,
@@ -248,6 +252,7 @@ impl LeafSettlement {
             review_decision_pending: false,
             crew: None,
             crew_model: None,
+            reasoning_effort: None,
             failed_step_id: None,
             reason: None,
             run_evidence: LeafRunEvidenceView::of(inspection.leaf_run_evidence.take()),
@@ -261,6 +266,7 @@ impl LeafSettlement {
             settlement.review_decision_pending = record.review_decision_pending;
             settlement.crew = record.crew;
             settlement.crew_model = record.crew_model;
+            settlement.reasoning_effort = record.reasoning_effort;
             settlement.failed_step_id = record.failed_step_id;
             settlement.reason = Some(record.reason);
             settlement.accounting = SettlementAccounting::derive(&settlement);

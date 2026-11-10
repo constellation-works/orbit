@@ -58,6 +58,7 @@ pub(in crate::application::agents) fn scan(
                 crew: leaf.crew.clone(),
                 model: leaf.crew_model.clone(),
                 run_id: None,
+                reported_effort: leaf.reasoning_effort.clone(),
             };
             (leaf.claim_id.as_str(), runner)
         })

@@ -65,6 +65,10 @@ pub struct Charge {
     /// The defect sites the regression link names (`symbol:`, `file:` or
     /// `dir:` selectors), for a regression; empty otherwise.
     pub(super) sites: Vec<String>,
+    /// The effort the charged attempt's follower reported on its claim
+    /// settlement, in the shared encoding; the fallback when the owner holds
+    /// no invocation evidence of its own for the run.
+    pub(super) reported_effort: Option<Option<String>>,
 }
 
 impl Charge {
@@ -88,6 +92,8 @@ pub struct Credit {
     pub at: Option<DateTime<Utc>>,
     /// The final implementation attempt's start.
     pub anchor: DateTime<Utc>,
+    /// The effort the credited attempt's follower reported, as on [`Charge`].
+    pub(super) reported_effort: Option<Option<String>>,
 }
 
 /// Every problem in `tasks`, every regression against them and every pilot
@@ -131,6 +137,7 @@ pub(super) fn attribute(
                 weight: 1,
                 at: task.landed_at,
                 anchor: attempt.start,
+                reported_effort: attempt.runner.reported_effort.clone(),
             });
         }
     }
@@ -202,6 +209,7 @@ impl Draft<'_> {
             after: None,
             severity: self.severity,
             sites: Vec::new(),
+            reported_effort: None,
         }
     }
 
@@ -229,13 +237,15 @@ impl Draft<'_> {
         }
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
-        self.charge(
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Implementers),
             runner.crew,
             runner.model,
             runner.run_id,
             anchor,
-        )
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
     }
 
     /// The review job attempt that filed the finding, or Not scored when no
@@ -246,13 +256,15 @@ impl Draft<'_> {
         };
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
-        self.charge(
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Reviewers),
             runner.crew,
             runner.model,
             runner.run_id,
             anchor,
-        )
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
     }
 
     /// The reviewer of `review`, or Not scored when no review settled.
@@ -431,6 +443,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             after: None,
             severity: None,
             sites: Vec::new(),
+            reported_effort: None,
         }
     };
     let misses = graded.costly.iter().map(move |(path, contest)| {
@@ -492,6 +505,7 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
                             .as_ref()
                             .filter(|_| matches!(activity, super::effort::MainActivity::Review))
                             .map(|_| charge.anchor),
+                        reported: charge.reported_effort.as_ref(),
                     },
                 );
                 let entry = rows
