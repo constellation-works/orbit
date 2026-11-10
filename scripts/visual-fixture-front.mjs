@@ -547,6 +547,12 @@ function proxy(req, res, upstream, target) {
     }
     upstreamResponse = response;
     res.writeHead(response.statusCode || 502, response.headers);
+    // Node keeps the status line in its header buffer until the first body
+    // chunk or res.end(). An idle event stream has neither within the
+    // client's header timeout, so the status never leaves this process.
+    // The upstream has already sent its headers; flush them now. The piped
+    // body still follows when the upstream writes it.
+    res.flushHeaders();
     response.pipe(res);
   });
   request.on('error', forwardUpstreamError);
