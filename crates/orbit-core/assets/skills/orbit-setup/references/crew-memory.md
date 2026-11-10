@@ -154,7 +154,10 @@ tasks created while the experiment ran, spread over that arm's priced tasks.
 ## Inspect, export and replace
 
 Every command takes the global `--json` flag. Reads work whether or not
-`crew_memory.enabled` is set. Writes are refused while it is false.
+`crew_memory.enabled` is set. Writes are refused while it is false. From
+inside a run, `show` and `history` need the access described in
+[Let a task's run read memory](#let-a-tasks-run-read-memory); every other
+command is the operator's.
 
 | Command | What it does |
 |---|---|
@@ -197,6 +200,42 @@ orbit memory export --dir <directory>
 Export writes `global.md` and `<model>/<file>.md`. Orbit never reads those
 files back. Changing one changes no memory. The command prints
 `Orbit never reads these files back.`
+
+### Let a task's run read memory
+
+`show` and `history` are yours from a terminal. An agent calling them from
+inside a run is refused unless the run's task has access:
+
+| Read | The run's task | What it reads |
+|---|---|---|
+| `orbit memory show` | Is a dreaming task | Its own model's space and `global` |
+| `orbit memory show` | Is in a memory experiment arm | Its run's model space and `global` |
+| `orbit memory show` | Has an operator grant for `orbit.memory.show` | Every space, any revision and the summary |
+| `orbit memory history` | Has an operator grant for `orbit.memory.history` | Every space's history |
+
+The grant is the task's `granted_tools`. Only an operator session can set
+it; a tag, title, description or `required_tools` entry grants nothing. Each
+tool needs its own entry, and the grant is read only: it never admits
+`orbit.memory.write`, `orbit.memory.propose` or any operator command. The
+run's `agent_implement` activity lists a granted tool, so the agent can call
+it as a tool or as the `orbit memory` command. A task with a grant runs only
+on the owner host, whose store holds the memory.
+
+Grant one task:
+
+```bash
+orbit task update <task-id> --granted-tools orbit.memory.show,orbit.memory.history
+```
+
+Grant every task an auto-task definition mints:
+
+```bash
+orbit auto-task update <name> --granted-tools orbit.memory.show,orbit.memory.history
+```
+
+Check a grant with `orbit task show <task-id>` or
+`orbit auto-task show <name>`. `--granted-tools ""` clears it. A refused
+read names the missing grant.
 
 ### Replace a whole space
 

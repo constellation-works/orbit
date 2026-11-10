@@ -91,6 +91,9 @@ Options:
           
           [default: skip-if-open]
 
+      --granted-tools <GRANTED_TOOLS>
+          Exact canonical tool names an operator grants every minted task's implementing activity (operator only)
+
   -h, --help
           Print help (see a summary with '-h')
 

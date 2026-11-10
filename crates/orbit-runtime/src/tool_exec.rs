@@ -216,8 +216,14 @@ impl RuntimeKernel {
         // [granted-tools §1] A grant lifts an activity's deny list, so writing
         // one is operator authority, refused (never stripped) for anyone else.
         // Keyed on presence: an empty list clears a grant, which is a change.
-        if matches!(name, "orbit.task.add" | "orbit.task.update")
-            && input.get(GRANTED_TOOLS_FIELD).is_some()
+        // An auto-task definition's grant is copied to every task it mints.
+        if matches!(
+            name,
+            "orbit.task.add"
+                | "orbit.task.update"
+                | "orbit.auto_task.add"
+                | "orbit.auto_task.update"
+        ) && input.get(GRANTED_TOOLS_FIELD).is_some()
         {
             self.authorize_tool_operation(
                 TASK_GRANT_TOOLS_OPERATION_ID,

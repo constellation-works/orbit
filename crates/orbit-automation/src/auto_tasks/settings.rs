@@ -10,10 +10,11 @@
 //! so every consumer (scheduler, mint, list, show, doctor) sees the same
 //! effective definition while the body keeps refreshing.
 //!
-//! Settings fields: `enabled`, `schedule`, `dedupe`, and the template's
-//! `crew`, `priority`, `complexity` and tag additions. Everything else is
-//! body. [`split_overrides`] decides whether an effective definition differs
-//! from a body only in settings fields, and names the body fields otherwise.
+//! Settings fields: `enabled`, `schedule`, `dedupe`, the operator's
+//! `granted_tools`, and the template's `crew`, `priority`, `complexity` and
+//! tag additions. Everything else is body. [`split_overrides`] decides
+//! whether an effective definition differs from a body only in settings
+//! fields, and names the body fields otherwise.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -50,6 +51,9 @@ pub struct AutoTaskSettings {
     /// Tags added after the body's template tags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// The operator's tool grant for minted tasks, replacing the body's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_tools: Option<Vec<String>>,
     /// Actor of the last settings edit, shown as the definition's `updated_by`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_by: Option<String>,
@@ -69,6 +73,7 @@ impl AutoTaskSettings {
             ("template.priority", self.priority.is_some()),
             ("template.complexity", self.complexity.is_some()),
             ("template.tags", !self.tags.is_empty()),
+            ("granted_tools", self.granted_tools.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, set)| set.then_some(name))
@@ -85,6 +90,9 @@ impl AutoTaskSettings {
         }
         if let Some(dedupe) = self.dedupe {
             definition.dedupe = dedupe;
+        }
+        if let Some(granted_tools) = &self.granted_tools {
+            definition.granted_tools = granted_tools.clone();
         }
         let template = &mut definition.template;
         if let Some(crew) = &self.crew {
@@ -137,6 +145,7 @@ pub fn split_overrides(
         skip_if_unchanged,
         skip_unless_blocked_candidates,
         completion,
+        granted_tools,
         created_by: _,
         created_at: _,
         updated_by: _,
@@ -223,6 +232,7 @@ pub fn split_overrides(
             .then_some(*complexity)
             .flatten(),
         tags: added_tags,
+        granted_tools: (*granted_tools != body.granted_tools).then(|| granted_tools.clone()),
         updated_by: None,
         updated_at: String::new(),
     };

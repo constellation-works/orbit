@@ -1,15 +1,18 @@
 //! Crew memory (experimental): per-model memory spaces and the global
 //! memory, held as append-only revisions in the owner store.
 //!
-//! History, export, reset and copy are the operator's: they have no MCP
-//! scope and register inactive, and export, reset and copy are governed
-//! operator-only operations, so an agent reaching them through
-//! `orbit tool run` is refused at the capability chokepoint. Show, write and
-//! propose (slice M3) are also agent tools: core admits an agent's call only
-//! from a crew memory dreaming task's run, with the key fixed to that task's
-//! key (show also from a run in a memory arm), and a run's activity lists
-//! them only then. Propose is tool-only. Proposal review is operator CLI
-//! only, including listing, which expires old proposals.
+//! Export, reset and copy are the operator's: they have no MCP scope and
+//! register inactive, and they are governed operator-only operations, so an
+//! agent reaching them through `orbit tool run` is refused at the capability
+//! chokepoint. Show, history, write and propose are also agent tools, and
+//! core decides which agent calls it admits: write and propose only from a
+//! crew memory dreaming task's run, with the key fixed to that task's key;
+//! show from that run or a run in a memory arm, for its own model's space
+//! and `global`; and show or history from the run of a task whose
+//! `granted_tools` an operator set to include that tool, for any space. A
+//! run's activity lists them only then. Propose is tool-only. Proposal
+//! review is operator CLI only, including listing, which expires old
+//! proposals.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
     ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only, operation_registry,
@@ -100,7 +103,7 @@ const SHOW: OperationSpec<MemoryVerb> = OperationSpec {
     verb: MemoryVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.memory.show",
-    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a crew memory dreaming task's run or a run in a memory experiment arm, and reads only its own model's space (the default key) or `global`.",
+    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a run: a crew memory dreaming task's run or a run in a memory experiment arm reads only its own model's space (the default key) or `global`, and the run of a task whose `granted_tools` an operator set to include this tool reads any space, any revision and the summary.",
     cli_about: "Show a memory space, or summarise every space",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -116,7 +119,7 @@ const HISTORY: OperationSpec<MemoryVerb> = OperationSpec {
     verb: MemoryVerb::History,
     cli_path: &["history"],
     tool_name: "orbit.memory.history",
-    tool_description: "List a crew memory space's revisions, newest first, each with its digest, file names, size, evidence, writer and reason, and the space's audit events in order: revisions written, resets, copies and refused writes with the rule they broke. Read only. Operator CLI only.",
+    tool_description: "List a crew memory space's revisions, newest first, each with its digest, file names, size, evidence, writer and reason, and the space's audit events in order: revisions written, resets, copies and refused writes with the rule they broke. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from the run of a task whose `granted_tools` an operator set to include this tool.",
     cli_about: "List a memory space's revisions and audit events",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -124,7 +127,7 @@ const HISTORY: OperationSpec<MemoryVerb> = OperationSpec {
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
-    mcp_scope: None,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 

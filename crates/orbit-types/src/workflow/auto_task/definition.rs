@@ -196,6 +196,15 @@ pub struct AutoTaskDefinition {
     /// to. Omitted, ordinary structured task completion applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<super::AutoTaskCompletionContract>,
+    /// Tools an operator granted every task this definition mints, copied to
+    /// each minted task's `granted_tools`. Not part of the template: only an
+    /// operator may set or change it, which `orbit-core` enforces.
+    #[serde(
+        default,
+        deserialize_with = "crate::task::deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,

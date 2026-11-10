@@ -1,7 +1,7 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-11-06
+last_updated: 2026-11-09
 last_validated: 2026-11-09
 status: Implemented
 stage: shipped
@@ -106,6 +106,23 @@ operator authority, following the field-level authorization pattern of
   and auto-task filing paths therefore cannot carry a grant through: they
   hold agent authority, so the write fails closed unless an operator
   performs or re-performs it.
+- **As built, auto-task definitions.** A recurring task has no operator at
+  mint time, so an auto-task definition may carry its own top-level
+  `granted_tools`, which the scheduler copies to every task it mints; task
+  creation records the usual history entry. The authority rule is the same
+  one: `orbit.auto_task` actions `add` and `update` additionally require
+  `orbit.task.grant_tools` when their input carries the field, so an agent
+  call or a mutation proposal that supplies it is refused, and application
+  consent cannot name it. The field sits beside `template`, never inside it,
+  so a template replacement cannot set or clear a grant. On a shipped
+  default it is a settings field and does not fork the body. The check is on
+  the write call: the definition file itself is per-user checkout state, and
+  a hand edit of it is not authority-checked.
+- **As built, call-time reads.** Crew memory's `orbit.memory.show` and
+  `orbit.memory.history` are not on any deny list; core refuses an agent's
+  call unless its run's task grants that tool, so for these two the grant is
+  what admits the call, not only what lifts a list entry
+  ([crew memory design](../crew-memory/2_design.md) §6.3).
 - **Change window.** An operator may change the grant freely while the
   task is pre-dispatch (no run, claim or worktree exists for it). Once an
   attempt is dispatched, the grant is frozen for that attempt: widening it

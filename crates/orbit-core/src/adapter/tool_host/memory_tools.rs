@@ -81,7 +81,9 @@ pub(super) fn dispatch(
             &input.required_string("id")?,
             &input.required_string("reason")?,
         ),
-        MemoryVerb::History => runtime.crew_memory_history(&input.required_string("key")?),
+        MemoryVerb::History => {
+            runtime.crew_memory_tool_history(&caller(), &input.required_string("key")?)
+        }
         MemoryVerb::Export => runtime.crew_memory_export(
             input
                 .optional_raw_string("dir")?

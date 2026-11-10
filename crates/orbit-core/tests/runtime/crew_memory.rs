@@ -1,8 +1,11 @@
 //! The proposals board is a read. Recently closed merges virtual expiries
 //! and decisions by effective close time, and listing writes nothing.
+//! An operator's task grant admits that task's run to read any space.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::OrbitRuntime;
+use orbit_core::application::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
+use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::{
     CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
     CrewMemoryProposalOutcome, CrewMemoryProposalRow, CrewMemoryStoreBackend,
@@ -234,3 +237,45 @@ crate::scenario_table!(
     proposal_board,
     recent_decision_stays_ahead_of_older_expiries,
 );
+
+/// A task that is neither dreaming nor in a memory arm, whose operator grant
+/// names `orbit.memory.show`, reads a model space that is not its run's own.
+fn granted_run_reads_another_models_space() {
+    let (_root, runtime) = runtime();
+    runtime
+        .crew_memory_write(
+            "model-b",
+            MemoryWrite {
+                files: vec![MemoryFile {
+                    path: "notes.md".to_string(),
+                    text: "Check the lockfile before changing a dependency.\n".to_string(),
+                }],
+                evidence: Vec::new(),
+            },
+            None,
+        )
+        .expect("operator seeds model-b's space");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Consolidate crew memory".into(),
+            granted_tools: vec!["orbit.memory.show".into()],
+            ..Default::default()
+        })
+        .expect("task with a memory read grant");
+    let run = MemoryToolCaller {
+        agent: true,
+        scope_task_id: Some(task.id.to_string()),
+        scope_run_id: Some("jrun-granted-read".to_string()),
+        model: Some("model-a".to_string()),
+        ..Default::default()
+    };
+
+    let shown = runtime
+        .crew_memory_tool_show(&run, Some("model-b"), None)
+        .expect("the grant admits the run to another model's space");
+    assert_eq!(shown["key"], "model-b");
+    assert_eq!(shown["revision"], 1);
+    assert_eq!(shown["files"][0]["path"], "notes.md");
+}
+
+crate::scenario_table!(memory_read_grant, granted_run_reads_another_models_space,);

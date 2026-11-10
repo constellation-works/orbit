@@ -67,13 +67,18 @@ fn add(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitErr
 
     // Validate before the write, so an ungrantable tool leaves nothing behind.
     let warnings = runtime.validate_required_tools(&template.required_tools)?;
-    let definition = runtime.auto_task_add(AutoTaskAddParams {
-        name,
-        description,
-        schedule,
-        template,
-        dedupe,
-    })?;
+    let definition = runtime.auto_task_add_with_operator_grant(
+        AutoTaskAddParams {
+            name,
+            description,
+            schedule,
+            template,
+            dedupe,
+        },
+        input
+            .optional_string_list("granted_tools")?
+            .unwrap_or_default(),
+    )?;
     with_warnings(to_json(&definition)?, warnings)
 }
 
@@ -185,6 +190,7 @@ fn update(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, Orbit
         dedupe: parse_field(input, "dedupe", false)?,
         template,
         enabled: input.optional_bool("enabled")?,
+        granted_tools: input.optional_string_list("granted_tools")?,
     };
     let waived = params.waive_batch.is_some();
     let definition = runtime.auto_task_update(&name, params)?;

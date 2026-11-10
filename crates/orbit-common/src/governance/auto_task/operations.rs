@@ -96,6 +96,16 @@ const TOGGLE_STATE_VALUES: &[EnumValue] = &[
 
 const DELIVERIES_LANDED_HELP: &str = "Delivery trigger JSON: branch, threshold, max_wait_minutes, coverage; optional owner_machine (defaults to this workspace's registered owner machine), max_items, retries";
 
+/// `--granted-tools`: repeatable or comma-separated, as `orbit task` spells it.
+const GRANTED_TOOLS_FLAG: CliArgKind = CliArgKind::Flag {
+    long: "granted-tools",
+    delimiter: Some(','),
+    aliases: &["granted-tool"],
+    visible_aliases: &[],
+    value_name: None,
+    multiple: false,
+};
+
 const ADD: AutoTaskOperation = AutoTaskOperation {
     verb: AutoTaskVerb::Add,
     cli_path: &["add"],
@@ -245,6 +255,13 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
                 "Dedupe policy (defaults to skip-if-open)",
             ),
             "skip-if-open",
+        ),
+        both(
+            "granted_tools",
+            ParamType::StringList,
+            "Operator only: tool names granted to every minted task. They are copied to its `granted_tools`; a caller without operator authority that supplies this is refused, and a `template` cannot carry it.",
+            GRANTED_TOOLS_FLAG,
+            "Exact canonical tool names an operator grants every minted task's implementing activity (operator only)",
         ),
     ]],
     at_least_one_of: &[],
@@ -490,6 +507,13 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
             ParamType::String,
             "Explicit workspace, required with `expected_enabled`",
         ),
+        preserve_empty(both(
+            "granted_tools",
+            ParamType::StringList,
+            "Operator only: replacement granted tool names; an empty list clears them. A caller without operator authority that supplies this is refused, and a `template` edit never changes it.",
+            GRANTED_TOOLS_FLAG,
+            "Replacement tool names an operator grants every minted task (operator only; empty string clears)",
+        )),
         // The CLI's field-scoped template edit, composed from its flags. Not
         // advertised: MCP replaces the whole `template` instead.
         ParamSpec {

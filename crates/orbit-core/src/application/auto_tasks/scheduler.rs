@@ -512,6 +512,9 @@ pub(crate) fn template_params(
         acceptance_criteria: template.acceptance_criteria.clone(),
         tags,
         required_tools: template.required_tools.clone(),
+        // The definition's operator grant; task creation records it in the
+        // minted task's history.
+        granted_tools: definition.granted_tools.clone(),
         context_files: template.context_files.clone(),
         priority: template.priority,
         // Legacy/custom definitions may omit an assessment. Preserve their

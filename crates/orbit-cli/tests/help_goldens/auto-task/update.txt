@@ -87,6 +87,9 @@ Options:
       --waiver-reason <WAIVER_REASON>
           Required explanation for a batch waiver
 
+      --granted-tools <GRANTED_TOOLS>
+          Replacement tool names an operator grants every minted task (operator only; empty string clears)
+
   -h, --help
           Print help (see a summary with '-h')
 
