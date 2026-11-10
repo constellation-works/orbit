@@ -3219,7 +3219,8 @@ fn implementation_handoff_contracts(sandbox: &Path) {
     for (name, step, code, contents, decision, detail) in rows_by_name! {
         "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write" => ("implement_one", "provider_refusal", "half written\n", "held_provider_failure", Some(("provider_failure", "provider_refusal")));
         "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task" => ("review", "upgrade_pending", "reviewer fix in progress\n", "held_upgrade_pending", Some(("blocker_kind", "orbit.generation_switch_pending")));
-        "a_child_its_parent_stopped_waiting_for_holds_its_candidate" => ("validate", "child_timeout", "implementation under validation\n", "held_child_timeout", None)
+        "a_child_its_parent_stopped_waiting_for_holds_its_candidate" => ("validate", "child_timeout", "implementation under validation\n", "held_child_timeout", None);
+        "an_owner_signoff_hold_commits_the_candidate_without_a_pr_or_a_status_write" => ("implement_one", "owner_signoff_required", "validated candidate\n", "held_owner_signoff", None)
     } {
         run_named_row(sandbox, name, |row| {
             let message = match code {
@@ -3237,6 +3238,10 @@ fn implementation_handoff_contracts(sandbox: &Path) {
                 }
                 // [ORB-15643] The parent stopped waiting during validation.
                 "child_timeout" => "child_timeout: parent run jrun-parent stopped waiting for child run jrun-child after 14400 s".into(),
+                // [ORB-23966] The implementer waits on recorded owner approval.
+                "owner_signoff_required" => {
+                    "The validated candidate awaits recorded owner approval.".into()
+                }
                 _ => unreachable!("unknown held failure {code}"),
             };
             let (fx, host) = fx_host(row);
@@ -3252,6 +3257,32 @@ fn implementation_handoff_contracts(sandbox: &Path) {
                 assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "half written");
             }
             assert_committed_held(&fx, &host, &handoff, &head_before, &remote_before, name);
+            if code == "owner_signoff_required" {
+                assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "validated candidate");
+                assert!(
+                    handoff["task_spec_digest"].is_string(),
+                    "{name}: the handoff records the spec digest for resume: {handoff}"
+                );
+                let comments = host.comments(TASK_ID);
+                assert!(
+                    comments.iter().any(|comment| {
+                        comment.message.contains("Owner sign-off")
+                            && comment.message.contains(&fx.head())
+                            && comment.message.contains(BRANCH)
+                            && comment.message.contains("approval is recorded")
+                    }),
+                    "{name}: a system comment names the held candidate and the operator's next step: {comments:?}"
+                );
+                assert!(
+                    host.history(TASK_ID).iter().any(|entry| {
+                        entry.event == orbit_types::workflow::CANDIDATE_HELD_EVENT
+                            && entry.note.as_deref().is_some_and(|note| {
+                                note.contains(&fx.head()) && note.contains(BRANCH)
+                            })
+                    }),
+                    "{name}: the task history records the held candidate"
+                );
+            }
         });
     }
 }

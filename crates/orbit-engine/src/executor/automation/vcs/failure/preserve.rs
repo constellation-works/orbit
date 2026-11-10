@@ -219,30 +219,80 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     }))
 }
 
-/// Leave a candidate whose implementer is waiting on recorded owner
+/// Keep a candidate whose implementer is waiting on recorded owner
 /// approval [ORB-23956].
 ///
-/// The tree may still be dirty. Nothing is committed, pushed, or published.
-/// This handoff does not change task status: run finalization holds the run
-/// and blocks the coupled task with the declared message.
-pub(super) fn preserve_owner_signoff_candidate(
-    task_id: &str,
+/// [ORB-23966] The validated candidate must not strand in the run's
+/// worktree: whatever the agent left is committed on the run's branch,
+/// carried to its durable ref and recorded in the task's history, as a
+/// provider failure keeps its candidate, and no PR is opened. Nothing is
+/// published to the branch. This handoff does not change task status: run
+/// finalization holds the run and blocks the coupled task with the
+/// declared message. Once the approval is recorded, the operator returns
+/// the task to the backlog (or `in-progress`) and a new run resumes this
+/// candidate (`candidate_resume` treats `held_owner_signoff` as
+/// preserving); the held run itself is not resumed.
+pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
     run_id: &str,
     failed_step_id: &str,
+    error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let (branch, head_sha) = candidate_head(workspace_path)?;
-    Ok(json!({
+    let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let held = carry_held_candidate(
+        host,
+        task,
+        run_id,
+        failed_step_id,
+        &branch,
+        &head_sha,
+        workspace_path,
+    )?;
+    let diagnostic = bounded_diagnostic(error_message);
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            append_history: vec![held_history(&held)],
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!(
+                    "## Owner sign-off\n\nRun `{run_id}` stopped at `{failed_step_id}`: the \
+                     implementer declared `owner_signoff_required` because recorded owner \
+                     approval is still missing. Nothing was judged or published, and no PR \
+                     was opened. The candidate `{head_sha}` is committed on branch \
+                     `{branch}`, and the task's next run resumes it.\n\n{}\n\nOnce the \
+                     approval is recorded on the task, move the task back to `backlog` (or \
+                     `in-progress`) and start a new delivery run; that run resumes the held \
+                     candidate. Do not resume the held run (`orbit job resume` refuses held \
+                     runs of this kind).\n\n## Failure\n\n```text\n{diagnostic}\n```",
+                    held_place(&held)
+                ),
+                operation_id: None,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+    let mut output = json!({
         "phase": "failure_handoff",
         "decision": "held_owner_signoff",
-        "task_id": task_id,
+        "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
         "branch": branch,
         "head_sha": head_sha,
+        "committed_files": committed_files,
         "candidate_preserved": true,
         "pr_created": false,
-    }))
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    });
+    insert_carry(&mut output, &held);
+    Ok(output)
 }
 
 /// Keep a candidate whose required validation could not run because a tool
