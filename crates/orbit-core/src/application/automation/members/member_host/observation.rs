@@ -62,38 +62,7 @@ impl Host<'_> {
                 let snapshot = cache.task_snapshot(&workspace_key, || {
                     self.snapshot_envelopes(cache, &workspace_key)
                 })?;
-                // One pass over the shared snapshot: count every match and
-                // clone only the first page past the cursor, instead of
-                // materializing every matching envelope per routine.
-                let mut items = Vec::new();
-                let mut total = 0usize;
-                let mut total_without_cursor = 0usize;
-                for task in snapshot.iter() {
-                    let matches = filter
-                        .statuses
-                        .as_ref()
-                        .is_none_or(|values| values.contains(&task.status))
-                        && filter.task_type.is_none_or(|value| task.task_type == value);
-                    if !matches {
-                        continue;
-                    }
-                    total_without_cursor += 1;
-                    let past_cursor = filter.scan_before.as_ref().is_none_or(|(at, id)| {
-                        task.created_at < *at || (task.created_at == *at && task.id > *id)
-                    });
-                    if !past_cursor {
-                        continue;
-                    }
-                    total += 1;
-                    if items.len() < 50 {
-                        items.push(task.clone());
-                    }
-                }
-                orbit_store::contracts::TaskCandidates {
-                    items,
-                    total,
-                    total_without_cursor,
-                }
+                filter.select_ordered_snapshot(&snapshot, 50)
             }
             _ => self.runtime.task_candidates(&filter, 50)?,
         };
@@ -378,11 +347,7 @@ impl Host<'_> {
         {
             return Ok(None);
         }
-        envelopes.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        TaskListFilter::default().sort_snapshot(&mut envelopes);
         Ok(Some(envelopes))
     }
 }

@@ -45,6 +45,66 @@ pub struct TaskListFilter {
 }
 
 impl TaskListFilter {
+    /// Sort an already-loaded snapshot in this filter's listing order.
+    ///
+    /// The canonical order is newest first, with task ID ascending for ties.
+    /// `scheduled_after` orders schedules soonest first; otherwise
+    /// `terminal_last` moves terminal tasks behind non-terminal tasks. Each
+    /// partition retains the canonical order. No filtering or I/O is done.
+    pub fn sort_snapshot(&self, snapshot: &mut [TaskEnvelopeV2]) {
+        self.sort_task_listing(
+            snapshot,
+            |task| task.not_before,
+            |task| &task.created_at,
+            |task| &task.id,
+            |task| task.status,
+        );
+    }
+
+    /// Filter, count and bound an already-loaded, ordered snapshot.
+    ///
+    /// `snapshot` must be ordered as by [`Self::sort_snapshot`] with this
+    /// filter. All metadata predicates are applied, with counts as defined by
+    /// [`TaskCandidates`]. Only the selected page's envelopes are cloned; the
+    /// rest are borrowed to count matches. No I/O or bundle validation is done.
+    pub fn select_ordered_snapshot(
+        &self,
+        snapshot: &[TaskEnvelopeV2],
+        limit: usize,
+    ) -> TaskCandidates {
+        select_task_snapshot_items(snapshot, self, limit, |task| task, TaskEnvelopeV2::clone)
+    }
+
+    pub(crate) fn select_owned_snapshot(
+        &self,
+        snapshot: Vec<TaskEnvelopeV2>,
+        limit: usize,
+    ) -> TaskCandidates {
+        // Move all matches before sorting; applying the cursor first cannot
+        // change their relative order or either count.
+        let mut candidates =
+            select_task_snapshot_items(snapshot, self, usize::MAX, |task| task, |task| task);
+        self.sort_snapshot(&mut candidates.items);
+        candidates.items.truncate(limit);
+        candidates
+    }
+
+    pub(crate) fn sort_task_listing<T>(
+        &self,
+        items: &mut [T],
+        not_before: impl Fn(&T) -> Option<chrono::DateTime<chrono::Utc>>,
+        created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+        id: impl Fn(&T) -> &str,
+        status: impl Fn(&T) -> TaskStatus,
+    ) {
+        sort_task_created_desc_id_asc(items, created_at, id);
+        if self.scheduled_after.is_some() {
+            items.sort_by_key(not_before);
+        } else if self.terminal_last {
+            items.sort_by_key(|item| status(item).is_terminal());
+        }
+    }
+
     pub(crate) fn normalized(&self) -> Self {
         Self {
             tags: normalize_task_tags(self.tags.clone()),
@@ -165,6 +225,46 @@ impl TaskListFilter {
             task.created_at < *at || (task.created_at == *at && task.id > *id)
         })
     }
+}
+
+/// Shared canonical ordering for snapshot selection and generated-index reads.
+pub(crate) fn sort_task_created_desc_id_asc<T>(
+    items: &mut [T],
+    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+    id: impl Fn(&T) -> &str,
+) {
+    items.sort_by(|a, b| {
+        created_at(b)
+            .cmp(created_at(a))
+            .then_with(|| id(a).cmp(id(b)))
+    });
+}
+
+fn select_task_snapshot_items<T>(
+    snapshot: impl IntoIterator<Item = T>,
+    filter: &TaskListFilter,
+    limit: usize,
+    envelope: impl Fn(&T) -> &TaskEnvelopeV2,
+    into_envelope: impl Fn(T) -> TaskEnvelopeV2,
+) -> TaskCandidates {
+    let filter = filter.normalized();
+    let unbounded = filter.without_cursor();
+    let mut candidates = TaskCandidates::default();
+    for item in snapshot {
+        let task = envelope(&item);
+        if !unbounded.matches(task) {
+            continue;
+        }
+        candidates.total_without_cursor += 1;
+        if !filter.matches_cursor(task) {
+            continue;
+        }
+        candidates.total += 1;
+        if candidates.items.len() < limit {
+            candidates.items.push(into_envelope(item));
+        }
+    }
+    candidates
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
