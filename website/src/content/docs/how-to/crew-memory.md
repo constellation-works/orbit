@@ -87,8 +87,10 @@ Start in `shadow` first (see [Run an experiment](../experiments/)):
   still delivered and recorded.
 
 The owner reads the drawn crew's model space at its newest revision after
-the crew draw. A dispatch whose model differs from the captured one
-receives no memory.
+the crew draw. A claimed dispatch whose model differs from the captured
+one receives no memory. On the owner, a dispatch with no captured delivery
+for its model, such as a reviewer or recovery dispatch, is rendered at
+dispatch instead.
 
 ## Write memory
 
@@ -130,7 +132,7 @@ beside the revisions that landed.
 
 ## Dreaming: the weekly reflection
 
-The shipped `crew_memory_dream` routine (seeded enabled, Monday 02:00
+The shipped `crew-memory-dream` routine (seeded enabled, Monday 02:00
 host-local, owner checkout only) is how memory mostly gets written. It
 mints nothing while `crew_memory.enabled` is false or no running `shadow`
 or `live` experiment has a memory arm. Otherwise, for each model with at
@@ -147,7 +149,8 @@ Only that task's `agent_implement` run may write: it lists the agent tools
 model's key, must cite evidence from its pack, and may raise at most two
 global proposals in one run. A dreaming task that ends without a revision
 is recorded as `no_revision`. To stop dreaming without turning crew memory
-off, disable the routine with `orbit routine` toggling (see
+off, find its exact workspace-suffixed name with `orbit routine list` and
+disable it with `orbit routine disable <name>` (see
 [Schedule recurring work](../recurring-work/)).
 
 ## Review global proposals
