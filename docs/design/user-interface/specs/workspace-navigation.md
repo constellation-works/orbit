@@ -152,8 +152,8 @@ can run the workspace: the owner's lane first, then each capacity host in host-f
 
 | Phase | Change | Removes |
 |---|---|---|
-| 1 | Catalog, owner routing, `?host=` normalization (§1, §2). The host picker stays. | Duplicate workspace entries. |
-| 2 | Capacity lanes (§4) and the host facet (§5). | The need to open a follower board. |
+| 1 | Catalog and owner routing (§1, §2 rules 1 to 3 and 5). The host picker gains **All hosts** as its first and default entry, which shows the catalog. Choosing one host still shows that host's own board, as today, so a follower's pull drain stays reachable. | Duplicate workspace entries in the default view. |
+| 2 | Capacity lanes (§4), the host facet (§5) and `?host=` normalization (§2 rule 4). The picker's single-host entries no longer open a board. | The need to open a follower board. |
 | 3 | Multi-workspace scope in every view (§3). | The aggregate placeholder. |
 | 4 | Hosts page; the host picker is removed (§6). | Host as a navigation level. |
 
