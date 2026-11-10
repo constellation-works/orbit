@@ -49,6 +49,16 @@ spec:
       # The original retry-exhausted error, before any recovery ran.
       error_message:
         type: string
+      # A candidate workflow failed before the forge created any jobs.
+      workflow_run_failure:
+        type: object
+        additionalProperties: false
+        required: [classification, evidence]
+        properties:
+          classification:
+            const: candidate_owned
+          evidence:
+            type: string
       # Fresh current-head evidence, collected after required checks conclude.
       required_check_failures:
         type: object
@@ -445,6 +455,11 @@ spec:
       incomplete or about an older head. Examine each check and its evidence
       before deciding the cause: a shared-base failure in one job does not
       explain a candidate failure in a sibling job.
+    - `workflow_run_failure` classifies a workflow that completed unsuccessfully
+      before creating jobs and whose file the candidate changed. Its absent
+      check runs cannot be rerun with `rerun_ci`. Repair the workflow and resume
+      the candidate repair/validation path when admitted; otherwise requeue
+      within the lane contract or escalate with the workflow path and run.
     - `absorbed_refusal` means conflict recovery left the branch on its base
       with no candidate commit, but Orbit refused to settle it (`reason`,
       `detail`). Treat the error's settlement claim as unverified and judge from

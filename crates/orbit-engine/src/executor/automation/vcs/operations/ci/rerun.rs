@@ -398,10 +398,12 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
     if let Some(deadline) = deadline {
         deadline.remaining()?;
     }
+    let mut zero_jobs = false;
     if let Some(evidence) = input.get("prerequisite") {
         let expected: orbit_types::workflow::PrInfrastructureEvidence =
             serde_json::from_value(evidence.clone())
                 .map_err(|_| super::super::prerequisite::unreadable("rerun reservation"))?;
+        zero_jobs = expected.failed_workflow_run().is_some();
         if expected.run_id.to_string() != run_id {
             return Err(super::super::prerequisite::unreadable("rerun run identity"));
         }
@@ -410,7 +412,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
         )?;
         if observed["attempt"].as_u64() != Some(u64::from(expected.run_attempt))
             || observed["status"] != "completed"
-            || observed["conclusion"] != "failure"
+            || observed["conclusion"] != expected.run["conclusion"]
         {
             return Err(super::super::prerequisite::unreadable(
                 "attempt advanced before mutation",
@@ -432,14 +434,15 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
         Some(deadline) => deadline.remaining()?,
         None => DEFAULT_TIMEOUT_MS,
     };
+    // A workflow with no jobs has no failed job selection; rerun the workflow
+    // itself under the same cumulative infrastructure reservation.
+    let mut args = vec!["run".to_string(), "rerun".to_string(), run_id.to_string()];
+    if !zero_jobs {
+        args.push("--failed".to_string());
+    }
     let result = super::super::process::run_vcs_process(
         "gh",
-        vec![
-            "run".to_string(),
-            "rerun".to_string(),
-            run_id.to_string(),
-            "--failed".to_string(),
-        ],
+        args,
         Some(Path::new(workspace_path)),
         timeout_ms,
     )?;

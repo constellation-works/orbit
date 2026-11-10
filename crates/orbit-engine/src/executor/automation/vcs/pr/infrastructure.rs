@@ -1,8 +1,8 @@
-//! Completion's generic prerequisite recovery; the adapter owns forge evidence.
+//! Completion's generic infrastructure recovery; the adapter owns forge evidence.
 use super::super::{completion_deadline::Deadline, operations};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
-    auto_fix::{AutoFix, attach_evidence, hold_auto_fix_stop, stopped, stopped_by},
+    auto_fix::{hold_auto_fix_stop, stopped, stopped_by},
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
@@ -18,24 +18,47 @@ pub(super) enum InfrastructureStep {
     Wait,
 }
 
+/// Task and execution identity for mechanical recovery; this carries no
+/// permission to admit an agent repair.
+pub(super) struct InfrastructureOwner<'a> {
+    pub(super) run_id: &'a str,
+    pub(super) task_ids: &'a [String],
+}
+
+impl InfrastructureOwner<'_> {
+    fn primary_task(&self) -> Result<&str, OrbitError> {
+        self.task_ids
+            .iter()
+            .min()
+            .map(String::as_str)
+            .ok_or_else(|| stopped("", "infrastructure recovery names no owning task"))
+    }
+}
+
 fn record<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &AutoFix,
+    owner: &InfrastructureOwner<'_>,
     evidence: &PrInfrastructureEvidence,
     suffix: &str,
     value: &Value,
 ) -> Result<(), OrbitError> {
     let path = format!(
         "auto-fix/{}/infrastructure-{}-{suffix}.json",
-        auto_fix.run_id, evidence.run_id
+        owner.run_id, evidence.run_id
     );
-    attach_evidence(
-        host,
-        auto_fix,
-        &evidence.pr_number,
-        "infrastructure evidence has no owning run",
+    let primary = owner.primary_task()?;
+    let run_id = host.get_task(primary)?.job_run_id.ok_or_else(|| {
+        stopped(
+            &evidence.pr_number,
+            "infrastructure evidence has no owning run",
+        )
+    })?;
+    let value = orbit_common::security::redaction::redact_all_json(value.clone());
+    host.attach_task_validation_log(
+        primary,
+        &run_id,
         &path,
-        value,
+        serde_json::to_vec(&value).map_err(|error| OrbitError::Execution(error.to_string()))?,
     )
 }
 fn exact_remote(
@@ -80,11 +103,12 @@ fn exact_remote(
 }
 
 /// Observe a durable reservation on every poll, even CLEAN. On a fresh
-/// optional-only failure, obtain complete typed evidence before admission.
+/// failed prerequisite or zero-job workflow, obtain complete typed evidence
+/// before admission.
 /// A lost mutation reply spends the reservation; only observation follows.
 pub(super) fn recover<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &AutoFix,
+    owner: &InfrastructureOwner<'_>,
     workspace: &str,
     pr: &str,
     status: &PullRequestStatus,
@@ -92,7 +116,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     deadline_ms: u64,
 ) -> Result<InfrastructureStep, OrbitError> {
     let deadline = Deadline(deadline_ms);
-    let history = host.get_task_history(auto_fix.primary_task()?)?;
+    let history = host.get_task_history(owner.primary_task()?)?;
     let reservations =
         pr_infrastructure_reservations(&history).map_err(|reason| stopped(pr, &reason))?;
     if let Some(reservation) = reservations
@@ -116,7 +140,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
             )
             .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
-        record(host, auto_fix, evidence, "observation", &observed)?;
+        record(host, owner, evidence, "observation", &observed)?;
         if deadline.remaining().is_err() {
             return Err(hold_auto_fix_stop(
                 stopped(
@@ -194,8 +218,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             DeliveryRefusal::CompletionBudgetExpired,
         ));
     }
-    let admission =
-        host.admit_pr_infrastructure(&auto_fix.run_id, &auto_fix.task_ids, &evidence)?;
+    let admission = host.admit_pr_infrastructure(owner.run_id, owner.task_ids, &evidence)?;
     match admission {
         PrInfrastructureAdmission::Refused(reason) => Err(stopped(pr, &reason)),
         PrInfrastructureAdmission::Observe(reservation) => {
@@ -210,7 +233,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         PrInfrastructureAdmission::Reserved(reservation) => {
             record(
                 host,
-                auto_fix,
+                owner,
                 &reservation.evidence,
                 "original",
                 &json!(reservation),
@@ -231,7 +254,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 });
             record(
                 host,
-                auto_fix,
+                owner,
                 &evidence,
                 "reply",
                 &match reply {
@@ -250,7 +273,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                     json!({"workspace_path":workspace,"evidence":evidence,"deadline_ms":deadline_ms}),
                 )
                 .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
-            record(host, auto_fix, &evidence, "observation", &observed)?;
+            record(host, owner, &evidence, "observation", &observed)?;
             Ok(InfrastructureStep::Wait)
         }
     }

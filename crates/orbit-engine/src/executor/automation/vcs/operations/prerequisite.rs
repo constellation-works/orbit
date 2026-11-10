@@ -584,6 +584,24 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     if missing.is_empty() {
         return Ok(json!({"evidence":null}));
     }
+    // Validation failures can have neither check runs nor PR linkage on the
+    // workflow run. Authenticate those runs directly before the stricter
+    // prerequisite-job path, which requires a linked PR and an actual job.
+    if checks.is_empty()
+        || complete_list(&snapshot.runs, "workflow_runs")?
+            .iter()
+            .any(|run| run["pull_requests"].as_array().is_some_and(Vec::is_empty))
+    {
+        let failures =
+            super::failed_workflow::failed_workflow_evidence(deadline, workspace, &snapshot)?;
+        if let Some(evidence) = failures.into_iter().find(|evidence| {
+            evidence
+                .failed_workflow_run()
+                .is_some_and(|failure| !failure.candidate_owned)
+        }) {
+            return Ok(json!({"evidence":evidence}));
+        }
+    }
     if statuses.iter().any(|status| {
         status["state"] != "success" || missing.iter().any(|gate| status["context"] == gate.context)
     }) {
@@ -604,7 +622,11 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             continue;
         }
         let run = checked_run(deadline, workspace, &snapshot, listed)?;
-        if run["status"] != "completed" || run["conclusion"] != "failure" {
+        if run["status"] != "completed"
+            || !run["conclusion"]
+                .as_str()
+                .is_some_and(|conclusion| !conclusion.is_empty() && conclusion != "success")
+        {
             return Err(unreadable("running, superseded or non-failed attempt"));
         }
         let run_id = number(&run, "id", unreadable)?;
@@ -617,6 +639,22 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             ),
         )?;
         let job_list = complete_list(&jobs, "jobs")?;
+        if job_list.is_empty() {
+            let failures =
+                super::failed_workflow::failed_workflow_evidence(deadline, workspace, &snapshot)?;
+            if let Some(evidence) = failures.into_iter().find(|evidence| {
+                evidence.run_id == run_id
+                    && evidence
+                        .failed_workflow_run()
+                        .is_some_and(|failure| !failure.candidate_owned)
+            }) {
+                return Ok(json!({"evidence":evidence}));
+            }
+            continue;
+        }
+        if run["conclusion"] != "failure" {
+            return Err(unreadable("running, superseded or non-failed attempt"));
+        }
         let mut job_ids = std::collections::BTreeSet::new();
         for job in job_list {
             if !job_ids.insert(number(job, "id", unreadable)?) {
@@ -766,9 +804,11 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
                 workflow_path: path.clone(),
                 workflow_blob: blob.clone(),
                 workflow_source: source.clone(),
-                workflow_job: dependency.job,
-                prerequisite: dependency.prerequisite,
-                prerequisite_job_id: job_id,
+                failure: orbit_types::workflow::PrInfrastructureFailure::Prerequisite {
+                    workflow_job: dependency.job,
+                    prerequisite: dependency.prerequisite,
+                    prerequisite_job_id: job_id,
+                },
                 run_id,
                 run_attempt: u32::try_from(attempt).map_err(|_| unreadable("attempt overflow"))?,
                 event: "pull_request".into(),
@@ -797,6 +837,14 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     let evidence: PrInfrastructureEvidence = serde_json::from_value(input["evidence"].clone())
         .map_err(|_| unreadable("reserved evidence"))?;
     let deadline = Deadline::from_input(input)?;
+    if let Some(failure) = evidence.failed_workflow_run() {
+        if failure.candidate_owned {
+            return Err(unreadable(
+                "candidate-owned workflow failure cannot authorize infrastructure recovery",
+            ));
+        }
+        return super::failed_workflow::observe_failed_workflow(deadline, workspace, &evidence);
+    }
     if evidence.required.is_empty() {
         return Err(unreadable("reserved protected contexts"));
     }

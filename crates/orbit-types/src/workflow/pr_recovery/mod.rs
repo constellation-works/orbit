@@ -21,9 +21,10 @@ pub use base_update::{
 };
 pub use completion::{PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance};
 pub use infrastructure::{
-    PR_INFRASTRUCTURE_RESERVED_EVENT, PrInfrastructureAdmission, PrInfrastructureEvidence,
-    PrInfrastructureReservation, RequiredGate, decide_pr_infrastructure,
-    pr_infrastructure_reservations,
+    PR_CANDIDATE_WORKFLOW_FAILED_EVENT, PR_CANDIDATE_WORKFLOW_FAILURE_MARKER,
+    PR_INFRASTRUCTURE_RESERVED_EVENT, PrFailedWorkflowRun, PrInfrastructureAdmission,
+    PrInfrastructureEvidence, PrInfrastructureFailure, PrInfrastructureReservation, RequiredGate,
+    decide_pr_infrastructure, pr_infrastructure_reservations,
 };
 
 pub use ci_failure::{

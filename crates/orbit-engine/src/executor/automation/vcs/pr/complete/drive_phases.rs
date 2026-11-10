@@ -327,7 +327,28 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 observed(error)
             }
         })?;
+        if let Some(evidence) = self
+            .unreported
+            .failed_workflow_runs
+            .iter()
+            .find(|evidence| {
+                evidence
+                    .failed_workflow_run()
+                    .is_some_and(|failure| failure.candidate_owned)
+            })
+        {
+            return Err(match auto_fix {
+                Some(auto_fix) => super::super::workflow_failure::repair_failed_workflow(
+                    host, auto_fix, pr_number, evidence,
+                ),
+                None => OrbitError::Execution(format!(
+                    "pr_complete: failed checks: {}; the pull request stays open and the task stays in review",
+                    super::super::workflow_failure::failed_workflow_diagnosis(evidence)
+                )),
+            });
+        }
         if !base_refresh_wait
+            && self.unreported.failed_workflow_runs.is_empty()
             && !self.base_adopted
             && (matches!(state, PrMergeState::Blocked(_))
                 || self.unreported.awaiting_policy_checks())
@@ -447,7 +468,8 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         {
             let verdict = blocked_verdict(status, self.unsettled_polls, pending_required);
             let diagnose = is_blocked_merge_state(status)
-                && matches!(verdict, BlockedVerdict::RepairChecks(_));
+                && (matches!(verdict, BlockedVerdict::RepairChecks(_))
+                    || !self.unreported.failed_workflow_runs.is_empty());
             if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
                 let error = stopped(pr_number, &reason.to_string());
                 return Err(match reason.delivery_refusal() {
@@ -540,7 +562,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 infrastructure_wait |= matches!(
                     super::super::infrastructure::recover(
                         host,
-                        auto_fix,
+                        &super::super::infrastructure::InfrastructureOwner {
+                            run_id: &auto_fix.run_id,
+                            task_ids: &auto_fix.task_ids
+                        },
                         workspace_path,
                         pr_number,
                         status,
@@ -552,6 +577,48 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                                     .saturating_mul(1000)
                             )
                         ),
+                    )
+                    .map_err(observed)?,
+                    super::super::infrastructure::InfrastructureStep::Wait
+                );
+            }
+        }
+        // Mechanical infrastructure recovery does not require source-repair
+        // permission. Plain completion still reconciles its reservation on
+        // every poll, including CLEAN, before any merge can be requested.
+        if auto_fix.is_none()
+            && !base_refresh_wait
+            && matches!(
+                observed_poll.state,
+                PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
+            )
+            && let Some(primary) = self.task_ids.iter().min()
+        {
+            let diagnose = !self.unreported.failed_workflow_runs.is_empty();
+            let reserved = host.get_task_history(primary)?.iter().any(|entry| {
+                entry.event == orbit_types::workflow::PR_INFRASTRUCTURE_RESERVED_EVENT
+            });
+            if diagnose || reserved {
+                let run_id = super::super::super::super::input::input_string_field(input, "run_id")
+                    .or_else(|| {
+                        super::super::super::super::input::input_string_field(input, "job_run_id")
+                    })
+                    .or(host.get_task(primary)?.job_run_id)
+                    .ok_or_else(|| {
+                        stopped(pr_number, "infrastructure recovery has no owning execution")
+                    })?;
+                infrastructure_wait |= matches!(
+                    super::super::infrastructure::recover(
+                        host,
+                        &super::super::infrastructure::InfrastructureOwner {
+                            run_id: &run_id,
+                            task_ids: self.task_ids
+                        },
+                        workspace_path,
+                        pr_number,
+                        status,
+                        diagnose,
+                        completion_deadline_ms,
                     )
                     .map_err(observed)?,
                     super::super::infrastructure::InfrastructureStep::Wait
