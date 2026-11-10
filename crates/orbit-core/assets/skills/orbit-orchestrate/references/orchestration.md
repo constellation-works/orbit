@@ -1011,7 +1011,23 @@ It cannot be combined with `--pull` or `--stop`.
   `blocked` or `backlog` that records a PR, not a window of recent leaves. A write-free pass scans and persists nothing.
   Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
   started with `--complete` under a drain without it are left alone.
-  The dashboard's **Fix PR** action on a `review` task starts the same
+- A `review` task whose newest leaf ended `held` with its PR open is handed
+  back the same way when its hold is one a fresh forge read can clear:
+  `delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
+  `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
+  `delivery_base_checks_pending` or `delivery_forge_observation_unavailable`.
+  Completion reruns with a fresh budget and repairs only what its own watcher
+  then finds; the record and started entry carry `hold_code`. A blocker on the
+  PR goes through the ledger as above; otherwise the hand-back spends no
+  repair budget and is bounded on its own: the pass waits 5 minutes after
+  the leaf held, doubled for each earlier hand-back of that PR for that code
+  (dashboard Fix PR skips the wait), and stops after 3 hand-backs per PR,
+  head and code. A waiting or spent lineage is listed under
+  `auto_fix.skipped` with the hold code as its `reason`. A task a
+  `completion.hold` rule keeps in review is skipped as `completion_held`.
+  Other holds keep their own next step (see the delivery-refusal table in
+  run debugging), and the source leaf still counts as `held`.
+- The dashboard's **Fix PR** action on a `review` task starts the same
   hand-back for that one task without a drain (operator session, governed as
   `auto_drain.auto_fix`); a refusal is a `409` coded `task_auto_fix_<reason>`.
 

@@ -53,9 +53,21 @@ fn rereviewed_leaf_job() -> String {
     .to_string()
 }
 
+/// How a delivered leaf ended.
+#[derive(Clone, Copy)]
+pub(super) enum LeafEnd {
+    /// Its completion step failed.
+    Failed,
+    /// It succeeded at review without running completion.
+    Review,
+    /// Its completion step held the run with this delivery refusal code, an
+    /// hour ago.
+    Held(&'static str),
+}
+
 /// How a stopped leaf left its task.
 #[derive(Clone, Copy)]
-enum Shelf {
+pub(super) enum Shelf {
     /// In review, as a timed-out completion leaves it.
     Review,
     /// Blocked by the leaf's final-recovery escalation.
@@ -68,14 +80,14 @@ enum Shelf {
     OptedOut,
 }
 
-struct Leaf {
-    task: String,
-    run: String,
-    head: String,
-    number: u64,
+pub(super) struct Leaf {
+    pub(super) task: String,
+    pub(super) run: String,
+    pub(super) head: String,
+    pub(super) number: u64,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     fixture_with(&repair_leaf_job())
 }
 
@@ -91,17 +103,23 @@ impl Fixture {
     /// promoted pull request `number` on its Orbit branch, then failed in
     /// completion and left the task on `shelf`.
     fn stopped_leaf(&self, number: u64, completion: &str, shelf: Shelf) -> Leaf {
-        self.delivered_leaf(number, completion, shelf, true)
+        self.delivered_leaf(number, completion, shelf, LeafEnd::Failed)
     }
 
     /// A task whose delivery leaf, started without `--complete`, opened and
     /// promoted pull request `number` and then succeeded, leaving the task
     /// in review: its completion step never ran.
     fn review_leaf(&self, number: u64) -> Leaf {
-        self.delivered_leaf(number, "review", Shelf::Review, false)
+        self.delivered_leaf(number, "review", Shelf::Review, LeafEnd::Review)
     }
 
-    fn delivered_leaf(&self, number: u64, completion: &str, shelf: Shelf, stopped: bool) -> Leaf {
+    pub(super) fn delivered_leaf(
+        &self,
+        number: u64,
+        completion: &str,
+        shelf: Shelf,
+        end: LeafEnd,
+    ) -> Leaf {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -153,24 +171,31 @@ impl Fixture {
             state.record_pipeline_output(id, output.clone());
             self.step(&run, index, id, JobRunState::Success, None);
         }
-        if stopped {
-            // Production checkpoints only a step that succeeded, so the failed
-            // `complete_pr` leaves no entry in `step_states`.
-            self.jobs.write_run_state(&run, &state).unwrap();
-            self.step(
-                &run,
-                4,
-                "complete_pr",
-                JobRunState::Failed,
-                Some("pr_checks_failed"),
-            );
-            self.fail(&run);
-        } else {
-            // A review delivery skips `complete_pr` and ends `success`.
-            state.record_step(4, JobRunState::Skipped, None, None);
-            self.jobs.write_run_state(&run, &state).unwrap();
-            self.step(&run, 4, "complete_pr", JobRunState::Skipped, None);
-            self.succeed(&run);
+        match end {
+            LeafEnd::Failed => {
+                // Production checkpoints only a step that succeeded, so the
+                // failed `complete_pr` leaves no entry in `step_states`.
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.step(
+                    &run,
+                    4,
+                    "complete_pr",
+                    JobRunState::Failed,
+                    Some("pr_checks_failed"),
+                );
+                self.fail(&run);
+            }
+            LeafEnd::Review => {
+                // A review delivery skips `complete_pr` and ends `success`.
+                state.record_step(4, JobRunState::Skipped, None, None);
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.step(&run, 4, "complete_pr", JobRunState::Skipped, None);
+                self.succeed(&run);
+            }
+            LeafEnd::Held(code) => {
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.hold(&run, 4, code);
+            }
         }
         self.runtime
             .apply_task_automation_update(
@@ -235,6 +260,26 @@ impl Fixture {
             .unwrap();
     }
 
+    /// `run`'s completion step at `index` holds it with the delivery refusal
+    /// `code`, an hour ago, as a fail-closed completion decision does.
+    pub(super) fn hold(&self, run: &str, index: usize, code: &str) {
+        let current = self.jobs.get_job_run(run).unwrap().unwrap();
+        if current.state == JobRunState::Pending {
+            self.jobs
+                .mark_job_run_running(run, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        self.step(run, index, "complete_pr", JobRunState::Failed, Some(code));
+        self.jobs
+            .finalize_job_run(
+                run,
+                JobRunState::Held,
+                Utc::now() - chrono::TimeDelta::hours(1),
+                None,
+            )
+            .unwrap();
+    }
+
     /// `run` ends `success`, as a delivery that stopped at review does.
     fn succeed(&self, run: &str) {
         let current = self.jobs.get_job_run(run).unwrap().unwrap();
@@ -267,7 +312,14 @@ impl Fixture {
 
     /// The forge reports `leaf`'s pull request open at `head_sha`, opened by
     /// `author`, conflicting and with `failed` required checks.
-    fn blocked(&self, leaf: &Leaf, head_sha: &str, author: &str, conflict: bool, failed: &[&str]) {
+    pub(super) fn blocked(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        author: &str,
+        conflict: bool,
+        failed: &[&str],
+    ) {
         self.forge.0.lock().unwrap().blockers.insert(
             leaf.number,
             PullRequestBlockers {
@@ -323,14 +375,14 @@ impl Fixture {
     }
 }
 
-fn started<'a>(pass: &'a Value, task: &str) -> Option<&'a Value> {
+pub(super) fn started<'a>(pass: &'a Value, task: &str) -> Option<&'a Value> {
     pass["auto_fix"]["started"]
         .as_array()?
         .iter()
         .find(|entry| entry["task_id"] == task)
 }
 
-fn repair_skip(pass: &Value, task: &str) -> Option<String> {
+pub(super) fn repair_skip(pass: &Value, task: &str) -> Option<String> {
     pass["auto_fix"]["skipped"]
         .as_array()?
         .iter()

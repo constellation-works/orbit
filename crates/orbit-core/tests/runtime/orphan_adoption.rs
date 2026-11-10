@@ -15,6 +15,7 @@
 //! start a substitute worker that waits for the fixture to end, so a retry
 //! stays the lineage's live attempt while the test asserts.
 
+mod held_handback;
 mod out_of_run_auto_fix;
 
 use std::collections::BTreeMap;

@@ -405,6 +405,8 @@ const FIX_PR_REASONS = {
   not_orbit_pull_request: "the pull request was not opened by an Orbit delivery on this task's branch",
   no_delivery_leaf: "the task has no delivery run of its own to hand the pull request back to",
   leaf_not_stopped: "the task's newest delivery neither stopped nor ended in review with its pull request unfinished",
+  leaf_held: "the task's newest delivery is held on a decision a fresh pull request read does not clear",
+  completion_held: "a completion.hold rule keeps the task in review for a person",
   operator_hold: "an operator holds the task",
   opted_out: "the task is tagged no-auto-approve; a person decides its delivery",
   authority: "its delivery was started with completion authority this session lacks",
@@ -514,10 +516,13 @@ export function appendFixPrControls(actions, task, detail, context, mutable) {
   const reason = fixPrDisabledReason(task, mutable, entry);
   const data = entry && entry.data ? entry.data : {};
   const blocker = data.blocker === "conflict" ? "its merge conflict" : "its failed required checks";
+  // A held delivery with no blocker is handed back to read the pull request
+  // again and continue completion.
+  const purpose = !data.blocker && data.hold_code ? `continue completion held as ${data.hold_code}` : `repair ${blocker}`;
   const btn = el("button", {
     class: "action fix-pr",
     text: "fix PR",
-    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to repair ${blocker}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
+    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
   });
   btn.disabled = Boolean(reason);
   btn.dataset.fixPrSignature = fixPrSignature(task);

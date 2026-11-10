@@ -37,6 +37,7 @@ pub(in crate::api) async fn task_auto_fix_readiness(
             "detail": denial.to_string(),
             "pr_number": null,
             "blocker": null,
+            "hold_code": null,
             "head_sha": null,
         }))
         .into_response();

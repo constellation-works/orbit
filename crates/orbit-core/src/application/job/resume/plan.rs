@@ -223,9 +223,21 @@ impl OrbitRuntime {
         // stopped delivery is. Only the completion-repair route admits it; a
         // generic resume of a succeeded run stays refused.
         let review_handoff = repair.is_some() && source.state == JobRunState::Success;
+        // [ORB-23809] A delivery held on a refusal a fresh forge read can
+        // clear is handed back to its completion step the same way, through
+        // the completion-repair route only.
+        let held_handback = repair.is_some()
+            && source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                .and_then(DeliveryRefusal::from_error_code)
+                .is_some_and(crate::application::job::pr_repair::handed_back_hold);
         if !forge_held
             && !base_chase_held
             && !review_handoff
+            && !held_handback
             && !matches!(
                 source.state,
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
