@@ -1135,3 +1135,331 @@ fn agents_scorecard_and_show_use_launch_effort_when_invocation_never_completed()
     assert_eq!(detail["row"]["label"], "model-fixture @ high", "{detail}");
     assert_eq!(detail["row"]["reasoning_effort"], json!("high"), "{detail}");
 }
+
+/// `orbit migrate --backfill-dispatch-effort` attributes an invocation that
+/// predates dispatch identities to the effort its audited launch argv
+/// rendered, in each provider's flag form, and leaves it unknown without a
+/// matching launch or with launches that disagree. Identities recorded at
+/// dispatch are untouched, a backfilled one is marked as such, and a second
+/// run changes nothing [ORB-23823].
+#[test]
+fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::migrate_backfill_dispatch_effort_attributes_pre_identity_invocations",
+    ) {
+        return;
+    }
+    use orbit_types::identity::ReasoningEffort;
+
+    // (crew, recorded dispatch effort, launch argvs audited for the run).
+    struct Spec {
+        crew: &'static str,
+        dispatch: Option<ReasoningEffort>,
+        launches: Vec<Vec<&'static str>>,
+    }
+    let specs = [
+        // 0: claude
+        Spec {
+            crew: "claude-crew",
+            dispatch: None,
+            launches: vec![vec![
+                "claude",
+                "--model",
+                "model-fixture",
+                "--effort",
+                "high",
+            ]],
+        },
+        // 1: codex
+        Spec {
+            crew: "codex-crew",
+            dispatch: None,
+            launches: vec![vec![
+                "codex",
+                "exec",
+                "--config",
+                "model_reasoning_effort=\"xhigh\"",
+            ]],
+        },
+        // 2: grok
+        Spec {
+            crew: "grok-crew",
+            dispatch: None,
+            launches: vec![vec!["grok", "--reasoning-effort", "high"]],
+        },
+        // 3: muse
+        Spec {
+            crew: "muse-crew",
+            dispatch: None,
+            launches: vec![vec!["muse", "exec", "--reasoning-effort", "medium"]],
+        },
+        // 4: no effort flag rendered → provider default
+        Spec {
+            crew: "default-crew",
+            dispatch: None,
+            launches: vec![vec!["claude", "--model", "model-fixture"]],
+        },
+        // 5: no matching launch → unknown
+        Spec {
+            crew: "unknown-crew",
+            dispatch: None,
+            launches: vec![],
+        },
+        // 6: two candidate launches disagree → unknown
+        Spec {
+            crew: "unknown-crew",
+            dispatch: None,
+            launches: vec![
+                vec!["claude", "--effort", "high"],
+                vec!["claude", "--effort", "medium"],
+            ],
+        },
+        // 7: identity recorded at dispatch; its launch says otherwise
+        Spec {
+            crew: "low-crew",
+            dispatch: Some(ReasoningEffort::Low),
+            launches: vec![vec!["claude", "--effort", "max"]],
+        },
+    ];
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let workspace;
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("agents-fixture"));
+        workspace = runtime.workspace_id().unwrap();
+        let store = runtime.sqlite_store().unwrap();
+        for (index, spec) in specs.iter().enumerate() {
+            let id = runtime
+                .add_task(TaskAddParams {
+                    title: format!("backfill {index}"),
+                    description: "dispatch effort backfill fixture".into(),
+                    plan: "implement the change".into(),
+                    complexity: TaskComplexity::Low,
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            runtime
+                .update_task_with_identity(
+                    &id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    Some("claude".into()),
+                    Some("model-fixture".into()),
+                )
+                .unwrap();
+            let run_id = format!("jrun-backfill-{index}");
+            let finished = Utc::now();
+            let started = finished - chrono::Duration::hours(1);
+            store
+                .upsert_job_run_for_workspace(
+                    &workspace,
+                    &JobRun {
+                        build: None,
+                        run_id: run_id.clone(),
+                        job_id: "task_pr_pipeline".into(),
+                        attempt: 1,
+                        state: JobRunState::Success,
+                        scheduled_at: started,
+                        created_at: started,
+                        started_at: Some(started),
+                        finished_at: Some(finished),
+                        duration_ms: None,
+                        pid: None,
+                        pid_start_time: None,
+                        input: Some(json!({ "task_ids": [id] })),
+                        retry_source_run_id: None,
+                        knowledge_metrics: None,
+                        resolved_crew: Some(spec.crew.into()),
+                        crew_model: Some("model-fixture".into()),
+                        steps: Vec::new(),
+                        executed_on: None,
+                    },
+                    None,
+                )
+                .unwrap();
+            // The invocation is recorded now and ran for a minute, so its
+            // launch was a minute ago.
+            let launched = Utc::now() - chrono::Duration::seconds(60);
+            let audit = |seq: usize, model: &str, argv: &[&str]| {
+                store
+                    .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: format!("v2evt-{run_id}-{seq}"),
+                        source: "fixture".into(),
+                        schema_version: 1,
+                        event_type: "cli.invocation.started".into(),
+                        ts: launched,
+                        run_id: run_id.clone(),
+                        agent_identity: "system".into(),
+                        parent_event_id: None,
+                        workspace_path: None,
+                        payload_json: json!({
+                            "body_kind": "cli_invocation_started",
+                            "model": model,
+                            "argv_redacted": argv,
+                        })
+                        .to_string(),
+                    })
+                    .unwrap();
+            };
+            for (seq, argv) in spec.launches.iter().enumerate() {
+                audit(seq, "model-fixture", argv);
+            }
+            let invoke = |activity: &str, model: &str, execution: Option<i64>| {
+                runtime
+                    .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                        agent_execution_id: execution,
+                        job_run_id: run_id.clone(),
+                        account: None,
+                        activity_id: activity.into(),
+                        agent: "claude".into(),
+                        provider: None,
+                        model: Some(model.into()),
+                        task_ids: vec![id.clone()],
+                        trace: orbit_types::telemetry::InvocationTrace {
+                            duration_ms: 60_000,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            };
+            let execution = spec.dispatch.map(|effort| {
+                store
+                    .begin_agent_execution(
+                        &workspace,
+                        &run_id,
+                        "implement_one",
+                        "claude",
+                        Some("model-fixture"),
+                        &orbit_types::telemetry::AgentExecutionIdentity {
+                            crew: Some(spec.crew.into()),
+                            reasoning_effort: Some(effort),
+                        },
+                    )
+                    .unwrap()
+            });
+            invoke("implement_one", "model-fixture", execution);
+            if index == 0 {
+                // A pilot in the same run is not the run's executor: its
+                // effort is backfilled, its crew is not guessed.
+                audit(9, "model-pilot", &["claude", "--effort", "low"]);
+                invoke("pilot", "model-pilot", None);
+            }
+        }
+    }
+
+    let rows = || {
+        let card = fixture.json(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "implementers",
+            "--min-support",
+            "1",
+            "--json",
+        ]);
+        let mut rows: Vec<(String, u64)> = card["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["label"].as_str().unwrap().to_string(),
+                    row["units"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+    let before = rows();
+    assert_eq!(
+        before,
+        vec![
+            ("model-fixture @ effort unknown".to_string(), 7),
+            ("model-fixture @ low".to_string(), 1),
+        ],
+        "only the dispatch-time identity is known before the backfill"
+    );
+
+    let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    let report = &report["dispatch_effort_backfill"];
+    assert_eq!(report["examined"], 8, "{report}");
+    assert_eq!(report["recorded"], 6, "{report}");
+    assert_eq!(report["no_launch_event"], 1, "{report}");
+    assert_eq!(report["conflicting"], 1, "{report}");
+
+    let after = rows();
+    assert_eq!(
+        after,
+        vec![
+            ("model-fixture @ effort unknown".to_string(), 2),
+            ("model-fixture @ high".to_string(), 2),
+            ("model-fixture @ low".to_string(), 1),
+            ("model-fixture @ medium".to_string(), 1),
+            ("model-fixture @ provider default".to_string(), 1),
+            ("model-fixture @ xhigh".to_string(), 1),
+        ],
+        "each flag form is attributed; no launch and disagreeing launches stay unknown, \
+         and the dispatch-time identity keeps its own effort"
+    );
+
+    let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    let again = &again["dispatch_effort_backfill"];
+    assert_eq!(again["examined"], 2, "{again}");
+    assert_eq!(again["recorded"], 0, "{again}");
+    assert_eq!(rows(), after, "a second run changes nothing");
+
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root).unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let backfilled = store
+        .agent_executions(&workspace, "jrun-backfill-0")
+        .unwrap();
+    assert_eq!(backfilled.len(), 2, "{backfilled:?}");
+    let executor = backfilled
+        .iter()
+        .find(|record| record.activity_id == "implement_one")
+        .unwrap();
+    let source = executor
+        .backfill
+        .as_ref()
+        .map(|backfill| backfill.source.as_str());
+    assert_eq!(source, Some("cli.invocation.started"), "{executor:?}");
+    assert_eq!(executor.identity.crew.as_deref(), Some("claude-crew"));
+    assert_eq!(
+        executor.identity.reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    let pilot = backfilled
+        .iter()
+        .find(|record| record.activity_id == "pilot")
+        .unwrap();
+    assert_eq!(pilot.identity.crew, None, "{pilot:?}");
+    assert_eq!(pilot.identity.reasoning_effort, Some(ReasoningEffort::Low));
+    let dispatched = store
+        .agent_executions(&workspace, "jrun-backfill-7")
+        .unwrap();
+    assert_eq!(dispatched.len(), 1, "{dispatched:?}");
+    assert!(dispatched[0].backfill.is_none(), "{dispatched:?}");
+    assert_eq!(
+        dispatched[0].identity.reasoning_effort,
+        Some(ReasoningEffort::Low)
+    );
+}

@@ -222,6 +222,45 @@ pub struct AgentExecutionRecord {
     pub model: Option<String>,
     pub identity: orbit_types::telemetry::AgentExecutionIdentity,
     pub started_at: DateTime<Utc>,
+    /// Present only on an identity recorded after the fact from the launch
+    /// audit trail; a dispatch-time identity has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backfill: Option<AgentExecutionBackfill>,
+}
+
+/// Provenance of a dispatch identity recorded after the fact for an
+/// invocation that predates dispatch-time identity recording. Stored beside
+/// the identity, so the record tells a backfilled identity from one written
+/// at dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentExecutionBackfill {
+    /// The audit event type the effort was read from.
+    pub source: String,
+    /// Every matching launch event, all of which rendered the same effort.
+    pub event_ids: Vec<String>,
+    pub recorded_at: DateTime<Utc>,
+}
+
+/// A completed invocation with no dispatch identity, with the launch events
+/// that may have started it: the `cli.invocation.started` events of its
+/// workspace and run, for its model, launched within the matching tolerance
+/// of its end time minus its duration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnidentifiedInvocationLaunch {
+    pub invocation_id: i64,
+    pub run_id: String,
+    pub activity_id: String,
+    /// The crew the invocation's job run resolved, when the run records one.
+    pub run_resolved_crew: Option<String>,
+    pub launches: Vec<InvocationLaunchEvent>,
+}
+
+/// One `cli.invocation.started` event that may have launched an invocation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvocationLaunchEvent {
+    pub event_id: String,
+    pub started_at: DateTime<Utc>,
+    pub argv_redacted: Vec<String>,
 }
 
 /// Aggregate completed invocations without consulting mutable crew configuration.
