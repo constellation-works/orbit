@@ -589,19 +589,25 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   stays pending until each named artifact is listed, unexpired and non-empty,
   or the same timeout expires naming the missing parts. Transient API errors
   are retried within the remaining budget.
-  For a single-page response with an ETag, both waits issue authenticated
-  conditional requests every three seconds. An unchanged `304 Not Modified` reuses
-  the last complete listing and consumes no primary GitHub API quota
+  For a single-page job-listing response with an ETag, the job wait issues
+  authenticated conditional requests every three seconds. An unchanged
+  `304 Not Modified` reuses the last complete listing and consumes no primary
+  GitHub API quota
   ([GitHub conditional requests](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)).
   This shortens the two detection delays between upload, shard execution and
   the final Check result. A changed response still checks every named job and
   step. Missing ETags, API errors, fewer than 100 remaining primary requests,
-  or a paginated listing use the fallback interval, `--poll-seconds` (default
-  15 seconds). A first-page ETag never stands in for later pages: those runs use
-  the full paginated listing. Server `X-Poll-Interval`, `Retry-After` and, once
-  the primary quota is exhausted, `X-RateLimit-Reset` minimums raise both
-  intervals. A 403 or 429 without `Retry-After` also sets a 60-second minimum on
-  single-page and paginated listings alike, so its interval is at least 60
+  or a paginated job listing use the fallback interval, `--poll-seconds`
+  (default 15 seconds). The artifact listing has no ETag fast path: every
+  artifact request is an unconditional GET that consumes primary quota, so
+  while a part is missing, when the artifact listing is paginated (one request
+  per page per cycle), on API errors, or with fewer than 100 remaining primary
+  requests it uses the same fallback interval. A first-page ETag never stands
+  in for later pages: those runs use the full paginated listing. Server
+  `X-Poll-Interval`, `Retry-After` and, once the primary quota is exhausted,
+  `X-RateLimit-Reset` minimums raise both intervals (job and artifact). A 403
+  or 429 without `Retry-After` also sets a 60-second minimum on single-page and
+  paginated listings alike, jobs and artifacts, so its interval is at least 60
   seconds. The artifact listing applies the same minimums to every page it
   reads, including a page that failed or was throttled, so a throttled artifact
   request is not repeated before its `Retry-After` has passed. The absolute
@@ -612,7 +618,10 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   most 80 job-listing calls per minute before API latency, below the secondary
   [REST limit of 900 points per minute](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits) for these GET requests; other repository
   traffic shares the limits, and changed responses still consume primary
-  quota. Check those counters and response fallback behavior on candidate
+  quota. Artifact polls add unconditional primary-quota cost on top: while parts
+  are missing each wait issues one artifact GET per page per cycle at the
+  fallback interval (four calls per 15 s across four waits, eight per cycle when
+  paginated to two pages). Check those counters and response fallback behavior on candidate
   hosted jobs instead of assuming every poll is free.
 
 Locally, `make ci` keeps the single-process full mode: the folded build, then
