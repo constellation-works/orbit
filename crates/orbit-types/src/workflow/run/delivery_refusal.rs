@@ -49,6 +49,10 @@ pub enum DeliveryRefusal {
     /// no `step_failure_recovery` to run it. The run holds; the repair stays
     /// uncommitted. Spending the repair budget is still a failure.
     CheckRepairActivityAbsent,
+    /// The forge started no run of any required check on the head Orbit
+    /// pushed, and the one re-trigger completion requested for that head
+    /// produced none either. The task stays in review; no repair is spent.
+    CheckRunsAbsent,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -80,6 +84,7 @@ impl DeliveryRefusal {
             Self::VisualNotEstablished => "delivery_visual_not_established",
             Self::VisualReviewUnresolved => "delivery_visual_review_unresolved",
             Self::CheckRepairActivityAbsent => "delivery_check_repair_activity_absent",
+            Self::CheckRunsAbsent => "delivery_check_runs_absent",
         }
     }
 
@@ -104,6 +109,7 @@ impl DeliveryRefusal {
             "delivery_visual_not_established" => Some(Self::VisualNotEstablished),
             "delivery_visual_review_unresolved" => Some(Self::VisualReviewUnresolved),
             "delivery_check_repair_activity_absent" => Some(Self::CheckRepairActivityAbsent),
+            "delivery_check_runs_absent" => Some(Self::CheckRunsAbsent),
             _ => None,
         }
     }

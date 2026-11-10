@@ -41,6 +41,7 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         PR_REQUIRED_CHECKS => pr_required_checks(input),
         PR_CLOSE => pr_close(input),
         PR_UPDATE_BRANCH => pr_update_branch(input),
+        super::PR_RETRIGGER_CHECKS => super::pr::pr_retrigger_checks(input),
         CI_PREREQUISITE_EVIDENCE => super::prerequisite::evidence(input),
         CI_PREREQUISITE_OBSERVE => super::prerequisite::observe(input),
         CI_COMMIT_JOBS => ci_commit_jobs(input),

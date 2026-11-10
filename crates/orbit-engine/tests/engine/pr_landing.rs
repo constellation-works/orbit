@@ -54,6 +54,7 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tempfile::TempDir;
+mod absent_check_runs;
 mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
 #[path = "pr_landing/auto_fix/scenarios.rs"]

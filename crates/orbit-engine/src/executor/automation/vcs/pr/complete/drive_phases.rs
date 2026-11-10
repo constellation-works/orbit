@@ -27,6 +27,7 @@ use super::super::delivery::{
 };
 use super::super::head_lag::HeadLag;
 use super::super::merge::PermittedMerge;
+use super::absent_check_runs::{AbsentCheckRunPoll, AbsentCheckRuns};
 use super::ci_rerun_hold::{CiRerunHold, CiRerunHoldStep, CiRerunRecoveryOutcome};
 use super::conflict::is_blocked_merge_state;
 use super::drive::Delivery;
@@ -74,6 +75,7 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) input: &'a Value,
     pub(super) workspace_path: &'a str,
     pub(super) pr_number: &'a str,
+    pub(super) task_ids: &'a [String],
     pub(super) auto_fix: Option<&'a AutoFix>,
     pub(super) diagnostic:
         &'a mut Option<super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic>,
@@ -93,6 +95,7 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) unsettled_polls: u32,
     pub(super) unreported: UnreportedChecks,
     pub(super) ci_rerun_hold: CiRerunHold,
+    pub(super) absent_check_runs: AbsentCheckRuns,
     pub(super) auto_merge_requested: bool,
     pub(super) merge_requested: bool,
     pub(super) requested_landed_commit: Option<String>,
@@ -153,6 +156,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 RecoveryFlow::ContinuePoll => continue,
                 RecoveryFlow::Ready => {}
             }
+            self.recover_absent_check_runs(&observed)?;
             match self.dispatch_state(observed)? {
                 DispatchFlow::ContinuePoll => continue,
                 DispatchFlow::Deliver(delivery) => return Ok(*delivery),
@@ -556,6 +560,39 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         }
         observed_poll.infrastructure_wait = infrastructure_wait;
         Ok(RecoveryFlow::Ready)
+    }
+
+    /// [ORB-23812] Re-trigger, once per head, the checks of a published head
+    /// the forge started no required check run for, or hold once that
+    /// re-trigger produced none. Any other state keeps the ordinary wait.
+    fn recover_absent_check_runs(&mut self, observed: &ObservedPoll) -> Result<(), OrbitError> {
+        let absent = !observed.infrastructure_wait
+            && !self.auto_merge_requested
+            && !self.merge_requested
+            && matches!(observed.state, PrMergeState::Pending)
+            && self.unreported.no_required_check_run();
+        let run_id = super::super::super::super::input::input_string_field(self.input, "run_id")
+            .or_else(|| {
+                super::super::super::super::input::input_string_field(self.input, "job_run_id")
+            });
+        self.absent_check_runs.observe(
+            self.host,
+            &AbsentCheckRunPoll {
+                task_ids: self.task_ids,
+                run_id: run_id.as_deref(),
+                workspace_path: self.workspace_path,
+                pr_number: self.pr_number,
+                status: &observed.status,
+                published_head: self.pin.candidate_sha(),
+                absent,
+                missing_note: self.unreported.timeout_note(),
+                waited_seconds: self.waited_seconds,
+                last_poll: self
+                    .waited_seconds
+                    .saturating_add(self.poll_interval_seconds)
+                    >= self.max_wait_seconds,
+            },
+        )
     }
 
     /// Phase 3: act on the classified merge state.
