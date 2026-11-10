@@ -120,8 +120,10 @@ host/workspace board, including a replica board, stays as it is.
 
 1. The Auto-drain card's workspace select is limited to the rail's selected
    workspaces. Its host select lists the workspace's owner first, then the
-   followers holding a replica. Both selections survive reloads; changing
-   workspace resets the host to its owner.
+   followers holding a replica. A host whose fleet read failed stays in the
+   select, and when it is the chosen host the card shows that read's error.
+   Both selections survive reloads; changing workspace resets the host to its
+   owner.
 2. The card reads `GET /api/on/<host>/workflows/auto/readiness?workspace=<id>`
    for the chosen pair, including when Idle. It shows that host's window,
    capacity, checkout and start policy rather than an aggregate of the hosts.
