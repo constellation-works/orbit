@@ -24,32 +24,217 @@ template:
 
     ## Stay blind
 
-    The evidence packet for a link is only the filing task's title,
-    description, acceptance criteria, context files and type, and the
-    culprit task's title, description, acceptance criteria and context
-    files. Write that packet before you read the filer's labels.
+    The filer's labels must not reach your context before your own second
+    labels are saved. A tool response that carries them is already in your
+    context, however little of it you copy, so the sample is drawn by the
+    helper script below, not by you. It calls the read tools itself and
+    prints only link identity and the allowed evidence packet.
 
-    Never put a model, provider or crew name into the packet: not the
-    filer's, and not the culprit's implementer or reviewer. Do not read,
-    for either task, crew, resolved_crew, crew_model, crew_unresolved,
-    implemented_by, planned_by, orchestrator, orchestrator_model,
-    orchestrator_model_source, comments, history, execution_summary,
-    final_recovery, job_run_id or artifacts. Do not open a run, its logs
-    or an experiment readout, and do not search for a crew.
+    - Never call `orbit.task.list` or `orbit.task.show` yourself with the
+      `relations`, `created_by` or `created_by_model` fields, and never
+      open the helper's `regression-label-audit-draw.json` or
+      `regression-label-audit.json` before `compare` has run.
+    - Use `orbit.task.list` and `orbit.task.show` yourself only for the
+      prior-audit lookup below, with `fields` limited to `id`, `status`
+      and `artifacts`.
+    - Never put a model, provider or crew name into the packet: not the
+      filer's, and not the culprit's implementer or reviewer. Do not read,
+      for either task, crew, resolved_crew, crew_model, crew_unresolved,
+      implemented_by, planned_by, orchestrator, orchestrator_model,
+      orchestrator_model_source, comments, history, execution_summary,
+      final_recovery, job_run_id or artifacts. Do not open a run, its logs
+      or an experiment readout, and do not search for a crew.
+    - If a packet field names a model, provider or crew, or states the
+      filer's recorded nature, escape or severity, exclude that link,
+      record a blindness breach and draw a replacement with `replace`. A
+      description of the defect is evidence. A line that sets the
+      classification is not.
 
-    `created_by` and `created_by_model` are read only while sampling, and
-    only to skip your own family. They never enter the packet. Read
-    `relations` only twice. While sampling, keep the relation type and
-    target and discard `regression` (nature, escape, severity,
-    severity_source and sites) without writing those values down. After
-    the second labels are in the scratch artifact, read `relations` again
-    and copy the recorded labels to score agreement.
+    ## Helper
 
-    If a field you were allowed to read names a model, provider or crew,
-    or states the filer's recorded nature, escape or severity, exclude
-    that link, record a blindness breach and draw a replacement. A
-    description of the defect is evidence. A line that sets the
-    classification is not.
+    Write this script verbatim to `.orbit/tmp/regression-label-audit.py`
+    and run it from the workspace root with `python3 -I`. Pass
+    `--model <agent-family>` before the subcommand. It needs only Python 3
+    and the `orbit` CLI. Its subcommands are the only place the filer's
+    labels are read.
+
+    - `sample` enumerates, filters and draws. It reads `created_by` and
+      `created_by_model` only to skip your own family and never prints
+      them. It prints the seed, window, eligible population, exclusion
+      counts, gaps, the sampled links as filing task id, culprit task id
+      and whether the filer is unknown, and how many reserve links remain.
+    - `packet` fetches the evidence packet of each sampled link through
+      `orbit.task.show` with `fields` limited to the allowed ones, prints
+      it and saves it.
+    - `replace <filing> <culprit> --reason <why>` records a blindness
+      breach and swaps in the next reserve link.
+    - `compare` refuses to run until `.orbit/tmp/regression-label-audit-second.json`
+      holds every sampled link's second labels. Only then does it read the
+      recorded labels, score agreement and write
+      `.orbit/tmp/regression-label-audit.json`.
+
+    ```python
+    #!/usr/bin/env python3
+    """Blind regression-label audit helper: sample, packet, replace, compare."""
+    import argparse, datetime as dt, json, os, random, re, subprocess, sys
+
+    T = ".orbit/tmp/"
+    DRAW, PACKETS, SECOND = (T + "regression-label-audit-" + n + ".json" for n in ("draw", "packets", "second"))
+    FINAL = T + "regression-label-audit.json"
+    STATUSES = ["proposed", "backlog", "in-progress", "review", "blocked", "someday", "done", "rejected", "archived"]
+    LABELS = ("nature", "escape", "severity")
+
+    def tool(a, name, **payload):
+        p = subprocess.run(["orbit", "tool", "run", name, "--input", json.dumps({**payload, "model": a.model})], capture_output=True, text=True)
+        if p.returncode:
+            sys.exit(f"{name} failed: {p.stderr.strip()[:300]}")
+        return json.loads(p.stdout)
+
+    def when(text):
+        text = re.sub(r"(\.\d{6})\d+", r"\1", text.replace("Z", "+00:00"))
+        return dt.datetime.fromisoformat(text)
+
+    def load(path):
+        with open(path) as f:
+            return json.load(f)
+
+    def save(path, value):
+        with open(path, "w") as f:
+            json.dump(value, f, indent=2)
+
+    def prior_keys(path):
+        """Judged link keys from a fetched prior artifact; nothing else is read."""
+        try:
+            doc = load(path)
+            doc = json.loads(doc["content"]) if "content" in doc else doc
+            return {str(k) for k in doc.get("judged_link_keys", [])}
+        except (OSError, ValueError, KeyError, AttributeError):
+            return None
+
+    def link_json(d, keys):
+        return [{"filing_task": k.split("|")[0], "culprit_task": k.split("|")[1], "filer_unknown": d["links"][k]} for k in keys]
+
+    def sample(a):
+        now = dt.datetime.now(dt.timezone.utc)
+        start = now - dt.timedelta(days=a.period_days)
+        judged = prior_keys(a.prior) if a.prior else None
+        terms = [t.strip().lower() for t in a.family.split(",") if t.strip()]
+        pool, excl, gaps = {}, {"own_family": 0, "already_judged": 0}, []
+        for status in STATUSES:
+            limit = 200
+            while True:
+                r = tool(a, "orbit.task.list", status=[status], limit=limit, fields=["id", "created_at", "created_by", "created_by_model", "relations"])
+                rows = r["tasks"]
+                open_end = r.get("truncated") and rows and when(rows[-1]["created_at"]) >= start
+                if not open_end:
+                    break
+                if limit >= 20000:
+                    gaps.append(status)
+                    break
+                limit *= 4
+            for row in rows:
+                if when(row["created_at"]) < start:
+                    continue
+                who = " ".join(str(row.get(f) or "") for f in ("created_by", "created_by_model")).lower()
+                for rel in row["relations"]:
+                    if rel.get("type") != "regression_from":
+                        continue
+                    key = f"{row['id']}|{rel['target']}"
+                    if judged and key in judged:
+                        excl["already_judged"] += 1
+                    elif any(t in who for t in terms):
+                        excl["own_family"] += 1
+                    else:
+                        pool[key] = not who.strip()
+        seed = a.seed or os.urandom(8).hex()
+        order = sorted(pool)
+        random.Random(seed).shuffle(order)
+        d = dict(seed=seed, drawn=order[:a.sample_size], reserve=order[a.sample_size:], window_start=start.isoformat(), window_end=now.isoformat(), sample_size=a.sample_size, period_days=a.period_days,
+                 family=a.family, eligible_population=len(pool), exclusions=excl, gaps=gaps, links=pool, breaches=[],
+                 prior_found=judged is not None, prior_keys=sorted(judged or []))
+        save(DRAW, d)
+        show(d)
+
+    def show(d):
+        print(json.dumps({k: d[k] for k in ("seed", "window_start", "window_end", "eligible_population", "exclusions", "gaps", "prior_found")}
+                         | {"sampled": link_json(d, d["drawn"]), "reserve": len(d["reserve"])}, indent=2))
+
+    def packet(a):
+        d, packets = load(DRAW), {}
+        def read(task_id, fields):
+            r = tool(a, "orbit.task.show", id=task_id, fields=fields)
+            return {f: r.get(f) for f in fields}
+        for key in d["drawn"]:
+            filing, culprit = key.split("|")
+            packets[key] = {"filing_task": {"id": filing, **read(filing, ["title", "description", "acceptance_criteria", "context_files", "type"])},
+                            "culprit_task": {"id": culprit, **read(culprit, ["title", "description", "acceptance_criteria", "context_files"])}}
+        save(PACKETS, packets)
+        print(json.dumps(packets, indent=2))
+
+    def replace(a):
+        d = load(DRAW)
+        key = f"{a.filing}|{a.culprit}"
+        if key not in d["drawn"]:
+            sys.exit("not an active sampled link")
+        d["breaches"].append({"link": key, "reason": a.reason})
+        d["drawn"].remove(key)
+        if d["reserve"]:
+            d["drawn"].append(d["reserve"].pop(0))
+        save(DRAW, d)
+        show(d)
+
+    def compare(a):
+        d = load(DRAW)
+        if not os.path.exists(SECOND):
+            sys.exit(f"refusing: {SECOND} (second labels) is not recorded yet")
+        second = {f"{s['filing_task']}|{s['culprit_task']}": s for s in load(SECOND)}
+        keys = d["drawn"]
+        missing = [k for k in keys if k not in second or any(not second[k].get(f) for f in LABELS)]
+        if missing:
+            sys.exit(f"refusing: second labels missing for {missing}")
+        packets, links, tally = load(PACKETS), [], {f: [0, 0] for f in LABELS}
+        if any(k not in packets for k in keys):
+            sys.exit("refusing: run packet again after a replacement")
+        for key in keys:
+            filing, culprit = key.split("|")
+            relations = tool(a, "orbit.task.show", id=filing, fields=["relations"]).get("relations", [])
+            rec = next((r for r in relations if r.get("type") == "regression_from" and r.get("target") == culprit), {}).get("regression") or {}
+            agree = {}
+            for f in LABELS:
+                if f == "severity" and (not rec or rec.get("severity_source") == "default" or not rec.get("severity")):
+                    agree[f] = None
+                    continue
+                agree[f] = bool(rec.get(f)) and rec[f] == second[key][f]
+                tally[f][0] += not agree[f]
+                tally[f][1] += 1
+            links.append({"filing_task": filing, "culprit_task": culprit, "filer_unknown": d["links"][key], "evidence_packet": packets[key],
+                          "second": {f: second[key][f] for f in LABELS} | {"reason": second[key].get("reason", "")}, "recorded": rec or None, "agreement": agree})
+        report = dict(schema_version=1, audited_at=dt.datetime.now(dt.timezone.utc).isoformat(), auditor_family=d["family"], sample_size=d["sample_size"],
+                      period_days=d["period_days"], window_start=d["window_start"], window_end=d["window_end"], eligible_population=d["eligible_population"],
+                      seed=d["seed"], exclusions=d["exclusions"] | {"blindness_breach": d["breaches"]}, gaps=d["gaps"], links=links,
+                      disagreement_rates={f: {"disagreed": n, "judged": m, "rate": (n / m if m else None)} for f, (n, m) in tally.items()},
+                      prior_artifact=a.prior_ref or None, baseline_reason=None if d["prior_found"] else (a.baseline_reason or "no prior artifact"),
+                      judged_link_keys=sorted(set(d["prior_keys"]) | set(keys)))
+        save(FINAL, report)
+        print(json.dumps({k: report[k] for k in ("eligible_population", "disagreement_rates")} | {"links": [{k: l[k] for k in ("filing_task", "culprit_task", "recorded", "agreement")} for l in links]}, indent=2))
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="claude")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("sample")
+    s.add_argument("--family", required=True)
+    s.add_argument("--sample-size", type=int, required=True)
+    s.add_argument("--period-days", type=int, required=True)
+    s.add_argument("--seed")
+    s.add_argument("--prior")
+    sub.add_parser("packet")
+    r = sub.add_parser("replace")
+    r.add_argument("filing"), r.add_argument("culprit"), r.add_argument("--reason", required=True)
+    c = sub.add_parser("compare")
+    c.add_argument("--prior-ref"), c.add_argument("--baseline-reason")
+    a = p.parse_args()
+    {"sample": sample, "packet": packet, "replace": replace, "compare": compare}[a.cmd](a)
+    ```
 
     ## Sample
 
@@ -58,25 +243,32 @@ template:
     has `created_at` in that window. A relation added later to an older
     task is outside the window.
 
-    Enumerate with `orbit.task.list` and
-    `fields: ["id", "created_at", "created_by", "created_by_model", "relations"]`,
-    once per status (proposed, backlog, in-progress, review, blocked,
-    someday, done, rejected, archived). Each status is newest first. Walk
-    until `created_at` is before the window. When `truncated` is true and
-    the oldest row is still inside the window, repeat that status with a
-    higher limit. A status you cannot cover is a recorded gap, not a
-    reason to pad the sample.
+    Find the previous completed audit first. List done chores with
+    `orbit.task.list` (tag auto-task:regression-label-audit, `fields`
+    `id`, `status`), exclude this task, list artifacts of the newest with
+    `orbit.task.show` field `artifacts`, and only when
+    regression-label-audit.json is listed, save it without reading it:
+    `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<prior task ID>","path":"regression-label-audit.json","model":"<agent-family>"}' > .orbit/tmp/regression-label-audit-prior.json`.
+    Missing prior evidence makes this a baseline; record why. Never open
+    that file: the helper takes only its judged link keys from it, so a
+    later run does not redraw those links.
 
-    Keep regression_from relations. Drop links already judged by a
-    previous audit (read its artifact below). Drop links whose
-    `created_by` or `created_by_model` names your own model family
-    (Claude, GPT/Codex, Gemini, Grok and so on), the same family test
-    `recovery-fault-audit` applies to `fault_judged_by`, so a different
-    family re-labels each link. Your family is the family of the model
-    this run dispatched. A link with neither field is eligible only when
-    you record that its filer is unknown. Draw sample_size at random with
-    a recorded seed. Fewer than sample_size eligible links is an evidenced
-    short sample, never padding.
+    Then run `sample` with the sample_size and period_days definition
+    fields above and, as `--family`, a comma list naming your own model
+    family (`claude`; `gpt,codex,openai`; `gemini`; `grok` and so on), the
+    same family test `recovery-fault-audit` applies to `fault_judged_by`.
+    Your family is the family of the model this run dispatched. Add
+    `--prior .orbit/tmp/regression-label-audit-prior.json` when you saved
+    it. The helper lists each status (proposed, backlog, in-progress,
+    review, blocked, someday, done, rejected, archived) newest first,
+    repeats a truncated status with a higher limit while its oldest row is
+    still inside the window, keeps regression_from relations, drops links a
+    previous audit judged and links filed under your own family, and draws
+    sample_size at random with a recorded seed. A status it could not cover
+    is a recorded gap, not a reason to pad the sample. A link with neither
+    field is eligible only when you record that its filer is unknown.
+    Fewer than sample_size eligible links is an evidenced short sample,
+    never padding.
 
     ## Re-label
 
@@ -117,47 +309,45 @@ template:
 
     ## Agreement
 
-    Agree on a field when both sides name the same value. A missing
-    recorded nature or escape disagrees with every second label, including
-    unclassified. Both unclassified agree. Severity agrees when the
-    recorded severity equals the second severity. When the payload is
-    absent, or `severity_source` is `default`, there is no filer severity:
-    leave that link's severity agreement null and leave it out of the
-    severity rate. The disagreement rate for a field is the disagreements
-    divided by the sampled links judged on that field. Report each rate
-    with its numerator and denominator.
-
-    Fetch the previous completed audit's regression-label-audit.json: find
-    done chores with `orbit.task.list` (tag auto-task:regression-label-audit),
-    exclude this task, list artifacts with `orbit.task.show` field
-    `artifacts`, and read the newest artifact with `orbit.task.artifact`
-    action `get` only when that path is listed. Missing prior evidence
-    makes this a baseline; record why. Carry its judged link keys (filing
-    task id and target) forward so a later run does not redraw them. The
-    rates in this run are this sample only.
+    Record your escape, nature and severity and a one-line reason for
+    every sampled link before `compare` runs: write
+    `.orbit/tmp/regression-label-audit-second.json` as an array of
+    `{"filing_task","culprit_task","escape","nature","severity","reason"}`,
+    one object per sampled link, then run `compare` with
+    `--prior-ref <prior task ID>/regression-label-audit.json` (or
+    `--baseline-reason <why>`). Do not read the recorded labels any other
+    way. The helper scores agreement: a field agrees when both sides name
+    the same value. A missing recorded nature or escape disagrees with
+    every second label, including unclassified. Both unclassified agree.
+    Severity agrees when the recorded severity equals the second severity.
+    When the payload is absent, or `severity_source` is `default`, there
+    is no filer severity: that link's severity agreement is null and it is
+    left out of the severity rate. The disagreement rate for a field is
+    the disagreements divided by the sampled links judged on that field,
+    reported with its numerator and denominator.
 
     ## Persist
 
-    Attach .orbit/tmp/regression-label-audit.json with schema_version: 1,
-    the audit time, your own model family, sample_size, period_days, the
-    eligible population size, the seed, exclusions with reasons (own
-    family, already judged, blindness breach, outside the window), each
-    sampled link (filing task id, culprit task id, the evidence packet,
-    the second escape, nature and severity and the one-line reason, the
-    recorded labels, and agreement per field), the three disagreement
-    rates with numerators and denominators, the prior artifact reference
-    and every judged link key. The evidence packet on each link contains
-    neither the filer's labels nor any model, provider or crew name.
-    Attach it with `orbit.task.artifact` action `put` (id this chore,
-    source_path the scratch file, path regression-label-audit.json). The
-    execution summary reports the sample size, the eligible population,
-    and the disagreement rate for escape, nature and severity. A short
-    sample or a baseline still persists the artifact and succeeds. Write
-    only this chore's artifact and its summary or comment. Do not edit a
-    regression link, a scorecard or a rank.
+    `compare` writes `.orbit/tmp/regression-label-audit.json` with
+    schema_version: 1, the audit time, your own model family, sample_size,
+    period_days, the eligible population size, the seed, exclusions with
+    reasons (own family, already judged, blindness breach), each sampled
+    link (filing task id, culprit task id, the evidence packet, the second
+    escape, nature and severity and the one-line reason, the recorded
+    labels, and agreement per field), the three disagreement rates with
+    numerators and denominators, the prior artifact reference and every
+    judged link key. The evidence packet on each link contains neither the
+    filer's labels nor any model, provider or crew name. Attach it with
+    `orbit.task.artifact` action `put` (id this chore, source_path the
+    scratch file, path regression-label-audit.json). The execution summary
+    reports the sample size, the eligible population, and the
+    disagreement rate for escape, nature and severity. A short sample or a
+    baseline still persists the artifact and succeeds. Write only this
+    chore's artifact and its summary or comment. Do not edit a regression
+    link, a scorecard or a rank.
   acceptance_criteria:
   - Up to sample_size (10) regression_from links from the last period_days (7), not judged by a previous audit and not filed by the auditor's own model family, were sampled with a recorded seed, or a short sample was evidenced with the eligible population size
-  - Each sampled link was re-labeled from an evidence packet of task title, description, acceptance criteria and context files that contains neither the filer's labels nor any model, provider or crew name of the filer or the culprit's implementer or reviewer, and a blindness breach was excluded and replaced
+  - Each sampled link was re-labeled from an evidence packet of task title, description, acceptance criteria and context files that contains neither the filer's labels nor any model, provider or crew name of the filer or the culprit's implementer or reviewer, no sampling response reached the judge with either before its second labels were saved, and a blindness breach was excluded and replaced
   - regression-label-audit.json records, per sampled link, the second escape, nature and severity and agreement on each of those fields
   - The execution summary reports this sample's disagreement rate for escape, nature and severity, each with its denominator
   - No regression link, scorecard number or rank number was changed

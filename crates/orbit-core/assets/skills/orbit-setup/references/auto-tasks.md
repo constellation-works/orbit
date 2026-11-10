@@ -773,15 +773,22 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
 - **`regression-label-audit`** (`medium`) — weekly. Re-labels 10
   `regression_from` links from the last 7 days that another model family
   filed, blind to the filer's labels and to any model, provider or crew
-  name of the filer or of the culprit's implementer or reviewer. It uses
-  the same family skip and field restriction as `recovery-fault-audit`:
-  `created_by` and `created_by_model` only to skip its own family, and the
-  evidence packet is the filing and culprit tasks' title, description,
-  criteria and context files. Sample size and period are definition fields
-  in the brief. Each run attaches `regression-label-audit.json` with the
-  second escape, nature and severity and per-field agreement, and the
-  execution summary reports the sample's disagreement rate for each field.
-  It never edits a regression link, a scorecard or a rank.
+  name of the filer or of the culprit's implementer or reviewer. The
+  filer's labels travel in the `relations` field of the task-list
+  response, so the judging model never reads that response: the brief
+  carries a small Python helper that lists, filters and draws outside the
+  model's context and prints only each link's filing and culprit task ids
+  and the evidence packet (title, description, criteria and context files).
+  It uses `created_by` and `created_by_model` only to skip the auditor's
+  own family, the same family skip as `recovery-fault-audit`, and never
+  prints them. The helper reads the recorded labels only after the model
+  has saved its second labels, then scores agreement. Sample size and
+  period are definition fields in the brief. Each run attaches
+  `regression-label-audit.json` with the second escape, nature and
+  severity and per-field agreement, and the execution summary reports the
+  sample's disagreement rate for each field. It never edits a regression
+  link, a scorecard or a rank. The run needs a shell with `python3` and
+  `orbit` on its path.
 
 - **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,

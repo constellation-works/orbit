@@ -503,7 +503,12 @@ re-init does not overwrite a workspace-authored definition of the same name.
   `fault_judged_by`. The evidence packet is the filing and culprit tasks'
   title, description, acceptance criteria and context files. It contains
   neither the filer's labels nor any model, provider or crew name of the
-  filer or of the culprit's implementer or reviewer. The run attaches
+  filer or of the culprit's implementer or reviewer. The labels ride in the
+  `relations` field of every task-list response, so listing, the family
+  and window filters and the draw run in a helper script carried in the
+  brief, outside the judging model's context; the model sees only link
+  identity and the packet, and the helper reads the recorded labels only
+  after the model's second labels are saved [ORB-23925]. The run attaches
   `regression-label-audit.json` with the second escape, nature and severity
   and per-field agreement, and the execution summary reports the sample's
   disagreement rate for each field. It writes only that artifact and its

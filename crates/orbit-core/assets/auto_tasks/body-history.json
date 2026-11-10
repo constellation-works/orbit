@@ -5337,7 +5337,33 @@
       }
     }
   ],
-  "regression-label-audit": [],
+  "regression-label-audit": [
+    {
+      "comments": [
+        "## Agreement",
+        "## Definition fields",
+        "## Persist",
+        "## Re-label",
+        "## Sample",
+        "## Stay blind"
+      ],
+      "digest": "1521d71fbc17499936ce91762b426e742047cba362e18c2ad3bdbeab2da8236a",
+      "revision": "36d73f758189711ac019739fe73f3917646c6a83",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "regression-label-audit",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "run-failure-patterns": [
     {
       "comments": [
