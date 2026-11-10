@@ -155,7 +155,10 @@ impl OrbitRuntime {
         // under the target lock allowed. Only raises take this lock, and
         // only raises create open agent requests, so the scanned cap
         // snapshot cannot gain a request from a concurrent raise.
-        let raise_lock_target = self.paths().orbit_dir.join("decision-raise");
+        // The shared Orbit root is read-only in managed lanes. Keep this
+        // workspace-wide lock inside the already-granted task store so a
+        // permitted raise needs no broader filesystem authority.
+        let raise_lock_target = self.paths().orbit_dir.join("tasks/decision-raise");
         let mut outcome: Option<AgentDecisionRaised> = None;
         orbit_common::fs::io::with_exclusive_file_lock(
             &raise_lock_target,
