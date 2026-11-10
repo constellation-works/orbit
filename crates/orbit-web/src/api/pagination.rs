@@ -21,6 +21,12 @@ pub(super) struct TaskCursor {
     pub(super) created_at: DateTime<Utc>,
     pub(super) id: String,
     pub(super) offset: usize,
+    /// The workspace the last row belonged to, for the aggregate listing,
+    /// which orders workspace by workspace: earlier workspaces are spent,
+    /// this one resumes after `created_at`/`id`, later ones start fresh.
+    /// Absent on single-workspace cursors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace_id: Option<String>,
     checksum: String,
 }
 
@@ -116,11 +122,21 @@ impl TaskPageQuery {
     }
 
     pub(super) fn filter(&self) -> TaskListFilter {
-        TaskListFilter {
-            scan_before: self
-                .cursor
+        self.filter_scanning_before(
+            self.cursor
                 .as_ref()
                 .map(|cursor| (cursor.created_at, cursor.id.clone())),
+        )
+    }
+
+    /// [`Self::filter`] with an explicit resume point instead of the cursor's,
+    /// for a listing that applies the cursor to one source only.
+    pub(super) fn filter_scanning_before(
+        &self,
+        scan_before: Option<(DateTime<Utc>, String)>,
+    ) -> TaskListFilter {
+        TaskListFilter {
+            scan_before,
             search: self.search.clone(),
             statuses: if self.no_statuses {
                 Some(Vec::new())
@@ -154,6 +170,10 @@ impl TaskPageQuery {
         self.cursor.as_ref().map_or(0, |cursor| cursor.offset)
     }
 
+    pub(super) fn cursor(&self) -> Option<&TaskCursor> {
+        self.cursor.as_ref()
+    }
+
     pub(super) fn next_cursor(
         &self,
         scope: &str,
@@ -161,7 +181,28 @@ impl TaskPageQuery {
         id: String,
         offset: usize,
     ) -> Result<String, serde_json::Error> {
-        TaskCursor::new(scope, &self.filter_key(), created_at, id, offset).encode()
+        TaskCursor::new(scope, &self.filter_key(), created_at, id, offset, None).encode()
+    }
+
+    /// [`Self::next_cursor`] for the aggregate listing, naming the workspace
+    /// the page's last row belongs to.
+    pub(super) fn next_workspace_cursor(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        created_at: DateTime<Utc>,
+        id: String,
+        offset: usize,
+    ) -> Result<String, serde_json::Error> {
+        TaskCursor::new(
+            scope,
+            &self.filter_key(),
+            created_at,
+            id,
+            offset,
+            Some(workspace_id.to_string()),
+        )
+        .encode()
     }
 
     fn parse_statuses(&mut self, value: &str) -> Result<(), String> {
@@ -248,6 +289,7 @@ impl TaskCursor {
         created_at: DateTime<Utc>,
         id: String,
         offset: usize,
+        workspace_id: Option<String>,
     ) -> Self {
         let mut cursor = Self {
             version: CURSOR_VERSION,
@@ -256,6 +298,7 @@ impl TaskCursor {
             created_at,
             id,
             offset,
+            workspace_id,
             checksum: String::new(),
         };
         cursor.checksum = cursor.expected_checksum();
@@ -300,19 +343,21 @@ impl TaskCursor {
     }
 
     fn expected_checksum(&self) -> String {
-        blake3::hash(
-            format!(
-                "{}\0{}\0{}\0{}\0{}\0{}",
-                self.version,
-                self.scope,
-                self.filters,
-                self.created_at.to_rfc3339(),
-                self.id,
-                self.offset,
-            )
-            .as_bytes(),
-        )
-        .to_hex()
-        .to_string()
+        let mut material = format!(
+            "{}\0{}\0{}\0{}\0{}\0{}",
+            self.version,
+            self.scope,
+            self.filters,
+            self.created_at.to_rfc3339(),
+            self.id,
+            self.offset,
+        );
+        // Appended only when set, so a single-workspace cursor keeps the
+        // checksum it had before aggregate cursors named a workspace.
+        if let Some(workspace_id) = &self.workspace_id {
+            material.push('\0');
+            material.push_str(workspace_id);
+        }
+        blake3::hash(material.as_bytes()).to_hex().to_string()
     }
 }

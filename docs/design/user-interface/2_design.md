@@ -331,6 +331,29 @@ The preview holds the fetched bytes in a `blob:` object URL, which Open and Down
 
 The set of types rendered inline mirrors the server's `nosniff` allowlist exactly. `image/svg+xml` and `text/html` are absent from both: they are viewable formats that are also script hosts, so they stay downloads. Everything else keeps its existing text render or download link.
 
+## 8b. All Workspaces: Workspace Order and Colours
+
+Under **All workspaces** each status section reads workspace by workspace, in the order the rail's workspace picker lists them (the `/api/workspaces` order), and inside one workspace rows keep the list's `created_at DESC, id ASC` order. `/api/tasks/all` cuts its pages in that same order: it walks the selected workspaces in picker order, and its cursor names the workspace the page's last row belongs to, so the next page skips the workspaces already shown (they still count toward `total`), resumes inside that workspace and starts later ones from their newest task. A status section that spans pages therefore never shows one workspace's rows on both sides of another's. A cursor issued before this ordering is refused as stale. The browser re-sorts each section by picker position with a stable sort, so a page reads in that order even when rows reach it from elsewhere [ORB-23884].
+
+Each row's workspace pill (`.ws-badge`) takes its workspace's colour from a palette of twelve tokens defined once in `css/base.css`: `--ws-1` … `--ws-12`, each paired with a `--ws-N-low` tint at 12% alpha, the way the `--ag-*` / `--ag-*-low` agent colours pair. The pill draws its text in the colour, its border in the colour at 45%, and its background in the tint; its shape, size, padding and font are the shared title-badge ones. `workspaceColor(id)` in `js/common.js` is the one function that picks a slot: the preferred slot is an FNV-1a hash of the workspace ID, and the host's listed workspaces are placed in ID order, a workspace whose slot is taken moving to the next free one. A workspace therefore keeps its colour across reloads and pages, and two workspaces share a colour only once all twelve slots are taken; the pill's text still names the workspace. Adding a workspace can move another only when it takes a slot that workspace had probed into, and a host listing a different set of workspaces can assign a probed workspace differently. The rail picker's multi-select entries draw their text in the same slot from the same function, so the picker is the colour key. A single-workspace board shows no pill and is unchanged.
+
+The palette avoids colours that already carry meaning: the status, run-state and priority colours (green, yellow and amber, orange, red, cyan, purple and lavender), the blue `--accent` and the five agent hues. Its entries sit in the three OKLCH hue bands those leave free (lime 116–132°, teal 190°, orchid 330°), each at least 15° of hue and 0.09 OKLab distance from every one of those tokens, and vary lightness and chroma inside the bands rather than borrow a semantic hue. Each entry's text meets 4.5:1 against its own tint over the dashboard's row, selected-row, control and page surfaces. A new slot must keep both distances and the contrast.
+
+| Token | Colour | OKLCH (L C h) | Nearest semantic token (OKLab ΔE) |
+|---|---|---|---|
+| `--ws-1` | `#d3fb51` lime | 0.93 0.195 122 | `--status-done` 0.187 |
+| `--ws-2` | `#14ebe3` aqua | 0.85 0.145 190 | `--ag-codex` 0.093 |
+| `--ws-3` | `#fea8f6` orchid | 0.84 0.140 330 | `--state-held` 0.091 |
+| `--ws-4` | `#8dd63e` leaf | 0.80 0.195 132 | `--status-done` 0.096 |
+| `--ws-5` | `#12aea8` teal | 0.68 0.115 190 | `--ag-grok` 0.090 |
+| `--ws-6` | `#ba83b4` mauve | 0.68 0.095 330 | `--status-review` 0.096 |
+| `--ws-7` | `#bbc589` khaki | 0.80 0.080 116 | `--status-proposed` 0.092 |
+| `--ws-8` | `#b7f2ed` pale aqua | 0.92 0.060 190 | `--ag-codex` 0.151 |
+| `--ws-9` | `#fed6fa` pale pink | 0.92 0.065 330 | `--state-held` 0.155 |
+| `--ws-10` | `#66a70c` dark lime | 0.66 0.180 132 | `--ag-grok` 0.115 |
+| `--ws-11` | `#d3ebbd` sage | 0.91 0.065 130 | `--status-done` 0.151 |
+| `--ws-12` | `#939b69` olive | 0.67 0.070 116 | `--ag-grok` 0.118 |
+
 ## 9. Operations
 
 Operations renders routine-definition state separately from the host sweep clock [ORB-10875]. Each routine row names its source workspace, cron schedule, catalog target, last scheduler evaluation/fire, linked run outcome, and next due slot. Definition `enabled` is the versioned switch; the clock card independently reports its native provider, configured/effective cadence, loaded/active health, and native last/next tick values when available.
@@ -528,6 +551,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 
 ## Task References
 
+- [ORB-23884] grouped the All workspaces task list by workspace and gave each workspace pill a palette colour, keyed by the rail picker.
 - [ORB-11365] added the responsive task-artifact image preview and its open/download controls.
 - [ORB-16623] allowed `blob:` image previews under the dashboard CSP.
 - [T20260427-29] introduced the Canon Refined UI direction.

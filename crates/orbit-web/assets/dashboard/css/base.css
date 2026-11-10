@@ -85,6 +85,38 @@
   --ag-grok-low:   rgba(76, 195, 138, 0.12);
   --ag-muse-low:   rgba(240, 140, 192, 0.12);
 
+  /* Workspace identity colours: the All workspaces task pills and the rail
+     picker's entries (common.js workspaceColor picks the slot). Every hue
+     sits in a band no status, state, priority, accent or agent colour uses
+     (lime, teal, orchid), at least 15 degrees of OKLCH hue and 0.09 OKLab
+     away from each of them, and each reads at 4.5:1 or better on its own
+     tint. Lightness and chroma vary inside the bands; see the user-interface
+     design doc before adding a slot. */
+  --ws-1: #d3fb51;       /* lime */
+  --ws-2: #14ebe3;       /* aqua */
+  --ws-3: #fea8f6;       /* orchid */
+  --ws-4: #8dd63e;       /* leaf */
+  --ws-5: #12aea8;       /* teal */
+  --ws-6: #ba83b4;       /* mauve */
+  --ws-7: #bbc589;       /* khaki */
+  --ws-8: #b7f2ed;       /* pale aqua */
+  --ws-9: #fed6fa;       /* pale pink */
+  --ws-10: #66a70c;      /* dark lime */
+  --ws-11: #d3ebbd;      /* sage */
+  --ws-12: #939b69;      /* olive */
+  --ws-1-low: rgba(211, 251, 81, 0.12);
+  --ws-2-low: rgba(20, 235, 227, 0.12);
+  --ws-3-low: rgba(254, 168, 246, 0.12);
+  --ws-4-low: rgba(141, 214, 62, 0.12);
+  --ws-5-low: rgba(18, 174, 168, 0.12);
+  --ws-6-low: rgba(186, 131, 180, 0.12);
+  --ws-7-low: rgba(187, 197, 137, 0.12);
+  --ws-8-low: rgba(183, 242, 237, 0.12);
+  --ws-9-low: rgba(254, 214, 250, 0.12);
+  --ws-10-low: rgba(102, 167, 12, 0.12);
+  --ws-11-low: rgba(211, 235, 189, 0.12);
+  --ws-12-low: rgba(147, 155, 105, 0.12);
+
   /* Washes and control surfaces shared by the redesigned chrome. */
   --bg-sunk: #0f1216;
   --bg-hover: rgba(255, 255, 255, 0.035);
@@ -149,6 +181,22 @@
 [data-state="cancelled"] { --dot: var(--state-cancelled); }
 [data-state="interrupted"] { --dot: var(--state-interrupted); }
 [data-state="disabled"], [data-state="skipped"] { --dot: var(--state-disabled); }
+
+/* One workspace colour pair per palette slot, read by the workspace pill and
+   the picker entry. */
+[data-ws-color="1"] { --ws: var(--ws-1); --ws-low: var(--ws-1-low); }
+[data-ws-color="2"] { --ws: var(--ws-2); --ws-low: var(--ws-2-low); }
+[data-ws-color="3"] { --ws: var(--ws-3); --ws-low: var(--ws-3-low); }
+[data-ws-color="4"] { --ws: var(--ws-4); --ws-low: var(--ws-4-low); }
+[data-ws-color="5"] { --ws: var(--ws-5); --ws-low: var(--ws-5-low); }
+[data-ws-color="6"] { --ws: var(--ws-6); --ws-low: var(--ws-6-low); }
+[data-ws-color="7"] { --ws: var(--ws-7); --ws-low: var(--ws-7-low); }
+[data-ws-color="8"] { --ws: var(--ws-8); --ws-low: var(--ws-8-low); }
+[data-ws-color="9"] { --ws: var(--ws-9); --ws-low: var(--ws-9-low); }
+[data-ws-color="10"] { --ws: var(--ws-10); --ws-low: var(--ws-10-low); }
+[data-ws-color="11"] { --ws: var(--ws-11); --ws-low: var(--ws-11-low); }
+[data-ws-color="12"] { --ws: var(--ws-12); --ws-low: var(--ws-12-low); }
+
 [data-pool="eligible"] { --dot: var(--ready-eligible); }
 [data-pool="locks"] { --dot: var(--ready-locks); }
 [data-pool="capacity"] { --dot: var(--ready-capacity); }

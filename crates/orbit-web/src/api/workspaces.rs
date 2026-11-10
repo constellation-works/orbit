@@ -307,11 +307,14 @@ fn fleet_drain_row(
 /// unavailable for the response while rows that did read stay in `items`. The
 /// aggregate stays available when one workspace is broken. `unavailable` is an
 /// empty array when every source answered. Status/tag/type/search filters,
-/// limit, and cursor have the same semantics as `/api/tasks`; selection happens
-/// independently in each available workspace before one global
-/// `created_at DESC, id ASC` merge. Repeated `workspaces` parameters narrow
-/// sources before selection and bind the cursor to that subset. `total` still
-/// sums only selected workspaces that answered.
+/// limit, and cursor have the same semantics as `/api/tasks`. Rows are ordered
+/// workspace by workspace, in the order `/api/workspaces` lists them (the
+/// dashboard's workspace picker order), and `created_at DESC, id ASC` inside
+/// one workspace. The page is cut in that order, so a status section that
+/// spans pages never shows one workspace's rows on both sides of another's;
+/// the cursor names the workspace its last row belongs to. Repeated
+/// `workspaces` parameters narrow sources before selection and bind the cursor
+/// to that subset. `total` still sums only selected workspaces that answered.
 pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
@@ -327,6 +330,7 @@ pub(super) async fn list_all_tasks(
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
+        aggregate_resume_index(&aggregate_task_entries(&pinned, &query), &query)?;
         Ok(all_tasks_json(&state, &pinned, &query, &scope))
     })
     .await
@@ -335,6 +339,44 @@ pub(super) async fn list_all_tasks(
         Ok(Err(error)) => server_error(error),
         Err(response) => *response,
     }
+}
+
+/// The workspaces `/api/tasks/all` reads, in `/api/workspaces` order.
+fn aggregate_task_entries<'a>(
+    pinned: &'a Pinned,
+    query: &TaskPageQuery,
+) -> Vec<&'a crate::state::WsEntry> {
+    pinned
+        .entries()
+        .iter()
+        .filter(|entry| query.workspaces.is_empty() || query.workspaces.contains(&entry.id))
+        .collect()
+}
+
+/// Where an aggregate page resumes: the index of the cursor's workspace in
+/// `entries`. Workspaces before it are spent: they still answer for `total`
+/// but contribute no rows. The cursor's own workspace resumes after its last
+/// row, and later workspaces start from their newest task.
+fn aggregate_resume_index(
+    entries: &[&crate::state::WsEntry],
+    query: &TaskPageQuery,
+) -> Result<usize, orbit_core::OrbitError> {
+    let Some(cursor) = query.cursor() else {
+        return Ok(0);
+    };
+    let workspace_id = cursor.workspace_id.as_deref().ok_or_else(|| {
+        orbit_core::OrbitError::InvalidInput(
+            "task cursor predates workspace-ordered pages; reload the list".to_string(),
+        )
+    })?;
+    entries
+        .iter()
+        .position(|entry| entry.id == workspace_id)
+        .ok_or_else(|| {
+            orbit_core::OrbitError::InvalidInput(
+                "task cursor names a workspace outside this listing".to_string(),
+            )
+        })
 }
 
 fn aggregate_task_scope(pinned: &Pinned) -> String {
@@ -639,14 +681,14 @@ fn all_tasks_json(
     let mut remaining = 0;
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
+    let entries = aggregate_task_entries(pinned, query);
+    let resume_index = aggregate_resume_index(&entries, query)?;
+    let resume_before = query
+        .cursor()
+        .map(|cursor| (cursor.created_at, cursor.id.clone()));
     // Each workspace's candidate keys are selected concurrently (its own
     // runtime and store); the fold below runs in pinned entry order, so
     // totals, candidates and `unavailable` keep their serial order.
-    let entries = pinned
-        .entries()
-        .iter()
-        .filter(|entry| query.workspaces.is_empty() || query.workspaces.contains(&entry.id))
-        .collect::<Vec<_>>();
     let selections = fan_out(entries.len(), |index| {
         let entry = &entries[index];
         if !entry.active {
@@ -659,8 +701,17 @@ fn all_tasks_json(
                 return Err("failed to open workspace".to_string());
             }
         };
+        let (filter, limit) = match index.cmp(&resume_index) {
+            // Only the total is read from a spent workspace.
+            std::cmp::Ordering::Less => (query.filter_scanning_before(None), 1),
+            std::cmp::Ordering::Equal => (
+                query.filter_scanning_before(resume_before.clone()),
+                query.limit(),
+            ),
+            std::cmp::Ordering::Greater => (query.filter_scanning_before(None), query.limit()),
+        };
         // One broken workspace must not take down the fleet-wide list.
-        match workspace_task_keys(&runtime, query) {
+        match workspace_task_keys(&runtime, query, filter, limit) {
             Ok(page) => Ok((runtime, page)),
             Err(error) => {
                 tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
@@ -668,7 +719,7 @@ fn all_tasks_json(
             }
         }
     });
-    for (entry, selection) in entries.iter().zip(selections) {
+    for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
         let (runtime, page) = match selection {
             Ok(selection) => selection,
             Err(error) => {
@@ -677,24 +728,34 @@ fn all_tasks_json(
             }
         };
         total += page.total_without_cursor;
+        if index < resume_index {
+            continue;
+        }
         remaining += page.total;
-        for task in page.items {
-            candidates.push((task, runtime.clone(), entry));
+        let mut items = page.items;
+        items.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        for task in items {
+            candidates.push((task, runtime.clone(), *entry));
         }
     }
-    candidates.sort_by(|(a, _, _), (b, _, _)| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| a.id.cmp(&b.id))
-    });
     candidates.truncate(query.limit());
     let offset = query.offset();
     let next_offset = offset.saturating_add(candidates.len());
     let next_cursor = if remaining > candidates.len() {
         candidates
             .last()
-            .map(|(task, _, _)| {
-                query.next_cursor(scope, task.created_at, task.id.clone(), next_offset)
+            .map(|(task, _, entry)| {
+                query.next_workspace_cursor(
+                    scope,
+                    &entry.id,
+                    task.created_at,
+                    task.id.clone(),
+                    next_offset,
+                )
             })
             .transpose()
             .map_err(|error| {
@@ -823,13 +884,14 @@ fn record_unavailable(
 fn workspace_task_keys(
     runtime: &OrbitRuntime,
     query: &TaskPageQuery,
+    filter: orbit_core::application::task::TaskListFilter,
+    limit: usize,
 ) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
-    let filter = query.filter();
     if query.pilot_warnings() {
         let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
             filter,
             pilot_warnings: true,
-            limit: query.limit(),
+            limit,
             ..Default::default()
         })?;
         return Ok(TaskCandidateKeys {
@@ -845,10 +907,10 @@ fn workspace_task_keys(
             total_without_cursor: page.total_without_cursor,
         });
     }
-    if let Some(keys) = runtime.observe_task_candidate_keys(&filter, query.limit())? {
+    if let Some(keys) = runtime.observe_task_candidate_keys(&filter, limit)? {
         return Ok(keys);
     }
-    let page = runtime.observe_task_candidates(&filter, query.limit())?;
+    let page = runtime.observe_task_candidates(&filter, limit)?;
     Ok(TaskCandidateKeys {
         items: page
             .items
