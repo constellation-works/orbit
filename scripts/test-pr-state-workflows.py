@@ -783,11 +783,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(pack[1], "pack")
         self.assertEqual(pack[4:], ["--parts", str(parts)])
         names = set()
+        artifact_flags = []
         for k, name in enumerate(uploads, 1):
             upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == name)
             self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)),
                              f"{pack[3]}.{k}")
             names.add(upload_step["with"]["name"])
+            artifact_flags += ["--artifact", upload_step["with"]["name"]]
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
@@ -797,12 +799,39 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 [unpack] = self.run_step(job, "Restore native nextest archive")
                 self.assertEqual(unpack[:2], [pack[0], "unpack"])
                 self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
-                download = next(step for step in job["steps"] if step.get("name") == "Download nextest archive")
-                self.assertTrue(download["with"]["merge-multiple"])
+                downloads = [step for step in job["steps"]
+                             if str(step.get("name", "")).startswith("Download nextest archive")]
+                self.assertEqual(
+                    [step["name"] for step in downloads],
+                    ["Download nextest archive",
+                     "Download nextest archive attempt 2",
+                     "Download nextest archive attempt 3"],
+                    "run 42657013708 failed GetSignedArtifactURL with ECONNRESET and had no retry")
                 uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
                             if step.get("uses", "").startswith("actions/upload-artifact@")}
-                self.assertEqual({name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
-                                 names, "every shard downloads every part and nothing else")
+                for download in downloads:
+                    self.assertTrue(download["with"]["merge-multiple"])
+                    self.assertEqual(download["with"]["path"], "${{ runner.temp }}")
+                    self.assertTrue(str(download.get("uses", "")).startswith("actions/download-artifact@"))
+                    self.assertEqual(
+                        {name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
+                        names, "every shard downloads every part and nothing else")
+                self.assertEqual({step["uses"] for step in downloads}, {downloads[0]["uses"]})
+                self.assertIs(downloads[0].get("continue-on-error"), True)
+                self.assertIs(downloads[1].get("continue-on-error"), True)
+                self.assertNotIn(
+                    "continue-on-error", downloads[2],
+                    "the last download attempt must fail the job so nextest does not run without the archive")
+                self.assertEqual(downloads[0].get("id"), "nextest-archive-download")
+                self.assertEqual(downloads[1].get("id"), "nextest-archive-download-2")
+                self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[1]["if"])
+                self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[2]["if"])
+                self.assertIn("steps.nextest-archive-download-2.outcome == 'failure'", downloads[2]["if"])
+                step_names = [step.get("name") for step in job["steps"]]
+                self.assertLess(step_names.index("Await the nextest archive"),
+                                step_names.index("Download nextest archive"))
+                self.assertLess(step_names.index("Download nextest archive attempt 3"),
+                                step_names.index("Restore native nextest archive"))
                 self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
@@ -811,7 +840,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertNotIn(partition, partitions, f"{job_id} repeats {partitions.get(partition)}'s shard")
                 partitions[partition] = job["name"]
                 [wait] = self.run_step(job, "Await the nextest archive")
-                self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
+                self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload, *artifact_flags])
         self.assertEqual(sorted(partitions),
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the test runners must select every count partition "

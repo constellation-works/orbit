@@ -42,12 +42,27 @@ class AwaitJobsTests(unittest.TestCase):
         self.timed_response = None
         self.response_headers = {}
         self.pages = None
+        self.artifacts = None
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 fixture.requests.append(self.path)
                 fixture.request_headers.append(dict(self.headers))
+                if "/artifacts" in self.path:
+                    produced = fixture.artifacts
+                    if callable(produced):
+                        produced = produced(float(self.headers.get("X-Fixture-Time", "0")))
+                    if produced is None:
+                        self.send_response(503)
+                        self.end_headers()
+                        return
+                    body = json.dumps({"total_count": len(produced), "artifacts": produced}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 response = (fixture.timed_response(float(self.headers.get("X-Fixture-Time", "0")))
                             if fixture.timed_response else
                             fixture.responses.pop(0) if len(fixture.responses) > 1 else fixture.responses[0])
@@ -129,11 +144,14 @@ finally:
     Path(os.environ["CI_AWAIT_CLOCK_OUTPUT"]).write_text(str(elapsed))
 ''')
 
-    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01", virtual=False):
+    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01", virtual=False,
+             artifact_names=()):
         self.responses[:] = responses
         arguments = [argument for name in jobs for argument in ("--job", name)]
         if step is not None:
             arguments += ["--step", step]
+        for name in artifact_names:
+            arguments += ["--artifact", name]
         launcher = [str(self.clock_launcher)] if virtual else []
         self.env["CI_AWAIT_CLOCK_OUTPUT"] = str(self.root / "elapsed")
         return self_test_hang.run(
@@ -287,7 +305,8 @@ finally:
         self.assertIn("paginated=true", result.stdout)
 
     def test_waits_until_every_named_job_succeeds(self):
-        building = [job("Test build", "in_progress"), job("Check / Clippy / Test", "in_progress")]
+        building = [job("Test build", "in_progress"), job("Test shard 1/2", "queued"),
+                    job("Test shard 2/2", "queued"), job("Check / Clippy / Test", "in_progress")]
         sharding = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2", "queued")]
         done = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2"),
                 job("Check / Clippy / Test", "in_progress")]
@@ -336,10 +355,26 @@ finally:
                 self.assertIn("concluded", result.stderr)
                 self.assertEqual(len(self.requests), 1)
 
-    def test_a_job_that_never_completes_times_out_by_name(self):
-        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="3")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 3 s waiting for Test shard 2/2 (missing)", result.stderr)
+    def test_an_absent_job_fails_without_waiting_out_the_timeout(self):
+        # Run 42670994582 attempt 1 listed no Test build job. The old wait
+        # treated that omission as pending and sat out the full timeout.
+        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="30", poll="15",
+                           virtual=True, artifact_names=["nextest-archive-1"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Test shard 2/2 is absent from the run", result.stderr)
+        self.assertNotIn("timed out", result.stderr)
+        self.assertEqual(len(self.requests), 1, self.requests)
+        self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+
+        self.requests.clear()
+        failed = job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "failure")])
+        result = self.wait([failed], jobs=["Test build"], step=UPLOAD, virtual=True, timeout="30",
+                           artifact_names=["nextest-archive-1"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("concluded failure", result.stderr)
+        self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 0)
 
     def test_a_blocked_listing_is_killed_at_the_deadline(self):
         pid_file = self.root / "gh.pid"
@@ -364,11 +399,59 @@ finally:
 
     def test_the_poll_sleep_does_not_outlast_the_deadline(self):
         started = time.monotonic()
-        result = self.wait([job("Test build")], timeout="3", poll="60")
+        result = self.wait([job("Test build", "in_progress")], timeout="3", poll="60",
+                           jobs=["Test build"])
         # Loose bound: unclipped, the sleep alone takes the full 60 s poll.
         self.assertLess(time.monotonic() - started, 30)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 3 s waiting for Test shard 1/2 (missing)", result.stderr)
+        self.assertIn("timed out after 3 s waiting for Test build (in_progress)", result.stderr)
+
+    def test_archive_parts_must_be_listed_before_the_wait_returns(self):
+        uploaded = [job("Test build", "in_progress", steps=[(UPLOAD, "completed", "success")])]
+        names = ["nextest-archive-1", "nextest-archive-2"]
+
+        def not_ready(elapsed):
+            if elapsed < 0.01:
+                return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 0},
+                        {"name": "nextest-archive-2", "expired": True, "size_in_bytes": 8}]
+            return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 8},
+                    {"name": "nextest-archive-2", "expired": False, "size_in_bytes": 8}]
+
+        self.artifacts = not_ready
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="0.01", timeout="10", artifact_names=names)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(float((self.root / "elapsed").read_text()), 0,
+                           "a zero-size or expired part must keep the wait open")
+        self.assertIn("with archive parts nextest-archive-1, nextest-archive-2", result.stdout)
+        self.assertIn("awaited jobs succeeded", result.stdout)
+
+        def never(_elapsed):
+            return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 8}]
+
+        self.artifacts = never
+        self.requests.clear()
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="1", timeout="5", artifact_names=names)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("timed out after 5 s waiting for archive parts nextest-archive-2", result.stderr)
+        self.assertNotIn("awaited jobs succeeded", result.stdout)
+
+        calls = {"n": 0}
+
+        def flaky(_elapsed):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        self.artifacts = flaky
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="0.01", timeout="10", artifact_names=names)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(float((self.root / "elapsed").read_text()), 0)
+        self.assertIn("artifact listing failed", result.stderr)
+        self.assertIn("with archive parts nextest-archive-1, nextest-archive-2", result.stdout)
 
 
 if __name__ == "__main__":
