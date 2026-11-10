@@ -20,7 +20,8 @@ or when pagination is needed, --poll-seconds (default 15) is the fallback
 interval. The server's X-Poll-Interval, Retry-After and, once the primary quota
 is exhausted, X-RateLimit-Reset minimums raise it. A 403 or 429 without
 Retry-After sets a 60-second minimum for single-page and paginated listings
-alike.
+alike. The artifact listing applies the same minimums to every page it reads,
+whether or not the response succeeded.
 
 --timeout-seconds is one absolute budget for the whole wait. Each `gh api`
 listing runs under the remaining budget, and the poll sleep is clipped to it. A
@@ -264,11 +265,16 @@ class JobListingPoller:
             status, stdout = request_job_listing(
                 ["--include", endpoint], remaining, kind="artifact listing")
             remaining -= time.monotonic() - started
-            if status:
-                return None
             head, _, body = stdout.partition("\n\n")
             status_line = head.splitlines()[0].split() if head else []
             http_status = status_line[1] if len(status_line) >= 2 else ""
+            headers = {name.lower(): value.strip() for line in head.splitlines()[1:]
+                       for name, separator, value in [line.partition(":")] if separator}
+            # Fold every page's backoff before judging it: a throttled or
+            # failed response still names the wait the next poll must honor.
+            self.poll_seconds = max(self.poll_seconds, self._backoff_minimum(headers, http_status))
+            if status:
+                return None
             if http_status != "200":
                 print(f"ci-await: artifact listing returned unexpected HTTP status {http_status}",
                       file=sys.stderr)

@@ -43,6 +43,8 @@ class AwaitJobsTests(unittest.TestCase):
         self.response_headers = {}
         self.pages = None
         self.artifacts = None
+        # Optional (page, elapsed) -> (status, headers, JSON payload or None).
+        self.artifact_reply = None
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -50,16 +52,22 @@ class AwaitJobsTests(unittest.TestCase):
                 fixture.requests.append(self.path)
                 fixture.request_headers.append(dict(self.headers))
                 if "/artifacts" in self.path:
-                    produced = fixture.artifacts
-                    if callable(produced):
-                        produced = produced(float(self.headers.get("X-Fixture-Time", "0")))
-                    if produced is None:
-                        self.send_response(503)
-                        self.end_headers()
-                        return
-                    body = json.dumps({"total_count": len(produced), "artifacts": produced}).encode()
-                    self.send_response(200)
+                    elapsed = float(self.headers.get("X-Fixture-Time", "0"))
+                    if fixture.artifact_reply:
+                        page = 2 if "&page=2" in self.path else 1
+                        status, headers, payload = fixture.artifact_reply(page, elapsed)
+                    else:
+                        produced = fixture.artifacts
+                        if callable(produced):
+                            produced = produced(elapsed)
+                        status, headers = (503, {}) if produced is None else (200, {})
+                        payload = None if produced is None else {"total_count": len(produced),
+                                                                 "artifacts": produced}
+                    body = b"" if payload is None else json.dumps(payload).encode()
+                    self.send_response(status)
                     self.send_header("Content-Type", "application/json")
+                    for name, value in headers.items():
+                        self.send_header(name, value)
                     self.end_headers()
                     self.wfile.write(body)
                     return
@@ -452,6 +460,64 @@ finally:
         self.assertGreater(float((self.root / "elapsed").read_text()), 0)
         self.assertIn("artifact listing failed", result.stderr)
         self.assertIn("with archive parts nextest-archive-1, nextest-archive-2", result.stdout)
+
+    def artifact_request_times(self):
+        return [float(headers["X-Fixture-Time"]) for path, headers in zip(self.requests, self.request_headers)
+                if "/artifacts" in path]
+
+    def test_artifact_listing_backoff_is_honored_before_the_next_poll(self):
+        # Completed job with an ETag, then an artifact listing throttled by
+        # the server. The next artifact poll must wait out the server minimum;
+        # the 7 s absolute deadline still ends the wait.
+        self.timed_response = lambda elapsed: [job("Test build")]
+        cases = (({"Retry-After": "60", "X-RateLimit-Remaining": "0"}, 429),
+                 ({"Retry-After": "60"}, 200),
+                 ({"X-Poll-Interval": "30"}, 200),
+                 ({}, 403),
+                 ({}, 429),
+                 ({"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 120)}, 403))
+        for headers, status in cases:
+            with self.subTest(headers=headers, status=status):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = lambda page, elapsed, headers=headers, status=status: (
+                    status, headers, {"total_count": 0, "artifacts": []})
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 7,
+                                 "the backoff minimum cannot extend the absolute deadline")
+                self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_paginated_artifact_listing_folds_backoff_from_every_page(self):
+        self.timed_response = lambda elapsed: [job("Test build")]
+
+        def page(names):
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        other = [f"other-{number}" for number in range(100)]
+        cases = (({"Retry-After": "60"}, 200, {}, 200),
+                 ({}, 200, {"Retry-After": "60"}, 429))
+        for first_headers, first_status, second_headers, second_status in cases:
+            with self.subTest(first=first_headers, second=second_headers, second_status=second_status):
+                self.requests.clear()
+                self.request_headers.clear()
+
+                def reply(number, elapsed):
+                    if number == 1:
+                        return first_status, first_headers, {"total_count": 101, "artifacts": page(other)}
+                    return second_status, second_headers, {"total_count": 101,
+                                                           "artifacts": page(["other-100"])}
+
+                self.artifact_reply = reply
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("timed out after 7 s", result.stderr)
+                self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
+                self.assertEqual(self.artifact_request_times(), [0, 0], self.requests)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 7)
 
 
 if __name__ == "__main__":

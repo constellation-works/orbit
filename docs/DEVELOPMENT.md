@@ -602,7 +602,10 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   the primary quota is exhausted, `X-RateLimit-Reset` minimums raise both
   intervals. A 403 or 429 without `Retry-After` also sets a 60-second minimum on
   single-page and paginated listings alike, so its interval is at least 60
-  seconds. The absolute deadline applies to both intervals. Each wait prints
+  seconds. The artifact listing applies the same minimums to every page it
+  reads, including a page that failed or was throttled, so a throttled artifact
+  request is not repeated before its `Retry-After` has passed. The absolute
+  deadline applies to both intervals. Each wait prints
   `ci-await-api: listings=... not_modified=... paginated=...` for the hosted
   phase and quota readout. The listing count includes artifact-listing calls
   made after the awaited jobs are ready. Across four waits, a three-second cadence makes at
