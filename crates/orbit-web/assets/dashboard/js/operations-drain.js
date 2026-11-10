@@ -82,7 +82,10 @@ function aggregateWorkspaceOptions(fleet) {
 }
 // The hosts that can show this workspace's drain: its owner first, then the
 // follower hosts holding a replica of it. A fleet row names its owner only
-// on a replica (`owner_machine_id`); the owner's own row names none.
+// on a replica (`owner_machine_id`); the owner's own row names none. A host
+// whose fleet read failed has one row with no workspace, so it cannot be
+// placed on the workspace; it is kept in the list rather than dropped, since
+// it may hold the workspace and the card must be able to show its error.
 function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
   const rows = (fleet?.items || []).filter(row => row.workspace_id === workspaceId && !row.pending);
   let owner = rows.find(row => !row.owner_machine_id)?.host || null;
@@ -97,7 +100,16 @@ function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
   for (const row of rows) {
     if (row.host && !ordered.includes(row.host)) ordered.push(row.host);
   }
-  return ordered.length ? ordered : hosts.map(host => host.name);
+  if (!ordered.length) return hosts.map(host => host.name);
+  for (const row of fleet?.items || []) {
+    if (hostFleetFailure(row) && !ordered.includes(row.host)) ordered.push(row.host);
+  }
+  return ordered;
+}
+// The host-level error row of a host whose fleet read failed. Workspace rows
+// carry their own `error` and are left to the readiness read.
+function hostFleetFailure(row) {
+  return Boolean(row?.host && row.error && !row.workspace_id && !row.pending);
 }
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
@@ -496,6 +508,10 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       }
       select.value = aggregateDrainHost || "";
       if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
+      // The chosen host's fleet read failed: its state is unknown, so the card
+      // shows that error rather than the Idle an absent workspace row reads as.
+      const failure = (fleet.items || []).find(item => item.host === aggregateDrainHost && hostFleetFailure(item));
+      if (failure) throw new Error(failure.error);
       const row = (fleet.items || []).find(item => item.host === aggregateDrainHost && item.workspace_id === aggregateDrainWorkspace);
       const chosenWorkspace = options.find(option => option.id === aggregateDrainWorkspace);
       const chosenHost = aggregateDrainHost;

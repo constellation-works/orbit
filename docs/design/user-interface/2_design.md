@@ -440,7 +440,9 @@ dropdown, in alphabetical order; its default is the first of those with a live
 drain on any host, or the first when none is live. The host select follows the
 workspace: that workspace's owner host first and selected by default, then the
 follower hosts holding a replica of it, and changing the workspace resets the
-host to its owner. Reads of another host use `/api/on/<host>/...` for the chosen
+host to its owner. A host whose fleet read failed stays in the host select, since
+it may hold the workspace, and when it is the chosen host the card shows that
+read's error rather than Idle. Reads of another host use `/api/on/<host>/...` for the chosen
 workspace; the card shows exactly the chosen workspace's drain on the chosen
 host, and no live window there shows Idle. The chosen workspace and host are
 remembered across reloads, falling back to the defaults when a remembered
