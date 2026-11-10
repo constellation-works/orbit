@@ -33,7 +33,8 @@ export function ownedWorkspaces(workspaces) {
 
 // Replica checkouts of the selected host when that host owns no workspace.
 // Tasks names their owner from these rows. Empty when the host owns a board,
-// or when its workspace list has not loaded.
+// when its workspace list has not loaded, or after a host switch until the new
+// host's list arrives (its rows name that host's owners, not the previous one's).
 let unownedReplicas = [];
 
 /// Remember replica rows from the selected host's `/api/workspaces` list.
@@ -176,6 +177,7 @@ export function setHost(name) {
   hostRevision += 1;
   hostWrites = null;
   hostUnavailable = false;
+  unownedReplicas = [];
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
   return true;
