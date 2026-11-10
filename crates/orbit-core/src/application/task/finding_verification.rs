@@ -233,9 +233,7 @@ impl FindingVerification {
     fn rejection_note(&self) -> String {
         match &self.rejection {
             Some(rejection) => {
-                let reason = serde_json::to_value(rejection.reason)
-                    .ok()
-                    .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                let reason = orbit_common::protocol::serde_string_label(&rejection.reason)
                     .unwrap_or_default();
                 format!(
                     "finding rejected by {} at {} ({reason}): {}",

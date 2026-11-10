@@ -251,9 +251,10 @@ jobs:
   # the affected and always-run crates' tests (ALWAYS_RUN in
   # scripts/ci-test-affected.py). [ORB-20394] "CI guardrails" runs the
   # repository guards and self-tests on its own runner beside the build. "Check
-  # / Clippy / Test" runs formatting, production Clippy, documentation and the
-  # supply-chain gate, then waits for the build, every shard and the
-  # guardrails. It is the job the 400-second budget measures.
+  # / Clippy / Test" runs formatting, production Clippy, documentation, an
+  # Apple-target type-check and the supply-chain gate, then waits for the
+  # build, every shard and the guardrails. It is the job the 400-second
+  # budget measures. The type-check does not add a job or a required check.
   ci:
     needs: [pr-state, scope]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
@@ -328,13 +329,16 @@ jobs:
         with:
           toolchain: "1.98.1"
           components: rustfmt, clippy
+          targets: aarch64-apple-darwin
 
       # [DANI-10428] Rust 1.98.1 dependency cache. rust-cache prunes target/
       # to dependency artifacts and the registry to crates Cargo.lock still
       # references before saving, so the archive stays far below the 10 GB
       # repo cap instead of evicting every other entry; `shared-key` names the
       # toolchain rather than the job. The Check job checks and documents
-      # dependencies the test build never compiles, so it keeps its own entry.
+      # dependencies the test build never compiles, including the
+      # aarch64-apple-darwin units of the Apple-target type-check, so it
+      # keeps its own entry.
       # Dependencies stay valid when a test fails, so save on failure too.
       # Pull requests restore only; pushes to main and agent-main save.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -380,7 +384,7 @@ jobs:
           df -Pk /
           du -sk target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
 
-      - name: Run format, Clippy, documentation and supply-chain checks
+      - name: Run format, Clippy, documentation, Apple-target type-check and supply-chain checks
         run: |
           set -euo pipefail
           TIMEFORMAT='checks_seconds=%R'
@@ -1351,6 +1355,32 @@ jobs:
           cargo nextest run --profile ci --no-fail-fast "${reuse[@]}" \
             --run-ignored only \
             -E 'package(orbit-exec) & binary(sandbox) & test(/^linux_sandbox::/)'
+
+      # The Landlock ruleset regressions are lib-unit tests, so the ignored
+      # sandbox leg above does not select them. Run them once, in the first
+      # shard, with the capability required: a kernel without Landlock ABI 2
+      # fails this step instead of reporting the regressions as passed after
+      # a visible skip (STD-04 §R8). No `--no-tests` pass: an empty selection
+      # (nextest exits 4) fails, and the list count is checked first.
+      - name: Linux Landlock ruleset gate
+        if: ${{ env.SHARD == '1' && (!contains(needs.scope.outputs.mode, ':') || contains(needs.scope.outputs.mode, 'orbit-exec')) }}
+        env:
+          ORBIT_REQUIRE_LANDLOCK_RULESET: "1"
+        run: |
+          set -euo pipefail
+          reuse=(--binaries-metadata target/nextest/binaries-metadata.json
+            --cargo-metadata target/nextest/cargo-metadata.json
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
+          selected=$(cargo nextest list "${reuse[@]}" \
+            -E 'package(orbit-exec) & test(/^linux_landlock::tests::ruleset::/)' \
+            --message-format json |
+            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
+          if [[ "$selected" -eq 0 ]]; then
+            echo "Linux Landlock ruleset gate: the filterset selects no tests" >&2
+            exit 1
+          fi
+          cargo nextest run --profile ci --no-fail-fast "${reuse[@]}" \
+            -E 'package(orbit-exec) & test(/^linux_landlock::tests::ruleset::/)'
 
   test-2:
     needs: [pr-state, scope]

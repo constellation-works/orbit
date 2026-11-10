@@ -1,6 +1,6 @@
 //! Authenticate the host commit, review, synchronization and publication chain.
 use super::*;
-use orbit_types::workflow::pr_auto_fix_pushes;
+use orbit_types::workflow::{SuccessfulCheckpoint, pr_auto_fix_pushes};
 
 impl OrbitRuntime {
     pub(super) fn observe_published_source(
@@ -162,9 +162,10 @@ pub(super) fn authenticated_checkpoint<'a>(
         .pipeline
         .get(id)
         .ok_or_else(|| refuse(format!("source lacks {id} evidence")))?;
-    if state.step_states.get(&index) != Some(&JobRunState::Success)
-        || state.step_output(index) != Some(output)
-    {
+    if !matches!(
+        state.successful_checkpoint(index, id),
+        SuccessfulCheckpoint::Recorded(_)
+    ) {
         return Err(refuse(format!(
             "{id} checkpoint is not authenticated success"
         )));

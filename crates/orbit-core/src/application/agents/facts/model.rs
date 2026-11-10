@@ -10,6 +10,7 @@ use super::super::attribution::{Charge, Credit};
 use super::super::records::Cause;
 use super::super::roles::pilot_warnings::Warnings;
 use super::super::roles::pilots::Graded;
+use super::invocations::AgentInvocationFacts;
 use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
@@ -368,8 +369,7 @@ pub(in crate::application::agents) fn filing_attempt<'a>(
 /// One scan of a workspace: every role and the attribution strip slice it.
 #[derive(Debug)]
 pub struct AgentFacts {
-    pub(in crate::application::agents) invocations:
-        Vec<orbit_store::contracts::InvocationAccountingFact>,
+    pub(in crate::application::agents) invocations: AgentInvocationFacts,
     pub(in crate::application::agents) computed_at: DateTime<Utc>,
     pub(in crate::application::agents) tasks_scanned: usize,
     pub(in crate::application::agents) tasks: Vec<TaskFacts>,

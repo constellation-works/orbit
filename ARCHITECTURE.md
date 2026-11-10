@@ -83,6 +83,13 @@ rules when writing `state.json`. Changes to this persisted contract must update
 both the serializer and the compatibility fixtures in the types integration
 suite.
 
+`PipelineState::successful_checkpoint` owns the pure success, indexed-output
+and named-entry consistency check used by member settlement, delivery
+observation and source-repair authentication. Callers retain resolved action
+admission, index conversion, missing-entry policy and diagnostic projection.
+The borrowed `SuccessfulCheckpoint` result has no persisted representation;
+inherited-checkpoint pointer and parent authentication remain in core.
+
 Core uses `git2` (vendored libgit2, network features disabled) to read local
 refs, config and trees in process: routine status's branch inspection, and the
 instruction and selector-object reads behind the preparation fingerprint. A

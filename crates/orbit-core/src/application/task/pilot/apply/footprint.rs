@@ -1,6 +1,6 @@
 //! Hold assessments whose source evidence leaves their lock footprint unresolved.
-use super::super::promotion::FOOTPRINT_UNRESOLVED;
-use orbit_types::task::{TaskComplexity, is_valid_orb_task_id};
+use super::super::promotion::{FOOTPRINT_UNRESOLVED, text_declares_unresolved_footprint};
+use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 
 /// Hold a task whose pilot could not establish its lock footprint, so the hold
@@ -44,8 +44,12 @@ pub(super) fn hold_unresolved_footprint(
         // a predecessor that finishes later must not release the hold while
         // the evidence remains unread [ORB-22178].
         for finding in warnings.iter_mut() {
-            if pilot_declares_unresolved_footprint(finding, &gaps_list)
-                && let Some(object) = finding.as_object_mut()
+            // `finding.text` only. Promotion passes `warning_text` instead.
+            if text_declares_unresolved_footprint(
+                finding.get("holds_promotion").and_then(Value::as_bool) == Some(true),
+                finding.get("text").and_then(Value::as_str),
+                &gaps_list,
+            ) && let Some(object) = finding.as_object_mut()
             {
                 object.insert("hold".to_string(), json!(FOOTPRINT_UNRESOLVED));
             }
@@ -64,39 +68,4 @@ pub(super) fn hold_unresolved_footprint(
             "hold": FOOTPRINT_UNRESOLVED,
         }));
     }
-}
-
-/// Whole task ids named in `text`, under any valid task-id prefix.
-fn named_task_ids(text: &str) -> Vec<String> {
-    text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_')))
-        .filter(|token| is_valid_orb_task_id(token))
-        .map(str::to_string)
-        .collect()
-}
-
-/// Whether an assessed pilot's holding utility finding declares an unread
-/// footprint source: it explicitly holds promotion and, with `evidence_gaps`
-/// present, either describes the source as unread or names a task the gaps
-/// also name as the unread source. The word "footprint" alone is not
-/// evidence: "ORB-1 must land before adjusting the footprint" declares
-/// nothing unread.
-fn pilot_declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
-    if finding.get("holds_promotion").and_then(Value::as_bool) != Some(true) {
-        return false;
-    }
-    let Some(text) = finding.get("text").and_then(Value::as_str) else {
-        return false;
-    };
-    let lower = text.to_ascii_lowercase();
-    if gaps.is_empty() {
-        return false;
-    }
-    if lower.contains("unread") {
-        return true;
-    }
-    // A task id the gaps also name ties the finding to the gap's source.
-    let gaps_text = gaps.join(" ");
-    named_task_ids(text)
-        .iter()
-        .any(|id| gaps_text.contains(id.as_str()))
 }

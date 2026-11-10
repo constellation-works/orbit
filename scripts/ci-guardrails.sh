@@ -22,7 +22,8 @@ done
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
-# formatting, production Clippy, documentation and the supply-chain gate.
+# formatting, production Clippy, documentation, an Apple-target type-check
+# and the supply-chain gate.
 # --guards runs the repository guards and self-tests (the guard pool and the
 # exclusive lane) in the CI guardrails job, beside the test build; with
 # CI_SELF_TESTS=changed (pull requests) it selects self-tests by their inputs,
@@ -514,6 +515,13 @@ with_production_lint() {
 # artifacts. Hosted doctests run on the test-build runner instead: --checks
 # has only checked metadata, so building doctest libraries there would repeat
 # the test-build runner's code generation and dependency compilation.
+# --checks then type-checks aarch64-apple-darwin. Host checks never compile
+# cfg(target_os = "macos") tests, so a rename of a shared item stays green
+# on Linux and fails only the informational macOS job. Plain rustc keeps
+# that job's Clippy lints from becoming a required gate. The C compiler is
+# a stub (scripts/ci-apple-target-cc.sh): build scripts run, C is not
+# compiled, and cargo check does not link. One target: hosted macOS is ARM,
+# and no cfg pairs target_os = "macos" with a single target_arch.
 run_check_chain() {
   local status=0 next=0
   run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
@@ -524,6 +532,13 @@ run_check_chain() {
   next=0
   RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
+  if [[ "$checks" == true ]]; then
+    next=0
+    CC_aarch64_apple_darwin="$repo_root/scripts/ci-apple-target-cc.sh" \
+      run_phase apple-target-check run_lowered env -u RUSTC_WORKSPACE_WRAPPER -u CLIPPY_ARGS \
+      cargo check --workspace --lib --bins --tests --target aarch64-apple-darwin || next=$?
+    if [[ "$status" -eq 0 ]]; then status="$next"; fi
+  fi
   return "$status"
 }
 
@@ -600,9 +615,10 @@ if [[ "$checks" == false ]]; then
   # build instead of extending the exclusive suites.
   start_waiting_guard "$repo_root/scripts/test-ci-download-verified.py"
   # Start the longer repository scans first; the pool keeps pool_width running.
-  # The dependency-direction self-test is the pool's longest member on hosted
-  # runs (380-486 s of the 451-611 s pool wall, 2026-11-08 cohort), so launch
-  # it first: started late, its tail alone extends the wall past every other
+  # The dependency-direction self-test set the pool wall on hosted runs
+  # (335-505 s, 2026-11-09 cohort) until it ran its cases four at a time; it
+  # and the QA sweep remain the longest members, so both launch in the first
+  # slots: started late, either tail alone extends the wall past every other
   # awaited job (longest-processing-time-first makespan scheduling).
   run_guard "$repo_root/scripts/test-check-dependency-direction.py"
   run_guard "$repo_root/scripts/check-orphan-modules.sh"

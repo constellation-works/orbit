@@ -316,8 +316,5 @@ pub(in crate::application) fn bounded(text: &str) -> String {
 
 /// A closed enum's wire label.
 pub(in crate::application) fn label<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default()
+    orbit_common::protocol::serde_string_label(value).unwrap_or_default()
 }

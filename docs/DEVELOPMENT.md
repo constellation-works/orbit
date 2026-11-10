@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-11-08
+last_validated: 2026-11-09
 ---
 
 # Development Reference
@@ -543,8 +543,16 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   it carries the compiler-cache namespace regression's sccache and Bubblewrap
   setup.
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
-  production Clippy, documentation and the supply-chain gate, with no
-  workspace test build, guard or nextest. It then
+  production Clippy, documentation, an Apple-target type-check and the
+  supply-chain gate, with no
+  workspace test build, guard or nextest. The type-check is
+  `cargo check --workspace --lib --bins --tests --target aarch64-apple-darwin`
+  on the Linux runner. That job's toolchain step installs the Apple target.
+  Its C compiler, `scripts/ci-apple-target-cc.sh`, is a stub: build scripts
+  run, C is not compiled, and nothing is linked. Rust gated on
+  `cfg(target_os = "macos")`, including tests, is type-checked. Hosted macOS
+  is ARM, and no gate pairs that `cfg` with one `target_arch`, so this single
+  target covers those items. It then
   waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
   `6`, `7` and `8` and `CI guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
@@ -598,12 +606,16 @@ supply-chain checks and repository guards. `--test-archive` mode records only
 mode `workspace-test-archive-extract` followed by `workspace-test-partitions`,
 and `--test-doctests` mode only `doctests`. An extraction failure stops before
 the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records `fmt`, `clippy-production`,
-`documentation` and `supply-chain`, and `--guards` mode (the CI guardrails job)
+`documentation`, `apple-target-check` and `supply-chain`, and `--guards` mode (the CI guardrails job)
 `guard-pool`, `exclusive-self-tests` and `repository-guards`: the hosted Check job leaves doctests to
 the Test build job. That job runs them through `with-test-build-lint.sh`
 directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
 record. `--test-doctests` runs the same command through the guard and records
 its `doctests` phase for local replays.
+`apple-target-check` is the Apple-target type-check: plain rustc, with the
+Clippy wrapper unset, lowered like the other check-chain commands. Full mode
+does not run it, so `make ci` stays on the host target. The informational
+macOS Clippy job is unchanged.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the workflow
 test build, so `guard-pool` includes the overlapped build.

@@ -50,6 +50,8 @@ function retireMemoryCache() {
   listRevision = null;
   detail = emptyDetail();
   clearMemoryDom();
+  const count = document.getElementById("knowledge-count");
+  if (count) count.textContent = "—";
 }
 
 onWorkspaceChange(retireMemoryCache);

@@ -21,7 +21,7 @@ You need:
 - Actions secrets `ORBIT_RELEASE_SIGNING_KEY_PEM` (signs the checksum manifests) and `TAP_GITHUB_TOKEN` (pushes to `constellation-works/homebrew-tap`).
 - For the macOS desktop app: the six Apple signing and notarization secrets listed in [desktop/README.md](desktop/README.md#one-time-setup). Without all six, a release still ships the Linux desktop bundles and skips only macOS. The Linux bundles need no extra secret. Setting the repository variable `ORBIT_DESKTOP_RELEASE` to `false` turns the desktop jobs off for tag pushes. Unset or any other value leaves them on.
 - npm publish rights on `@orbit-tools` with your OTP. The npm package is published by hand.
-- Permission to create GitHub Releases and admin-merge on `constellation-works/orbit`.
+- Permission to create GitHub Releases and to push the validated release commit to `main` (or a repository admin who can make that push).
 
 Never paste, log, or rotate these credentials in a PR.
 

@@ -320,9 +320,7 @@ fn relation_keys(task: &Task) -> Vec<String> {
     task.relations
         .iter()
         .map(|relation| {
-            let kind = serde_json::to_value(relation.relation_type)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string))
+            let kind = orbit_common::protocol::serde_string_label(&relation.relation_type)
                 .unwrap_or_default();
             format!("{kind}:{}", relation.target)
         })

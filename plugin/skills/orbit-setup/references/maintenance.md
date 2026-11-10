@@ -232,6 +232,10 @@ only renamed or moved are translated on load and rewritten by
 | Selective before-landing review | `[review.selective_before_landing]` table; `review.selective_before_landing.mode`, `risk_threshold`, `paths`, `unknown_risk` | Review before landing with `review.timing = "before_landing"` or `review.before_landing_hosts`. | 2026-12-08 |
 | Decision assistance | Global `[assistance]` table. `orbit decision assist` is gone. | None. | 2026-12-08 |
 | Path leases | `[lease]` table / `lease.*` keys. `orbit lease` and the `orbit.lease.*` tools are gone. | None. The lease machinery stays disabled. | 2026-12-08 |
+| Orchestrator scorecard | `orbit orchestrator`; `--role orchestrators` on `orbit agents scorecard` and `orbit agents show`; the orchestrator scorecard's MCP tool; the `/api/agents/orchestrators` endpoint; any link to the dashboard Orchestrators tab. | None for orchestrators. The dashboard Orchestrators tab is replaced by Rank, which ranks implementer models with `orbit agents rank`. For crew comparison, use [experiments](configuration.md#experiments). | No window stated; removed in 0.48.0. |
+| MCP tool-family names | Per-action tool names such as `orbit_friction_add`, `orbit_friction_update`, `orbit_task_artifact_get` and `orbit_task_artifact_put`, in scripts, prompts and MCP client allow-lists. Stored names in existing records migrate on upgrade, so there is nothing to delete there. | The family tool with an `action` field: `orbit_friction` with `add` or `update`, and `orbit_task_artifact` with `get` or `put`. See [tool surface](../../orbit/references/tool-surface.md). | No window stated; removed in 0.48.0. |
+| MCP task schema string forms | A bare string where a list is expected on `orbit_task_add`, `orbit_task_update` and `orbit_task_list`, such as in `acceptance_criteria` or `context_files`. | Send a JSON array for each list field, such as `acceptance_criteria`, `context_files` and `relations`. | No window stated; removed in 0.48.0. |
+| Per-call `model` input and task aliases | The `model` input on MCP task calls, which the MCP schema no longer lists; the `agent` alias of `orbit_task_list`; the `context` alias on `orbit_task_add` and `orbit_task_update`. Orbit still accepts a sent `model` as an unadvertised identity key, and the session's own identity takes precedence over it. | Identity comes from the session's crew configuration or the MCP client's `clientInfo`, not from the call. Use `context_files` in place of `context`. For `agent` on `orbit_task_list`, read the list's field names with `orbit tool show orbit.task.list`. | No window stated; removed in 0.48.0. |
 
 The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
 while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
@@ -325,7 +329,53 @@ catalog and update them deliberately.
 
 Sync updates managed files, not workspace ownership or task publication. The
 plugin skill bundle updates through its plugin distribution; global skill
-symlinks and a plugin installation are distinct delivery paths.
+symlinks and a plugin installation are distinct delivery paths. The `orbit skill`
+commands that inspect and repair the global skill links are in
+[Skill management](#skill-management).
+
+## Skill management
+
+`orbit skill` works with two separate things on a host:
+
+- **The catalog**: each shipped skill's files under the global Orbit root, by
+  default `~/.orbit/skills/` (`orbit`, `orbit-orchestrate` and `orbit-setup`).
+  `orbit workspace sync` reconciles these managed files and preserves local
+  edits. A missing catalog entry is a sync question, not a `link` one.
+- **The client links**: a symlink named after each shipped skill in
+  `~/.agents/skills/` and `~/.claude/skills/`, each pointing at its catalog
+  entry. Client CLIs discover skills through these links.
+
+The plugin skill bundle is a third delivery path that these commands do not
+touch; see [Managed resources and upgrades](#managed-resources-and-upgrades).
+
+| Subcommand | What it does | When to run it | How to verify |
+|---|---|---|---|
+| `orbit skill list` | Lists each installed skill with its ID, the first ten characters of its content hash, its tag count and its summary. | After an upgrade or sync, to confirm every shipped skill is installed. | The three shipped IDs appear, each with a hash. A hash that differs from the same skill on another host means the content differs. |
+| `orbit skill show <name>` | Prints one skill's `Path`, full `Content hash`, its SKILL.md behavioral contract and its `meta.json` (or `(none)`). | To read what a skill tells agents to do, or to confirm which file a catalog entry resolves to. | The output starts with `Skill: <name>`, and the `Content hash` begins with the HASH that `list` shows. An unknown name fails with `skill not found` and exit status 1. |
+| `orbit skill doctor [<name>]` | Without a name, checks each catalog skill and diagnoses dangling symlinks in existing client link directories. A dangling symlink in `~/.agents/skills/` or `~/.claude/skills/` is a `warning` that names its path. It does not report an expected client link that is absent. With a name, prints only that skill's findings. | After an upgrade, after an interrupted run, or to diagnose catalog problems and dangling client links. If a client cannot find a skill, also inspect the expected links under `~/.agents/skills/` and `~/.claude/skills/` or run `orbit skill link`. | A healthy doctor result ends with `All skills healthy.`, but only confirms the catalog checks and dangling-link checks it performs; it does not certify that every expected client link exists. With findings, the table lists them and `N issue(s) found.` goes to stderr. The exit status stays 0 for findings, so read the STATUS column. An unknown name fails with `no skill diagnostic named '<name>'` and exit status 1. |
+| `orbit skill link` | Creates the client links for each shipped skill in `~/.agents/skills/` and `~/.claude/skills/`. It replaces an existing link that points elsewhere or dangles, and does nothing when the links are current. It fails if a shipped skill's catalog entry is missing, and it never creates catalog entries. | When an expected client link is absent, a client stops listing Orbit skills, or `doctor` reports a dangling link. | It prints `Linked N skill(s) in:` with both directories, or `Skill symlinks are already up to date.` when nothing changed. Then `ls -l ~/.agents/skills ~/.claude/skills` shows each shipped skill as a symlink to `~/.orbit/skills/<name>`. `orbit skill doctor` can confirm there are no reported catalog problems or dangling links, but a healthy result alone does not confirm every expected client link exists. |
+| `orbit skill unlink` | Removes only the links that `link` creates: entries named after a shipped skill that point at its catalog entry. Plugin links, custom links, regular files and other symlinks stay in place, and a discovery `skills` directory left empty is removed. The catalog under `~/.orbit/skills/` is not changed. | When Orbit should stop offering the shipped skills to clients on this host, such as before moving to the plugin distribution or retiring the host. Clients stop finding them there until `orbit skill link` runs again. Confirm with the operator first, because it changes what clients load. | It prints `Removed N skill symlink(s).` or `No skill symlinks found to remove.`. Then `ls -l ~/.agents/skills ~/.claude/skills` shows no `orbit`-named links, and `orbit skill list` still lists the three skills. |
+
+### Repair a missing or broken client link
+
+1. Run `orbit skill doctor` to check the catalog and diagnose dangling links.
+   It does not report an expected client link that is absent, so a healthy
+   result does not prove every client can discover every shipped skill.
+2. If a client cannot find a skill, inspect the expected links under
+   `~/.agents/skills/` and `~/.claude/skills/`. Run `orbit skill link` to create
+   absent links or repair links for shipped skills that point elsewhere or
+   dangle.
+3. If a shipped skill's catalog entry is missing, `orbit skill link` fails, so
+   restore the catalog first with `orbit workspace sync` (see
+   [Managed resources and upgrades](#managed-resources-and-upgrades)), then
+   confirm with `orbit skill list` and run `orbit skill link` again.
+4. A dangling link named after something other than a shipped skill is not
+   Orbit's to remove. Delete it by hand, as the `doctor` message says.
+5. Verify expected links with `ls -l ~/.agents/skills ~/.claude/skills`, then
+   run `orbit skill doctor` to confirm it reports no catalog problems or
+   dangling links. Doctor still does not verify that all expected links exist.
+
+Do not use `unlink` as a repair: it removes the links that clients use.
 
 ## Removing or re-targeting a workspace
 

@@ -32,6 +32,17 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const GIB_F: f64 = GIB as f64;
 const OTHER_WORKSPACE: &str = "ws_other_checkout";
 
+struct RunResourceSeries<'a> {
+    cpu_cores: &'a [f64],
+    memory_bytes: &'a [u64],
+}
+
+struct RunMinuteSample {
+    cpu_cores: f64,
+    memory_bytes: u64,
+    samples: u32,
+}
+
 struct Fixture {
     root: TempDir,
     global: PathBuf,
@@ -117,7 +128,6 @@ impl Fixture {
         run.run_id
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn minutes(
         &self,
         workspace: &str,
@@ -125,10 +135,10 @@ impl Fixture {
         task: &str,
         complexity: Option<&str>,
         admitted: DateTime<Utc>,
-        cpu: &[f64],
-        memory: &[u64],
+        series: RunResourceSeries<'_>,
     ) {
-        for (index, (cores, bytes)) in cpu.iter().zip(memory).enumerate() {
+        for (index, (cores, bytes)) in series.cpu_cores.iter().zip(series.memory_bytes).enumerate()
+        {
             self.store
                 .record_run_resource_minute(&RunResourceMinute {
                     workspace_id: workspace.to_string(),
@@ -152,7 +162,6 @@ impl Fixture {
     }
 
     /// One run minute starting at `started`, covering `samples` readings.
-    #[allow(clippy::too_many_arguments)]
     fn minute_at(
         &self,
         run_id: &str,
@@ -160,9 +169,7 @@ impl Fixture {
         index: u32,
         admitted: DateTime<Utc>,
         started: DateTime<Utc>,
-        cores: f64,
-        bytes: u64,
-        samples: u32,
+        sample: RunMinuteSample,
     ) {
         self.store
             .record_run_resource_minute(&RunResourceMinute {
@@ -175,10 +182,10 @@ impl Fixture {
                 complexity: Some("medium".to_string()),
                 resumed: false,
                 delivery_admitted_at: Some(admitted),
-                cpu_cores: cores,
+                cpu_cores: sample.cpu_cores,
                 cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                memory_bytes: bytes,
-                samples,
+                memory_bytes: sample.memory_bytes,
+                samples: sample.samples,
                 crew_model: None,
                 orbit_version: None,
             })
@@ -219,25 +226,24 @@ impl Fixture {
             task,
             Some(complexity),
             admitted,
-            cpu,
-            memory,
+            RunResourceSeries {
+                cpu_cores: cpu,
+                memory_bytes: memory,
+            },
         );
     }
 
-    /// A live delivery admitted `age` before `now`, whose newest minute
-    /// measured `cores` and `bytes`.
-    #[allow(clippy::too_many_arguments)]
+    /// A live delivery admitted at `admitted`, whose newest minute measured
+    /// `cores` and `bytes`.
     fn running_delivery(
         &self,
         workspace: &str,
         task: &str,
         complexity: Option<&str>,
-        now: DateTime<Utc>,
-        age: Duration,
+        admitted: DateTime<Utc>,
         cores: f64,
         bytes: u64,
     ) {
-        let admitted = now - age;
         let run = self.job_run(workspace, task, admitted, JobRunState::Running, None);
         self.minutes(
             workspace,
@@ -245,8 +251,10 @@ impl Fixture {
             task,
             complexity,
             admitted,
-            &[cores],
-            &[bytes],
+            RunResourceSeries {
+                cpu_cores: &[cores],
+                memory_bytes: &[bytes],
+            },
         );
     }
 
@@ -341,8 +349,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
         &workspace,
         "ORB-x",
         Some("hard"),
-        now,
-        Duration::seconds(70),
+        now - Duration::seconds(70),
         1.5,
         3 * GIB,
     );
@@ -350,8 +357,7 @@ fn the_forecast_scales_running_deliveries_by_survival_and_adds_reservations() {
         &workspace,
         "ORB-y",
         Some("small"),
-        now,
-        Duration::seconds(310),
+        now - Duration::seconds(310),
         0.75,
         GIB / 2,
     );
@@ -429,8 +435,7 @@ fn a_live_leaf_of_another_workspace_counts() {
         OTHER_WORKSPACE,
         "ORB-elsewhere",
         Some("medium"),
-        now,
-        Duration::minutes(3),
+        now - Duration::minutes(3),
         2.0,
         GIB,
     );
@@ -461,8 +466,7 @@ fn the_baseline_is_measured_utilization_minus_running_use() {
         &workspace,
         "ORB-busy",
         None,
-        now,
-        Duration::minutes(2),
+        now - Duration::minutes(2),
         4.0,
         8 * GIB,
     );
@@ -524,7 +528,18 @@ fn a_short_host_spike_does_not_raise_the_baseline_but_sustained_load_does() {
     let run = fixture.job_run(&workspace, "ORB-run", admitted, JobRunState::Running, None);
     for index in 0..2 {
         let started = admitted + Duration::minutes(i64::from(index));
-        fixture.minute_at(&run, "ORB-run", index, admitted, started, 4.0, 8 * GIB, 12);
+        fixture.minute_at(
+            &run,
+            "ORB-run",
+            index,
+            admitted,
+            started,
+            RunMinuteSample {
+                cpu_cores: 4.0,
+                memory_bytes: 8 * GIB,
+                samples: 12,
+            },
+        );
     }
     fixture.host_minute(minute - Duration::minutes(1), 9.0, 14 * GIB);
     fixture.host_minute(minute, 6.0, 12 * GIB);
@@ -646,10 +661,32 @@ fn the_baseline_never_subtracts_more_than_the_runs_used() {
         JobRunState::Success,
         Some(finished),
     );
-    fixture.minute_at(&run, "ORB-done", 0, admitted, admitted, 4.0, 8 * GIB, 12);
+    fixture.minute_at(
+        &run,
+        "ORB-done",
+        0,
+        admitted,
+        admitted,
+        RunMinuteSample {
+            cpu_cores: 4.0,
+            memory_bytes: 8 * GIB,
+            samples: 12,
+        },
+    );
     // Two readings, the second at the run's end.
     let last = admitted + Duration::minutes(1);
-    fixture.minute_at(&run, "ORB-done", 1, admitted, last, 4.0, 8 * GIB, 2);
+    fixture.minute_at(
+        &run,
+        "ORB-done",
+        1,
+        admitted,
+        last,
+        RunMinuteSample {
+            cpu_cores: 4.0,
+            memory_bytes: 8 * GIB,
+            samples: 2,
+        },
+    );
     fixture.host_minute(minute, 2.0 + 4.0 * 25.0 / 60.0, 12 * GIB);
     fixture.write_proc(10_000, 90_000, 4 * GIB);
     fixture.forecast_at(now);
@@ -801,8 +838,7 @@ fn every_call_reads_running_reservations_and_baseline_fresh() {
         &workspace,
         "ORB-started",
         Some("small"),
-        now,
-        Duration::seconds(10),
+        now - Duration::seconds(10),
         0.5,
         GIB,
     );

@@ -133,7 +133,7 @@ pub(in crate::application::agents) fn scan(
         },
     )?;
     Ok(AgentFacts {
-        invocations,
+        invocations: invocations.into(),
         computed_at,
         tasks_scanned,
         tasks: facts,

@@ -162,18 +162,20 @@ pub(super) fn main_invocation_effort(
     else {
         return Some(EFFORT_UNKNOWN.to_string());
     };
-    let candidates = facts.invocations.iter().filter(|fact| {
-        fact.job_run_id == run_id
-            && activity.matches(fact.activity_id.as_deref())
-            && activity_id.is_none_or(|id| {
-                fact.activity_id
-                    .as_deref()
-                    .is_some_and(|step| step_produced(id, step))
-            })
-            && model.is_none_or(|model| fact.model.as_deref() == Some(model))
-            && after.is_none_or(|after| fact.ts > after)
-            && until.is_none_or(|until| fact.ts <= until)
-    });
+    let candidates = facts
+        .invocations
+        .invocations_for_run(run_id)
+        .filter(|fact| {
+            activity.matches(fact.activity_id.as_deref())
+                && activity_id.is_none_or(|id| {
+                    fact.activity_id
+                        .as_deref()
+                        .is_some_and(|step| step_produced(id, step))
+                })
+                && model.is_none_or(|model| fact.model.as_deref() == Some(model))
+                && after.is_none_or(|after| fact.ts > after)
+                && until.is_none_or(|until| fact.ts <= until)
+        });
     let linked: Vec<_> = match task_id {
         Some(task) => {
             let linked: Vec<_> = candidates

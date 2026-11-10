@@ -2,7 +2,7 @@ use orbit_automation::AutomationError;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workflow::automation::members::{MemberEvidence, StateTriggerKind};
 use orbit_types::workflow::{
-    ActivityV2Spec, JobRun, JobRunState, JobV2, JobV2StepBody, PipelineState, TargetStep,
+    ActivityV2Spec, JobRun, JobV2, JobV2StepBody, PipelineState, SuccessfulCheckpoint, TargetStep,
 };
 use serde_json::Value;
 
@@ -113,15 +113,10 @@ pub(super) fn deterministic_step(job: &JobV2, id: &'static str, action: &str) ->
 /// the index names another step in what was recorded, so nothing is read.
 pub(super) fn checkpoint(state: Option<&PipelineState>, step: Option<PilotStep>) -> Option<&Value> {
     let (state, step) = (state?, step?);
-    if state.step_states.get(&step.index) != Some(&JobRunState::Success) {
-        return None;
+    match state.successful_checkpoint(step.index, step.id) {
+        SuccessfulCheckpoint::Recorded(output) => Some(output),
+        SuccessfulCheckpoint::Absent | SuccessfulCheckpoint::Inconsistent => None,
     }
-    let output = state.step_output(step.index)?;
-    state
-        .pipeline
-        .get(step.id)
-        .is_none_or(|entry| entry == output)
-        .then_some(output)
 }
 
 /// Whether `output` is an apply record: every apply output counts its
