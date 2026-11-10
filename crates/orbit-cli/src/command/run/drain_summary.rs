@@ -10,8 +10,8 @@
 
 use std::collections::BTreeMap;
 
-use orbit_core::JobRun;
-use orbit_core::application::job::run_error_step;
+use orbit_core::application::job::{job_run_task_ids, run_error_step};
+use orbit_core::{JobRun, OrbitRuntime};
 use orbit_types::workflow::{
     DrainAdmissionPass, DrainApprovalReport, DrainCapacity, DrainWaitingTask, JobRunState,
     PipelineState, ResourceThrottle,
@@ -35,6 +35,12 @@ pub(super) struct DrainLeafSummary {
     pub(super) running: usize,
     /// Leaves whose run record could not be read.
     pub(super) unreadable: usize,
+    /// Succeeded or held leaves whose task is in review under a delivery
+    /// hold or a current completion hold. Not a failure.
+    pub(super) held_in_review: usize,
+    /// Delivery code or completion-hold rule, to the task ids counted there.
+    pub(super) held_in_review_by_reason: BTreeMap<String, Vec<String>>,
+    pub(super) held_leaves: Vec<HeldReviewLeaf>,
     pub(super) failed_leaves: Vec<FailedLeaf>,
     pub(super) waiting: WaitingBacklog,
     /// What an `--approve-proposed` drain approved and held [ORB-14117].
@@ -54,6 +60,27 @@ pub(super) struct FailedLeaf {
     /// that failure, so this is the deepest resumable failed run, or the leaf
     /// itself. Set by the caller, which can read the run tree.
     pub(super) resume_run_id: Option<String>,
+}
+
+/// One drain leaf whose task (or tasks) is held in review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HeldReviewLeaf {
+    pub(super) run_id: String,
+    pub(super) tasks: Vec<HeldReviewTask>,
+}
+
+/// One task on a held-in-review leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HeldReviewTask {
+    pub(super) task_id: String,
+    pub(super) hold: String,
+    /// Delivery refusal code, or the completion-hold rule label.
+    pub(super) reason: String,
+    pub(super) delivery_run_id: String,
+    pub(super) pr_number: Option<String>,
+    pub(super) field: Option<String>,
+    pub(super) pattern: Option<String>,
+    pub(super) matched: Option<String>,
 }
 
 /// Backlog tasks the drain's last admission pass left unstarted.
@@ -131,6 +158,21 @@ impl DrainLeafSummary {
             "cancelled": self.cancelled,
             "running": self.running,
             "unreadable": self.unreadable,
+            "held_in_review": self.held_in_review,
+            "held_in_review_by_reason": self.held_in_review_by_reason,
+            "held_leaves": self.held_leaves.iter().map(|leaf| json!({
+                "run_id": leaf.run_id,
+                "tasks": leaf.tasks.iter().map(|task| json!({
+                    "task_id": task.task_id,
+                    "hold": task.hold,
+                    "reason": task.reason,
+                    "delivery_run_id": task.delivery_run_id,
+                    "pr_number": task.pr_number,
+                    "field": task.field,
+                    "pattern": task.pattern,
+                    "matched": task.matched,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
             "has_failed_leaves": self.has_failed_leaves(),
             "has_starved_tasks": self.has_starved_tasks(),
             "failed_leaves": self.failed_leaves.iter().map(|leaf| json!({
@@ -171,7 +213,7 @@ impl DrainLeafSummary {
     ) -> Vec<String> {
         use crate::output::color::bold;
         let mut lines = vec![format!(
-            "{} admitted={} succeeded={} failed={} running={} cancelled={}{}",
+            "{} admitted={} succeeded={} failed={} running={} cancelled={}{}{}",
             bold("Leaves:"),
             self.admitted,
             self.succeeded,
@@ -183,7 +225,46 @@ impl DrainLeafSummary {
             } else {
                 String::new()
             },
+            if self.held_in_review > 0 {
+                format!(" held_in_review={}", self.held_in_review)
+            } else {
+                String::new()
+            },
         )];
+        if self.held_in_review > 0 {
+            lines.push(format!(
+                "{} {}",
+                bold("Held in review:"),
+                self.held_in_review
+            ));
+            let breakdown = self
+                .held_in_review_by_reason
+                .iter()
+                .map(|(reason, ids)| format!("{reason}={} {}", ids.len(), ids.join(",")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !breakdown.is_empty() {
+                lines.push(format!("  {breakdown}"));
+            }
+            for leaf in &self.held_leaves {
+                for task in &leaf.tasks {
+                    let pr = task
+                        .pr_number
+                        .as_deref()
+                        .map(|number| format!(" pr={number}"))
+                        .unwrap_or_default();
+                    let matched = task
+                        .matched
+                        .as_deref()
+                        .map(|value| format!(" matched={value}"))
+                        .unwrap_or_default();
+                    lines.push(format!(
+                        "  {} task={} {} {} run={}{pr}{matched}",
+                        leaf.run_id, task.task_id, task.hold, task.reason, task.delivery_run_id
+                    ));
+                }
+            }
+        }
         if let Some(capacity) = &self.capacity {
             lines.push(format!(
                 "{} occupied={} inherited={} limit={} (last admission pass {})",
@@ -523,6 +604,7 @@ pub(super) fn summarize_drain_leaves(
     run: &JobRun,
     state: Option<&PipelineState>,
     mut read_child: impl FnMut(&str) -> Option<JobRun>,
+    mut held_in_review: impl FnMut(&JobRun) -> Option<HeldReviewLeaf>,
 ) -> Option<DrainLeafSummary> {
     if run.job_id != DRAIN_JOB {
         return None;
@@ -549,7 +631,13 @@ pub(super) fn summarize_drain_leaves(
             continue;
         };
         match leaf.state {
-            JobRunState::Success => summary.succeeded += 1,
+            JobRunState::Success => {
+                if let Some(held) = held_in_review(&leaf) {
+                    record_held_review(&mut summary, held);
+                } else {
+                    summary.succeeded += 1;
+                }
+            }
             JobRunState::Cancelled => summary.cancelled += 1,
             JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted => {
                 summary.failed += 1;
@@ -571,8 +659,19 @@ pub(super) fn summarize_drain_leaves(
                     resume_run_id: None,
                 });
             }
+            JobRunState::Held => {
+                if let Some(held) = held_in_review(&leaf) {
+                    record_held_review(&mut summary, held);
+                } else {
+                    summary.running += 1;
+                }
+            }
             _ => summary.running += 1,
         }
+    }
+    for ids in summary.held_in_review_by_reason.values_mut() {
+        ids.sort();
+        ids.dedup();
     }
     if summary.admitted == 0
         && summary.waiting == WaitingBacklog::default()
@@ -581,6 +680,83 @@ pub(super) fn summarize_drain_leaves(
         return None;
     }
     Some(summary)
+}
+
+fn record_held_review(summary: &mut DrainLeafSummary, held: HeldReviewLeaf) {
+    summary.held_in_review += 1;
+    for task in &held.tasks {
+        summary
+            .held_in_review_by_reason
+            .entry(task.reason.clone())
+            .or_default()
+            .push(task.task_id.clone());
+    }
+    summary.held_leaves.push(held);
+}
+
+/// Tasks on this leaf that are in review under a delivery hold or a current
+/// completion hold. A task or run that cannot be read is left out and warned;
+/// the leaf then stays in its old bucket instead of failing the drain view.
+pub(super) fn held_review_leaf(runtime: &OrbitRuntime, leaf: &JobRun) -> Option<HeldReviewLeaf> {
+    let mut tasks = Vec::new();
+    for task_id in job_run_task_ids(leaf) {
+        let task = match runtime.get_task(&task_id) {
+            Ok(task) => task,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.cli.run",
+                    run_id = %leaf.run_id,
+                    %task_id,
+                    %error,
+                    "held-in-review task unreadable; leaf stays in its outcome bucket"
+                );
+                continue;
+            }
+        };
+        let history = match runtime.get_task_history(&task_id) {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.cli.run",
+                    run_id = %leaf.run_id,
+                    %task_id,
+                    %error,
+                    "held-in-review history unreadable; leaf stays in its outcome bucket"
+                );
+                continue;
+            }
+        };
+        match runtime.current_review_hold(&task, &history) {
+            Ok(Some(hold)) => tasks.push(HeldReviewTask {
+                task_id,
+                hold: hold.kind.as_str().to_string(),
+                reason: hold.code.or(hold.rule).unwrap_or_default(),
+                delivery_run_id: hold.run_id,
+                pr_number: hold.pr_number,
+                field: hold.field,
+                pattern: hold.pattern,
+                matched: hold.matched,
+            }),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.cli.run",
+                    run_id = %leaf.run_id,
+                    %task_id,
+                    %error,
+                    "held-in-review delivery run unreadable; leaf stays in its outcome bucket"
+                );
+            }
+        }
+    }
+    if tasks.is_empty() {
+        None
+    } else {
+        Some(HeldReviewLeaf {
+            run_id: leaf.run_id.clone(),
+            tasks,
+        })
+    }
 }
 
 /// What the drain's last admission pass left waiting, from the record it keeps

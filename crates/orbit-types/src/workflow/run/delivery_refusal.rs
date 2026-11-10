@@ -113,4 +113,64 @@ impl DeliveryRefusal {
             _ => None,
         }
     }
+
+    /// The operator's next step for this refusal, as the delivery-refusal
+    /// reference states it. `run_id` fills the resume command for a forge
+    /// observation hold; other refusals do not resume the held run.
+    #[must_use]
+    pub fn operator_next_step(self, run_id: &str) -> String {
+        match self {
+            Self::HeadChanged => {
+                "Compare the pull-request head against the published candidate, then start a new delivery attempt on the current head.".into()
+            }
+            Self::EvidenceStale => {
+                "Re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt.".into()
+            }
+            Self::RepairDispatched => {
+                "If a repair is running, let it finish. If none ran because the job lacked step_failure_recovery, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt.".into()
+            }
+            Self::PullRequestDraft => {
+                "Mark the pull request ready for review, then start a new delivery attempt.".into()
+            }
+            Self::PullRequestClosed => {
+                "Reopen the pull request or open a new one, then start a new delivery attempt.".into()
+            }
+            Self::TaskNotPromotable => {
+                "Move the task to a promotable status, then start a new delivery attempt.".into()
+            }
+            Self::LandingConflict => {
+                "Repair the conflict, revalidate, and hand off again.".into()
+            }
+            Self::RequirementsUnsatisfied => {
+                "Satisfy the named gate. A stopped authorized owner landing with typed waiting_gate evidence resumes automatically after a fresh observation confirms the gate cleared, for at most three retries with 60/120/240-second minimum backoffs; explicit retries count toward that ceiling. Use Retry landing or orbit task retry-handoff for other stops and after the automatic retry budget is exhausted. Other deliveries need a new attempt.".into()
+            }
+            Self::BaseChecksPending => {
+                "Wait for the base's own check result; do not run candidate recovery first.".into()
+            }
+            Self::CompletionBudgetExpired => {
+                "Check the forge for the current pull-request state, then start a new delivery attempt.".into()
+            }
+            Self::BaseChaseExhausted => {
+                "Resume on the next authorized owner drain pass. This run keeps its certified recovery and a fresh per-run chase budget.".into()
+            }
+            Self::CheckEvidenceInconclusive => {
+                "Let the next auto-fix pass reread the pull-request status; do not dispatch a repair on that evidence.".into()
+            }
+            Self::ForgeObservationUnavailable => format!(
+                "Run `orbit job resume {run_id}`: it reads the forge again and continues completion from its checkpoints."
+            ),
+            Self::OriginUnavailable => {
+                "Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead.".into()
+            }
+            Self::CheckRepairActivityAbsent => {
+                "Adding step_failure_recovery and retrying the same head holds again as delivery_repair_dispatched; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run.".into()
+            }
+            Self::CheckRunsAbsent => {
+                "Start the required checks on that head by hand, or push a new head, then start a new delivery attempt.".into()
+            }
+            Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
+                "Inspect the held run. This refusal is no longer raised.".into()
+            }
+        }
+    }
 }

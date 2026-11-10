@@ -299,7 +299,18 @@ other admission error still fails the drain at once.
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
 show <drain-run-id>` (JSON: `drain_summary`) for admitted / succeeded / failed
-counts. It lists each failed leaf with its `orbit job resume <leaf-run-id>`, and
+/ running / cancelled counts. A leaf whose task is in `review` because its
+newest delivery run ended `held` on a `delivery_*` refusal, or because a
+`completion.hold` rule is still current, is counted in `held_in_review`
+instead of `succeeded`. That is not a failure: `failed` does not change.
+With no such leaf the succeeded and failed counts stay as they were and the
+printed line omits `held_in_review`. When the count is above zero, the card
+prints `held_in_review=N`, a `Held in review:` breakdown (the delivery code
+or the completion-hold rule, with the task ids) and one line per held task
+naming the leaf run, the hold, the reason, the delivery run and the pull
+request. `--json` always includes `held_in_review`,
+`held_in_review_by_reason` and `held_leaves`, including zeros. The card
+lists each failed leaf with its `orbit job resume <leaf-run-id>`, and
 a `Still waiting:` block for backlog tasks the last pass never started.
 
 `--allow-crew` restricts a ship or drain to the crews you name — the lever for
