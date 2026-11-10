@@ -261,8 +261,10 @@ in the current directory; `--dir <path>` creates it in `<path>/.orbit-plugin/` i
 sources inside a workspace repository, so move the scaffold outside the repository
 or give `--dir` an external path before installing it.
 
-`orbit plugin validate <dir> --render` uses the same profile and child-environment builders
-as a real call, but starts no backend. Human and JSON inspection retain environment
+`orbit plugin validate <dir> --render` projects the sandbox profile and child environment
+a real call would use, including the program-link directory on `PATH` when the source
+declares a granted program. It does not create, repoint or remove those links, and it
+starts no backend. Human and JSON inspection retain environment
 names and non-sensitive values while redacting credential values; actual backend calls
 still receive the admitted values. In a registered workspace it renders for that
 workspace. From an unregistered directory it uses host-level config and does not

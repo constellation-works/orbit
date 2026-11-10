@@ -1,6 +1,14 @@
 use super::*;
 use crate::{DeterministicStepPrograms, ToolCaller};
 
+/// Whether a child environment also writes the host program-link directory.
+enum ProgramLinks {
+    /// Create, repoint and prune links so a returned `PATH` entry exists.
+    Materialize,
+    /// Name the link directory without writing it.
+    Observe,
+}
+
 impl PluginBackendSpec {
     pub fn granted(&self, grant: PluginGrant) -> bool {
         self.grants.contains(grant)
@@ -345,12 +353,40 @@ impl PluginBackendSpec {
     /// boundary for a manifest loaded before that check existed).
     ///
     /// Materializes the program links first (`materialize_program_links`), so
-    /// the `PATH` it names exists whenever it is returned.
+    /// the `PATH` it names exists whenever it is returned. A diagnostic
+    /// render uses [`Self::diagnostic_child_environment`] and does not write
+    /// those links.
     pub fn child_environment(
         &self,
         ctx: &ToolContext,
         cwd: &str,
         tool_name: Option<&str>,
+    ) -> Result<Vec<(String, String)>, OrbitError> {
+        self.compose_child_environment(ctx, cwd, tool_name, ProgramLinks::Materialize)
+    }
+
+    /// The child environment a diagnostic render projects.
+    ///
+    /// Same variables as [`Self::child_environment`], including a `PATH` that
+    /// names the program-link directory when this spec has a granted bare
+    /// program. It does not create, repoint or remove the links in that
+    /// directory, so rendering a same-namespace checkout leaves an installed
+    /// backend's program links unchanged.
+    pub fn diagnostic_child_environment(
+        &self,
+        ctx: &ToolContext,
+        cwd: &str,
+        tool_name: Option<&str>,
+    ) -> Result<Vec<(String, String)>, OrbitError> {
+        self.compose_child_environment(ctx, cwd, tool_name, ProgramLinks::Observe)
+    }
+
+    fn compose_child_environment(
+        &self,
+        ctx: &ToolContext,
+        cwd: &str,
+        tool_name: Option<&str>,
+        program_links: ProgramLinks,
     ) -> Result<Vec<(String, String)>, OrbitError> {
         let env_pass = if self.granted(PluginGrant::EnvPass) {
             self.permissions.env_pass.as_slice()
@@ -367,7 +403,13 @@ impl PluginBackendSpec {
         // A program whose recorded path is no longer granted gets no link, so
         // it adds nothing. The directory is not the recorded file's parent,
         // because a name reached through a symlink is not in that parent.
-        let path_override = if let Some(program_dir) = self.materialize_program_links()? {
+        // Observation names that directory without writing it: a rendered
+        // validation must not change links a running backend already uses.
+        let program_dir = match program_links {
+            ProgramLinks::Materialize => self.materialize_program_links()?,
+            ProgramLinks::Observe => self.granted_program_dir(),
+        };
+        let path_override = if let Some(program_dir) = program_dir {
             let mut path_dirs = vec![program_dir];
             if let Some(existing) = env_pairs
                 .iter()

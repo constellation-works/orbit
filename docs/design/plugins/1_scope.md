@@ -7,8 +7,8 @@ doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_updated: 2026-11-10
+last_validated: 2026-11-10
 stage: shipped
 next: "—"
 ---
@@ -865,8 +865,10 @@ the consenting operator's `PATH`:
   whatever the spawning caller's `PATH`, and whatever symlink layout the operator's `PATH`
   used (an installed `claude` is commonly a link into a versioned tree). Only the host writes
   the directory: the plugin is granted read on it and never write, so it cannot re-point a
-  granted name. The links are rebuilt on every call, and a link for a name that is no longer
-  granted is removed. A program whose recorded path is no longer granted gets no link and adds
+  granted name. The links are rebuilt on every backend call, and a link for a name that is no
+  longer granted is removed. `orbit plugin validate --render` only names that directory in the
+  projected `PATH`; it does not create, repoint or remove the links. A program whose recorded
+  path is no longer granted gets no link and adds
   nothing to the child's `PATH`. Absolute declared entries run as written and get no link.
 - A recorded path is granted only while it still names that executable: it exists, is an
   executable regular file, is still its own canonical path (a link retargeted after consent
@@ -1227,8 +1229,8 @@ schemas compile at read time (naming the tool on failure) and may reference only
 `orbit plugin validate <dir>` — manifest schema, path containment, namespace collisions,
 schema self-consistency, definition cross-references, and the `spec.web` rules of §4.7.
 With `--render`, it previews the effective sandbox profile and child environment without
-starting a backend. Human and JSON output preserve environment names and non-sensitive
-values while redacting credential values. Redaction applies only to this diagnostic
+starting a backend or writing program links. Human and JSON output preserve environment names
+and non-sensitive values while redacting credential values. Redaction applies only to this diagnostic
 projection; backend calls receive their admitted environment values unchanged.
 
 `orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol.

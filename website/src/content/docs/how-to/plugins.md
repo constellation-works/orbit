@@ -81,7 +81,7 @@ orbit plugin validate ./my-plugin --render
 
 `validate` checks the manifest without installing anything. `--render` also prints the
 sandbox profile and child environment the backend would receive. It does not run the
-backend.
+backend, and it does not create, repoint or remove an installed plugin's program links.
 
 ## Install
 
