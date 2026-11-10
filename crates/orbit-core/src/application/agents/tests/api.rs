@@ -262,11 +262,10 @@ fn supported_tier_scorecard_keeps_existing_scores() {
     assert_conserved(&payload);
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `run_task` is the `(run_id, task_id)` the invocation is recorded under.
 fn invocation(
     id: i64,
-    run_id: &str,
-    task_id: &str,
+    (run_id, task_id): (&str, &str),
     crew: &str,
     effort: Option<orbit_types::identity::ReasoningEffort>,
     identity: bool,
@@ -336,8 +335,7 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
             attempt.runner.run_id = Some((*run_id).into());
             invocations.push(invocation(
                 index as i64 * 2 + 1,
-                run_id,
-                &task_id,
+                (run_id, &task_id),
                 crew,
                 *effort,
                 *identity,
@@ -349,8 +347,7 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
                 // move the unit: the longest (main) invocation decides.
                 invocations.push(invocation(
                     999,
-                    run_id,
-                    &task_id,
+                    (run_id, &task_id),
                     crew,
                     Some(High),
                     true,
@@ -503,11 +500,10 @@ fn reviewer_ranks_are_dense_over_ranked_rows() {
     assert_eq!(small["below_support"], json!(true));
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `run_task` is the `(run_id, task_id)` the invocation is recorded under.
 fn unit_invocation(
     id: i64,
-    run_id: &str,
-    task_id: &str,
+    (run_id, task_id): (&str, &str),
     activity_id: &str,
     model: &str,
     effort: orbit_types::identity::ReasoningEffort,
@@ -635,8 +631,7 @@ fn pilot_rows_keep_each_rounds_own_effort() {
     let invocations = vec![
         unit_invocation(
             1,
-            "run-pilot",
-            "pilot-initial",
+            ("run-pilot", "pilot-initial"),
             "pilot",
             "initial-model",
             High,
@@ -645,8 +640,7 @@ fn pilot_rows_keep_each_rounds_own_effort() {
         ),
         unit_invocation(
             2,
-            "run-pilot",
-            "pilot-repair",
+            ("run-pilot", "pilot-repair"),
             "repair_pilot",
             "repair-model",
             Medium,
@@ -656,8 +650,7 @@ fn pilot_rows_keep_each_rounds_own_effort() {
         // The orphan receipt's run recorded only the other round's worker.
         unit_invocation(
             3,
-            "run-orphan",
-            "pilot-orphan",
+            ("run-orphan", "pilot-orphan"),
             "pilot",
             "orphan-model",
             High,
@@ -748,8 +741,7 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
     let invocations = vec![
         unit_invocation(
             1,
-            "run-pr",
-            "reviewed-task",
+            ("run-pr", "reviewed-task"),
             "review",
             "rev-model",
             High,
@@ -758,8 +750,7 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
         ),
         unit_invocation(
             2,
-            "run-pr",
-            "reviewed-task",
+            ("run-pr", "reviewed-task"),
             "landing_review",
             "rev-model",
             Medium,
@@ -853,8 +844,7 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
     let invocations = vec![
         unit_invocation(
             1,
-            "run-pr",
-            "reviewed-task",
+            ("run-pr", "reviewed-task"),
             "review",
             "rev-model",
             High,
@@ -863,8 +853,7 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
         ),
         unit_invocation(
             2,
-            "run-pr",
-            "reviewed-task",
+            ("run-pr", "reviewed-task"),
             "re_review",
             "rev-model",
             Medium,
@@ -873,8 +862,7 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
         ),
         unit_invocation(
             3,
-            "run-pr",
-            "reviewed-task",
+            ("run-pr", "reviewed-task"),
             "re_review_2",
             "rev-model",
             Low,
@@ -951,8 +939,7 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     let tasks = vec![task];
     let invocations = vec![unit_invocation(
         1,
-        "run-later",
-        "borrowed-effort",
+        ("run-later", "borrowed-effort"),
         "implement_one",
         "m1",
         High,

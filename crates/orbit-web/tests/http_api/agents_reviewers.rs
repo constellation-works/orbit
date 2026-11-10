@@ -270,11 +270,10 @@ fn review_job(fixture: &Fixture, crew: &str) -> String {
 
 /// One recorded invocation in `run_id` under `activity`, with dispatch
 /// identity `crew` at `effort`, as the pipeline's telemetry records it.
-#[allow(clippy::too_many_arguments)]
+/// `run_task` is the `(run_id, task_id)` the invocation is recorded under.
 fn recorded_invocation(
     fixture: &Fixture,
-    run_id: &str,
-    task_id: &str,
+    (run_id, task_id): (&str, &str),
     activity: &str,
     crew: &str,
     model: &str,
@@ -1057,8 +1056,7 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
             );
             recorded_invocation(
                 &fixture,
-                "jrun-orion",
-                &review_job,
+                ("jrun-orion", &review_job),
                 "implement_one",
                 "orion",
                 "gpt-orion",
@@ -1067,8 +1065,7 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
             );
             recorded_invocation(
                 &fixture,
-                "jrun-orion",
-                &review_job,
+                ("jrun-orion", &review_job),
                 "review",
                 "vega",
                 "gpt-vega",
