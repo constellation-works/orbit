@@ -29,7 +29,9 @@ use crate::application::agents::effort::{
 use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
-use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
+use crate::application::agents::score::{
+    Occurrence, ResampleClusters, RowInput, Stat, Tally, Term, number,
+};
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem, WindowBounds};
 use crate::application::task::FindingVerdict;
 
@@ -156,11 +158,19 @@ struct Row<'a> {
     /// Each review gate settlement's tier and whether its verdict passed.
     verdicts: Vec<(&'static str, bool)>,
     seconds: Vec<u64>,
+    clusters: ResampleClusters,
 }
 
 impl<'a> Row<'a> {
-    fn unit(&mut self, at: DateTime<Utc>, model: Option<&str>, lookback: DateTime<Utc>) {
+    fn unit(
+        &mut self,
+        task: &str,
+        at: DateTime<Utc>,
+        model: Option<&str>,
+        lookback: DateTime<Utc>,
+    ) {
         self.units += 1;
+        self.clusters.unit(task, "");
         if at >= lookback {
             self.provisional += 1;
         }
@@ -243,7 +253,7 @@ fn rows(
             if let Some(crew) = &runner.crew {
                 row.crews.insert(crew.clone());
             }
-            row.unit(review.at, runner.model.as_deref(), lookback);
+            row.unit(&task.id, review.at, runner.model.as_deref(), lookback);
             row.judged = true;
             row.verdicts
                 .push((tier(task.complexity), review.verdict.passed()));
@@ -325,7 +335,7 @@ fn rows(
         if let Some(crew) = &runner.crew {
             row.crews.insert(crew.clone());
         }
-        row.unit(attempt.start, runner.model.as_deref(), lookback);
+        row.unit(filer, attempt.start, runner.model.as_deref(), lookback);
         row.review_jobs += 1;
         let (mut held, mut rejected) = (0, 0);
         for task in findings {
@@ -444,6 +454,7 @@ fn rows(
         .zip(comparisons)
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
+            let clusters = row.clusters.finish(&row.tallies);
             let crews: Vec<String> = row.crews.iter().cloned().collect();
             RowInput {
                 escaped_regressions_fallback: None,
@@ -463,6 +474,7 @@ fn rows(
                 reviewed_units: None,
                 unjudged: !row.judged,
                 stats,
+                clusters,
             }
         })
         .collect()

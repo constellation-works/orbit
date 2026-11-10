@@ -32,7 +32,7 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
-    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, ResampleClusters, RowInput, Stat, Tally, Term, number,
 };
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
@@ -556,12 +556,15 @@ fn row_input<'a>(
     let mut denominators = warnings.denominators();
     let warning_stats = warnings.stats();
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = warnings.tallies;
+    let settled_tasks = warnings.settled_tasks;
+    let mut clusters = ResampleClusters::default();
     let mut pilot = Score::default();
     let mut author = Score::default();
     let mut matrix = vec![vec![0usize; TIERS.len()]; TIERS.len()];
     let mut runs: BTreeMap<String, Option<f64>> = BTreeMap::new();
     let mut runs_without_model = 0;
     for &(graded, task) in assessed {
+        clusters.unit(task.id.as_str(), "");
         pilot.add(&graded.pilot);
         author.add(&graded.author);
         if let Some(run) = &graded.run {
@@ -594,6 +597,7 @@ fn row_input<'a>(
         }
         if let Some(&(assessed_tier, observed_tier)) = tiers.get(graded.task_id.as_str()) {
             matrix[assessed_tier][observed_tier] += 1;
+            clusters.member(task.id.as_str(), "tier_calibration", 1);
             if assessed_tier == observed_tier {
                 tallies.entry("tier_calibration").or_default().add(
                     task,
@@ -629,6 +633,12 @@ fn row_input<'a>(
             );
         }
     }
+    for (task, settled) in settled_tasks {
+        for key in [CONFIRMED, DISMISSED, MISSED] {
+            clusters.member(task, key, settled);
+        }
+    }
+    let clusters = clusters.finish(&tallies);
     let units = assessed.len();
     // Unpriced when an assessment has no run or a run has no recorded cost.
     let cost = if runs.is_empty() || assessed.iter().any(|(graded, _)| graded.run.is_none()) {
@@ -711,6 +721,7 @@ fn row_input<'a>(
         expected: None,
         reviewed_units: None,
         unjudged: false,
+        clusters,
         denominators,
         stats: [
             stat(

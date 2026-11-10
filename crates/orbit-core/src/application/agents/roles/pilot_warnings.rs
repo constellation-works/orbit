@@ -430,6 +430,8 @@ pub(super) struct WarningRow<'a> {
     pub(super) crews: BTreeSet<String>,
     /// Assessments whose outcome settled in the window.
     settled: usize,
+    /// Those settled assessments by task, the warning terms' units per task.
+    pub(super) settled_tasks: BTreeMap<&'a str, usize>,
     /// Assessments written in the window that are excluded or pending.
     excluded: usize,
     /// Assessments written in the window, and those that held.
@@ -531,6 +533,7 @@ pub(super) fn rows(
                 continue;
             };
             row.settled += 1;
+            *row.settled_tasks.entry(task.id.as_str()).or_default() += 1;
             let key = match assessment.outcome {
                 Outcome::Confirmed => {
                     row.confirmed += 1;

@@ -10,7 +10,8 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
-    Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, REVIEW_MIN_SUPPORT, ResampleClusters, RowInput, Stat, Tally, Term,
+    number,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
@@ -286,6 +287,18 @@ pub(super) fn evaluate_implementers(
                 })
                 .collect(),
         );
+        let mut clusters = ResampleClusters::default();
+        for expectation in &expectations {
+            let task = expectation.task.id.as_str();
+            clusters.unit(task, tier(expectation.task));
+            for &(key, _) in REVIEW_TERM_UNITS {
+                clusters.member(task, key, usize::from(expectation.reviewed));
+            }
+            for term in TERMS {
+                clusters.expect(task, term.key, expectation.expected[term.key]);
+            }
+        }
+        row.clusters = clusters.finish(&row.tallies);
         per_task.push(expectations);
     }
     Evaluated {
@@ -685,6 +698,7 @@ fn row_input<'a>(
             .collect(),
         reviewed_units: Some(reviewed_units),
         unjudged: false,
+        clusters: Vec::new(),
         crew: crews_of(facts, window, &row, tasks)
             .first()
             .cloned()

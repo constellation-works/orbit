@@ -484,8 +484,9 @@ function rows() {
   }
   const ranking = all.flatMap((row) => {
     const tier = tiers.get(implementerTierKey(row));
+    // The interval belongs to the all-tier score, so a tier's score carries none.
     return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score,
-      below_support: tier.units < scorecard.min_support, rank: null }] : [];
+      interval: null, below_support: tier.units < scorecard.min_support, rank: null }] : [];
   });
   ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
     || b.units - a.units || a.crew.localeCompare(b.crew) || a.model.localeCompare(b.model));
@@ -895,7 +896,7 @@ function scoreBar(value, scale) {
   return track;
 }
 
-const SCORE_HINT = "One row per model and recorded reasoning effort (crews that contributed are listed under the row; unrecorded effort is its own effort-unknown row and a null effort is the provider default), ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
+const SCORE_HINT = "One row per model and recorded reasoning effort (crews that contributed are listed under the row; unrecorded effort is its own effort-unknown row and a null effort is the provider default), ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works. Beneath a ranked score, the range is its 10th to 90th percentile over 1,000 resamples of the row's tasks: a lead inside the ranges of the rows around it is not a clear lead.";
 
 // The ranking's term columns. A review term no row can score (implementers,
 // no reviewed deliveries anywhere) has nothing to show, so it leaves the
@@ -968,6 +969,13 @@ function rankingNode(ranking) {
     const score = el("td", { class: "agents-score-col" }, row.unjudged
       ? [el("span", { class: "agents-score-value agents-unjudged", text: "unjudged" })]
       : [scoreBar(row.score, scale), el("span", { class: "agents-score-value", text: number(row.score) })]);
+    if (row.interval) {
+      score.append(el("span", {
+        class: "agents-score-interval",
+        text: `${number(row.interval.p10)} to ${number(row.interval.p90)}`,
+        title: "10th to 90th percentile of this score over 1,000 resamples of the row's tasks",
+      }));
+    }
     const note = panel && panel.scoreNote ? panel.scoreNote(row) : null;
     if (note) score.append(el("span", { class: "agents-score-note", text: note.text, title: note.detail }));
     const classes = ["agents-row"];

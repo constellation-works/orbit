@@ -9,17 +9,17 @@ use chrono::{DateTime, Utc};
 use super::measures::{MEASURE_COUNT, MEASURES, Observations, totals};
 
 /// Draws per resample, for scales and for intervals alike.
-pub(super) const DRAWS: usize = 1000;
+pub(in crate::application::agents) const DRAWS: usize = 1000;
 /// The percentile of weekly estimates a scale is floored at.
 const FLOOR_PERCENTILE: f64 = 10.0;
 const CALIBRATION_SEED: u64 = 0x6f72_6269_745f_7261;
 pub(super) const BOOTSTRAP_SEED: u64 = 0x6e6b_5f62_6f6f_7473;
 
 /// SplitMix64: small, seedable and good enough for resampling indices.
-pub(super) struct Rng(u64);
+pub(in crate::application::agents) struct Rng(u64);
 
 impl Rng {
-    pub(super) fn seeded(seed: u64) -> Self {
+    pub(in crate::application::agents) fn seeded(seed: u64) -> Self {
         Self(seed)
     }
 
@@ -32,7 +32,7 @@ impl Rng {
     }
 
     /// A uniform index below `n`, which must be positive.
-    pub(super) fn below(&mut self, n: usize) -> usize {
+    pub(in crate::application::agents) fn below(&mut self, n: usize) -> usize {
         (self.next_u64() % n as u64) as usize
     }
 }
@@ -130,7 +130,10 @@ fn deviation(values: &[f64]) -> Option<f64> {
 }
 
 /// The `percentile` (0–100) of `values` by linear interpolation.
-pub(super) fn percentile(values: &mut [f64], percentile: f64) -> Option<f64> {
+pub(in crate::application::agents) fn percentile(
+    values: &mut [f64],
+    percentile: f64,
+) -> Option<f64> {
     if values.is_empty() {
         return None;
     }

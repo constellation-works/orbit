@@ -194,6 +194,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
         Column::new("CREWS"),
         Column::new("UNITS").number(),
         Column::new("SCORE").number(),
+        Column::new("P10-P90"),
     ];
     columns.extend(
         terms
@@ -205,6 +206,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
         .empty_message(empty)
         .trailing_notice(selection_line(value));
     for row in value["rows"].as_array().into_iter().flatten() {
+        let interval = &row["interval"];
         let mut cells = vec![
             if row["unjudged"] == true {
                 "unjudged".into()
@@ -220,6 +222,11 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
                 .unwrap_or_else(|| text(&row["crew"])),
             number(&row["units"]),
             number(&row["score"]),
+            if interval.is_object() {
+                format!("{}-{}", number(&interval["p10"]), number(&interval["p90"]))
+            } else {
+                "-".to_string()
+            },
         ];
         cells.extend(
             terms
@@ -235,7 +242,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
             "each term per 100 units, weighted and summed"
         };
         table = table.trailing_notice(format!(
-            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
+            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it. P10-P90 is the score's 10th to 90th percentile over 1,000 resamples of the row's tasks; ranked rows only.\nWeights: {}",
             text(&value["unit"]),
             number(&value["fleet_average"]),
             terms

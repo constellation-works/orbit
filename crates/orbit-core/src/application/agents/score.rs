@@ -16,6 +16,13 @@ use serde_json::{Value, json};
 
 use super::AgentRole;
 use super::facts::TaskFacts;
+use super::rank::sample::{DRAWS, Rng, percentile};
+
+/// The seed every row's interval resamples from, so the same facts always
+/// give the same interval. Fixed, as the model ranking's seeds are.
+const INTERVAL_SEED: u64 = 0x7363_6f72_6563_6172;
+/// The percentiles of resampled scores an interval spans.
+const INTERVAL_PERCENTILES: (f64, f64) = (10.0, 90.0);
 
 /// Units of fleet-average evidence a row's score is blended with:
 /// `score = min(raw, (units × raw + K × fleet_average) ÷ (units + K))`.
@@ -151,6 +158,68 @@ pub(super) struct RowInput<'a> {
     /// No unit of the row has been judged yet (reviewers only): it gets no
     /// score or rank, is listed last, and stays out of the fleet average.
     pub(super) unjudged: bool,
+    /// The row's tasks as resampling clusters, for the score's interval.
+    pub(super) clusters: Vec<ResampleCluster>,
+}
+
+/// One task's share of a row: the row's units it carries, and the counts,
+/// expectations and denominator membership charged to it. The interval
+/// draws whole clusters, so a task's units and the counts behind them move
+/// together.
+#[derive(Default)]
+pub(super) struct ResampleCluster {
+    /// The stratum a resample draws within (an implementer's tier), so the
+    /// tier mix of the row's expectations holds. Empty when unstratified.
+    stratum: &'static str,
+    units: usize,
+    counts: BTreeMap<&'static str, f64>,
+    expected: BTreeMap<&'static str, f64>,
+    /// Units inside a term's own denominator, for terms that have one.
+    members: BTreeMap<&'static str, usize>,
+}
+
+/// A row's clusters keyed by task id while the role reads its records.
+#[derive(Default)]
+pub(super) struct ResampleClusters {
+    by_task: BTreeMap<String, ResampleCluster>,
+}
+
+impl ResampleClusters {
+    fn of(&mut self, task: &str) -> &mut ResampleCluster {
+        self.by_task.entry(task.to_owned()).or_default()
+    }
+
+    /// Count one of the row's units from `task`, in `stratum`.
+    pub(super) fn unit(&mut self, task: &str, stratum: &'static str) {
+        let cluster = self.of(task);
+        cluster.stratum = stratum;
+        cluster.units += 1;
+    }
+
+    /// Add `expected` to `task`'s expected count for `key`.
+    pub(super) fn expect(&mut self, task: &str, key: &'static str, expected: f64) {
+        *self.of(task).expected.entry(key).or_insert(0.0) += expected;
+    }
+
+    /// Add `count` of `task`'s units inside `key`'s own denominator.
+    pub(super) fn member(&mut self, task: &str, key: &'static str, count: usize) {
+        *self.of(task).members.entry(key).or_insert(0) += count;
+    }
+
+    /// The clusters with every term's count from `tallies` charged to the
+    /// task it names. A task with counts but no unit becomes a cluster of
+    /// zero units.
+    pub(super) fn finish(
+        mut self,
+        tallies: &BTreeMap<&'static str, Tally<'_>>,
+    ) -> Vec<ResampleCluster> {
+        for (&key, tally) in tallies {
+            for (task, count) in tally.task_counts() {
+                *self.of(&task.id).counts.entry(key).or_insert(0.0) += count;
+            }
+        }
+        self.by_task.into_values().collect()
+    }
 }
 
 impl RowInput<'_> {
@@ -177,6 +246,9 @@ pub(super) struct Scored<'a> {
     score: f64,
     below_support: bool,
     rank: Option<usize>,
+    /// The 10th and 90th percentile of the score over resamples; set on
+    /// ranked rows only.
+    interval: Option<(f64, f64)>,
 }
 
 /// Score and order `rows`: rows meeting `min_support` first, best score
@@ -204,7 +276,7 @@ pub(super) fn score<'a>(
             let raw = if input.expected.is_some() { 100.0 } else { 0.0 }
                 + terms
                     .iter()
-                    .map(|term| contribution(&input, &per_100, term))
+                    .map(|term| contribution(&input, term))
                     .sum::<f64>();
             Scored {
                 below_support: input.units < min_support,
@@ -213,6 +285,7 @@ pub(super) fn score<'a>(
                 raw,
                 score: raw,
                 rank: None,
+                interval: None,
             }
         })
         .collect();
@@ -257,22 +330,114 @@ pub(super) fn score<'a>(
     {
         row.rank = Some(index + 1);
     }
+    if let Some(average) = fleet_average {
+        for row in scored.iter_mut().filter(|row| row.rank.is_some()) {
+            row.interval = interval(terms, &row.input, average);
+        }
+    }
     (fleet_average, scored)
 }
 
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
-/// while the term has no units or is below its own minimum support.
-fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, term: &Term) -> f64 {
-    if input.provisional_term(term.key) || input.units_of(term.key) == 0 {
+/// while the term has no units or is below its own minimum support. `units`
+/// are the term's own units, and `provisional` says whether they fall short
+/// of the term's minimum support.
+fn term_part(term: &Term, count: f64, expected: f64, units: usize, provisional: bool) -> f64 {
+    if provisional || units == 0 {
         return 0.0;
     }
+    let units = units as f64;
+    term.weight * (count * 100.0 / units - expected * 100.0 / units)
+}
+
+/// A term's part of a row's raw score, from its tallies and expectations.
+fn contribution(input: &RowInput<'_>, term: &Term) -> f64 {
+    let count = input.tallies.get(term.key).map_or(0.0, |tally| tally.count);
     let expected = input
         .expected
         .as_ref()
         .and_then(|counts| counts.get(term.key))
         .copied()
         .unwrap_or(0.0);
-    term.weight * (per_100[term.key] - expected * 100.0 / input.units_of(term.key).max(1) as f64)
+    term_part(
+        term,
+        count,
+        expected,
+        input.units_of(term.key),
+        input.provisional_term(term.key),
+    )
+}
+
+/// The score's interval for a ranked row: its clusters drawn with
+/// replacement within each stratum, `DRAWS` times, each draw scored the way
+/// [`score`] scores the row, with the fleet average held fixed. The 10th and
+/// 90th percentiles of those scores.
+fn interval(terms: &[Term], input: &RowInput<'_>, average: f64) -> Option<(f64, f64)> {
+    // Each cluster's values by term position, read once rather than per draw.
+    let cells: Vec<(usize, &'static str, Vec<TermSum>)> = input
+        .clusters
+        .iter()
+        .map(|cluster| {
+            let values = terms
+                .iter()
+                .map(|term| TermSum {
+                    count: cluster.counts.get(term.key).copied().unwrap_or(0.0),
+                    expected: cluster.expected.get(term.key).copied().unwrap_or(0.0),
+                    members: cluster.members.get(term.key).copied().unwrap_or(0),
+                })
+                .collect();
+            (cluster.units, cluster.stratum, values)
+        })
+        .collect();
+    let mut strata: BTreeMap<&'static str, Vec<usize>> = BTreeMap::new();
+    for (index, (_, stratum, _)) in cells.iter().enumerate() {
+        strata.entry(*stratum).or_default().push(index);
+    }
+    if strata.is_empty() {
+        return None;
+    }
+    let mut rng = Rng::seeded(INTERVAL_SEED);
+    let mut scores = Vec::with_capacity(DRAWS);
+    let mut sums = vec![TermSum::default(); terms.len()];
+    for _ in 0..DRAWS {
+        sums.iter_mut().for_each(|sum| *sum = TermSum::default());
+        let mut units = 0usize;
+        for members in strata.values() {
+            for _ in 0..members.len() {
+                let (cluster_units, _, values) = &cells[members[rng.below(members.len())]];
+                units += cluster_units;
+                for (sum, value) in sums.iter_mut().zip(values) {
+                    sum.count += value.count;
+                    sum.expected += value.expected;
+                    sum.members += value.members;
+                }
+            }
+        }
+        let mut raw = if input.expected.is_some() { 100.0 } else { 0.0 };
+        for (term, sum) in terms.iter().zip(&sums) {
+            let (members, provisional) = match input.denominators.get(term.key) {
+                // Below its minimum support, as `Denominator::provisional`
+                // reads it, but over this draw's members.
+                Some(denominator) => (sum.members, sum.members < denominator.min_support),
+                None => (units, false),
+            };
+            raw += term_part(term, sum.count, sum.expected, members, provisional);
+        }
+        let blended = (units as f64 * raw + SMOOTHING * average) / (units as f64 + SMOOTHING);
+        scores.push(raw.min(blended));
+    }
+    Some((
+        percentile(&mut scores, INTERVAL_PERCENTILES.0)?,
+        percentile(&mut scores, INTERVAL_PERCENTILES.1)?,
+    ))
+}
+
+/// One term's totals over a resample's clusters.
+#[derive(Clone, Copy, Default)]
+struct TermSum {
+    count: f64,
+    expected: f64,
+    members: usize,
 }
 
 impl Scored<'_> {
@@ -312,6 +477,10 @@ impl Scored<'_> {
             "per_100": per_100,
             "raw": (!self.input.unjudged).then(|| number(self.raw)),
             "score": (!self.input.unjudged).then(|| number(self.score)),
+            "interval": self
+                .interval
+                .map(|(low, high)| json!({"p10": number(low), "p90": number(high)}))
+                .unwrap_or(Value::Null),
             "runs_without_model": self.input.runs_without_model,
             "provisional": self.input.provisional,
             "stats": self.input.stats.iter().map(|stat| json!({
@@ -356,7 +525,7 @@ impl Scored<'_> {
     }
 
     fn contribution(&self, term: &Term) -> f64 {
-        contribution(&self.input, &self.per_100, term)
+        contribution(&self.input, term)
     }
 
     /// Each term's count, rate and contribution to the raw score, with the
