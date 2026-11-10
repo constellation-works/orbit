@@ -30,6 +30,10 @@ impl Fixture {
     fn new() -> Self {
         crate::scenarios::require_isolated_mutable_fixture("decision_raise::Fixture::new");
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        Self::with_root(root)
+    }
+
+    fn with_root(root: TempDir) -> Self {
         let global = root.path().join("global");
         let repo = root.path().join("repo");
         let workspace = repo.join(".orbit");
@@ -110,6 +114,183 @@ fn options() -> Value {
 fn raise_input(task: &str, question: &str) -> Value {
     json!({"task_id": task, "question": question, "options": options(), "topic": "pricing/sign-off"})
 }
+
+#[cfg(target_os = "linux")]
+fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
+    use orbit_engine::RuntimeHost;
+    use orbit_exec::{LinuxBwrapMountAuthority, LinuxBwrapSpawnRequest};
+    use std::process::Stdio;
+
+    const CHILD: &str = "ORBIT_DECISION_SANDBOX_ROOT";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let root = PathBuf::from(root);
+        let workspace = root.join("repo/.orbit");
+        let runtime = OrbitRuntime::from_roots(&root.join("global"), &workspace).unwrap();
+        let denied = std::fs::write(workspace.join("unlisted-file"), b"denied")
+            .expect_err("the shared Orbit root must remain read-only");
+        assert!(matches!(
+            denied.raw_os_error(),
+            Some(libc::EROFS | libc::EACCES)
+        ));
+        let task = std::env::var("ORBIT_DECISION_SANDBOX_TASK").unwrap();
+        let mut input = raise_input(&task, "Which price do we ship?");
+        input["action"] = json!("raise");
+        input["model"] = json!("claude");
+        let raised = runtime
+            .run_tool("orbit.decision", input)
+            .expect("a granted raise must create its request under the managed write policy");
+        assert_eq!(raised["state"], "open");
+        let refused = runtime
+            .run_tool(
+                "orbit.decision",
+                json!({
+                    "action": "submit", "model": "claude", "id": raised["id"],
+                    "channel": "fixture", "answer": "1", "token": "fixture"
+                }),
+            )
+            .expect_err("agents cannot submit a decision");
+        assert!(
+            matches!(&refused, OrbitError::InvalidInput(message)
+                if message.contains("unknown `orbit.decision` action `submit`")),
+            "{refused:?}"
+        );
+        assert_eq!(
+            runtime.get_task_decision_requests(&task).unwrap()[0].state,
+            DecisionRequestState::Open
+        );
+        return crate::scenarios::Outcome::Passed;
+    }
+    // Bubblewrap replaces /tmp; keep the fixture and executable visible.
+    let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let fx = Fixture::with_root(root);
+    let task = fx.task("Sandboxed owner decision", "dk");
+    let worktree = fx.repo.join(".orbit/state/worktrees/orbit-jrun-decision");
+    std::fs::create_dir_all(&worktree).unwrap();
+    fx.runtime
+        .upsert_executor_def(&orbit_types::workflow::ExecutorDef {
+            name: "codex".into(),
+            executor_type: orbit_types::workflow::ExecutorType::DirectAgent,
+            command: Some("codex".into()),
+            args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            auth_probe: None,
+            env: Default::default(),
+            sandbox: Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+            allow_fallback: false,
+            host_os: None,
+            created_at: None,
+            updated_at: None,
+        })
+        .unwrap();
+    let resolved = fx
+        .runtime
+        .resolve_executor_sandbox("codex", Some("implementer"), Some(&worktree))
+        .unwrap()
+        .expect("shipped Codex sandbox");
+    assert!(resolved.managed_worktree);
+    let binary = fx._root.path().join("decision-probe");
+    std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    orbit_exec::prepare_linux_bwrap_write_grants(&resolved.fs_profile, &worktree).unwrap();
+    let authority = resolved
+        .runtime_write_authority
+        .iter()
+        .map(|grant| LinuxBwrapMountAuthority {
+            destination: grant.path.clone(),
+            source: grant.handle.clone(),
+        })
+        .collect();
+    let mut plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+        &resolved.fs_profile,
+        binary.to_str().unwrap(),
+        &[
+            "--exact".into(),
+            "decision_raise::managed_scenarios".into(),
+            "--nocapture".into(),
+        ],
+        Some(&worktree),
+        true,
+        authority,
+        None,
+    )
+    .unwrap();
+    let guard = plan.take_post_run_guard();
+    let env = vec![
+        (CHILD.into(), fx._root.path().display().to_string()),
+        ("ORBIT_DECISION_SANDBOX_TASK".into(), task.clone()),
+        (
+            "ORBIT_RUNTIME_SCENARIO_ROW".into(),
+            "managed_raise_keeps_shared_root_read_only".into(),
+        ),
+        ("HOME".into(), std::env::var("HOME").unwrap()),
+    ];
+    let probe = orbit_exec::probe_bwrap();
+    let child = if probe.available {
+        orbit_exec::spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &env,
+            cwd: Some(&worktree),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        })
+        .unwrap()
+    } else {
+        // Exercise the same resolved runtime-store roots even on hosts that
+        // cannot nest mount namespaces. This proves the lock's write authority,
+        // not Bubblewrap mount enforcement (reported separately).
+        orbit_exec::report_bwrap_deferral(
+            "managed_raise_keeps_shared_root_read_only",
+            &probe.detail,
+        );
+        let boundary = orbit_exec::LandlockBoundary {
+            read: vec![PathBuf::from("/")],
+            write: resolved
+                .runtime_write_authority
+                .iter()
+                .map(|grant| grant.path.clone())
+                .collect(),
+            ..Default::default()
+        };
+        orbit_exec::spawn_under_linux_landlock_boundary(
+            &orbit_exec::ExecRequest {
+                program: binary.display().to_string(),
+                args: vec![
+                    "--exact".into(),
+                    "decision_raise::managed_scenarios".into(),
+                    "--nocapture".into(),
+                ],
+                current_dir: Some(worktree.display().to_string()),
+                timeout_ms: Some(60_000),
+                stdin_mode: orbit_exec::StdinMode::Null,
+                environment_mode: orbit_exec::EnvironmentMode::ClearAndSet(env),
+                debug: false,
+            },
+            &boundary,
+            &[],
+        )
+        .expect("Landlock must enforce the resolved runtime write roots")
+    };
+    let outcome = orbit_exec::supervise_child(child, Some(60_000), None).unwrap();
+    assert!(!outcome.timed_out, "sandboxed raise timed out");
+    assert_eq!(outcome.result.exit_code, Some(0), "{:?}", outcome.result);
+    if let Some(guard) = guard {
+        guard.verify(None).unwrap();
+    }
+    assert_eq!(
+        fx.runtime.get_task_decision_requests(&task).unwrap().len(),
+        1
+    );
+    assert!(!fx.repo.join(".orbit/unlisted-file").exists());
+    crate::scenarios::Outcome::Passed
+}
+
+#[cfg(target_os = "linux")]
+crate::scenario_table!(managed_scenarios, managed_raise_keeps_shared_root_read_only);
 
 fn raised_decision_risk_and_category_are_stored_and_exposed() {
     let fx = Fixture::new();
