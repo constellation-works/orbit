@@ -40,7 +40,9 @@ fn family_description(family: &ToolFamily) -> &'static str {
             "Codebase analytics: ranked rollups, one key's detail, or files changed together."
         }
         "orbit.friction" => "Record a friction, or update one.",
-        "orbit.task.artifact" => "Read a task artifact, or attach a local file as one.",
+        "orbit.task.artifact" => {
+            "Read/attach artifacts; list via `orbit.task.show` (`fields: [\"artifacts\"]`)."
+        }
         _ => "",
     }
 }
@@ -345,9 +347,15 @@ pub(crate) fn resolve_family_input(
         .iter()
         .find(|member| member.action.action == selected)
     else {
+        let recovery_hint = if name == "orbit.task.artifact" && matches!(selected, "list" | "read")
+        {
+            "; to list task artifacts, use `orbit.task.show` with `fields: [\"artifacts\"]`"
+        } else {
+            ""
+        };
         return Err(OrbitError::InvalidInput(format!(
-            "unknown `{name}` action `{selected}`; expected one of {}",
-            family.action_names()
+            "unknown `{name}` action `{selected}`; expected one of {}{recovery_hint}",
+            family.action_names(),
         )));
     };
     let action = member.action;

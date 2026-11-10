@@ -2526,7 +2526,7 @@
   },
   {
     "name": "orbit.task.artifact",
-    "description": "Read a task artifact, or attach a local file as one.",
+    "description": "Read/attach artifacts; list via `orbit.task.show` (`fields: [\"artifacts\"]`).",
     "enabled": true,
     "active": true,
     "status": "active",

@@ -486,7 +486,7 @@
   },
   {
     "name": "orbit_task_artifact",
-    "description": "Read a task artifact, or attach a local file as one.",
+    "description": "Read/attach artifacts; list via `orbit_task_show` (`fields: [\"artifacts\"]`).",
     "inputSchema": {
       "type": "object",
       "properties": {

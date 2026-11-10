@@ -68,6 +68,51 @@ fn tool_run_input_misses_return_actionable_suggestions() {
     }
 }
 
+#[test]
+fn artifact_list_and_read_actions_recommend_task_show() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "artifact-action-hints"])
+        .assert()
+        .success();
+
+    for action in ["list", "read"] {
+        let input = serde_json::json!({"action": action}).to_string();
+        let output = orbit_command(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.task.artifact",
+                "--input",
+                &input,
+                "--format",
+                "json",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        let message = error["error"].as_str().expect("error string");
+        assert!(
+            message.contains(&format!(
+                "unknown `orbit.task.artifact` action `{action}`; expected one of get, put"
+            )),
+            "the unsupported action must remain refused with the valid actions listed: {message}"
+        );
+        assert!(
+            message.contains("`orbit.task.show` with `fields: [\"artifacts\"]`"),
+            "the refusal must show how to list task artifacts: {message}"
+        );
+    }
+}
+
 /// Malformed `--input` and an unreadable `--input-file` fail before workspace
 /// bootstrap, including from a directory that is not an Orbit workspace.
 #[test]
