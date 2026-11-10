@@ -13,15 +13,20 @@ and its conclusion stays the gate's result. It reads the run's jobs through
 the latest attempt of each job. A job that completes with any conclusion but
 success fails the wait at once. API errors are retried until the timeout.
 
-Single-page listings use ETag conditional requests at three-second intervals.
+Single-page job listings use ETag conditional requests at three-second intervals.
 Authenticated 304 responses do not consume GitHub's primary rate limit.
 Without an ETag, on API errors, with fewer than 100 primary requests left,
 or when pagination is needed, --poll-seconds (default 15) is the fallback
-interval. The server's X-Poll-Interval, Retry-After and, once the primary quota
-is exhausted, X-RateLimit-Reset minimums raise it. A 403 or 429 without
-Retry-After sets a 60-second minimum for single-page and paginated listings
-alike. The artifact listing applies the same minimums to every page it reads,
-whether or not the response succeeded.
+interval. The artifact listing has no ETag fast path: every artifact request
+is an unconditional GET that consumes primary quota, so it always uses the
+fallback interval while a part is missing, when the listing is paginated
+(one quota-consuming request per page per cycle), on API errors, or with
+fewer than 100 primary requests left. The server's X-Poll-Interval, Retry-After
+and, once the primary quota is exhausted, X-RateLimit-Reset minimums raise both
+intervals. A 403 or 429 without Retry-After sets a 60-second minimum for
+single-page and paginated listings alike, jobs and artifacts. The artifact
+listing applies the same minimums to every page it reads, whether or not the
+response succeeded.
 
 --timeout-seconds is one absolute budget for the whole wait. Each `gh api`
 listing runs under the remaining budget, and the poll sleep is clipped to it. A
@@ -251,7 +256,18 @@ class JobListingPoller:
         the returned artifacts is None so the caller retries. It is not an
         empty set: a failed listing must not look like a missing part that
         will never appear, and it must not look like every part being ready.
+
+        Artifact requests are unconditional GETs that consume primary quota, so
+        this method keeps the shared poll interval at the fallback
+        (--poll-seconds) plus any server minimum: an unusable listing, a
+        paginated listing, fewer than 100 remaining primary requests, or a
+        still-missing part all wait out the fallback before the next cycle.
         """
+        # The artifact listing has no ETag fast path. Lift the interval the
+        # job listing may have dropped to three seconds back to the fallback
+        # before the first artifact request, so the sleep after this cycle
+        # honors the documented fallback even when the job listing is fresh.
+        self.poll_seconds = max(self.poll_seconds, self.fallback_seconds, self.server_minimum)
         names = set()
         returned = 0
         total = None
@@ -272,7 +288,11 @@ class JobListingPoller:
                        for name, separator, value in [line.partition(":")] if separator}
             # Fold every page's backoff before judging it: a throttled or
             # failed response still names the wait the next poll must honor.
-            self.poll_seconds = max(self.poll_seconds, self._backoff_minimum(headers, http_status))
+            # Keep the fallback floor: artifact requests never use the
+            # three-second job-listing fast path, even on a clean page.
+            self.poll_seconds = max(
+                self.poll_seconds, self.fallback_seconds,
+                self._backoff_minimum(headers, http_status))
             if status:
                 return None
             if http_status != "200":

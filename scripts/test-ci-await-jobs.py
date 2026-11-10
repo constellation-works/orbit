@@ -519,6 +519,65 @@ finally:
                 self.assertEqual(self.artifact_request_times(), [0, 0], self.requests)
                 self.assertEqual(float((self.root / "elapsed").read_text()), 7)
 
+    def test_artifact_polling_uses_fallback_interval(self):
+        # Completed jobs carry an ETag, so the job listing drops to a 3 s
+        # fast path. Artifact requests are unconditional primary-quota GETs
+        # with no ETag fast path, so an API error, a still-missing part, a
+        # paginated listing, or fewer than 100 remaining primary requests must
+        # wait out --poll-seconds (15 s) before the next artifact cycle; a
+        # shorter deadline still ends the wait there (ORB-23867).
+        self.timed_response = lambda elapsed: [job("Test build")]
+
+        def available(names):
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        other100 = [f"other-{number}" for number in range(100)]
+
+        def error_reply(_page, _elapsed):
+            return 503, {}, None
+
+        def missing_reply(_page, _elapsed):
+            return 200, {}, {"total_count": 1, "artifacts": available(["other"])}
+
+        def low_quota_reply(_page, _elapsed):
+            return 200, {"X-RateLimit-Remaining": "5"}, {
+                "total_count": 1, "artifacts": available(["other"])}
+
+        def paginated_reply(number, _elapsed):
+            if number == 1:
+                return 200, {}, {"total_count": 101, "artifacts": available(other100)}
+            return 200, {}, {"total_count": 101, "artifacts": available(["other-100"])}
+
+        cases = (("error", error_reply, [0, 15]),
+                 ("missing", missing_reply, [0, 15]),
+                 ("low-quota", low_quota_reply, [0, 15]),
+                 ("paginated", paginated_reply, [0, 0, 15, 15]))
+        for name, reply, expected in cases:
+            with self.subTest(case=name):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = reply
+                result = self.wait(timeout="20", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("timed out after 20 s waiting for archive parts", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 20,
+                                 "a shorter overall timeout still exits at its deadline")
+                self.assertEqual(self.artifact_request_times(), expected, self.requests)
+
+        # A shorter deadline still ends the wait there instead of waiting out
+        # the fallback.
+        with self.subTest(case="short-timeout"):
+            self.requests.clear()
+            self.request_headers.clear()
+            self.artifact_reply = error_reply
+            result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                               artifact_names=["nextest-archive-1"])
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
+            self.assertEqual(float((self.root / "elapsed").read_text()), 7)
+            self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
 
 if __name__ == "__main__":
     unittest.main()
