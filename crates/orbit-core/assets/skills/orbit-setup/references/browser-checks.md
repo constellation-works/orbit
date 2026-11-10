@@ -71,7 +71,9 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 await page.goto("http://127.0.0.1:<port>/");
-// wait for rendered content (see below), then page.screenshot() under .orbit/tmp/
+// The default Rank view; use ".agents-row" for the Implementers table.
+await page.waitForSelector(".agents-rank-row");
+await page.screenshot({ path: ".orbit/tmp/dashboard.png" });
 await browser.close();
 '
 ```
