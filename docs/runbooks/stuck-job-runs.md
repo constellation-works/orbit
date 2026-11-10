@@ -1511,7 +1511,8 @@ first failure, longer when the failed task was held before).
 A run that ends `held` with code `owner_signoff_required` stopped because its
 implementer needs recorded owner approval that no agent can record (for
 example, a stable-tier breaking change). Nothing failed. The task is
-`blocked` with the declared message, and its system comment (and
+`blocked` with the declared message under a `workflow run held:` note, which
+the blocked-task recovery backstop does not act on, and its system comment (and
 `candidate_held` history entry) names the run, failed step, branch and
 candidate head. The candidate is committed on the run's branch, and the
 handoff tries to push it to `refs/orbit/candidates/<task>/<run>` on `origin`.

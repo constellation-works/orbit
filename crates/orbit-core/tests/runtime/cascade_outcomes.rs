@@ -606,11 +606,106 @@ fn root_cause_preserves_interleaved_control_and_backlog_policy() {
     );
 }
 
+/// [ORB-23967] A run held on `owner_signoff_required` blocks its task under the
+/// held note, and the blocked-task recovery backstop does not own that block:
+/// no recovery agent is spent on a wait only the operator can clear. A real
+/// failed run's block is still recovered.
+fn an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop() {
+    use orbit_core::application::task::EpisodeDisposition;
+    use orbit_engine::blocked_workflow_failure_update;
+    use orbit_store::contracts::TaskReservationReleaseReason;
+
+    let fixture = Fixture::new();
+    let held_task = fixture.task();
+    let held_run = fixture.queued(json!({"task_ids": [held_task]}));
+    fixture.couple(&held_task, &held_run);
+    fixture
+        .jobs
+        .mark_job_run_running(&held_run, Utc::now(), std::process::id())
+        .unwrap();
+    let now = Utc::now();
+    fixture
+        .jobs
+        .complete_job_run_step(
+            &held_run,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "implement".to_string(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(1),
+                exit_code: Some(1),
+                agent_response_json: None,
+                state: JobRunState::Failed,
+                error_code: Some("owner_signoff_required".to_string()),
+                error_message: Some(
+                    "owner approval is not recorded yet; error.code=owner_signoff_required;"
+                        .to_string(),
+                ),
+            },
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &held_run,
+            JobRunState::Held,
+            Utc::now(),
+            Some(1),
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+
+    assert_eq!(
+        fixture.runtime.get_task(&held_task).unwrap().status,
+        TaskStatus::Blocked
+    );
+    let note = fixture
+        .runtime
+        .get_task_history(&held_task)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .and_then(|entry| entry.note)
+        .unwrap_or_default();
+    assert!(note.starts_with("workflow run held:"), "{note}");
+    assert!(note.contains("error_code=owner_signoff_required"), "{note}");
+
+    let failed_task = fixture.task();
+    fixture
+        .runtime
+        .apply_task_automation_update(
+            &failed_task,
+            blocked_workflow_failure_update(
+                "task_pr_pipeline",
+                "jrun-failed-control",
+                Some("STEP_FAILED"),
+                Some("implementation failed its tests"),
+            ),
+        )
+        .unwrap();
+
+    let views = fixture.runtime.blocked_recovery_view(Utc::now()).unwrap();
+    assert!(
+        views.iter().all(|view| view.episode.task_id != held_task),
+        "an owner sign-off hold is not a recovery episode: {views:?}"
+    );
+    assert!(
+        views.iter().any(|view| view.episode.task_id == failed_task
+            && view.disposition == EpisodeDisposition::Eligible),
+        "a failed run is still recovered: {views:?}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail_scenarios,
     root_cause_preserves_interleaved_control_and_backlog_policy,
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail,
+    an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop,
     a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog,
     a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it,
     cascaded_parents_name_their_leaf_and_fold_into_one_incident,

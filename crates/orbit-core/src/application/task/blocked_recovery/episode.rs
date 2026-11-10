@@ -100,9 +100,19 @@ impl BlockEpisode {
         let operator_prerequisite = orbit_store::contracts::ClaimFailedNote::parse(&note)
             .and_then(|note| note.failure_class)
             .is_some_and(orbit_types::workflow::ClaimFailureClass::requires_operator_decision);
+        // [ORB-23967] A run held on owner sign-off blocks under its
+        // `workflow_run_failed` event, but it waits for the operator's approval,
+        // which no recovery agent can record. Its note carries the typed code,
+        // or the diagnostic token in the message when the code is missing,
+        // mirroring the writer's `HeldFailure::of_local` check.
+        let owner_signoff = orbit_types::workflow::is_owner_signoff_required(
+            note_field(&note, "error_code="),
+            Some(&note),
+        );
         if orbit_types::workflow::is_validation_environment_failure(None, Some(&note))
             || operator_prerequisite
             || agent_blocker
+            || owner_signoff
         {
             return None;
         }
