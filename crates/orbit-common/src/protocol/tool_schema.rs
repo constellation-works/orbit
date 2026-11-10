@@ -16,6 +16,16 @@ const TASK_STATUS_ENUM: &[&str] = &[
     "rejected",
 ];
 const TASK_COMPLEXITY_ENUM: &[&str] = &["low", "medium", "hard", "xhard"];
+const AGENT_ROLE_ENUM: &[&str] = &["implementers", "reviewers", "pilots"];
+const AGENT_WINDOW_ENUM: &[&str] = &[
+    "1h", "24h", "7d", "30d", "90d", "all", "last50", "last200", "last500", "last1000",
+];
+const AGENT_EXECUTION_ENUM: &[&str] = &["managed", "all", "interactive"];
+const CI_FAILURE_CLASS_ENUM: &[&str] = &["code", "flaky", "infrastructure", "unknown"];
+const ELIGIBLE_STATUS_ENUM: &[&str] = &["backlog", "proposed"];
+const RESIDENT_RIGHT_ENUM: &[&str] = &["dispatch", "promote", "merge", "plugin_upgrade"];
+const RESIDENT_CONTROL_ACTION_ENUM: &[&str] =
+    &["pause", "resume", "stop", "wake", "takeover", "release"];
 /// JSON Schema `pattern` for a provenance `model` value.
 ///
 /// Mirrors `infer_agent_family_from_model` in `orbit-types`: a canonical
@@ -48,7 +58,17 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
     for param in params {
         let mut property = tool_parameter_schema(&param.param_type);
         if let Some(values) = tool_parameter_enum_values(tool_name, &param.name) {
-            property.insert("enum".to_string(), json!(values));
+            if property.get("type").and_then(Value::as_str) == Some("array") {
+                // A list of enumerated values carries its set on the items.
+                let items = property
+                    .entry("items".to_string())
+                    .or_insert_with(|| json!({ "type": "string" }));
+                if let Some(items) = items.as_object_mut() {
+                    items.insert("enum".to_string(), json!(values));
+                }
+            } else {
+                property.insert("enum".to_string(), json!(values));
+            }
         }
         if let Some(pattern) = tool_parameter_pattern(tool_name, &param.name) {
             property.insert("pattern".to_string(), json!(pattern));
@@ -157,6 +177,15 @@ pub fn tool_parameter_enum_values(
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
         ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
+        // Value lists that MCP descriptions shorten move here whole, so a
+        // shortened description never invents a closed set (ORB-23869).
+        ("orbit.agents.scorecard" | "orbit.agents.show", "role") => Some(AGENT_ROLE_ENUM),
+        ("orbit.agents.scorecard" | "orbit.agents.show", "window") => Some(AGENT_WINDOW_ENUM),
+        ("orbit.agents.scorecard" | "orbit.agents.show", "execution") => Some(AGENT_EXECUTION_ENUM),
+        ("orbit.agents.ci_failures", "class") => Some(CI_FAILURE_CLASS_ENUM),
+        ("orbit.task.eligible", "status") => Some(ELIGIBLE_STATUS_ENUM),
+        ("orbit.resident.grant", "add" | "remove") => Some(RESIDENT_RIGHT_ENUM),
+        ("orbit.resident.control", "action") => Some(RESIDENT_CONTROL_ACTION_ENUM),
         // No MCP tool advertises `model`. A parameter that is still named
         // `model` (a CLI filter, or the unadvertised identity key) accepts
         // families and full model strings, so it has no finite enum.

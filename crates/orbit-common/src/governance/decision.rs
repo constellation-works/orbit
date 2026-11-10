@@ -163,7 +163,7 @@ const RAISE_PARAMS: &[ParamSpec] = &[
     required(both(
         "task_id",
         ParamType::String,
-        "The human-crew task the decision is for. The task must be assigned to a human crew and not be done, archived or rejected.",
+        "The human-crew task this decision concerns. The task must be assigned to a human crew and not be done, archived or rejected.",
         CliArgKind::flag("task"),
         "The human-crew task the decision is for",
     )),

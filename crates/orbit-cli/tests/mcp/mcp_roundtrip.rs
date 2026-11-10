@@ -1408,6 +1408,101 @@ fn operator_tools_list_stays_within_byte_budget() {
     );
 }
 
+/// ORB-23869: no advertised description is cut mid-clause, and the value
+/// lists a shortened description drops are carried whole by a schema `enum`.
+#[test]
+fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
+    const DANGLING: &[&str] = &[
+        "a", "an", "the", "and", "or", "but", "nor", "by", "with", "without", "for", "to", "of",
+        "in", "on", "at", "from", "as", "per", "via", "over", "under", "into", "between",
+        "through", "before", "after", "about",
+    ];
+    let mut violations = Vec::new();
+    let mut ends_complete = |owner: &str, description: &str| {
+        let last = description
+            .trim()
+            .rsplit(|ch: char| ch.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .trim_matches(|ch: char| "`\"'().,;:".contains(ch))
+            .to_ascii_lowercase();
+        if DANGLING.contains(&last.as_str()) {
+            violations.push(format!("{owner} ends in {last:?}: {description}"));
+        }
+    };
+
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve_with_args(&["--toolset", "all"]);
+    let tools = client.listed_tools();
+    for tool in &tools {
+        let name = tool["name"].as_str().unwrap_or("");
+        if let Some(description) = tool["description"].as_str() {
+            ends_complete(name, description);
+        }
+        if let Some(properties) = tool["inputSchema"]["properties"].as_object() {
+            for (field, property) in properties {
+                if let Some(description) = property["description"].as_str() {
+                    ends_complete(&format!("{name}.{field}"), description);
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "descriptions ending mid-clause:\n{}",
+        violations.join("\n")
+    );
+
+    // (tool, field, expected values): each set is advertised as an `enum`,
+    // on the property itself or on its array items.
+    let enum_cases: &[(&str, &str, &[&str])] = &[
+        (
+            "orbit_agents_scorecard",
+            "role",
+            &["implementers", "reviewers", "pilots"],
+        ),
+        (
+            "orbit_agents_scorecard",
+            "window",
+            &[
+                "1h", "24h", "7d", "30d", "90d", "all", "last50", "last200", "last500", "last1000",
+            ],
+        ),
+        (
+            "orbit_agents_ci_failures",
+            "class",
+            &["code", "flaky", "infrastructure", "unknown"],
+        ),
+        ("orbit_task_eligible", "status", &["backlog", "proposed"]),
+        (
+            "orbit_resident_grant",
+            "add",
+            &["dispatch", "promote", "merge", "plugin_upgrade"],
+        ),
+    ];
+    for (tool_name, field, expected) in enum_cases {
+        let tool = find_tool(&tools, tool_name);
+        let property = &tool["inputSchema"]["properties"][field];
+        let advertised = property["enum"]
+            .as_array()
+            .or_else(|| property["items"]["enum"].as_array())
+            .unwrap_or_else(|| panic!("{tool_name}.{field} advertises no enum: {property}"));
+        let advertised: Vec<&str> = advertised.iter().filter_map(Value::as_str).collect();
+        assert_eq!(
+            advertised, *expected,
+            "{tool_name}.{field} enum must list every valid value"
+        );
+    }
+
+    // A shortened tool description keeps its docs pointer.
+    let attention = find_tool(&tools, "orbit_attention");
+    let description = attention["description"].as_str().unwrap_or("");
+    assert!(
+        description.contains("references/attention.md"),
+        "orbit_attention lost its docs pointer: {description}"
+    );
+}
+
 /// Python `json.dumps` default encoding: spaces after separators, ASCII escapes.
 fn python_json_dumps(value: &Value) -> String {
     let mut out = String::new();

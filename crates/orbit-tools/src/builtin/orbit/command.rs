@@ -37,7 +37,7 @@ impl Tool for OrbitCommandExecTool {
             },
             ToolParam {
                 name: "working_directory".to_string(),
-                description: "Absolute working directory the command runs in. Must exist and \
+                description: "The command's absolute working directory. Must exist and \
                      be inside this workspace's checkout or a linked worktree under \
                      `.orbit/state/worktrees/`; it is never inferred from the caller."
                     .to_string(),

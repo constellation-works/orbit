@@ -64,7 +64,7 @@ const RIGHTS: &[EnumValue] = &[
 const ATTRIBUTION: &[ParamSpec] = &[mcp_only(
     "orchestrator",
     ParamType::String,
-    "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+    "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
 )];
 
 const TASK_ID: ParamSpec = required(both(
@@ -206,7 +206,7 @@ const METRICS_PARAMS: &[ParamSpec] = &[
     both(
         "baseline",
         ParamType::String,
-        "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero. Tasks in other workspaces are read via their owner; unreachable ones are listed in references.unreachable.",
+        "An interactive orchestration assignment task for computing the same measures. Measures that cannot be derived from its history report not_derivable, never zero. Tasks in other workspaces are read via their owner; unreachable ones are listed in references.unreachable.",
         CliArgKind::flag("baseline"),
         "Compute the same measures for this interactive assignment task",
     ),

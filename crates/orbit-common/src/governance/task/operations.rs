@@ -322,7 +322,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "tag",
                 ParamType::StringList,
-                "Filter by tag; an array is AND.",
+                "Filter by tag; an array matches every listed tag.",
                 CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),

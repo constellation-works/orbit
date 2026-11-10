@@ -333,12 +333,25 @@ pub(super) fn slim_advertised_property_descriptions(schema: &mut JsonObject, too
     }
 }
 
-/// First sentence, then a short cap, for tools other than the three task writes.
+/// First complete sentence or clause, for tools other than preserved writes.
+///
+/// A shortened tool description keeps the source's docs pointer when it has
+/// one, so detail moved into installed references still reaches agents.
 pub(super) fn advertised_tool_description(tool_name: &str, description: &str) -> String {
     if PRESERVED_TOOL_DESCRIPTIONS.contains(&tool_name) {
         return description.to_string();
     }
-    cap_description(first_sentence(description), ADVERTISED_TOOL_DESCRIPTION_CAP)
+    let shortened = cap_description(description, ADVERTISED_TOOL_DESCRIPTION_CAP);
+    if shortened.contains("references/") {
+        return shortened;
+    }
+    match docs_pointer_sentence(description) {
+        Some(pointer) if !shortened.contains(&pointer) => {
+            let separator = if shortened.ends_with('.') { " " } else { ". " };
+            format!("{shortened}{separator}{pointer}")
+        }
+        _ => shortened,
+    }
 }
 
 fn advertised_other_property_description(description: &str) -> String {
@@ -350,38 +363,167 @@ fn advertised_other_property_description(description: &str) -> String {
     {
         return "Array of strings.".to_string();
     }
-    cap_description(sentence, ADVERTISED_PROPERTY_CAP)
+    cap_description(description, ADVERTISED_PROPERTY_CAP)
+}
+
+/// The sentence carrying a docs pointer (`references/…` or an installed
+/// skill), when the source has one.
+fn docs_pointer_sentence(text: &str) -> Option<String> {
+    split_sentences(text).into_iter().find(|sentence| {
+        sentence.contains("references/")
+            || sentence.contains("installed Orbit skill")
+            || sentence.contains("installed skill")
+    })
 }
 
 fn first_sentence(text: &str) -> &str {
     let trimmed = text.trim();
-    if let Some(index) = trimmed.find(". ") {
-        &trimmed[..=index]
+    split_sentences(trimmed)
+        .into_iter()
+        .next()
+        .map(|sentence| {
+            let start = trimmed.find(&sentence).unwrap_or(0);
+            &trimmed[start..start + sentence.len()]
+        })
+        .unwrap_or(trimmed)
+}
+
+/// Split on sentence-ending periods: a `.` followed by an uppercase letter,
+/// a digit or a backtick, so dotted names and abbreviations stay whole.
+fn split_sentences(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    let bytes = trimmed.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'.' {
+            let mut next = index + 1;
+            while next < bytes.len() && bytes[next] == b' ' {
+                next += 1;
+            }
+            if next > index + 1
+                && next < bytes.len()
+                && (bytes[next].is_ascii_uppercase()
+                    || bytes[next].is_ascii_digit()
+                    || bytes[next] == b'`')
+            {
+                let sentence = trimmed[start..=index].trim();
+                if !sentence.is_empty() {
+                    sentences.push(sentence.to_string());
+                }
+                start = next;
+                index = next;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    let tail = trimmed[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_string());
+    }
+    sentences
+}
+
+/// Words a complete sentence or clause never ends with.
+const DANGLING_END_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "nor", "by", "with", "without", "within", "for", "to",
+    "of", "in", "on", "at", "from", "as", "per", "via", "over", "under", "into", "onto", "between",
+    "through", "during", "before", "after", "about", "against", "whose", "which", "that", "this",
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "e.g", "i.e",
+];
+
+fn is_complete_candidate(head: &str) -> bool {
+    let candidate = head.trim().trim_end_matches([',', ';', ':']);
+    if candidate.chars().count() < 10 {
+        return false;
+    }
+    if !candidate.matches('`').count().is_multiple_of(2) {
+        return false;
+    }
+    let opens = candidate.matches('(').count();
+    let closes = candidate.matches(')').count();
+    if opens != closes {
+        return false;
+    }
+    let last_word = candidate
+        .rsplit(|ch: char| ch.is_whitespace())
+        .next()
+        .unwrap_or("")
+        .trim_matches(|ch: char| "`\"'().,;:".contains(ch))
+        .to_ascii_lowercase();
+    !last_word.is_empty() && !DANGLING_END_WORDS.contains(&last_word.as_str())
+}
+
+/// A clause cut is only valid when it does not slice a value list: a comma
+/// after a `:` list introduction is part of the list, not a clause boundary.
+fn clause_candidate(head: &str, delimiter: char) -> Option<String> {
+    // A head that already contains a comma is likely a value list in
+    // progress; cutting at its next comma would present a partial list.
+    if delimiter == ',' && (head.contains(": ") || head.contains(',')) {
+        return None;
+    }
+    if !is_complete_candidate(head) {
+        return None;
+    }
+    let candidate = head.trim().trim_end_matches([',', ';', ':']);
+    if candidate.ends_with('.') {
+        Some(candidate.to_string())
     } else {
-        trimmed
+        Some(format!("{candidate}."))
     }
 }
 
+/// Clause boundaries in `text`, as (char count of the head, delimiter, head).
+fn clause_boundaries(text: &str) -> Vec<(usize, char, &str)> {
+    let mut boundaries = Vec::new();
+    let mut char_count = 0usize;
+    for (byte_index, ch) in text.char_indices() {
+        char_count += 1;
+        if matches!(ch, ';' | ',' | ':') {
+            boundaries.push((char_count - 1, ch, &text[..byte_index]));
+        } else if ch == '(' && byte_index > 0 && text[..byte_index].ends_with(' ') {
+            boundaries.push((char_count - 1, '(', &text[..byte_index]));
+        }
+    }
+    boundaries
+}
+
+/// Shorten to a complete sentence or clause. The cap is a preference, never
+/// a licence to cut mid-clause: when no clause ends within it, the first
+/// clause or sentence beyond it is kept whole.
 fn cap_description(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= max_chars {
         return trimmed.to_string();
     }
-    let mut end = 0;
-    for (index, ch) in trimmed.char_indices() {
-        let next = index + ch.len_utf8();
-        if next > max_chars {
-            break;
+    let Some(first) = split_sentences(trimmed).into_iter().next() else {
+        return trimmed.to_string();
+    };
+    if first.chars().count() <= max_chars {
+        return first;
+    }
+    let boundaries = clause_boundaries(&first);
+    // Strong boundaries first (`;`, then `:`), then commas, within the cap.
+    for wanted in [';', ':', ','] {
+        if let Some(candidate) = boundaries
+            .iter()
+            .filter(|(count, delimiter, _)| *count <= max_chars && *delimiter == wanted)
+            .rev()
+            .find_map(|(_, delimiter, head)| clause_candidate(head, *delimiter))
+        {
+            return candidate;
         }
-        end = next;
     }
-    let prefix = &trimmed[..end];
-    let cut = prefix.rsplit_once(' ').map_or(prefix, |(head, _)| head);
-    let cut = cut.trim_end_matches([',', ';', ':']);
-    let cut = if cut.is_empty() { prefix } else { cut };
-    if cut.ends_with('.') {
-        cut.to_string()
-    } else {
-        format!("{cut}.")
+    // No safe boundary within the cap: keep the first complete clause beyond
+    // it rather than inventing a sentence by truncating mid-clause.
+    if let Some(candidate) = boundaries
+        .iter()
+        .filter(|(count, _, _)| *count > max_chars)
+        .find_map(|(_, delimiter, head)| clause_candidate(head, *delimiter))
+    {
+        return candidate;
     }
+    first
 }
