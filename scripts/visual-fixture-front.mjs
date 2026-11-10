@@ -307,7 +307,9 @@ function loopbackUpstream(raw) {
   } catch {
     fail('fixture upstream is not a loopback origin');
   }
-  const host = url.hostname.toLowerCase();
+  const rawHost = url.hostname.toLowerCase();
+  // WHATWG URL keeps the brackets on an IPv6 literal hostname ("[::1]").
+  const host = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost;
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
   if (url.protocol !== 'http:' || !loopback || !url.port || url.username || url.password) {
     fail('fixture upstream is not a loopback origin');
@@ -379,6 +381,12 @@ function staticNamespace(pathname) {
   return pathname === '/' || lower === '/static' || lower.startsWith('/static/');
 }
 
+function upstreamRequestHostname(upstream) {
+  const name = upstream.hostname;
+  // http.request resolves a bare IP literal; the bracketed URL form is refused by DNS.
+  return name.startsWith('[') && name.endsWith(']') ? name.slice(1, -1) : name;
+}
+
 function confinedDispatch(upstream, target, method, headers) {
   if (target.origin !== upstream.origin || target.protocol !== 'http:' || target.host !== upstream.host) {
     throw new Error('request target is not confined to the fixture upstream');
@@ -389,7 +397,7 @@ function confinedDispatch(upstream, target, method, headers) {
   }
   return http.request({
     protocol: 'http:',
-    hostname: upstream.hostname,
+    hostname: upstreamRequestHostname(upstream),
     port: upstream.port,
     method,
     path: pathAndQuery,
