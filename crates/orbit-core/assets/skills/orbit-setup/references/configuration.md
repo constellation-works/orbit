@@ -223,6 +223,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.unlocked_path_validation_commands` | **Advanced: validation policy.** Default `[]` keeps full validation; array of command strings, trimmed with blank entries dropped. Replaces required commands only when the candidate differs from this run's last fully validated tree solely in unlocked paths. Verify `validation_scope` in validation logs. See [Recovery settings](#recovery-settings). |
 | `workflow.ci_infrastructure_retry.max_attempts` | Total failed-jobs reruns for one pull-request head whose failures are all logged infrastructure/transient. Default `3`; integer `0`..`10`. `0` disables this recovery. See [CI infrastructure reruns](#ci-infrastructure-reruns). |
 | `workflow.ci_infrastructure_retry.backoff_seconds` | Initial delay between infrastructure reruns, doubled after each reservation. Default `60`; integer `1`..`3600` seconds; the first rerun is immediate. See [CI infrastructure reruns](#ci-infrastructure-reruns). |
+| `workflow.ci_infrastructure_retry.handoff_steps` | Failed-step name patterns of CI dependency handoffs (a step that awaits or downloads another job's output). When every failed job stopped in a matching step, the set gets the infrastructure rerun without reading logs. Default `[]`; whole-name, case-sensitive, `*` matches any characters. See [CI infrastructure reruns](#ci-infrastructure-reruns). |
 | `worktree.reclaim_below_free_mib` | **Advanced: reclaims rebuildable output.** Default unset; non-negative integer MiB (`u64`). During admission, reclaim `worktree.reclaim` paths from oldest terminal worktrees while free space under the state directory is below this mark; active runs remain protected. `0` never triggers it. Verify candidates with `orbit gc worktrees --reclaim --dry-run --estimate-bytes` and actual reclamation via the `worktree.reclaim` audit event. See [Worktree GC](maintenance.md#worktree-garbage-collection). |
 | `workflow.provider_limit_overrides` | Delivery admission skips a crew while a live usage window of its provider or model is exhausted or used at or above 90%. Each entry replaces that percent for one provider: `provider:percent` (1..=100; 100 skips only on exhaustion) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
@@ -936,6 +937,16 @@ immediate, then each reservation doubles the wait (by default `60`, then
 matches only when a line it emitted starts with one of those prefixes.
 Declare only failures a rerun can clear; anything else keeps its repair
 route, and no repair agent runs for a match.
+
+`workflow.ci_infrastructure_retry.handoff_steps` covers a job that failed
+while obtaining another job's output, whose log is often truncated or names
+no failing command. Each entry is a step-name pattern matching the whole
+name, case-sensitively, with `*` for any characters, such as
+`["Download nextest archive", "Await the *"]`. When every failed job's one
+failed step, as the provider's job listing reports it, matches a pattern,
+the set gets these reruns from the step names alone, without reading logs.
+A failed job in any other step, or with several failed steps, leaves the set
+to its usual classification. Default `[]` declares none.
 
 Behavior notes:
 

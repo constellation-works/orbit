@@ -55,6 +55,9 @@ pub struct PrSettings {
     pub ci_infrastructure_signatures: Vec<String>,
     /// Bounded, backed-off retries of logged infrastructure failures.
     pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
+    /// Failed-step name patterns of dependency handoffs
+    /// (`workflow.ci_infrastructure_retry.handoff_steps`). Empty declares none.
+    pub ci_handoff_steps: Vec<String>,
     /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
     /// shape what a delivery publishes.
     pub conventions: orbit_types::workflow::DeliveryConventions,
@@ -138,6 +141,9 @@ impl ResolvedConfig {
                     max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
                     backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
                 },
+                ci_handoff_steps: snapshot
+                    .workflow_ci_infrastructure_retry_handoff_steps
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
@@ -383,6 +389,9 @@ impl ResolvedConfig {
                     max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
                     backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
                 },
+                ci_handoff_steps: snapshot
+                    .workflow_ci_infrastructure_retry_handoff_steps
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
             workflow_base_branch: snapshot.workflow_base_branch.clone(),

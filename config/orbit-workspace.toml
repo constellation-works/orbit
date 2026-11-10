@@ -7,6 +7,17 @@ required_validation_commands = []
 unlocked_path_validation_commands = ["make ci-fast"]
 
 # Conflict recovery regenerates these instead of merging them.
+# A CI job that stopped while waiting for or downloading the test build's
+# nextest archive failed in CI's dependency handoff, not in the candidate:
+# when every failed job stopped in one of these steps, the set gets the
+# bounded infrastructure rerun instead of a repair agent.
+[workflow.ci_infrastructure_retry]
+handoff_steps = [
+  "Await the nextest archive",
+  "Download nextest archive",
+  "Await the test build and nextest shards",
+]
+
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
 

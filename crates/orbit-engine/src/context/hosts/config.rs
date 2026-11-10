@@ -45,6 +45,10 @@ pub struct PrConfig {
     pub ci_infrastructure_signatures: Vec<String>,
     /// Owner policy for logged infrastructure failures; reservations survive runs.
     pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
+    /// `workflow.ci_infrastructure_retry.handoff_steps`: failed-step name
+    /// patterns of dependency handoffs. A failed set whose every failed job
+    /// stopped in a matching step is transient. Empty declares none.
+    pub ci_handoff_steps: Vec<String>,
     /// `pr.*`, `commit.*` and `branch.*` templates and switches; the default
     /// is Orbit's built-in titles, bodies, messages and branch names.
     pub conventions: orbit_types::workflow::DeliveryConventions,

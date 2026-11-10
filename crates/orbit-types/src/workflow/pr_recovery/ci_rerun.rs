@@ -79,6 +79,54 @@ fn signature_keeps_single_rerun(signature: &str) -> bool {
     signature.starts_with("concluded ") || signature.starts_with(CI_AWAIT_TIMEOUT_SIGNATURE_PREFIX)
 }
 
+/// Signature prefix of a root whose evidence is the provider's failed-step
+/// name, not its log: the job stopped in a step the workspace declares as a
+/// dependency handoff (`workflow.ci_infrastructure_retry.handoff_steps`).
+/// It is a logged-transient root for the infrastructure budget.
+pub const CI_HANDOFF_STEP_SIGNATURE_PREFIX: &str = "handoff step: ";
+
+/// The rerun-root signature of a job that failed in handoff step `step`.
+pub fn ci_handoff_step_signature(step: &str) -> String {
+    format!("{CI_HANDOFF_STEP_SIGNATURE_PREFIX}{step}")
+}
+
+/// Whether failed step `step` is a declared dependency handoff. Each pattern
+/// matches the whole step name, case-sensitively; `*` matches any run of
+/// characters. No pattern matches an empty step name.
+pub fn ci_handoff_step_matches(patterns: &[String], step: &str) -> bool {
+    !step.trim().is_empty()
+        && patterns
+            .iter()
+            .any(|pattern| wildcard_matches(pattern.as_bytes(), step.as_bytes()))
+}
+
+/// Whole-string match where `*` matches any (possibly empty) byte run.
+fn wildcard_matches(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(byte) if *byte == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|byte| *byte == b'*')
+}
+
 /// Admission is atomic under the owning task/claim boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiRerunAdmission {

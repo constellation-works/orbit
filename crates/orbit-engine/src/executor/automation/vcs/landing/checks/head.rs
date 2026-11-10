@@ -147,6 +147,23 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             ));
         }
     };
+    // [ORB-23813] Every failed job stopped in a declared dependency-handoff
+    // step: CI could not hand a job its dependency's output. That is no
+    // failure a code repair clears, readable log or not.
+    if let Some((_, roots)) =
+        super::rerun::handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed)
+    {
+        let stopped = roots
+            .iter()
+            .map(|root| format!("'{}' ({})", root.check, root.signature))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return HeadCheckEvidence::Stop(format!(
+            "every failed job on head {head} stopped in a dependency-handoff step \
+             (workflow.ci_infrastructure_retry.handoff_steps): {stopped}; CI infrastructure, \
+             not the candidate, failed"
+        ));
+    }
     let mut details = Vec::new();
     let mut waits = Vec::new();
     let mut annotations = Vec::new();

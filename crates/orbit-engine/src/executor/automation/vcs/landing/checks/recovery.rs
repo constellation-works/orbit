@@ -286,6 +286,12 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 })
         })
     };
+    // [ORB-23813] Every failed job stopped in a declared dependency-handoff
+    // step: each is transient from its failed-step name, without a log read.
+    let handoff_roots =
+        super::rerun::handoff_step_set(&host.pr_config().ci_handoff_steps, &head_jobs, failed)
+            .map(|(_, roots)| roots)
+            .unwrap_or_default();
     for job in failed_jobs {
         let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Ok(unclassified(
@@ -303,6 +309,22 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 class: CheckFailureClass::Transient,
                 signature: super::jobs::conclusion_signature(conclusion),
                 why: format!("the job concluded {conclusion}"),
+                excerpt: String::new(),
+                tip_passes: false,
+            });
+            continue;
+        }
+        if let Some(root) = handoff_roots.iter().find(|root| root.job_id == job_id) {
+            jobs.push(FailedJob {
+                run_id: Some(run_id),
+                job_id,
+                label,
+                class: CheckFailureClass::Transient,
+                signature: root.signature.clone(),
+                why: format!(
+                    "the job stopped in dependency-handoff step `{}`",
+                    super::jobs::failed_step(job)
+                ),
                 excerpt: String::new(),
                 tip_passes: false,
             });

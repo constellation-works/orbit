@@ -266,6 +266,7 @@ pub(crate) fn build_context_from_roots(
         delivery_authors: runtime_config.pr.delivery_authors.clone(),
         ci_infrastructure_signatures: runtime_config.pr.ci_infrastructure_signatures.clone(),
         ci_infrastructure_retry: runtime_config.pr.ci_infrastructure_retry,
+        ci_handoff_steps: runtime_config.pr.ci_handoff_steps.clone(),
         conventions: runtime_config.pr.conventions.clone(),
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();

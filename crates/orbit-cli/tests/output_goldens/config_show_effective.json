@@ -406,6 +406,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.ci_infrastructure_retry.handoff_steps": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.ci_infrastructure_retry.max_attempts": {
       "scope": "built-in",
       "state": "default",
