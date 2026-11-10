@@ -433,6 +433,7 @@ fn launch(
             reasoning_effort: effort,
         },
         started_at: at,
+        backfill: None,
     }
 }
 

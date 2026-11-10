@@ -3,6 +3,7 @@ use orbit_cmd::registry_runtime::{
     RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
 };
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+use orbit_core::application::agents::DispatchEffortBackfill;
 use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 use orbit_core::application::job::TaskCrewBackfill;
 use orbit_core::composition::WorkspaceAuthorityAdoption;
@@ -27,7 +28,7 @@ pub struct MigrateCommand {
     #[arg(long, conflicts_with = "dry_run")]
     pub confirm: bool,
     /// Explicitly request the default non-destructive inspection mode
-    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews"])]
+    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort"])]
     pub dry_run: bool,
     /// Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
     #[arg(long)]
@@ -43,11 +44,14 @@ pub struct MigrateCommand {
     /// Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
     #[arg(long, conflicts_with = "backfill_diff_stats")]
     pub backfill_task_crews: bool,
+    /// Apply pending migrations, then record the reasoning effort each agent invocation without a recorded dispatch identity was launched with, read from its audited launch command, so agent scorecards stop showing it as effort unknown. Invocations whose launch cannot be matched, or whose matching launches disagree, stay unknown; running it again changes nothing
+    #[arg(long, conflicts_with_all = ["backfill_diff_stats", "backfill_task_crews"])]
+    pub backfill_dispatch_effort: bool,
     /// Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews"]
+        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort"]
     )]
     pub adopt_authority: Option<std::path::PathBuf>,
 }
@@ -129,7 +133,10 @@ impl MigrateCommand {
     /// Whether this invocation opens the runtime, which applies pending
     /// migrations: `--confirm`, or a backfill that needs the current schema.
     pub fn applies(&self) -> bool {
-        self.confirm || self.backfill_diff_stats || self.backfill_task_crews
+        self.confirm
+            || self.backfill_diff_stats
+            || self.backfill_task_crews
+            || self.backfill_dispatch_effort
     }
 }
 
@@ -140,6 +147,9 @@ impl Execute for MigrateCommand {
         }
         if self.backfill_task_crews {
             return task_crew_backfill_payload(&runtime.backfill_admitted_task_crews()?);
+        }
+        if self.backfill_dispatch_effort {
+            return dispatch_effort_backfill_payload(&runtime.backfill_dispatch_effort()?);
         }
         // Apply path: opening the runtime (before this command ran) already
         // applied everything pending; report the outcome.
@@ -209,6 +219,30 @@ fn task_crew_backfill_payload(report: &TaskCrewBackfill) -> CommandOut {
             change.task_id,
             change.from.as_deref().unwrap_or("(none)"),
             change.to
+        ));
+    }
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
+}
+
+fn dispatch_effort_backfill_payload(report: &DispatchEffortBackfill) -> CommandOut {
+    let doc = json!({ "dispatch_effort_backfill": report });
+    let mut text = format!(
+        "dispatch effort backfill in workspace {}: {} recorded of {} invocations without a \
+         dispatch identity; {} left unknown with no matching launch, {} with launches that \
+         disagree",
+        report.workspace,
+        report.recorded,
+        report.examined,
+        report.no_launch_event,
+        report.conflicting
+    );
+    for (effort, count) in &report.recorded_by_effort {
+        text.push_str(&format!("\n  {effort}: {count}"));
+    }
+    if report.already_recorded > 0 {
+        text.push_str(&format!(
+            "\n{} recorded by another writer while this ran",
+            report.already_recorded
         ));
     }
     Ok(Payload::blocks(doc, vec![Block::text(text)]).into())

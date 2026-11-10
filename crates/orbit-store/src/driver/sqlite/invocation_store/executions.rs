@@ -1,5 +1,5 @@
 //! Immutable dispatch provenance, separate from optional completion telemetry.
-use crate::contracts::{AgentExecutionQuery, AgentExecutionRecord};
+use crate::contracts::{AgentExecutionBackfill, AgentExecutionQuery, AgentExecutionRecord};
 use crate::{Store, now_string};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
@@ -58,15 +58,17 @@ impl Store {
         rows.map(|row| {
             let (id, run_id, activity_id, provider, model, json, at) =
                 row.map_err(sqlite_store_error)?;
+            let stored: StoredAgentExecutionIdentity = serde_json::from_str(&json)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
             Ok(AgentExecutionRecord {
                 id,
                 run_id,
                 activity_id,
                 provider,
                 model,
-                identity: serde_json::from_str(&json)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?,
+                identity: stored.identity,
                 started_at: crate::parse_timestamp(&at).map_err(sqlite_store_error)?,
+                backfill: stored.backfill,
             })
         })
         .collect()
@@ -111,17 +113,30 @@ impl Store {
         rows.map(|row| {
             let (id, run_id, activity_id, provider, model, json, at) =
                 row.map_err(sqlite_store_error)?;
+            let stored: StoredAgentExecutionIdentity = serde_json::from_str(&json)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
             Ok(AgentExecutionRecord {
                 id,
                 run_id,
                 activity_id,
                 provider,
                 model,
-                identity: serde_json::from_str(&json)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?,
+                identity: stored.identity,
                 started_at: crate::parse_timestamp(&at).map_err(sqlite_store_error)?,
+                backfill: stored.backfill,
             })
         })
         .collect()
     }
+}
+
+/// `identity_json` as stored: the dispatch identity, plus the provenance of a
+/// backfilled one. Readers that want only the identity deserialize
+/// [`AgentExecutionIdentity`] from the same text and ignore `backfill`.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct StoredAgentExecutionIdentity {
+    #[serde(flatten)]
+    pub(super) identity: AgentExecutionIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) backfill: Option<AgentExecutionBackfill>,
 }

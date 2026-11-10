@@ -182,6 +182,16 @@ task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a
 
 This is a different repair from `--backfill-diff-stats`, which records landed line counts for done tasks and takes `--limit`. The two flags cannot be combined with each other, and neither combines with `--dry-run`; `--limit` only applies to the diff-stats backfill. There is no built-in undo for the crew repair beyond the per-task history entries it appends, and only runs and settlements visible in this workspace's store count: deliveries whose records live on another host are not repaired from here.
 
+### Repair historical dispatch effort
+
+Agent scorecards group work by model and the reasoning effort it was launched with, read from the dispatch identity Orbit records for each agent invocation. Invocations that completed before Orbit recorded that identity show as `@ effort unknown`. `orbit migrate --backfill-dispatch-effort` recovers their effort from the audited launch command of each invocation and records it:
+
+```bash
+orbit migrate --backfill-dispatch-effort --workspace my-project
+```
+
+Like the crew repair, it applies pending migrations first. It matches each invocation to the run's launch events for the same model that started within a minute of the invocation's start, and reads the effort flag the launch rendered (`--effort`, `--reasoning-effort` or Codex's `model_reasoning_effort`). A launch with no effort flag is recorded as the provider default. An invocation with no matching launch, or with matching launches that disagree, stays `effort unknown`: effort is never guessed from crew configuration. A recorded identity is marked as backfilled, invocations that already have one are never changed, and running it again changes nothing. It works on any host against that host's own store; the report counts what it recorded, by effort, and what it left unknown.
+
 ### Forward compatibility and upgrades
 
 If a workspace was created or migrated by a newer Orbit binary:

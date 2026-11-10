@@ -1046,6 +1046,7 @@ orbit migrate --confirm    # open the workspace, auto-apply, and report
 orbit migrate --json       # machine-readable inspection report
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
+orbit migrate --backfill-dispatch-effort  # apply, then record the launch effort of agent invocations that predate dispatch identities
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -1084,6 +1085,20 @@ recorded crew. Terminal tasks are included. Each change records
 `crew_source: backfill:admission` and a `crew_assigned` history entry; the report names the
 workspace, how many tasks had a selection and which changed. Run it on the owner, once,
 after upgrading to a build that writes admission crews back. A rerun changes nothing.
+
+`--backfill-dispatch-effort` applies pending migrations like `--confirm`, then gives each agent
+invocation of the workspace that has no dispatch identity (those that completed before Orbit
+recorded one at dispatch, 2026-10-31) the reasoning effort its launch rendered. It reads the
+effort from the redacted argv of the run's `cli.invocation.started` audit event for the same
+model, launched within a minute of the invocation's end minus its duration: `--effort X`,
+`--reasoning-effort X` or `model_reasoning_effort="X"`, and the provider default when the argv
+carries no effort flag. An invocation with no matching launch, or whose matching launches
+disagree or carry an unreadable effort, stays `unknown`; effort is never taken from crew
+configuration. The crew recorded is the run's resolved crew for the run's executor invocation
+and absent otherwise. Each backfilled identity carries a `backfill` provenance (source event
+type, matched event ids, time recorded) in its stored record. Existing identities are never
+changed, so a rerun changes nothing. Run it on any host, owner or follower, against its own
+store; attempts a follower ran have no invocation on the owner.
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace
