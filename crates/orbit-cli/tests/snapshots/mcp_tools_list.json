@@ -1,7 +1,7 @@
 [
   {
     "name": "orbit_attention",
-    "description": "List operator waits and suggested next actions; use at session start or on-call.",
+    "description": "List operator waits and suggested next actions. Details: installed Orbit skill `references/attention.md`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -118,7 +118,7 @@
         },
         "since": {
           "type": "string",
-          "description": "Opaque cursor from a prior response; unusable."
+          "description": "Opaque cursor from a prior response."
         },
         "limit": {
           "type": "integer",
@@ -165,7 +165,7 @@
           "items": {
             "type": "string"
           },
-          "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; For."
+          "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other."
         },
         "during_task": {
           "type": "string",
@@ -212,7 +212,7 @@
       "properties": {
         "query": {
           "type": "string",
-          "description": "Tasks match non-adjacent terms: full matches.",
+          "description": "Tasks match non-adjacent terms.",
           "minLength": 1
         },
         "kind": {
@@ -240,18 +240,18 @@
           "items": {
             "type": "string"
           },
-          "description": "Explicit per-kind status override using."
+          "description": "Explicit per-kind status override using kind."
         },
         "workspaces": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Federated scope: registered workspace names."
+          "description": "Federated scope."
         },
         "all_workspaces": {
           "type": "boolean",
-          "description": "Search every active workspace registered on the."
+          "description": "Search every active workspace registered on the answering machine."
         },
         "workspace": {
           "type": "string",
@@ -530,20 +530,24 @@
   },
   {
     "name": "orbit_task_eligible",
-    "description": "List backlog and proposed tasks that can be picked up now without colliding.",
+    "description": "List backlog and proposed tasks that can be picked up now without colliding with work in flight.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "status": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "backlog",
+              "proposed"
+            ]
           },
-          "description": "Candidate statuses: `backlog`, `proposed`, or."
+          "description": "Candidate statuses."
         },
         "path": {
           "type": "string",
-          "description": "Keep only candidates whose `context_files`."
+          "description": "Keep only candidates whose `context_files` selectors apply to this path."
         },
         "limit": {
           "type": "integer",
@@ -551,7 +555,7 @@
         },
         "explain": {
           "type": "boolean",
-          "description": "When true, also return `conflicting`: every."
+          "description": "When true, also return `conflicting`."
         },
         "workspace": {
           "type": "string",
@@ -611,7 +615,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Filter by tag; an array is AND."
+          "description": "Filter by tag; an array matches every listed tag."
         },
         "runs_on": {
           "type": "string",
@@ -688,22 +692,22 @@
         },
         "snapshot": {
           "type": "boolean",
-          "description": "True returns a bounded versioned snapshot with."
+          "description": "True returns a bounded versioned snapshot with opaque revision and available actions."
         },
         "fields": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Field names to return; `delivery` is selected."
+          "description": "Field names to return."
         },
         "field": {
           "type": "string",
-          "description": "Compatibility alias for a single field."
+          "description": "Compatibility alias for a single field projection."
         },
         "run_id": {
           "type": "string",
-          "description": "With `field: \"delivery\"` only: the delivery run."
+          "description": "With `field: \"delivery\"` only."
         },
         "workspace": {
           "type": "string",
@@ -1045,7 +1049,7 @@
   },
   {
     "name": "orbit_workspace_list",
-    "description": "List active workspaces with a checkout registered on this machine, optionally.",
+    "description": "List active workspaces with a checkout registered on this machine.",
     "inputSchema": {
       "type": "object",
       "properties": {

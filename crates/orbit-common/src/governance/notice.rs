@@ -65,7 +65,7 @@ const AUTHOR_CLASSES: &[EnumValue] = &[
 const ATTRIBUTION: &[ParamSpec] = &[mcp_only(
     "orchestrator",
     ParamType::String,
-    "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
+    "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
 )];
 
 const POST_PARAMS: &[ParamSpec] = &[

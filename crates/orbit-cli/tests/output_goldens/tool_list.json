@@ -650,7 +650,7 @@
       },
       {
         "name": "working_directory",
-        "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
+        "description": "The command's absolute working directory. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "param_type": "string",
         "required": true
       },
@@ -691,7 +691,7 @@
       },
       {
         "name": "task_id",
-        "description": "For list: Only requests on this task; For raise: The human-crew task the decision is for.",
+        "description": "For list: Only requests on this task; For raise: The human-crew task this decision concerns.",
         "param_type": "string",
         "required": false
       },
@@ -1604,7 +1604,7 @@
       },
       {
         "name": "evidence",
-        "description": "Evidence task ids the notes rest on. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
+        "description": "Evidence task ids supporting the notes. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
         "param_type": "string_list",
         "required": false
       },
@@ -1645,7 +1645,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
       }
@@ -1716,7 +1716,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
       }
@@ -1799,7 +1799,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
       }
@@ -1822,7 +1822,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it never outranks the operator or a managed run's binding.",
         "param_type": "string",
         "required": false
       }
@@ -1921,7 +1921,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -1968,7 +1968,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -1997,7 +1997,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2056,7 +2056,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2079,7 +2079,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2108,13 +2108,13 @@
       },
       {
         "name": "baseline",
-        "description": "An interactive orchestration assignment task to compute the same measures for. Measures that cannot be derived from its history report not_derivable, never zero. Tasks in other workspaces are read via their owner; unreachable ones are listed in references.unreachable.",
+        "description": "An interactive orchestration assignment task for computing the same measures. Measures that cannot be derived from its history report not_derivable, never zero. Tasks in other workspaces are read via their owner; unreachable ones are listed in references.unreachable.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2161,7 +2161,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2184,7 +2184,7 @@
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew this unmanaged session acts for. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
+        "description": "Orchestrator crew for this unmanaged session. Defaults to the session's configured orchestrator. Attribution only: it is recorded on a grant request as the relaying session and never grants authority.",
         "param_type": "string",
         "required": false
       }
@@ -2764,7 +2764,7 @@
       },
       {
         "name": "tag",
-        "description": "Filter by tag; an array is AND.",
+        "description": "Filter by tag; an array matches every listed tag.",
         "param_type": "string_list",
         "required": false
       },
@@ -3050,7 +3050,7 @@
       },
       {
         "name": "reconciliation_id",
-        "description": "For reconcile_review: status, accept_baseline: the reconciliation to act on.",
+        "description": "For reconcile_review: status, accept_baseline: the target reconciliation.",
         "param_type": "string",
         "required": false
       },

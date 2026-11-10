@@ -184,7 +184,7 @@ const WRITE_PARAMS: &[ParamSpec] = &[
     both(
         "evidence",
         ParamType::StringList,
-        "Evidence task ids the notes rest on. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
+        "Evidence task ids supporting the notes. A dreaming run must cite at least one, each from its evidence pack; an operator write may cite none.",
         CliArgKind::Flag {
             long: "evidence",
             delimiter: Some(','),

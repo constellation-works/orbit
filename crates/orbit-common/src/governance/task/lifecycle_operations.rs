@@ -171,7 +171,7 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
         mcp_only(
             "reconciliation_id",
             ParamType::String,
-            "status, accept_baseline: the reconciliation to act on",
+            "status, accept_baseline: the target reconciliation",
         ),
         // Selects an already-authorized stored command, so it is kept
         // byte-for-byte for exact evidence matching.
