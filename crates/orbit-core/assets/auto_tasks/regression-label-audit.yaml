@@ -1,0 +1,180 @@
+schemaVersion: 1
+name: regression-label-audit
+description: Weekly blind re-judgement of ten regression labels from the last seven days by a different model family; reports the sample's disagreement rate for escape, nature and severity without changing any link
+enabled: false
+schedule:
+  cron: 30 7 * * 1
+template:
+  title: Audit regression labels
+  description: |-
+    Re-judge a sample of regression labels and report how often an
+    independent judge disagrees. A regression_from link's escape, nature
+    and severity decide which role is charged and how much, and the agent
+    that files the link sets all three. The durable output is
+    regression-label-audit.json on this chore. Recorded links, scorecards
+    and ranks stay as they are.
+
+    ## Definition fields
+
+    Read the draw and the window from these fields. Do not replace them
+    with other numbers.
+
+    - sample_size: 10
+    - period_days: 7
+
+    ## Stay blind
+
+    The evidence packet for a link is only the filing task's title,
+    description, acceptance criteria, context files and type, and the
+    culprit task's title, description, acceptance criteria and context
+    files. Write that packet before you read the filer's labels.
+
+    Never put a model, provider or crew name into the packet: not the
+    filer's, and not the culprit's implementer or reviewer. Do not read,
+    for either task, crew, resolved_crew, crew_model, crew_unresolved,
+    implemented_by, planned_by, orchestrator, orchestrator_model,
+    orchestrator_model_source, comments, history, execution_summary,
+    final_recovery, job_run_id or artifacts. Do not open a run, its logs
+    or an experiment readout, and do not search for a crew.
+
+    `created_by` and `created_by_model` are read only while sampling, and
+    only to skip your own family. They never enter the packet. Read
+    `relations` only twice. While sampling, keep the relation type and
+    target and discard `regression` (nature, escape, severity,
+    severity_source and sites) without writing those values down. After
+    the second labels are in the scratch artifact, read `relations` again
+    and copy the recorded labels to score agreement.
+
+    If a field you were allowed to read names a model, provider or crew,
+    or states the filer's recorded nature, escape or severity, exclude
+    that link, record a blindness breach and draw a replacement. A
+    description of the defect is evidence. A line that sets the
+    classification is not.
+
+    ## Sample
+
+    The window is the period_days before this run starts, in UTC. A link
+    is inside it when the task that carries the regression_from relation
+    has `created_at` in that window. A relation added later to an older
+    task is outside the window.
+
+    Enumerate with `orbit.task.list` and
+    `fields: ["id", "created_at", "created_by", "created_by_model", "relations"]`,
+    once per status (proposed, backlog, in-progress, review, blocked,
+    someday, done, rejected, archived). Each status is newest first. Walk
+    until `created_at` is before the window. When `truncated` is true and
+    the oldest row is still inside the window, repeat that status with a
+    higher limit. A status you cannot cover is a recorded gap, not a
+    reason to pad the sample.
+
+    Keep regression_from relations. Drop links already judged by a
+    previous audit (read its artifact below). Drop links whose
+    `created_by` or `created_by_model` names your own model family
+    (Claude, GPT/Codex, Gemini, Grok and so on), the same family test
+    `recovery-fault-audit` applies to `fault_judged_by`, so a different
+    family re-labels each link. Your family is the family of the model
+    this run dispatched. A link with neither field is eligible only when
+    you record that its filer is unknown. Draw sample_size at random with
+    a recorded seed. Fewer than sample_size eligible links is an evidenced
+    short sample, never padding.
+
+    ## Re-label
+
+    For each sampled link, write the evidence packet, then judge escape,
+    nature and severity from that packet only. Use this rubric. When the
+    evidence does not settle a field, label it unclassified.
+
+    Nature:
+
+    - broke_existing: the culprit broke behavior that worked before it landed.
+    - defect_in_new: the defect is in code the culprit itself introduced.
+    - incomplete: the culprit shipped without part of what its task required.
+    - merge_reintroduced: a merge restored code or assets an earlier change had removed.
+    - contract_drift: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - unclassified: the evidence does not settle the nature.
+
+    Escape, from the tests and gate selection the evidence shows:
+
+    - no_test: no test exercised the broken behavior.
+    - test_not_selected: a covering test existed but the delivery's gates did not run it.
+    - platform_only: it shows only on a platform or host the gates did not exercise.
+    - review_missed: it was visible in the diff and review did not flag it. Visibility alone is not enough when no test exercises the behavior.
+    - spec_ambiguous: the task or spec left the expected behavior open to the shipped reading.
+    - nondeterministic: it depends on timing, ordering or environment and passed when gated.
+    - unclassified: the evidence does not settle the escape.
+
+    Severity, by the worst impact the evidence shows. When torn between
+    two levels, take the lower.
+
+    - critical: data loss or corruption, a security hole, every drain halted, or silently wrong results.
+    - high: a core workflow broken with no workaround.
+    - medium: a feature broken or wrong in a real path, with a workaround.
+    - low: an edge case, a misleading message or a minor defect.
+    - nit: wording or doc drift, cosmetic, no behavior impact.
+
+    Record your escape, nature and severity and a one-line reason before
+    you compare them with the recorded labels.
+
+    ## Agreement
+
+    Agree on a field when both sides name the same value. A missing
+    recorded nature or escape disagrees with every second label, including
+    unclassified. Both unclassified agree. Severity agrees when the
+    recorded severity equals the second severity. When the payload is
+    absent, or `severity_source` is `default`, there is no filer severity:
+    leave that link's severity agreement null and leave it out of the
+    severity rate. The disagreement rate for a field is the disagreements
+    divided by the sampled links judged on that field. Report each rate
+    with its numerator and denominator.
+
+    Fetch the previous completed audit's regression-label-audit.json: find
+    done chores with `orbit.task.list` (tag auto-task:regression-label-audit),
+    exclude this task, list artifacts with `orbit.task.show` field
+    `artifacts`, and read the newest artifact with `orbit.task.artifact`
+    action `get` only when that path is listed. Missing prior evidence
+    makes this a baseline; record why. Carry its judged link keys (filing
+    task id and target) forward so a later run does not redraw them. The
+    rates in this run are this sample only.
+
+    ## Persist
+
+    Attach .orbit/tmp/regression-label-audit.json with schema_version: 1,
+    the audit time, your own model family, sample_size, period_days, the
+    eligible population size, the seed, exclusions with reasons (own
+    family, already judged, blindness breach, outside the window), each
+    sampled link (filing task id, culprit task id, the evidence packet,
+    the second escape, nature and severity and the one-line reason, the
+    recorded labels, and agreement per field), the three disagreement
+    rates with numerators and denominators, the prior artifact reference
+    and every judged link key. The evidence packet on each link contains
+    neither the filer's labels nor any model, provider or crew name.
+    Attach it with `orbit.task.artifact` action `put` (id this chore,
+    source_path the scratch file, path regression-label-audit.json). The
+    execution summary reports the sample size, the eligible population,
+    and the disagreement rate for escape, nature and severity. A short
+    sample or a baseline still persists the artifact and succeeds. Write
+    only this chore's artifact and its summary or comment. Do not edit a
+    regression link, a scorecard or a rank.
+  acceptance_criteria:
+  - Up to sample_size (10) regression_from links from the last period_days (7), not judged by a previous audit and not filed by the auditor's own model family, were sampled with a recorded seed, or a short sample was evidenced with the eligible population size
+  - Each sampled link was re-labeled from an evidence packet of task title, description, acceptance criteria and context files that contains neither the filer's labels nor any model, provider or crew name of the filer or the culprit's implementer or reviewer, and a blindness breach was excluded and replaced
+  - regression-label-audit.json records, per sampled link, the second escape, nature and severity and agreement on each of those fields
+  - The execution summary reports this sample's disagreement rate for escape, nature and severity, each with its denominator
+  - No regression link, scorecard number or rank number was changed
+  task_type: chore
+  tags:
+  - regression-label-audit
+  - no-diff-expected
+  required_tools:
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-11-10T00:00:00Z
+updated_by: system
+updated_at: 2026-11-10T00:00:00Z

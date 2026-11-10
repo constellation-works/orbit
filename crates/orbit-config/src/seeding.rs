@@ -71,6 +71,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "qa-full-sweep",
     "qa-sweep",
     "recovery-fault-audit",
+    "regression-label-audit",
     "run-failure-patterns",
     "security-review",
 ];

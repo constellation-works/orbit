@@ -3846,6 +3846,33 @@
         "## Windows, signatures and recurrence"
       ],
       "digest": "383d2d9677620f4f11bc147f87f7f598dda209373d8602cc6fef9019774cb74b",
+      "revision": "ab4135fee6c0bbfc367f6d1652e188f7258121aa",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * 1"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Orbit version and migrations",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "383d2d9677620f4f11bc147f87f7f598dda209373d8602cc6fef9019774cb74b",
       "revision": "ece2cce0fa66cdec8e5bf16d30cfd813df4bc1a6",
       "settings": {
         "complexity": "hard",
@@ -5310,6 +5337,7 @@
       }
     }
   ],
+  "regression-label-audit": [],
   "run-failure-patterns": [
     {
       "comments": [

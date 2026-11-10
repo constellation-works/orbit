@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-10
+last_validated: 2026-11-10
 status: Implemented
 stage: shipped
 next: "—"
@@ -493,6 +493,25 @@ re-init does not overwrite a workspace-authored definition of the same name.
   run it earlier. `auto-task-yield-review` measures it like any other
   default. The minted chore is tagged `no-diff-expected`.
 
+- `regression-label-audit` — disabled-by-default weekly bias check [ORB-23842]
+  of the escape, nature and severity a `regression_from` link records.
+  `sample_size` (10) and `period_days` (7) are fields of the definition,
+  not constants in code. It samples that many links whose filing task was
+  created in the window, skipping links a previous audit judged and links
+  whose `created_by` or `created_by_model` names the auditor's own model
+  family — the same family test `recovery-fault-audit` applies to
+  `fault_judged_by`. The evidence packet is the filing and culprit tasks'
+  title, description, acceptance criteria and context files. It contains
+  neither the filer's labels nor any model, provider or crew name of the
+  filer or of the culprit's implementer or reviewer. The run attaches
+  `regression-label-audit.json` with the second escape, nature and severity
+  and per-field agreement, and the execution summary reports the sample's
+  disagreement rate for each field. It writes only that artifact and its
+  own summary or comment. It ships with the labels it audits rather than
+  after proven yield, for the same reason as `recovery-fault-audit`: the
+  ranking charges on those labels, so no workspace could run the check
+  earlier. The minted chore is tagged `no-diff-expected`.
+
 The former `blocked-task-triage` default (an hourly reader of escalated blocks,
 shipped by [ORB-17245]) is retired and is not seeded. [ORB-17744] had moved it
 to an event trigger on the escalation job, and [ORB-20629] made final recovery
@@ -724,5 +743,7 @@ encode this repository's branches and gates. Re-init preserves them:
   accounting, with a separate `held_7d` counter.
 - [ORB-23301] — Shipped the disabled weekly `recovery-fault-audit` default
   with the fault final recovery records.
+- [ORB-23842] — Shipped the disabled weekly `regression-label-audit` default,
+  a blind cross-family sample of regression escape, nature and severity.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
