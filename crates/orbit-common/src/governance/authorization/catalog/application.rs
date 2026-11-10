@@ -149,6 +149,16 @@ pub const INPUT_DEPENDENT_OPERATION_FLOORS: &[(&str, &str, &str)] = &[
         "granted_tools",
         TASK_GRANT_TOOLS_OPERATION_ID,
     ),
+    (
+        "orbit.auto_task.add",
+        "granted_tools",
+        TASK_GRANT_TOOLS_OPERATION_ID,
+    ),
+    (
+        "orbit.auto_task.update",
+        "granted_tools",
+        TASK_GRANT_TOOLS_OPERATION_ID,
+    ),
     ("orbit.task.update", "repilot", "orbit.task.repilot"),
     ("orbit.auto_task.list", "view", "orbit.workflow.run.show"),
 ];

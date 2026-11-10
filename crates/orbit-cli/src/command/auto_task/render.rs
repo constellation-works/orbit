@@ -257,6 +257,14 @@ fn show(value: Value) -> CommandOut {
     let _ = writeln!(out, "  schedule: {}", schedule_summary(&doc["schedule"]));
     let _ = writeln!(out, "  dedupe: {}", text(&doc, "dedupe"));
     let _ = writeln!(out, "  template: {}", text(&doc["template"], "title"));
+    let granted_tools = strings(&doc["granted_tools"]);
+    if !granted_tools.is_empty() {
+        let _ = writeln!(
+            out,
+            "  granted tools (operator grant, copied to minted tasks): {}",
+            granted_tools.join(", ")
+        );
+    }
     if let Some(note) = doc["crew_overridden"].as_str() {
         let _ = writeln!(out, "  crew: {note}");
     }
@@ -373,6 +381,7 @@ fn settings_fields(settings: &Value) -> Vec<&'static str> {
         ("priority", "template.priority"),
         ("complexity", "template.complexity"),
         ("tags", "template.tags"),
+        ("granted_tools", "granted_tools"),
     ]
     .into_iter()
     .filter(|(key, _)| settings.get(key).is_some_and(|value| !value.is_null()))

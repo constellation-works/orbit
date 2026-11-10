@@ -89,6 +89,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.experiment.start",
             "orbit.experiment.update",
             "orbit.friction",
+            "orbit.memory.history",
             "orbit.memory.propose",
             "orbit.memory.show",
             "orbit.memory.write",

@@ -12,7 +12,7 @@ impl OrbitRuntime {
     /// Validate an operator's grant before persisting it. Unlike durable
     /// requirements, grants refuse disabled tools rather than warning: every
     /// named tool must actually be available to the implementing agent.
-    pub(super) fn validate_granted_tools(&self, names: &[String]) -> Result<(), OrbitError> {
+    pub(crate) fn validate_granted_tools(&self, names: &[String]) -> Result<(), OrbitError> {
         for name in normalize_required_tools(names.to_vec()) {
             if authorization::classify_agent_tool_grant(&name).grantability
                 == ToolGrantability::AlwaysOperatorOnly

@@ -267,6 +267,12 @@ on the operator-only `orbit.run` action `show`.
   A lifted tool still
   passes every other check: capability and field-level operator gates,
   filesystem and process policy, and claimed-mode denials.
+  Two tools read the grant at call time as well. `orbit.memory.show` and
+  `orbit.memory.history` refuse an agent unless its run's task grants that
+  tool; a granted run reads every crew memory space, read only. An
+  auto-task definition can carry the same list
+  (`orbit auto-task update <name> --granted-tools …`, operator only), which
+  is copied to every task it mints.
 - **Mutation proposals** carry a mutating grant's call instead. Attach
   `mutation-proposals/<name>.json` with `orbit.task.artifact` action `put`, content
   `{"tool": "<granted tool>", "input": {…exact tool input…}, "rationale":

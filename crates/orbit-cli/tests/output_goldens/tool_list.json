@@ -502,6 +502,12 @@
         "required": false
       },
       {
+        "name": "granted_tools",
+        "description": "For add: Operator only: tool names granted to every minted task; For update: Operator only: replacement granted tool names; an empty list clears them.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
         "name": "waive_batch",
         "description": "For update: Explicit settled-batch waiver: { batch_id, reason }.",
         "param_type": "object",
@@ -1508,6 +1514,23 @@
     "mcp_toolset": "tasks-write"
   },
   {
+    "name": "orbit.memory.history",
+    "description": "List a crew memory space's revisions, newest first, each with its digest, file names, size, evidence, writer and reason, and the space's audit events in order: revisions written, resets, copies and refused writes with the rule they broke. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from the run of a task whose `granted_tools` an operator set to include this tool.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "key",
+        "description": "Memory key: the model id a space belongs to, as runs record it, or `global`.",
+        "param_type": "string",
+        "required": true
+      }
+    ],
+    "mcp_toolset": "experiments"
+  },
+  {
     "name": "orbit.memory.propose",
     "description": "Propose a note for the global memory every model receives, for an operator to accept or reject. Only a crew memory dreaming task's run may propose, at most 2 proposals per run. The note is refused, naming the rule, when it breaks the global memory's caps (3 KiB), provenance (at least one evidence task id, each from the run's evidence pack), the score-blind lint or the not-instructions lint. Refused while crew_memory.enabled is false.",
     "enabled": true,
@@ -1532,7 +1555,7 @@
   },
   {
     "name": "orbit.memory.show",
-    "description": "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a crew memory dreaming task's run or a run in a memory experiment arm, and reads only its own model's space (the default key) or `global`.",
+    "description": "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a run: a crew memory dreaming task's run or a run in a memory experiment arm reads only its own model's space (the default key) or `global`, and the run of a task whose `granted_tools` an operator set to include this tool reads any space, any revision and the summary.",
     "enabled": true,
     "active": true,
     "status": "active",

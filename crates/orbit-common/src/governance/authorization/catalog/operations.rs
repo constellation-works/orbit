@@ -178,13 +178,14 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
     },
-    // Field-level, not a tool: `orbit.task.add` and `orbit.task.update`
-    // additionally require it when their input carries `granted_tools`.
+    // Field-level, not a tool: `orbit.task.add`, `orbit.task.update`,
+    // `orbit.auto_task.add` and `orbit.auto_task.update` additionally require
+    // it when their input carries `granted_tools`.
     GovernedOperation {
         id: TASK_GRANT_TOOLS_OPERATION_ID,
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
-        rationale: "granting a task tools its implementing activity denies widens what that agent may do, so only an operator may set or change `granted_tools`",
+        rationale: "granting a task tools its implementing activity denies widens what that agent may do, so only an operator may set or change `granted_tools`, on a task or on the auto-task definition that mints it",
     },
     GovernedOperation {
         id: "orbit.task.review_reset",
@@ -454,9 +455,10 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     },
     // Crew memory (experimental): reset, copy and export, which writes
     // files on this host, are the operator's; show and history stay
-    // ungoverned reads. Write and propose admit the agent capability too,
-    // and core then admits an agent's call only from a dreaming task's run,
-    // with the key fixed to that task's key.
+    // ungoverned reads here, and core decides which runs may read. Write and
+    // propose admit the agent capability too, and core then admits an
+    // agent's call only from a dreaming task's run, with the key fixed to
+    // that task's key.
     GovernedOperation {
         id: "orbit.memory.write",
         surface: OperationSurface::Tool,

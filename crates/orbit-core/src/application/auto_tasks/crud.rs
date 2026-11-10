@@ -99,6 +99,10 @@ pub struct AutoTaskUpdateParams {
     pub dedupe: Option<DedupePolicy>,
     pub template: Option<AutoTaskTemplatePatch>,
     pub enabled: Option<bool>,
+    /// Replacement operator grant for minted tasks; an empty list clears it.
+    /// The tool chokepoint admits a caller that supplies it only under
+    /// operator authority.
+    pub granted_tools: Option<Vec<String>>,
 }
 
 /// Present-field template patch, merged with the latest definition under the
@@ -235,7 +239,19 @@ impl OrbitRuntime {
     /// with the other definition writers. Settings failures publish no file.
     pub fn auto_task_add(
         &self,
+        params: AutoTaskAddParams,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.auto_task_add_with_operator_grant(params, Vec::new())
+    }
+
+    /// [`Self::auto_task_add`] for a definition whose minted tasks carry
+    /// `granted_tools`. The tool chokepoint admits a caller that supplies a
+    /// grant only under operator authority; nothing else may call this with
+    /// one.
+    pub fn auto_task_add_with_operator_grant(
+        &self,
         mut params: AutoTaskAddParams,
+        granted_tools: Vec<String>,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
@@ -265,12 +281,14 @@ impl OrbitRuntime {
                 skip_unless_blocked_candidates: false,
                 // Like the preconditions above: declared in the workspace's YAML.
                 completion: None,
+                granted_tools: normalize_required_tools(granted_tools),
                 created_by: Some(actor.clone()),
                 created_at: now.clone(),
                 updated_by: Some(actor),
                 updated_at: now,
             };
             self.validate_auto_task(&definition)?;
+            self.validate_granted_tools(&definition.granted_tools)?;
 
             let collection = self.validated_auto_tasks(&definition.name)?;
             let path = definition_path(&self.paths().local_dir, &definition.name);
@@ -380,6 +398,7 @@ impl OrbitRuntime {
                 || params.dedupe.is_some()
                 || params.template.is_some()
                 || params.enabled.is_some()
+                || params.granted_tools.is_some()
             {
                 return Err(OrbitError::InvalidInput(
                     "waive_batch cannot be combined with a definition edit".into(),
@@ -401,6 +420,12 @@ impl OrbitRuntime {
         if let Some(schedule) = &params.schedule {
             admit_schedule(schedule)?;
         }
+        // Checked when the grant changes, never on an unrelated edit: a tool
+        // that later became unavailable must not block the kill-switch. Mint
+        // checks the stored grant again.
+        if let Some(granted_tools) = &params.granted_tools {
+            self.validate_granted_tools(granted_tools)?;
+        }
 
         self.try_edit_auto_task(name, |definition| {
             if let Some(description) = params.description {
@@ -417,6 +442,9 @@ impl OrbitRuntime {
             }
             if let Some(enabled) = params.enabled {
                 definition.enabled = enabled;
+            }
+            if let Some(granted_tools) = params.granted_tools {
+                definition.granted_tools = normalize_required_tools(granted_tools);
             }
             Ok(())
         })

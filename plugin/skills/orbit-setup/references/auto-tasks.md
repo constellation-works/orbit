@@ -48,6 +48,7 @@ back with `orbit auto-task show <name>` before enabling it.
 | `--complexity` | Optional assessed complexity: `low`, `medium`, `hard`, or `xhard`. It is copied to every minted task. |
 | `--status` | Template status stored on the definition. The serialized default is `backlog`, but at mint a `backlog` template becomes `proposed` unless the normalized minted tags include `no-diff-expected`; explicit non-`backlog` statuses are preserved. Implementation mints therefore enter `proposed` and need approval before becoming shippable work. |
 | `--crew` | Crew override for minted tasks. |
+| `--granted-tools` | Operator only. Exact canonical tool names an operator grants every minted task (the tasks' `granted_tools`); see [Granting tools to every minted task](#granting-tools-to-every-minted-task). `--granted-tool` is an alias. |
 | `--dedupe` | `skip-if-open` (default) or `always`. `skip_if_open` is also accepted. The definition file, the JSON document, and `show` all print the canonical `skip_if_open` / `always` token. |
 
 ## Minted tasks inherit template complexity
@@ -185,13 +186,43 @@ write anchor and does not hide workspace definitions.
 `orbit doctor` diagnoses both catalogs with their own settings and manifests.
 
 On a shipped default, `toggle` and `update` of settings fields — `enabled`,
-the schedule, dedupe, and the template's crew, priority, complexity, and added
-tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and
+the schedule, dedupe, the operator's granted tools, and the template's crew,
+priority, complexity, and added tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and
 applied over the bundled body, which keeps receiving upstream fixes on
 `orbit workspace sync`. Changing any other field forks the definition: Orbit
 then preserves the file as written and stops refreshing it, and `show` reports
 `body: forked` with the differing fields. `orbit workspace sync` moves an older
 fork that differs only in settings back under management.
+
+### Granting tools to every minted task
+
+A task's `granted_tools` is an operator's grant, and a minted task has no
+operator at mint time. Put the grant on the definition instead:
+
+```bash
+orbit auto-task update <name> --granted-tools orbit.memory.show,orbit.memory.history
+orbit auto-task show <name>
+```
+
+Each scheduled fire and manual `mint` copies the list to the new task's
+`granted_tools` and records a `granted_tools_changed` entry in its history.
+The list is the definition's top-level `granted_tools`, beside `template`,
+not a template field: a `template` replacement or flag edit never changes
+it. `--granted-tools ""` clears it. `orbit auto-task add` takes the same
+flag.
+
+Only an operator session may supply the field. Any other caller that
+supplies it, an agent's `orbit.auto_task` call or a mutation proposal
+included, is refused naming the missing operator authority, never silently
+stripped. Names are checked like a task's grant: exact canonical names of
+agent-facing, enabled tools, never an operator-only tool. A minted task
+with a grant runs only on the owner host. What a grant lets the task's
+`agent_implement` run do is in the installed Orbit skill
+`references/task-fields.md`.
+
+The definition file is per-user checkout state. Orbit checks authority on
+the `add` and `update` calls, not on a hand edit of the YAML, so treat that
+file as you treat the rest of `.orbit/`.
 
 Tool names written before tool families (`orbit.task.artifact.put` rather
 than `orbit.task.artifact:put`) are upgraded automatically. On the first open
