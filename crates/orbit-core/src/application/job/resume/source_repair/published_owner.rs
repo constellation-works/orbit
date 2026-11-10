@@ -6,6 +6,7 @@
 //! the blocked task keeps (`failure_handoff`). Both are re-authenticated in
 //! full from the immutable source when the next run adopts them.
 use super::*;
+use orbit_common::SourceRepairRunStateRefusal;
 use orbit_types::workflow::{HeldFailure, JobRunStep};
 use serde::{Deserialize, Serialize};
 
@@ -92,23 +93,32 @@ fn adoptable_published_source(source: &JobRun) -> bool {
 
 /// What to tell the operator when `source` cannot be repaired, naming an
 /// action that can succeed in its current state.
-fn stopped_source_refusal(source: &JobRun) -> String {
+fn stopped_source_refusal(source: &JobRun) -> OrbitError {
     let run_id = &source.run_id;
     if !source.state.is_terminal() || source.finished_at.is_none() {
         // Cancel succeeds only while the run is not terminal. Discard of a
         // blocked task also succeeds; the requeue wrapper names that route.
-        format!(
-            "delivery `{run_id}` is still running, so it cannot be repaired. \
-             Cancel it with `orbit run cancel {run_id} --confirm`"
+        refuse_run_state(
+            SourceRepairRunStateRefusal::StillRunning,
+            format!(
+                "delivery `{run_id}` is still running, so it cannot be repaired. \
+                 Cancel it with `orbit run cancel {run_id} --confirm`"
+            ),
         )
     } else if run_owner_liveness(source) != RunOwnerLiveness::Stopped {
         // The record is terminal, so cancel reports already terminal and
         // does not stop the worker. Discard is the route that can succeed.
-        format!("delivery `{run_id}` is still running, so it cannot be repaired")
+        refuse_run_state(
+            SourceRepairRunStateRefusal::StillRunning,
+            format!("delivery `{run_id}` is still running, so it cannot be repaired"),
+        )
     } else {
-        format!(
-            "run `{run_id}` is {}, not a conclusively stopped failed delivery",
-            source.state
+        refuse_run_state(
+            SourceRepairRunStateRefusal::NotStoppedFailed,
+            format!(
+                "run `{run_id}` is {}, not a conclusively stopped failed delivery",
+                source.state
+            ),
         )
     }
 }
@@ -120,7 +130,7 @@ pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(
     if repairable_stopped_source(source) {
         return Ok(());
     }
-    Err(refuse(stopped_source_refusal(source)))
+    Err(stopped_source_refusal(source))
 }
 
 impl OrbitRuntime {

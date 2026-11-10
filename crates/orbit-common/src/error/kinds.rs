@@ -714,6 +714,24 @@ impl std::fmt::Display for TaskPilotRefusalCode {
     }
 }
 
+/// Why a source-repair requeue refused the run it would repair, carried by
+/// [`crate::OrbitError::SourceRepairRunStateRefused`].
+///
+/// Both reasons describe the run's state, not the pull request's checks, so
+/// requeuing again cannot succeed until the run changes or is discarded. The
+/// producer that decides the refusal attaches the reason; consumers never
+/// read it from the rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRepairRunStateRefusal {
+    /// The delivery is still running, or its record says it ended but its
+    /// worker is not conclusively gone.
+    StillRunning,
+    /// The run is terminal but is not a conclusively stopped failed delivery
+    /// or review-decision hold.
+    NotStoppedFailed,
+}
+
 /// A named source-repair authority refusal, carried by
 /// [`crate::OrbitError::SourceRepairAuthorityRefused`].
 ///

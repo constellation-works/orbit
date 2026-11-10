@@ -34,9 +34,9 @@ pub use error::{
     DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
     ForgePushHoldFailure, HostRegistryCode, LOCK_BUSY_ERROR_CODE, NotFoundKind, NoticeRefusalCode,
     OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
-    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention,
-    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
-    is_lock_busy_message,
+    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
+    SourceRepairRunStateRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld, is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

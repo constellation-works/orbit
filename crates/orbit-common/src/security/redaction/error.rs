@@ -354,6 +354,12 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             layer,
             message: redact(&message),
         },
+        OrbitError::SourceRepairRunStateRefused { reason, message } => {
+            OrbitError::SourceRepairRunStateRefused {
+                reason,
+                message: redact(&message),
+            }
+        }
         // A static code: its text is fixed and carries no caller input.
         refusal @ OrbitError::SourceRepairAuthorityRefused(_) => refusal,
     }

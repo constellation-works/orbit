@@ -4,8 +4,8 @@ use super::{
     ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForceOverridableKind,
     ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
     NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
+    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 impl OrbitError {
@@ -319,6 +319,14 @@ impl OrbitError {
         }
     }
 
+    /// The run-state reason of a source-repair refusal, if this is one.
+    pub fn source_repair_run_state_refusal(&self) -> Option<SourceRepairRunStateRefusal> {
+        match self {
+            Self::SourceRepairRunStateRefused { reason, .. } => Some(*reason),
+            _ => None,
+        }
+    }
+
     /// The message of a job-validation refusal: a [`Self::JobValidation`],
     /// or a typed source-repair refusal that reports as one. Callers that
     /// answer job-validation refusals specially use this so the typed
@@ -329,6 +337,7 @@ impl OrbitError {
             Self::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
                 Some(code.message().into())
             }
+            Self::SourceRepairRunStateRefused { message, .. } => Some(message.as_str().into()),
             _ => None,
         }
     }

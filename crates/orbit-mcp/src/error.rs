@@ -132,6 +132,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
+        OrbitError::SourceRepairRunStateRefused { .. } => "validation_failed",
         OrbitError::SourceRepairAuthorityRefused(code) => {
             if code.reports_as_execution() {
                 "execution_failed"

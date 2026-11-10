@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::Utc;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
-use orbit_common::{OrbitError, SourceRepairAuthorityRefusal};
+use orbit_common::{OrbitError, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
@@ -43,6 +43,18 @@ pub(super) struct RepairLink {
 
 pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
+}
+
+/// A refusal caused by the run's state; reports exactly as the [`refuse`] text
+/// it carries, with the reason attached for callers to classify.
+pub(super) fn refuse_run_state(
+    reason: SourceRepairRunStateRefusal,
+    message: impl Into<String>,
+) -> OrbitError {
+    OrbitError::SourceRepairRunStateRefused {
+        reason,
+        message: format!("source repair refused: {}", message.into()),
+    }
 }
 
 /// A named authority refusal; reports exactly as the [`refuse`] text it replaced.

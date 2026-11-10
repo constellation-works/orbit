@@ -5,8 +5,8 @@ use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
     DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict,
-    RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -422,6 +422,16 @@ pub enum OrbitError {
     #[error("{}", source_repair_refusal_legacy_error(*.0))]
     #[serde(untagged, serialize_with = "serialize_source_repair_refusal")]
     SourceRepairAuthorityRefused(SourceRepairAuthorityRefusal),
+    /// A source-repair refusal caused by the run's state. Displays, reports
+    /// and serializes exactly as the [`Self::JobValidation`] carrying
+    /// `message`; the `reason` is attached where the refusal is decided, so
+    /// callers never read it from the text.
+    #[error("job validation failed: {message}")]
+    #[serde(untagged, serialize_with = "serialize_source_repair_run_state_refusal")]
+    SourceRepairRunStateRefused {
+        reason: SourceRepairRunStateRefusal,
+        message: String,
+    },
 }
 
 const _: () = assert!(
@@ -496,6 +506,14 @@ fn source_repair_refusal_legacy_error(code: SourceRepairAuthorityRefusal) -> Orb
     } else {
         OrbitError::JobValidation(code.message())
     }
+}
+
+fn serialize_source_repair_run_state_refusal<S: serde::Serializer>(
+    _reason: &SourceRepairRunStateRefusal,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::JobValidation(message.to_string()).serialize(serializer)
 }
 
 fn serialize_source_repair_refusal<S: serde::Serializer>(

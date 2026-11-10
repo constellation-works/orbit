@@ -145,6 +145,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",
+        OrbitError::SourceRepairRunStateRefused { .. } => "job_validation_failed",
         OrbitError::SourceRepairAuthorityRefused(code) => {
             if code.reports_as_execution() {
                 "execution_failed"
