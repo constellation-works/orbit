@@ -194,6 +194,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
         Column::new("CREWS"),
         Column::new("UNITS").number(),
         Column::new("SCORE").number(),
+        Column::new("INTERVAL"),
     ];
     columns.extend(
         terms
@@ -220,6 +221,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
                 .unwrap_or_else(|| text(&row["crew"])),
             number(&row["units"]),
             number(&row["score"]),
+            interval(&row["interval"]),
         ];
         cells.extend(
             terms
@@ -235,7 +237,7 @@ fn scorecard_blocks(value: &Value) -> Vec<Block> {
             "each term per 100 units, weighted and summed"
         };
         table = table.trailing_notice(format!(
-            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
+            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nInterval: the 10th to 90th percentile of a fixed-seed resample of the row's own units; `-` for an unranked row.\nWeights: {}",
             text(&value["unit"]),
             number(&value["fleet_average"]),
             terms
@@ -692,6 +694,15 @@ fn selection_line(value: &Value) -> String {
 
 fn text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
+}
+
+/// A row's score interval as `p10 to p90`; `-` when the row has none.
+fn interval(value: &Value) -> String {
+    if value["p10"].is_number() && value["p90"].is_number() {
+        format!("{} to {}", number(&value["p10"]), number(&value["p90"]))
+    } else {
+        "-".into()
+    }
 }
 
 /// A count, rate or score; `-` when the payload has none.

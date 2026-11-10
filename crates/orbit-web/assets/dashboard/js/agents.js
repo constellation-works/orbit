@@ -484,7 +484,8 @@ function rows() {
   }
   const ranking = all.flatMap((row) => {
     const tier = tiers.get(implementerTierKey(row));
-    return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score,
+    // The all-tier interval describes the all-tier score, so a tier view drops it.
+    return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score, interval: null,
       below_support: tier.units < scorecard.min_support, rank: null }] : [];
   });
   ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
@@ -895,6 +896,18 @@ function scoreBar(value, scale) {
   return track;
 }
 
+// A ranked row's p10–p90 score interval beside its score, or null for a row
+// without one (below support, unjudged, or a tier view's row).
+function scoreInterval(row) {
+  const interval = row.interval;
+  if (!interval || typeof interval.p10 !== "number" || typeof interval.p90 !== "number") return null;
+  return el("span", {
+    class: "agents-score-interval",
+    text: `${number(interval.p10)} to ${number(interval.p90)}`,
+    title: "Interval: the 10th to 90th percentile of a fixed-seed resample of this row's own units, with the fleet references held fixed.",
+  });
+}
+
 const SCORE_HINT = "One row per model and recorded reasoning effort (crews that contributed are listed under the row; unrecorded effort is its own effort-unknown row and a null effort is the provider default), ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it. Each term and the formula are under How the score works.";
 
 // The ranking's term columns. A review term no row can score (implementers,
@@ -968,6 +981,8 @@ function rankingNode(ranking) {
     const score = el("td", { class: "agents-score-col" }, row.unjudged
       ? [el("span", { class: "agents-score-value agents-unjudged", text: "unjudged" })]
       : [scoreBar(row.score, scale), el("span", { class: "agents-score-value", text: number(row.score) })]);
+    const interval = scoreInterval(row);
+    if (interval) score.append(interval);
     const note = panel && panel.scoreNote ? panel.scoreNote(row) : null;
     if (note) score.append(el("span", { class: "agents-score-note", text: note.text, title: note.detail }));
     const classes = ["agents-row"];

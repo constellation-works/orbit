@@ -207,3 +207,36 @@ ready = "#plugins-panel"
 responsive = true
 states = ["default"]
 mask = []
+
+[[view]]
+id = "analytics-agents-implementers-ranking"
+app = "dashboard"
+title = "Analytics implementers ranking with score intervals"
+route = "#analytics/agents/implementers?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-agents-reviewers-ranking"
+app = "dashboard"
+title = "Analytics reviewers ranking with score intervals"
+route = "#analytics/agents/reviewers?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-agents-pilots-ranking"
+app = "dashboard"
+title = "Analytics pilots ranking with score intervals"
+route = "#analytics/agents/pilots?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []

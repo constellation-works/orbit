@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::AgentRole;
 use super::facts::TaskFacts;
+use super::rank::sample::{Rng, percentile};
 
 /// Units of fleet-average evidence a row's score is blended with:
 /// `score = min(raw, (units × raw + K × fleet_average) ÷ (units + K))`.
@@ -31,6 +32,11 @@ pub(super) const SMOOTHING: f64 = 30.0;
 /// Zero reviewed deliveries stays unmeasured. Matches [`SMOOTHING`]; one named
 /// value for every surface, returned as `review_min_support`.
 pub(super) const REVIEW_MIN_SUPPORT: usize = 30;
+
+/// Resamples per ranked row's interval, and the seed every row's resample
+/// starts from, so the same facts give the same interval on every request.
+const INTERVAL_DRAWS: usize = 1000;
+const INTERVAL_SEED: u64 = 0x7363_6f72_6563_6976;
 
 /// One weighted term of a role's score.
 pub(super) struct Term {
@@ -177,6 +183,9 @@ pub(super) struct Scored<'a> {
     score: f64,
     below_support: bool,
     rank: Option<usize>,
+    /// The 10th and 90th percentiles of the row's resampled score; set only
+    /// on ranked rows.
+    interval: Option<(f64, f64)>,
 }
 
 /// Score and order `rows`: rows meeting `min_support` first, best score
@@ -213,6 +222,7 @@ pub(super) fn score<'a>(
                 raw,
                 score: raw,
                 rank: None,
+                interval: None,
             }
         })
         .collect();
@@ -257,7 +267,77 @@ pub(super) fn score<'a>(
     {
         row.rank = Some(index + 1);
     }
+    if let Some(average) = fleet_average {
+        for row in scored.iter_mut().filter(|row| row.rank.is_some()) {
+            row.interval = resampled_interval(terms, &row.input, average);
+        }
+    }
     (fleet_average, scored)
+}
+
+/// A ranked row's interval: its own units are resampled with replacement,
+/// each draw rescored with the expectations, term denominators, smoothing
+/// and fleet average held as they are, and the 10th and 90th percentiles of
+/// the draws bound it. A row whose units are all unjudged or below support
+/// has none, and so does a row with no units.
+fn resampled_interval(
+    terms: &[Term],
+    input: &RowInput<'_>,
+    fleet_average: f64,
+) -> Option<(f64, f64)> {
+    if input.units == 0 {
+        return None;
+    }
+    // One vector of term counts per unit: each task with a tally, then zero
+    // units for the rest of the row's units.
+    let mut per_task: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    for (index, term) in terms.iter().enumerate() {
+        if let Some(tally) = input.tallies.get(term.key) {
+            for (task, count) in tally.task_counts() {
+                per_task
+                    .entry(task.id.as_str())
+                    .or_insert_with(|| vec![0.0; terms.len()])[index] += count;
+            }
+        }
+    }
+    let zero_units = input.units.saturating_sub(per_task.len());
+    let mut pool: Vec<Vec<f64>> = per_task.into_values().collect();
+    pool.extend(std::iter::repeat_with(|| vec![0.0; terms.len()]).take(zero_units));
+
+    let units = input.units as f64;
+    let mut rng = Rng::seeded(INTERVAL_SEED);
+    let mut sums = vec![0.0; terms.len()];
+    let mut scores = Vec::with_capacity(INTERVAL_DRAWS);
+    for _ in 0..INTERVAL_DRAWS {
+        sums.iter_mut().for_each(|sum| *sum = 0.0);
+        for _ in 0..input.units {
+            let unit = &pool[rng.below(pool.len())];
+            for (sum, count) in sums.iter_mut().zip(unit) {
+                *sum += count;
+            }
+        }
+        let per_100: BTreeMap<&'static str, f64> = terms
+            .iter()
+            .zip(&sums)
+            .map(|(term, sum)| {
+                (
+                    term.key,
+                    sum * 100.0 / input.units_of(term.key).max(1) as f64,
+                )
+            })
+            .collect();
+        let raw = if input.expected.is_some() { 100.0 } else { 0.0 }
+            + terms
+                .iter()
+                .map(|term| contribution(input, &per_100, term))
+                .sum::<f64>();
+        let blended = (units * raw + SMOOTHING * fleet_average) / (units + SMOOTHING);
+        scores.push(raw.min(blended));
+    }
+    Some((
+        percentile(&mut scores, 10.0)?,
+        percentile(&mut scores, 90.0)?,
+    ))
 }
 
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
@@ -312,6 +392,10 @@ impl Scored<'_> {
             "per_100": per_100,
             "raw": (!self.input.unjudged).then(|| number(self.raw)),
             "score": (!self.input.unjudged).then(|| number(self.score)),
+            "interval": self.interval.map(|(low, high)| json!({
+                "p10": number(low),
+                "p90": number(high),
+            })),
             "runs_without_model": self.input.runs_without_model,
             "provisional": self.input.provisional,
             "stats": self.input.stats.iter().map(|stat| json!({
