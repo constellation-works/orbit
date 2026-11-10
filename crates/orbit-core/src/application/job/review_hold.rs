@@ -73,9 +73,34 @@ impl ReviewHold {
                 if self.code.as_deref()
                     == Some(DeliveryRefusal::ForgeObservationUnavailable.error_code()) =>
             {
-                format!("orbit job resume {}", self.run_id)
+                format!(
+                    "orbit --workspace '{workspace_id}' job resume {}",
+                    self.run_id
+                )
             }
-            ReviewHoldKind::DeliveryHold => format!("orbit run show {}", self.run_id),
+            ReviewHoldKind::DeliveryHold => {
+                format!(
+                    "orbit --workspace '{workspace_id}' run show {}",
+                    self.run_id
+                )
+            }
+        }
+    }
+
+    /// The MCP tool that performs the next step, when one does. A completion
+    /// hold's approve has no MCP tool; a delivery hold resumes only for a
+    /// forge-observation refusal and otherwise shows its run.
+    #[must_use]
+    pub fn next_tool(&self) -> Option<&'static str> {
+        match self.kind {
+            ReviewHoldKind::CompletionHold => None,
+            ReviewHoldKind::DeliveryHold
+                if self.code.as_deref()
+                    == Some(DeliveryRefusal::ForgeObservationUnavailable.error_code()) =>
+            {
+                Some("orbit.workflow.run.resume")
+            }
+            ReviewHoldKind::DeliveryHold => Some("orbit.workflow.run.show"),
         }
     }
 }

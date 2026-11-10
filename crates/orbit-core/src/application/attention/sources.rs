@@ -239,8 +239,10 @@ fn review_hold_attention_item(
         }),
         AttentionNext {
             summary: hold.next_summary.clone(),
-            tool: None,
-            input: None,
+            tool: hold.next_tool().map(str::to_owned),
+            input: hold
+                .next_tool()
+                .map(|_| json!({"id": hold.run_id, "workspace": subject.workspace.id})),
             command: hold.next_command(&subject.workspace.id, &subject.task.id),
             needs: vec![],
             also: vec![subject.show_next()],
