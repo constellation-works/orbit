@@ -2,8 +2,9 @@ use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 /// The statuses a task settles from.
-pub(super) const SETTLEABLE_STATUSES: [TaskStatus; 3] = [
+pub(super) const SETTLEABLE_STATUSES: [TaskStatus; 4] = [
     TaskStatus::Blocked,
+    TaskStatus::Backlog,
     TaskStatus::InProgress,
     TaskStatus::Review,
 ];

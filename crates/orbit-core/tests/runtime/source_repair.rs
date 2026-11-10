@@ -32,6 +32,8 @@ use fixture::{Fixture, git};
 mod completion;
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/handoff_landing.rs"]
+mod handoff_landing;
 #[path = "source_repair/handoff_requeue.rs"]
 mod handoff_requeue;
 #[path = "source_repair/inline_completion_retry.rs"]

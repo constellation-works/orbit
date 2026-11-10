@@ -103,3 +103,5 @@ pub use executor::automation::vcs::{
     verify_claimed_known_red, verify_claimed_known_red_base,
 };
 pub use orbit_agent::provider_supports_continuity;
+
+pub use executor::automation::vcs::completion_hold::candidate_completion_hold;

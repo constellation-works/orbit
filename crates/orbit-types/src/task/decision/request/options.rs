@@ -96,6 +96,8 @@ impl DecisionRewrite {
 pub enum DecisionAction {
     /// Return the task to `backlog` for a fresh run (approve a proposed task).
     Requeue,
+    /// Merge the receipt-bound failure handoff as the operator.
+    Land,
     /// Explicitly submit one new pilot (no rewrite required); a blocked task returns to backlog.
     RePilot,
     /// Assign `crew`, then return the task to `backlog`.
@@ -121,8 +123,9 @@ pub enum DecisionAction {
 
 impl DecisionAction {
     /// Every action tag, in contract order.
-    pub const KINDS: [&'static str; 6] = [
+    pub const KINDS: [&'static str; 7] = [
         "requeue",
+        "land",
         "re_pilot",
         "change_crew",
         "split",
@@ -134,6 +137,7 @@ impl DecisionAction {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Requeue => "requeue",
+            Self::Land => "land",
             Self::RePilot => "re_pilot",
             Self::ChangeCrew { .. } => "change_crew",
             Self::Split { .. } => "split",
@@ -312,6 +316,11 @@ fn validated_action(
         reason: reason.to_string(),
     };
     Ok(match action {
+        DecisionAction::Land => {
+            return Err(bad(
+                "land is offered by the operator's failure-handoff decision, not proposed as an option",
+            ));
+        }
         DecisionAction::ChangeCrew { crew } => {
             if crew.trim().is_empty() {
                 return Err(bad("change_crew needs a crew"));

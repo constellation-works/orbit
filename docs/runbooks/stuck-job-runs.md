@@ -747,6 +747,21 @@ created by the continuation.
 
 ## Requeue a failure-handoff task onto its published candidate
 
+When the work is finished, open the task's block decision in the dashboard or list
+it with `orbit decision list`. If **Approve and land** is offered, choose it there
+or run `orbit decision answer <request-id> land`. This accepts the option's owner
+sign-off, merges the handoff pull request and moves the task directly to `done`.
+It does not start another run. Only the operator can choose it; automatic corpus
+rules and agents cannot.
+
+The answer is hidden while a required pre-landing review has not settled for the
+exact candidate. Requeue remains the route to finish that review. At answer time,
+Orbit refuses a missing receipt, changed task specification, live run, mismatched
+PR head, closed or draft PR, failed or pending required checks, conflicting merge
+or wrong target branch. Each refusal names the condition and leaves the request
+open and the task unchanged. Forge branch protection still applies. A matching
+`completion.hold` rule is recorded; this explicit human approval satisfies the hold.
+
 A run whose failure handoff published a `[BLOCKED]` pull request leaves the
 task `blocked`. When the candidate is sound (the failure was the environment,
 not the work), requeue it as an operator decision:
@@ -1875,7 +1890,8 @@ naming `auto_drain.auto_fix`. An unknown task gets `404`.
 ## A delivery pull request merged outside Orbit
 
 When you merge a task's delivery pull request on GitHub yourself, no run observes
-the merge, so the task stays `blocked`, `in-progress` or `review`. Orbit settles it
+the merge, so the task stays `blocked`, `in-progress`, `review`, or `backlog`
+after a failure-handoff requeue. Orbit settles it
 to `done` from the merge. Each pass of a running owner drain (`orbit run auto`) does
 this after it reconciles stale runs, matching against the 100 most recently merged
 pull requests. To settle a task now, or one whose pull request merged before
@@ -1888,7 +1904,9 @@ orbit task settle-merged             # match every candidate against the recent 
 
 A task settles only when all of these hold:
 
-- it is `blocked`, `in-progress` or `review`;
+- it is `blocked`, `in-progress` or `review`, or `backlog` after a requeue preserved
+  the current failure-handoff candidate. In that backlog case only the handoff
+  receipt's pull request can settle it, and the task specification must still match;
 - no run or unsettled execution claim of its own is live, and no live `run auto`
   leaf carries it. That run lands or fails the task itself. A handed-off claim
   whose completion authority an operator revoked is the one exception (see below);

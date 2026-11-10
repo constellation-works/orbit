@@ -51,7 +51,13 @@ impl OrbitRuntime {
         let Some(topic) = request.topic.as_deref() else {
             return Ok(request.clone());
         };
-        if request.gate != DecisionGate::AgentRequest {
+        if request.gate != DecisionGate::AgentRequest
+            || request.answers.iter().any(|answer| {
+                answer.option.as_ref().is_some_and(|option| {
+                    option.action == Some(orbit_types::task::DecisionAction::Land)
+                })
+            })
+        {
             return Ok(request.clone());
         }
         let Ok(revision) = self.workspace_base_revision() else {

@@ -146,6 +146,53 @@ impl OrbitRuntime {
         })
     }
 
+    /// Refuse anything that would prevent a blocked handoff from settling after merge.
+    pub(in crate::application::task) fn preflight_handoff_landing(
+        &self,
+        task: &Task,
+        pull: &crate::runtime::task_pr_forge::HandoffLandingPullRequest,
+    ) -> Result<(), OrbitError> {
+        let candidate = self
+            .settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
+            .map_err(|reason| landing_refused(&task.id, reason))?;
+        if candidate.revoked.is_some() {
+            return Err(landing_refused(
+                &task.id,
+                "an unsettled handoff claim owns completion",
+            ));
+        }
+        let pr = &pull.blockers.pull;
+        let authors = self.settlement_authors(&self.context.paths().repo_root);
+        if !candidate.pr_numbers().contains(&pr.number)
+            || !orbit_types::task::names_task_delivery_pull_request(
+                &self
+                    .context
+                    .settings()
+                    .pr_settings()
+                    .conventions
+                    .branch_name,
+                &pr.head_branch,
+                &pr.body,
+                &task.id,
+            )
+            || !self.delivers_candidate(
+                &candidate,
+                pr.number,
+                &pr.author,
+                &pull.base_branch,
+                &authors,
+            )
+        {
+            return Err(landing_refused(
+                &task.id,
+                "the handoff pull request is not its delivery into its target branch",
+            ));
+        }
+        self.ensure_mutation_proposals_applied(task)?;
+        self.ensure_resolves_are_workspace_local(task)?;
+        Ok(())
+    }
+
     /// The candidate's one open PR that may deliver it, or `None` when none of
     /// its PRs is open. An open PR that cannot deliver the task, or more than
     /// one that can, is refused: the choice is not this call's to make.

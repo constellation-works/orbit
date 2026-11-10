@@ -305,3 +305,16 @@ pub(crate) fn record_completion_hold<H: RuntimeHost + ?Sized>(
     }
     Ok(())
 }
+
+/// Evaluate completion holds for an exact candidate, retaining unreadable-path holds.
+pub fn candidate_completion_hold(
+    rules: &[orbit_types::workflow::CompletionHoldRule],
+    task: &orbit_types::task::Task,
+    workspace: &std::path::Path,
+    base: &str,
+    candidate: &str,
+    run_id: &str,
+) -> Result<Option<orbit_types::workflow::CompletionHold>, orbit_common::OrbitError> {
+    let changed = pull_request_changed_paths(workspace, Some(base), false, Some(candidate));
+    evaluate_completion_hold(rules, std::slice::from_ref(task), &changed, run_id)
+}

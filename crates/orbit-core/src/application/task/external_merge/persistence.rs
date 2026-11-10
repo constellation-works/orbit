@@ -6,7 +6,7 @@ use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_miss
 use crate::OrbitRuntime;
 use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
 use crate::application::task::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
-use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
+use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::MergedPullRequest;
 
 use super::candidate::{Candidate, RevokedHandoff};
@@ -29,7 +29,10 @@ fn landing_note(landing: &MergedPullRequest) -> (String, String) {
 pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
     let landed = note.strip_prefix("settled from pull request #")?;
     let (_, merged) = landed.split_once(", merged into ")?;
-    let (_, commit) = merged.strip_suffix(" outside Orbit")?.rsplit_once(" as ")?;
+    let merged = merged
+        .strip_suffix(" outside Orbit")
+        .or_else(|| merged.strip_suffix(" by owner decision"))?;
+    let (_, commit) = merged.rsplit_once(" as ")?;
     (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(commit)
 }
 
@@ -172,6 +175,20 @@ impl OrbitRuntime {
             }
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refusal::refused(id, &live));
+            }
+            if task.status == TaskStatus::Backlog {
+                // Recheck the narrow backlog exception under the write lock:
+                // a later rewrite, discard or run binding must invalidate it.
+                let current = self.settlement_candidate(task.clone(), &self.live_leaf_task_ids()?)
+                    .map_err(|reason| refusal::refused(id, &reason))?;
+                if !current.pr_numbers().contains(&number)
+                    || self.delivery_target_branch(&task) != landing.base_branch
+                {
+                    return Err(refusal::refused(
+                        id,
+                        "the preserved failure-handoff delivery changed after the merge was matched",
+                    ));
+                }
             }
             if let Some(rescue) = rescue {
                 self.check_recovered_merge(&task, rescue, landing)?;

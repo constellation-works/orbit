@@ -74,6 +74,17 @@ pub struct PullRequestBlockers {
     pub passed_required_checks: Vec<String>,
 }
 
+/// Open pull request state needed for an operator's failure-handoff landing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffLandingPullRequest {
+    /// Exact head and required checks, with known mergeability.
+    pub blockers: PullRequestBlockers,
+    /// Destination branch.
+    pub base_branch: String,
+    /// Whether the author still marks the pull request as a draft.
+    pub draft: bool,
+}
+
 /// Outcomes of requests made to rerun failed workflow jobs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckRerunOutcome {
@@ -167,6 +178,17 @@ pub trait TaskPrForge: Send + Sync {
         _number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
         Ok(None)
+    }
+
+    /// Open state for an owner landing. Unsupported forges fail closed.
+    fn handoff_landing_pull_request(
+        &self,
+        _repo_root: &Path,
+        _number: u64,
+    ) -> Result<Option<HandoffLandingPullRequest>, OrbitError> {
+        Err(OrbitError::Execution(
+            "handoff landing PR lookup unavailable".into(),
+        ))
     }
 
     /// Required checks on open pull request `number`, without treating unknown
@@ -417,6 +439,42 @@ impl TaskPrForge for GhTaskPrForge {
         pull_request_blockers_from_json(number, &pull)
             .map(Some)
             .ok_or_else(|| unreadable_pull_request_blockers(number))
+    }
+
+    fn handoff_landing_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<HandoffLandingPullRequest>, OrbitError> {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+            return Ok(None);
+        };
+        if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
+            return Err(OrbitError::PullRequestMergeabilityUnknown { number });
+        }
+        if !matches!(
+            pull.get("mergeable").and_then(Value::as_str),
+            Some("MERGEABLE" | "CONFLICTING")
+        ) {
+            return Err(unreadable_pull_request_blockers(number));
+        }
+        let blockers = pull_request_blockers_from_json(number, &pull)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        let base_branch = pull
+            .get("baseRefName")
+            .and_then(Value::as_str)
+            .filter(|base| !base.is_empty())
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?
+            .to_string();
+        let draft = pull
+            .get("isDraft")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        Ok(Some(HandoffLandingPullRequest {
+            blockers,
+            base_branch,
+            draft,
+        }))
     }
 
     fn pull_request_required_checks(

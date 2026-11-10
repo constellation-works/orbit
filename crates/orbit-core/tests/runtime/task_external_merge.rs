@@ -875,12 +875,12 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
         }
         fx.forge.merge_recent(105, &task, BOT, &fx.base);
         let error = fx.runtime.settle_externally_merged_task(&task).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("only a blocked, in-progress or review task settles"),
-            "{error}"
-        );
+        let condition = if status == TaskStatus::Backlog {
+            "backlog task has no preserved failure-handoff requeue"
+        } else {
+            "only a blocked, in-progress, review or preserved failure-handoff backlog task settles"
+        };
+        assert!(error.to_string().contains(condition), "{error}");
         assert_eq!(fx.status(&task), status);
     }
     assert!(
