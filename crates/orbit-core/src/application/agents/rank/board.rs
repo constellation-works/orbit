@@ -22,7 +22,7 @@ pub(super) const MIN_TIER_TASKS: usize = 5;
 pub(super) const MIN_ELIGIBLE_MODELS: usize = 3;
 /// A model starts a new band when the one above beats it at least this
 /// often.
-pub(super) const BAND_PROBABILITY: f64 = 0.8;
+pub(super) const BAND_PROBABILITY: f64 = 0.95;
 /// Cost coverage below which a model is ordered by score in its band.
 pub(super) const MIN_COST_COVERAGE: f64 = 0.8;
 pub(super) const INTERVAL: (f64, f64) = (10.0, 90.0);

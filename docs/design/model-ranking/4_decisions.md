@@ -1,7 +1,7 @@
 ---
 title: Model Ranking — Decisions
 owner: claude
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-11-09
 status: Draft
 feature: model-ranking
@@ -87,6 +87,11 @@ remains 80%; 95% is a shadow target pending further evidence and Daniel's adopti
 decision. The task's readout also includes eight complete weekly windows and recommends
 evaluating two-sided K = 30 shrinkage in shadow. Cost: wider bands yield more co-leaders
 and less separation without guaranteeing weight stability.
+
+**Adoption (2026-11-10 · Daniel, [ORB-23839]):** the threshold is now 95% — a model
+shares its band with the one above it unless the paired bootstrap gives the higher
+model at least a 95% chance of really being ahead. The 80% rule above remains as the
+superseded R2 rule, and the R3 sensitivity evidence stands as the reason for the change.
 
 ### Consequences
 
@@ -225,5 +230,6 @@ shrinkage, the within-tier bootstrap, bands and cost ordering are unchanged.
 - [ORB-23297] — designs the model ranking (this folder)
 - [ORB-23672] — admits single-tier models and flags them
 - [ORB-23304] — R3 calibration and replay readout; recommends wider bands for shadow evaluation
+- [ORB-23839] — adopts the 95% tie-band threshold
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

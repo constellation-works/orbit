@@ -1,7 +1,7 @@
 ---
 title: Model Ranking — Design
 owner: claude
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_validated: 2026-11-09
 status: Draft
 feature: model-ranking
@@ -176,15 +176,15 @@ for every pair of models.
 
 Bands are displayed as shared ranks: `1=`, `1=`, `3`.
 
-The 95% threshold is the **R3 recommendation for the R4 shadow**, not an adopted
-publication rule. R2 still implements 80%. The [ORB-23304] readout found band-membership
-changes in 14 of 96 one-at-a-time ±50% weight perturbations at 80%, versus 6 of 96 at
-95%, over eight retained-history rolling cutoffs. Wider bands reduce sensitivity but do
-not establish robustness; the earliest rolling cutoff is retention-limited. Eight
-additional complete, non-overlapping weekly windows are included in the task artifact.
-Keep the proposed weights and evaluate K = 30 in shadow; CI and recovery remain
-unmeasured, and the sparsely attributed tool measure is exploratory. This recommendation
-does not waive R1's coverage exit or Daniel's adoption decision.
+The 95% threshold is **adopted** (Daniel, 2026-11-10 · [ORB-23839]); R2's 80% rule
+is superseded but kept legible here and in the decisions record. The [ORB-23304]
+readout found band-membership changes in 14 of 96 one-at-a-time ±50% weight
+perturbations at 80%, versus 6 of 96 at 95%, over eight retained-history rolling
+cutoffs. Wider bands reduce sensitivity but do not establish robustness; the earliest
+rolling cutoff is retention-limited. Eight additional complete, non-overlapping weekly
+windows are included in the task artifact. Keep the proposed weights and evaluate
+K = 30 in shadow; CI and recovery remain unmeasured, and the sparsely attributed tool
+measure is exploratory. This adoption does not waive R1's coverage exit.
 
 ### 4.5 Order within a band
 
@@ -347,7 +347,8 @@ change starts a new season (§4.2).
   `not_scored` and `paired_probabilities`. A tier score is `100 + 10 × z`
   on that tier's tasks only, before the board's shrinkage; the page computes
   the frontier from those points. The weekly snapshot is later work.
-- **Band threshold.** R2 uses 80%; the R3 shadow recommendation in §4.4 is 95%.
+- **Band threshold.** 95%, adopted 2026-11-10 (Daniel · [ORB-23839]), following
+  the R3 shadow recommendation in §4.4; this supersedes R2's 80% rule.
 
 ## 7. Validation and rollout
 
@@ -379,5 +380,6 @@ change starts a new season (§4.2).
 - [ORB-17779] — same-task-mix expectations on the implementer scorecard
 - [ORB-23302] — R2: computes the ranking, `orbit agents rank` and `GET /api/agents/rank`
 - [ORB-23304] — R3: season-0 candidate scales, component replay, coverage and weight sensitivity
+- [ORB-23839] — adopts the 95% tie-band threshold
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
