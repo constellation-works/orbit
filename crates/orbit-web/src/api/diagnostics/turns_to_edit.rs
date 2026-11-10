@@ -366,6 +366,7 @@ fn turns_to_edit_trend(
     let mut provider_coverage: BTreeMap<String, Cell> = BTreeMap::new();
     let mut overall = Cell::default();
     let mut other_provider = 0u64;
+    let mut unattributed = 0u64;
     for (index, row) in &in_window {
         for tag in &row.tags {
             *tag_counts.entry(tag.as_str()).or_default() += 1;
@@ -395,7 +396,10 @@ fn turns_to_edit_trend(
                     other_provider += 1;
                     continue;
                 }
-                None => continue,
+                None => {
+                    unattributed += 1;
+                    continue;
+                }
             }
         }
         let cohort = if filters.tags.is_empty() {
@@ -461,6 +465,7 @@ fn turns_to_edit_trend(
         "total": overall.to_json(),
         "coverage": overall.coverage_json(),
         "excluded_other_provider": other_provider,
+        "excluded_unattributed": unattributed,
         "undated_tasks": undated_tasks,
         "available_tags": tags
             .into_iter()

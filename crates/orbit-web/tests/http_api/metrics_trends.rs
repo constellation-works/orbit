@@ -1467,11 +1467,13 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
             assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 0);
             assert_eq!(nobody["coverage"]["tasks"], 0);
             assert_eq!(nobody["coverage"]["no_invocation"], 0);
+            assert_eq!(nobody["excluded_unattributed"], 1);
             assert_eq!(
                 nobody["coverage"]["tasks"].as_u64().unwrap()
-                    + nobody["excluded_other_provider"].as_u64().unwrap(),
-                11,
-                "provider exclusion keeps only tasks whose first invocation used another provider"
+                    + nobody["excluded_other_provider"].as_u64().unwrap()
+                    + nobody["excluded_unattributed"].as_u64().unwrap(),
+                12,
+                "provider exclusion discloses other-provider and unattributed tasks separately"
             );
 
             for query in [
@@ -1547,6 +1549,18 @@ fn turns_to_edit_provider_filter_excludes_unattributed_tasks() {
             assert_eq!(a_res["coverage"]["tasks"], 1);
             assert_eq!(a_res["coverage"]["measured"], 1);
             assert_eq!(a_res["coverage"]["no_invocation"], 0);
+            assert_eq!(
+                a_res["excluded_unattributed"], 1,
+                "the task with no implement invocation is disclosed, not dropped"
+            );
+            assert_eq!(
+                a_res["coverage"]["tasks"].as_u64().unwrap()
+                    + a_res["excluded_other_provider"].as_u64().unwrap()
+                    + a_res["excluded_unattributed"].as_u64().unwrap(),
+                unfiltered["coverage"]["tasks"].as_u64().unwrap(),
+                "a provider-filtered response reconciles to the window's tasks"
+            );
+            assert_eq!(unfiltered["excluded_unattributed"], 0);
 
             let providers = a_res["available_providers"].as_array().unwrap();
             let prov_a = providers
@@ -1567,6 +1581,7 @@ fn turns_to_edit_provider_filter_excludes_unattributed_tasks() {
             // provider=nobody has 0 tasks in coverage
             let nobody = turns_body(&server, "since=24h&provider=nobody");
             assert_eq!(nobody["excluded_other_provider"], 2);
+            assert_eq!(nobody["excluded_unattributed"], 1);
             assert_eq!(nobody["coverage"]["tasks"], 0);
             assert_eq!(nobody["coverage"]["no_invocation"], 0);
             let med_nobody = series(&nobody, "medium", "all");

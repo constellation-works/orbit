@@ -127,7 +127,11 @@ function percent(rate) {
 function coverageNote(payload) {
   const coverage = payload.coverage;
   if (!coverage) return "Trace coverage categories are unavailable from this host.";
-  return `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.incomplete_trace || 0} had a tool trace truncated by the output capture, ${coverage.no_detectable_edit} had a populated trace without a recognized editor, and ${coverage.no_invocation} had no implement invocation.`;
+  const head = `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.incomplete_trace || 0} had a tool trace truncated by the output capture, ${coverage.no_detectable_edit} had a populated trace without a recognized editor`;
+  // A provider filter keeps only attributed tasks, so coverage.no_invocation is
+  // 0 by construction; report the excluded count instead of that zero.
+  if (payload.provider) return `${head}. ${tasks(payload.excluded_unattributed || 0)} with no implement invocation were excluded by the provider filter and are not counted here.`;
+  return `${head}, and ${coverage.no_invocation} had no implement invocation.`;
 }
 
 function providerCoverageNote(payload) {
@@ -247,9 +251,11 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   if (!total.n) {
     const left = excluded(total);
     const other = payload.excluded_other_provider || 0;
+    const unattributed = payload.excluded_unattributed || 0;
     const parts = [];
     if (left) parts.push(`${tasks(left)} outside the measured sample: ${excludedDescription(total)}`);
     if (other) parts.push(`${tasks(other)} on another provider`);
+    if (unattributed) parts.push(`${tasks(unattributed)} with no implement invocation, so no provider`);
     parts.push(coverageNote(payload), providerCoverageNote(payload));
     if (payload.undated_tasks) parts.push(undatedNote(payload.undated_tasks));
     return {
@@ -277,7 +283,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     bytes ? "result bytes before the first edit" : "tool calls before the first edit",
   ];
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider`);
+  if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider; ${tasks(payload.excluded_unattributed || 0)} with no implement invocation, so no provider to match`);
   notes.push(coverageNote(payload), providerCoverageNote(payload));
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.truncated) notes.push("older implement invocations were left out of this read");
