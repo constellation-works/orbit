@@ -415,6 +415,41 @@ In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-sco
 
 Push runs of `ci.yml` share one group per branch without cancelling the running workflow, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The surviving tip runs in full unless its entire tree already passed on the PR head, or its changes from a successfully checked `before` commit qualify for docs mode. Replacing a pending code push therefore cannot let a later Markdown-only delta hide its untested code. Skipped jobs keep their check names and report as skipped, which GitHub's required checks treat as passing. Orbit's landing pays an owed check only with an explicit success, so a skipped owed check keeps it waiting; its absent-context repair recognises this exact scope job when it proves that a missing required check will report after a branch update. The macOS and CodeQL workflows are unaffected. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
 
+#### Getting a completed result for a chosen agent-main SHA
+
+RB-15 deploys only an exact agent-main SHA with a completed successful `CI` result, plus a completed successful `macOS Platform` result for the Mac. On a busy day that SHA may never get one from its push: each workflow keeps one running and one pending push run per branch, so the next merge replaces the pending run and the replaced SHA ends `cancelled` with no jobs started. A `gh run rerun` of the cancelled run re-enters the same push group and can be replaced again the same way. Use a manual dispatch instead. Both workflows accept `workflow_dispatch`, and a dispatch run gets a concurrency group per run (`run-<run_id>`: the existing fall-through in `ci.yml`, the dispatch branch of the group in `ci-macos.yml`) with cancellation off for that event, so later agent-main pushes neither replace nor cancel it. Ordinary push and `pull_request` groups and cancellation are unchanged, no extra macOS push runs are added, and the required PR checks and ruleset are untouched. A dispatch run always takes the `full` change scope, so its result covers every crate.
+
+If the chosen SHA is still the `agent-main` head, dispatch both workflows on that branch and confirm the runs report that SHA before relying on them (a merge landing between choosing and dispatching moves the head):
+
+```bash
+SHA=<full agent-main commit>
+gh workflow run ci.yml --ref agent-main
+gh workflow run ci-macos.yml --ref agent-main
+gh run list --workflow ci.yml --branch agent-main --event workflow_dispatch --limit 1 --json databaseId,headSha,status,conclusion
+gh run list --workflow ci-macos.yml --branch agent-main --event workflow_dispatch --limit 1 --json databaseId,headSha,status,conclusion
+```
+
+If the chosen SHA is no longer the head, pin it with a throwaway `deploy-candidate/*` ref first. Pushing that ref alone starts no workflow (it is not a push-trigger branch); it only names the commit for the dispatch:
+
+```bash
+SHA=<full agent-main commit>
+git push origin "$SHA:refs/heads/deploy-candidate/${SHA:0:12}"
+gh workflow run ci.yml --ref "deploy-candidate/${SHA:0:12}"
+gh workflow run ci-macos.yml --ref "deploy-candidate/${SHA:0:12}"
+```
+
+Wait for both runs, then verify each run's `headSha` is exactly `$SHA` and its `conclusion` is `success` before treating the SHA as deployable under RB-15. A dispatch on `agent-main` whose `headSha` differs from `$SHA` tested the newer head, not the chosen commit: redo it through the `deploy-candidate/*` ref.
+
+```bash
+gh run watch <ci-run-id> --exit-status
+gh run watch <macos-run-id> --exit-status
+gh run view <ci-run-id> --json headSha,conclusion,event
+gh run view <macos-run-id> --json headSha,conclusion,event
+git push origin --delete "deploy-candidate/${SHA:0:12}" # only for the pinned-ref route, after both runs complete
+```
+
+Delete the candidate ref only once both runs have completed. Workflow helpers still run from the workflow's own revision (the dispatched ref's `github.sha`), as on push and pull-request runs.
+
 The ephemeral Linux runner installs sandbox packages with needrestart's
 per-invocation `NEEDRESTART_MODE=l` (list-only) setting through `sudo env`.
 This avoids restarting unrelated image services while retaining signed apt
