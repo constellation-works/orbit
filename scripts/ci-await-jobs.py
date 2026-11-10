@@ -235,13 +235,21 @@ class JobListingPoller:
                 jobs = self.read_job_listing(remaining)
                 self.poll_seconds = max(self.poll_seconds, first_minimum, self.fallback_seconds)
                 return jobs
-            payload = json.loads(body)
-            if payload.get("total_count") != len(payload["jobs"]):
+            # A truncated, HTML, or non-object body is an unusable listing.
+            # Retry until the deadline, as the paginated path does.
+            try:
+                payload = json.loads(body)
+                if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+                    return None
+                jobs = payload["jobs"]
+                if payload.get("total_count") != len(jobs):
+                    return None
+                self.jobs = {job["name"]: job for job in jobs}
+                if len(self.jobs) != len(jobs):
+                    return None
+                self.etag = headers.get("etag")
+            except (ValueError, KeyError, TypeError):
                 return None
-            self.jobs = {job["name"]: job for job in payload["jobs"]}
-            if len(self.jobs) != len(payload["jobs"]):
-                return None
-            self.etag = headers.get("etag")
         else:
             print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
             return None

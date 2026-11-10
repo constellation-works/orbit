@@ -272,6 +272,15 @@ then
   fail=1
 fi
 
+# Process substitution hides a failed listing from set -e and pipefail, so a
+# failed cargo metadata run would look like a crate with no internal dependencies.
+dependency_listing="$(mktemp)"
+trap 'rm -f "$dependency_listing"' EXIT
+if ! load_workspace_dependencies >"$dependency_listing"; then
+  echo "workspace dependency listing failed"
+  exit 1
+fi
+
 while IFS=$'\t' read -r crate manifest dependency kind; do
   allowed="$(allowed_internal_deps "$crate")"
 
@@ -285,7 +294,7 @@ while IFS=$'\t' read -r crate manifest dependency kind; do
     echo "  allowed internal deps for ${crate}: ${allowed:-<none>}"
     fail=1
   fi
-done < <(load_workspace_dependencies)
+done < "$dependency_listing"
 
 # orbit-core is one crate, but its internal boundaries are directional too.
 # The runtime kernel lives in orbit-runtime, which cannot reach Core's use

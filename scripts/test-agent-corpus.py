@@ -5,6 +5,7 @@ The generator previously split on any '---', truncating a valid source URL.
 Exercise the public generator rather than its parser implementation.
 """
 from pathlib import Path
+import json
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,70 @@ class CorpusFrontmatterRegression(unittest.TestCase):
                     capture_output=True, text=True, check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_materialize_appends_under_an_immediately_following_heading(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="corpus-adjacent-", dir=scratch) as directory:
+            repo = Path(directory)
+            corpus = repo / "docs/agents/corpus"
+            target = corpus / "issues/adjacent-heading.md"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "---\n"
+                "type: issue\n"
+                "applies_to: [agent_implement]\n"
+                "status: active\n"
+                "links: []\n"
+                "---\n"
+                "\n"
+                "# Adjacent heading\n"
+                "\n"
+                "## Signature\n"
+                "Signature text.\n"
+                "\n"
+                "## Mechanism\n"
+                "Mechanism text.\n"
+                "\n"
+                "## Resolution\n"
+                "Resolution text.\n"
+                "\n"
+                "## Fix task\n"
+                "Fix text.\n"
+                "\n"
+                "## Occurrences\n"
+                "## After\n"
+                "After text.\n",
+                encoding="utf-8",
+            )
+            record = {
+                "schema_version": 1,
+                "id": "adjacent-heading",
+                "path": "docs/agents/corpus/issues/adjacent-heading.md",
+                "section": "Occurrences",
+                "entry": {"summary": "adjacent-heading-entry"},
+            }
+            records = repo / "records.json"
+            records.write_text(json.dumps({
+                "history": [{
+                    "event": "agent_corpus_append",
+                    "by": "system",
+                    "note": json.dumps(record),
+                }],
+            }), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/agent-corpus.py"),
+                 "--repo-root", str(repo), "--records", str(records)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            text = target.read_text(encoding="utf-8")
+            heading = text.index("## Occurrences\n")
+            line_end = text.index("\n", heading)
+            next_heading = text.index("\n## ", line_end)
+            marker = text.index("adjacent-heading-entry")
+            self.assertGreater(marker, line_end)
+            self.assertLess(marker, next_heading)
 
 
 if __name__ == "__main__":

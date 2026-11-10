@@ -67,7 +67,8 @@ def main() -> int:
     violations = []
     for source_root in SOURCE_ROOTS:
         for path in source_root.rglob("*.rs"):
-            if "tests" in path.parts:
+            relative = path.relative_to(ROOT)
+            if "tests" in relative.parts:
                 continue
             for line_number, line in production_lines(path):
                 # Internal provenance belongs in ordinary source comments, which
@@ -77,7 +78,7 @@ def main() -> int:
                     continue
                 if match := CONCRETE_ID.search(code):
                     violations.append(
-                        f"{path.relative_to(ROOT)}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
+                        f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
                     )
 
     if violations:

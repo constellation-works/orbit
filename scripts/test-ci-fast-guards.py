@@ -2841,6 +2841,23 @@ class ScriptFailClosedTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("ORB-12345", result.stderr)
 
+    def test_checkout_under_tests_directory_still_scans_crate_sources(self):
+        checkout = self.root / "tests" / "orbit"
+        guard = checkout / "scripts/check-public-artifact-ids.py"
+        guard.parent.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = checkout / "crates/example/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text('pub const LABEL: &str = "ORB-123";\n')
+        skipped = checkout / "crates/example/src/tests/hidden.rs"
+        skipped.parent.mkdir(parents=True)
+        skipped.write_text('pub const LABEL: &str = "ORB-999";\n')
+        result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("ORB-123", result.stderr)
+        self.assertNotIn("ORB-999", result.stderr)
+        self.assertIn("crates/example/src/lib.rs", result.stderr)
+
     def test_crate_guides_require_ripgrep(self):
         guard = self.root / "scripts/check-crate-agent-guides.sh"
         shutil.copy2(SCRIPTS / guard.name, guard)

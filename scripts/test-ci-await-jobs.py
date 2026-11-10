@@ -43,6 +43,8 @@ class AwaitJobsTests(unittest.TestCase):
         self.response_headers = {}
         self.pages = None
         self.artifacts = None
+        # Raw HTTP 200 job-listing body, when set, replaces the jobs JSON.
+        self.raw_job_body = None
         # Optional (page, elapsed) -> (status, headers, JSON payload or None).
         self.artifact_reply = None
         fixture = self
@@ -68,6 +70,14 @@ class AwaitJobsTests(unittest.TestCase):
                     self.send_header("Content-Type", "application/json")
                     for name, value in headers.items():
                         self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if fixture.raw_job_body is not None:
+                    raw = fixture.raw_job_body
+                    body = raw.encode() if isinstance(raw, str) else raw
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
                     self.end_headers()
                     self.wfile.write(body)
                     return
@@ -577,6 +587,30 @@ finally:
             self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
             self.assertEqual(float((self.root / "elapsed").read_text()), 7)
             self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_malformed_single_page_job_listing_retries_until_the_deadline(self):
+        bodies = (
+            "<html>not-json",
+            "{",
+            "[]",
+            "null",
+            '{"total_count": 1}',
+            '{"total_count": 1, "jobs": [{"status": "completed"}]}',
+        )
+        try:
+            for body in bodies:
+                with self.subTest(body=body):
+                    self.requests.clear()
+                    self.raw_job_body = body
+                    result = self.wait(timeout="30", poll="15", virtual=True)
+                    combined = result.stdout + result.stderr
+                    self.assertNotIn("Traceback", combined)
+                    self.assertEqual(result.returncode, 1, combined)
+                    self.assertIn("timed out after 30 s waiting for every job", result.stderr)
+                    self.assertGreaterEqual(len(self.requests), 2, self.requests)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 30)
+        finally:
+            self.raw_job_body = None
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Smoke test: confirm the headless `claude -p` invocation defined by
-# crates/orbit-core/assets/executors/claude.yaml can reach the orbit MCP
-# server. Mirrors that yaml's args verbatim except `--debug-file`, which the
-# engine rewrites at spawn time.
+# Smoke test: confirm this headless claude invocation can reach the orbit MCP
+# server:
+#   claude -p --permission-mode bypassPermissions --output-format json
+#     --tools default --model claude-sonnet-4-6
 #
 # Pass criterion: this invocation exits 0, and a new successful run-mcp audit
 # row for orbit.task.list names an orbit process observed under it. A matching
@@ -87,7 +87,6 @@ if [[ "$delta" -gt 0 ]]; then
 fi
 
 echo "FAIL: no new successful run-mcp orbit.task.list audit rows bound to this invocation. claude did not reach orbit MCP." >&2
-echo "  Likely causes: (1) --allowedTools wildcard not honored;" >&2
-echo "  (2) claude version doesn't recognize --mcp-config or --tools; " >&2
-echo "  (3) .mcp.json malformed or orbit binary not spawnable from cwd." >&2
+echo "  Likely causes: (1) claude rejected --permission-mode, --output-format, --tools, or --model;" >&2
+echo "  (2) .mcp.json is malformed or the orbit binary is not spawnable from cwd." >&2
 exit 1
