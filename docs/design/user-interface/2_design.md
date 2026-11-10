@@ -444,7 +444,23 @@ host to its owner. Reads of another host use `/api/on/<host>/...` for the chosen
 workspace; the card shows exactly the chosen workspace's drain on the chosen
 host, and no live window there shows Idle. The chosen workspace and host are
 remembered across reloads, falling back to the defaults when a remembered
-value no longer exists. This card does not start a follower drain. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
+value no longer exists. The existing **Start a window** card applies to that
+same workspace and host, with the concrete board's fields, markup and styles.
+For the owner it starts the owner's window; for a follower it says **Start pulling
+on <host>** and starts a pull from the workspace's owner. Starts post to
+`/api/workflows/auto?workspace=<id>` for the serving owner, or
+`/api/on/<host>/workflows/auto?workspace=<id>` for another owner or a follower.
+A pull body uses `pull` (the workspace), `host` (its owner), `for_duration` and
+any explicit concurrency, just as the replica board does. The Auto-drain
+card's existing **Stop** (or **Send pending results**) addresses the same pair
+at `workflows/auto/stop`; a follower keeps the pull-drain confirmation. After
+either action, readiness is read from the chosen host, even when the fleet
+snapshot still reports Idle. A forwarding-write refusal disables Start and
+Stop with the existing read-only reason; a missing replica or unavailable
+owner disables Start with the replica card's existing unavailable-owner
+message. Switching either select retires pending readbacks from the previous
+pair. Single-workspace boards, including replica boards, keep their existing
+controls and behavior. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
 phase, leaf slots, eligible work, waits, holds and queued windows. Rows switch
 host and workspace. Its cache and cadence are shared with the rail reading.
 
