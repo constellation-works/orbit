@@ -5,10 +5,13 @@
 //! surfaces, except for known no-diff holders, and name the claim behind each
 //! lock wait. Every claim still fences admission of its own task.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExecutionClaim;
+use orbit_common::fs::lock_mode::FootprintLockModes;
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+use orbit_store::contracts::{ExecutionClaim, claim_refusing_work_start};
 use orbit_types::task::{Task, is_no_diff_expected};
 use serde_json::{Value, json};
 
@@ -46,6 +49,17 @@ impl ClaimHolders {
         })
     }
 
+    /// The protecting claims among `claims`, already read.
+    pub(crate) fn from_claims(claims: &[ExecutionClaim]) -> Self {
+        Self {
+            by_task: claims
+                .iter()
+                .filter(|claim| claim.phase.protects_footprint())
+                .map(|claim| (claim.task_id.clone(), claim.clone()))
+                .collect(),
+        }
+    }
+
     /// Include frozen surfaces even when no active task envelope holds them.
     /// Known no-diff tasks hold no context lock; an unknown owner still does.
     pub(crate) fn extend_lock_holders(
@@ -72,6 +86,43 @@ impl ClaimHolders {
     /// A protecting claim still fences its own task, including no-diff work.
     pub(crate) fn protecting_task_claim(&self, task_id: &str) -> Option<&ExecutionClaim> {
         self.by_task.get(task_id)
+    }
+
+    /// The protecting claim that would refuse `task` starting work, judged
+    /// over its whole canonical context exactly as the work-start guard
+    /// judges it, unlocked paths included [ORB-23894]. Admission defers the
+    /// task on this answer rather than create a run that guard fails.
+    /// A claim `no_diff_holder` names holds no context lock for other tasks,
+    /// as in [`Self::extend_lock_holders`]; it still fences its own task.
+    pub(crate) fn refusing_work_start(
+        &self,
+        task: &Task,
+        workspace_root: &Path,
+        lock_modes: &FootprintLockModes,
+        no_diff_holder: impl Fn(&str) -> bool,
+    ) -> Option<(&ExecutionClaim, Vec<String>)> {
+        let footprint = task
+            .context_files
+            .iter()
+            .filter_map(|selector| canonical_selector_in_workspace(selector, workspace_root).ok())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let claims = self
+            .by_task
+            .values()
+            .filter(|claim| claim.task_id == task.id || !no_diff_holder(&claim.task_id));
+        let claim = claim_refusing_work_start(claims, &footprint, lock_modes)?;
+        let overlapping = footprint
+            .into_iter()
+            .filter(|selector| {
+                claim
+                    .footprint
+                    .iter()
+                    .any(|held| lock_modes.selectors_block(selector, held))
+            })
+            .collect();
+        Some((claim, overlapping))
     }
 
     /// The claims holding `task_ids`, as readiness reports them.
