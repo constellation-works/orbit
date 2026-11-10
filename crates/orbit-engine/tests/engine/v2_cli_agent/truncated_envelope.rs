@@ -5,6 +5,10 @@
 //! envelope. The envelope is accepted through the same validation gates, the
 //! capture bound is unchanged, and a truncated capture with no envelope anywhere
 //! still fails with the missing-envelope protocol violation.
+//!
+//! [ORB-23924] A retained later `result` stays that terminal. An exit-zero
+//! max-turns result or an empty result does not yield to an earlier assistant
+//! envelope.
 
 use serde_json::json;
 
@@ -20,12 +24,24 @@ const CONTRADICTORY: &str = r#"{"schemaVersion":1,"status":"success","result":{"
 /// A Claude stream that outgrows the capture and ends on one assistant message
 /// whose text is `answer`, with no terminal `result` frame after it.
 fn stream_ending_on_message(answer: &str) -> String {
+    stream_with_tail(answer, None)
+}
+
+/// The same stream with a terminal `result` frame after the assistant message.
+fn stream_ending_on_terminal(answer: &str, terminal: serde_json::Value) -> String {
+    stream_with_tail(answer, Some(terminal))
+}
+
+fn stream_with_tail(answer: &str, terminal: Option<serde_json::Value>) -> String {
     let padding = json!({"type":"stream_event","event":{"type":"content_block_delta",
         "delta":{"type":"text_delta","text":"padding ".repeat(16)}}});
     let assistant = json!({"type":"assistant","message":{"role":"assistant",
         "content":[{"type":"text","text":answer}]}});
     let mut frames = vec![padding; 128];
     frames.push(assistant);
+    if let Some(terminal) = terminal {
+        frames.push(terminal);
+    }
     frames
         .iter()
         .map(ToString::to_string)
@@ -136,6 +152,83 @@ fn truncated_capture_recovered_envelope_keeps_status_validation() {
                 error.contains("success status must not carry error object"),
                 "expected the status/error consistency violation, got {error}"
             );
+        },
+    );
+}
+
+/// A later retained terminal is the turn's ending. The earlier assistant
+/// envelope must not complete the step. [ORB-23924]
+#[cfg(unix)]
+#[test]
+fn truncated_capture_does_not_adopt_an_earlier_envelope_after_a_later_terminal() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "truncated_capture_does_not_adopt_an_earlier_envelope_after_a_later_terminal",
+        || {
+            let cases = [
+                (
+                    "exit-zero max-turns",
+                    json!({
+                        "type": "result",
+                        "subtype": "error_max_turns",
+                        "is_error": false,
+                        "terminal_reason": "max_turns",
+                        "result": null
+                    }),
+                    "truncated-envelope-max-turns",
+                    "max_turns",
+                ),
+                (
+                    "empty result",
+                    json!({
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": false,
+                        "result": ""
+                    }),
+                    "truncated-envelope-empty-result",
+                    "",
+                ),
+            ];
+            for (case, terminal, run_id, terminal_marker) in cases {
+                let outcome =
+                    dispatch_truncated(&stream_ending_on_terminal(VALID, terminal), run_id);
+                assert!(
+                    !outcome.success,
+                    "{case}: selected the earlier envelope: status={} summary={:?} message={:?}",
+                    outcome.output["response_envelope_status"],
+                    outcome.output.get("summary"),
+                    outcome.message
+                );
+                assert_eq!(
+                    outcome.output["completion_envelope_satisfied"], false,
+                    "{case}"
+                );
+                assert_eq!(outcome.output["response_envelope_valid"], false, "{case}");
+                assert!(
+                    outcome.output["response_envelope_status"].is_null(),
+                    "{case}: earlier status was selected: {}",
+                    outcome.output["response_envelope_status"]
+                );
+                assert!(
+                    outcome.output.get("summary").is_none(),
+                    "{case}: earlier result was projected"
+                );
+                let error = outcome.output["completion_envelope_error"]
+                    .as_str()
+                    .unwrap_or("");
+                assert!(
+                    error.contains("stdout does not contain an Orbit response envelope"),
+                    "{case}: expected the missing-envelope protocol violation, got {error:?}"
+                );
+                if !terminal_marker.is_empty() {
+                    let message = outcome.message.as_deref().unwrap_or("");
+                    assert!(
+                        error.contains(terminal_marker) || message.contains(terminal_marker),
+                        "{case}: the retained terminal did not stay authoritative: error={error:?} message={message:?}"
+                    );
+                }
+            }
         },
     );
 }
