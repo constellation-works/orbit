@@ -10,7 +10,7 @@ use crate::application::agents::effort::{
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
-    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, REVIEW_MIN_SUPPORT, RowInput, Stat, Tally, Term, number,
 };
 use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
@@ -366,6 +366,7 @@ pub(super) fn execution_header(
         .collect();
     let mut header = serde_json::Map::new();
     header.insert("execution_split".into(), Value::Array(rows));
+    header.insert("review_min_support".into(), json!(REVIEW_MIN_SUPPORT));
     header
 }
 
@@ -667,9 +668,14 @@ fn row_input<'a>(
                     *key,
                     Denominator {
                         units: reviewed_units,
-                        // Any observed review is measured; zero reviews is unmeasured,
-                        // not a provisional estimate or a measured zero.
-                        min_support: 0,
+                        // Zero reviews is unmeasured, not a provisional estimate or
+                        // a measured zero. Fewer than the minimum support is
+                        // provisional: rated and shown, left out of the raw score.
+                        min_support: if reviewed_units > 0 {
+                            REVIEW_MIN_SUPPORT
+                        } else {
+                            0
+                        },
                     },
                 )
             })

@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 
 use crate::application::agents::roles::LedgerTask;
+use crate::application::agents::score::REVIEW_MIN_SUPPORT;
 
 /// How many measures the ranking has; per-measure arrays use it.
 pub(super) const MEASURE_COUNT: usize = 6;
@@ -137,6 +138,15 @@ pub(super) fn observe(task: &LedgerTask) -> Observations {
     })
 }
 
+/// Whether `totals` hold the reviewed deliveries the review-outcome measure
+/// needs to count.
+pub(super) fn review_supported(totals: &[Totals; MEASURE_COUNT]) -> bool {
+    MEASURES
+        .iter()
+        .zip(totals)
+        .all(|(measure, total)| measure.key != REVIEW_OUTCOME || total.units >= REVIEW_MIN_SUPPORT)
+}
+
 /// A measure's totals over a set of tasks.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Totals {
@@ -170,13 +180,21 @@ pub(super) fn totals<'a>(
 
 /// Each measure's weighted noise-unit term, `w × resid ÷ scale`, for the
 /// measures that have units and a scale, and their weight sum.
+///
+/// `review_supported` says whether the review outcome has the reviewed
+/// deliveries it needs; without them that measure is unmeasured and its
+/// weight leaves the denominator, like an unrecorded measure.
 pub(super) fn weighted_terms(
     totals: &[Totals; MEASURE_COUNT],
     scales: &[Option<f64>; MEASURE_COUNT],
+    review_supported: bool,
 ) -> ([Option<f64>; MEASURE_COUNT], f64) {
     let mut weight = 0.0;
     let terms = std::array::from_fn(|index| {
         let measure = &MEASURES[index];
+        if measure.key == REVIEW_OUTCOME && !review_supported {
+            return None;
+        }
         let scale = scales[index].filter(|scale| *scale > 0.0)?;
         let residual = totals[index].residual(measure)?;
         weight += measure.weight;
@@ -190,8 +208,9 @@ pub(super) fn weighted_terms(
 pub(super) fn composite(
     totals: &[Totals; MEASURE_COUNT],
     scales: &[Option<f64>; MEASURE_COUNT],
+    review_supported: bool,
 ) -> Option<f64> {
-    let (terms, weight) = weighted_terms(totals, scales);
+    let (terms, weight) = weighted_terms(totals, scales, review_supported);
     (weight > 0.0).then(|| terms.iter().flatten().sum::<f64>() / weight)
 }
 

@@ -9,7 +9,7 @@ use super::performance::{
 };
 use crate::application::agents::attribution::{Charge, Credit};
 use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::score::{Tally, number};
+use crate::application::agents::score::{REVIEW_MIN_SUPPORT, Tally, number};
 use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 
 /// One row per implemented task and the row (crew, model) that worked it:
@@ -96,12 +96,18 @@ fn raw_against(
     let mut raw = 100.0;
     for term in TERMS {
         let actual = tallies.get(term.key).map_or(0.0, Tally::count);
-        let (units, fleet_units) = if performance::is_implementer_review_term(term.key) {
+        let review_term = performance::is_implementer_review_term(term.key);
+        let (units, fleet_units) = if review_term {
             (reviewed as f64, fleet.reviewed_units)
         } else {
             (n, fleet.units)
         };
         if units == 0.0 || fleet_units == 0 {
+            continue;
+        }
+        // A review term below its minimum support is provisional: it adds
+        // nothing to the raw score, as on the scorecard rows.
+        if review_term && reviewed < REVIEW_MIN_SUPPORT {
             continue;
         }
         let rate = fleet.counts.get(term.key).copied().unwrap_or(0.0) / fleet_units as f64;

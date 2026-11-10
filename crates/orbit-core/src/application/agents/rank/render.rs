@@ -7,7 +7,8 @@ use super::board;
 use super::board::ModelRow;
 use super::compute::Scales;
 use super::execution::{ExecutionCounts, execution_json};
-use super::measures::{MEASURE_COUNT, MEASURES, weighted_terms};
+use super::measures::{MEASURE_COUNT, MEASURES, REVIEW_OUTCOME, review_supported, weighted_terms};
+use crate::application::agents::score::REVIEW_MIN_SUPPORT;
 
 pub(super) fn crews_json(row: &ModelRow) -> Vec<Value> {
     row.crews
@@ -27,7 +28,8 @@ pub(super) fn row_json(
 ) -> Value {
     let placed = &board.placed[index];
     let totals = row.totals();
-    let (terms, weight) = weighted_terms(&totals, &scales.scales);
+    let review_counts = review_supported(&totals);
+    let (terms, weight) = weighted_terms(&totals, &scales.scales, review_counts);
     let mut measures = Map::new();
     for (position, measure) in MEASURES.iter().enumerate() {
         let total = totals[position];
@@ -37,6 +39,10 @@ pub(super) fn row_json(
             (None, None) if total.units == 0 => {
                 ("unmeasured", Some("no units for this model in the window"))
             }
+            (None, None) if measure.key == REVIEW_OUTCOME && !review_counts => (
+                "unmeasured",
+                Some("fewer reviewed deliveries than the minimum support"),
+            ),
             (None, None) => ("no_scale", Some("no noise scale for this measure")),
         };
         let measured = measure.unrecorded.is_none() && total.units > 0;
@@ -48,6 +54,7 @@ pub(super) fn row_json(
                 "weight": measure.weight,
                 "units": total.units,
                 "unit": measure.units,
+                "min_support": (measure.key == REVIEW_OUTCOME).then_some(REVIEW_MIN_SUPPORT),
                 "actual": measured.then(|| round(total.actual)),
                 "expected": measured.then(|| round(total.expected)),
                 "residual": total.residual(measure).filter(|_| measured).map(round),

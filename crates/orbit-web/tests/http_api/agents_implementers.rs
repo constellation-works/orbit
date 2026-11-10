@@ -357,10 +357,20 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                 assert_eq!(r["rank"], Value::Null);
             }
             assert_eq!(row(&card, "unknown")["model"], "model unknown");
-            assert_eq!(
-                as_f64(&card["fleet_average"]),
-                100.0,
-                "pooling conserves the fleet's total expected outcomes"
+            // One reviewed delivery is below the review terms' minimum
+            // support: the rejects are counted and rated, but score nothing,
+            // so the dense row's clean reviews are no longer offset.
+            for crew in ["sparse", "unknown"] {
+                assert_eq!(
+                    row(&card, crew)["provisional_terms"],
+                    json!(["first_pass_accepts", "review_rejects", "reviewer_repairs"])
+                );
+            }
+            assert!(
+                row(&card, "dense")["provisional_terms"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
             );
         },
     );
@@ -622,13 +632,15 @@ fn implementers_review_terms_ignore_review_coverage() {
         "agents_implementers::implementers_review_terms_ignore_review_coverage",
         || {
             let fixture = Fixture::new();
-            for (crew, reviewed) in [
-                ("dense", 8),
-                ("sparse", 4),
-                ("unreviewed", 0),
-                ("reference", 8),
+            // Review terms score from 30 reviewed deliveries up, so the
+            // reviewed crews are sized to clear that minimum support.
+            for (crew, tasks, reviewed) in [
+                ("dense", 64, 64),
+                ("sparse", 64, 32),
+                ("unreviewed", 8, 0),
+                ("reference", 64, 64),
             ] {
-                for index in 0..8 {
+                for index in 0..tasks {
                     let id = landed_with_tags(
                         &fixture,
                         &format!("jrun-{crew}-{index}"),
@@ -657,7 +669,7 @@ fn implementers_review_terms_ignore_review_coverage() {
                 .runtime
                 .agent_per_task_export(&AgentQuery::parse(Some("30d"), Some(1)).unwrap())
                 .unwrap();
-            for (crew, reviewed) in [("dense", 8), ("sparse", 4), ("unreviewed", 0)] {
+            for (crew, reviewed) in [("dense", 64), ("sparse", 32), ("unreviewed", 0)] {
                 let count: u64 = export["tasks"]
                     .as_array()
                     .unwrap()
@@ -700,7 +712,7 @@ fn implementers_review_terms_ignore_review_coverage() {
                     0.0,
                     "the reference crew makes the coverage comparison non-neutral"
                 );
-                for (crew, units) in [("dense", 8), ("sparse", 4), ("unreviewed", 0)] {
+                for (crew, units) in [("dense", 64), ("sparse", 32), ("unreviewed", 0)] {
                     assert_eq!(row(&card, crew)["term_units"][key], units);
                     assert_eq!(
                         card["terms"]
@@ -740,7 +752,7 @@ fn implementers_review_terms_ignore_review_coverage() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .find(|cell| cell["crew"] == crew && cell["n"] == 8)
+                    .find(|cell| cell["crew"] == crew && cell["n"].as_u64() > Some(0))
                     .unwrap()
                     .clone()
             };
@@ -750,6 +762,63 @@ fn implementers_review_terms_ignore_review_coverage() {
                 "tier scores must also ignore review coverage"
             );
             assert_eq!(cell("unreviewed")["raw"], 100);
+        },
+    );
+}
+
+/// Regression: a handful of reviewed deliveries rated per 100 reviews once
+/// outweighed hundreds of tasks. Below the review minimum support the three
+/// review terms are provisional: counted and rated, but left out of the raw.
+#[test]
+fn two_reviewed_deliveries_do_not_move_the_raw_score() {
+    isolated(
+        "agents_implementers::two_reviewed_deliveries_do_not_move_the_raw_score",
+        || {
+            let fixture = Fixture::new();
+            for (crew, verdicts) in [
+                ("reviewed", vec![Some("reject"), Some("accept_with_fixes")]),
+                ("plain", vec![None, None]),
+            ] {
+                for (index, verdict) in verdicts.into_iter().enumerate() {
+                    let id = landed_with_tags(
+                        &fixture,
+                        &format!("jrun-{crew}-{index}"),
+                        crew,
+                        Vec::new(),
+                    );
+                    if let Some(verdict) = verdict {
+                        comment(
+                            &fixture,
+                            &id,
+                            &format!(
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **{verdict}**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                            ),
+                        );
+                    }
+                }
+            }
+            let card = fixture
+                .runtime
+                .agent_role_scorecard(
+                    AgentRole::Implementers,
+                    &AgentQuery::parse(Some("30d"), Some(1)).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(card["review_min_support"], 30);
+            let reviewed = row(&card, "reviewed");
+            assert_eq!(reviewed["reviewed_units"], 2);
+            assert_eq!(
+                reviewed["provisional_terms"],
+                json!(["first_pass_accepts", "review_rejects", "reviewer_repairs"])
+            );
+            assert_eq!(reviewed["counts"]["review_rejects"], 1);
+            assert_eq!(reviewed["counts"]["reviewer_repairs"], 1);
+            assert_eq!(reviewed["per_100"]["review_rejects"], 50);
+            assert_eq!(
+                reviewed["raw"],
+                row(&card, "plain")["raw"],
+                "two reviewed deliveries leave the raw score where unreviewed work puts it"
+            );
         },
     );
 }

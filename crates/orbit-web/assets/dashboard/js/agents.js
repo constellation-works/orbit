@@ -1296,7 +1296,7 @@ function howNode() {
     el("summary", { text: "How the score works" }),
     list,
     el("p", { text: role === "implementers"
-      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit}, except first-pass accepts, review rejects and reviewer repairs, which use reviewed deliveries. Review expectations use only the row's reviewed tier mix, and no reviewed deliveries contributes nothing. Expected counts use the fleet's rates on the corresponding tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
+      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit}, except first-pass accepts, review rejects and reviewer repairs, which use reviewed deliveries. Review expectations use only the row's reviewed tier mix, and no reviewed deliveries contributes nothing. A row with fewer than ${scorecard.review_min_support ?? 30} reviewed deliveries has those three terms provisional: counted, rated and shown, but left out of the raw score. Expected counts use the fleet's rates on the corresponding tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
       : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
     ...(role === "implementers" ? [el("p", { text: "Escaped regressions are scored: regression links with escape no_test, mostly delivery-review findings, at their severity weights (critical 8, high 4, medium 2, low 1, nit 0.25), weighted −0.5. Change size dominates regression risk, so their expected count uses fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. A defect a pre-landing review already rejected or repaired counts once, as that verdict." }),
       el("p", { text: "Diff economy is the median landed-task ratio of lines changed to the fleet median for that tier and type. Above 1 means larger diffs for comparable work. Missing data or a zero reference median is unavailable. It is shown, not scored; normalizing regressions by a crew's own diff would reward bloat. All tiers keeps the tier-mix score. A selected tier ranks its crew scores from the cell matrix, pulled toward 100 with 30 tasks of reference evidence, and hides rows without work in that tier. Detail evidence remains for all tiers." })] : []),
@@ -1309,7 +1309,7 @@ function howNode() {
   details.open = howOpen;
   details.addEventListener("toggle", () => { howOpen = details.open; });
   details.dataset.key = "how";
-  details.dataset.hash = JSON.stringify([role, scorecard.terms, unit, scorecard.min_support]);
+  details.dataset.hash = JSON.stringify([role, scorecard.terms, unit, scorecard.min_support, scorecard.review_min_support]);
   return details;
 }
 
