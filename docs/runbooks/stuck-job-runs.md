@@ -1513,14 +1513,21 @@ implementer needs recorded owner approval that no agent can record (for
 example, a stable-tier breaking change). Nothing failed. The task is
 `blocked` with the declared message, and its system comment (and
 `candidate_held` history entry) names the run, failed step, branch and
-candidate head. The candidate is committed on the run's branch and pushed to
-`refs/orbit/candidates/<task>/<run>` on `origin`; no PR was opened.
+candidate head. The candidate is committed on the run's branch, and the
+handoff tries to push it to `refs/orbit/candidates/<task>/<run>` on `origin`.
+If the push succeeds, another host can fetch it; if it fails, the comment
+identifies the host-local candidate and another host cannot fetch it. No PR
+was opened.
 
 Record the approval on the task (for example, an operator comment or decision
 approving the change the implementer named). Then move the task back to
-`backlog` (or `in-progress`) and start a new delivery run. That run resumes
-the held candidate instead of implementing afresh. Do not run
-`orbit job resume <held_run_id>`: resume refuses held runs of this kind.
+`backlog` (or `in-progress`) and start a new delivery run. The handoff tries
+to push the candidate to its durable ref on `origin`, so a successful push
+lets that run resume it from any host. If the system comment says the
+candidate is host-local, recover or push the named head before routing a run
+to another host; it cannot fetch a host-local candidate and would implement
+afresh. Do not run `orbit job resume <held_run_id>`: resume refuses held runs
+of this kind.
 See [CONFIG.md](../CONFIG.md#owner-sign-off-holds-the-run-owner_signoff_required).
 
 ## A task waiting on a provider usage limit

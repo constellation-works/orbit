@@ -18,12 +18,14 @@ spec:
     `worktree` failure before its checkpoint created no checkout, so it returns
     `no_candidate` and publishes nothing. An `owner_signoff_required` stop
     (recorded owner approval is still missing) returns `held_owner_signoff`:
-    it commits the candidate, carries it to its durable ref, records it in
-    the task's history and a system comment naming the operator's next step,
-    and opens no PR, so the task's next run resumes it once the approval is
-    recorded.
-    Every preserved candidate records the task's spec digest, so the
-    task's next run can resume it (`candidate_resume`).
+    it commits the candidate, tries to carry it to its durable ref, records
+    it in the task's history and a system comment naming the operator's next
+    step, and opens no PR. If the carry succeeds, the next run resumes the
+    candidate from any host after approval is recorded. If it fails, the
+    comment records that the candidate is host-local; recover or push that
+    head before routing the next run to another host.
+    Every preserved candidate records the task's spec digest, which
+    `candidate_resume` checks before applying the candidate.
   input_schema_json:
     type: object
     additionalProperties: false

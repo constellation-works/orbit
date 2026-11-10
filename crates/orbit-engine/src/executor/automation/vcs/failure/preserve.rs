@@ -266,11 +266,12 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
                      implementer declared `owner_signoff_required` because recorded owner \
                      approval is still missing. Nothing was judged or published, and no PR \
                      was opened. The candidate `{head_sha}` is committed on branch \
-                     `{branch}`, and the task's next run resumes it.\n\n{}\n\nOnce the \
+                     `{branch}`. Its location below says whether another host can fetch it.\n\n{}\n\nOnce the \
                      approval is recorded on the task, move the task back to `backlog` (or \
-                     `in-progress`) and start a new delivery run; that run resumes the held \
-                     candidate. Do not resume the held run (`orbit job resume` refuses held \
-                     runs of this kind).\n\n## Failure\n\n```text\n{diagnostic}\n```",
+                     `in-progress`) and start a new delivery run. If the candidate is host-local, \
+                     recover or push the named head before routing that run to another host. Do \
+                     not resume the held run (`orbit job resume` refuses held runs of this \
+                     kind).\n\n## Failure\n\n```text\n{diagnostic}\n```",
                     held_place(&held)
                 ),
                 operation_id: None,
