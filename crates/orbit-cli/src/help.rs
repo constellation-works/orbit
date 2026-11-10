@@ -86,10 +86,18 @@ const HANG_INDENT: usize = 2;
 /// prose paragraph hard-wrapped in the source (unindented lines, each ending
 /// mid-sentence) is re-flowed as one when any of its lines is too wide, so the
 /// narrow wrap does not leave a ragged stub after every source line break.
+///
+/// Contiguous indented lines form a block. When such a block holds an aligned
+/// two-column layout (two or more rows starting their description at the same
+/// column) and any row is too wide, the overflowing aligned rows keep that
+/// shared column: their explanation wraps with continuation lines indented to
+/// the column, or stacks onto its own indented lines when the column leaves no
+/// room. Single-column rows in the same block keep the plain hanging indent.
 fn hang_wrap_text(text: &str, width: usize) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut paragraph: Vec<&str> = Vec::new();
-    let flush = |paragraph: &mut Vec<&str>, out: &mut Vec<String>| {
+    let mut block: Vec<&str> = Vec::new();
+    let flush_paragraph = |paragraph: &mut Vec<&str>, out: &mut Vec<String>| {
         if paragraph.iter().any(|line| line.chars().count() > width) {
             out.push(hang_wrap_line(&paragraph.join(" "), width));
         } else {
@@ -97,21 +105,209 @@ fn hang_wrap_text(text: &str, width: usize) -> String {
         }
         paragraph.clear();
     };
+    let flush_block = |block: &mut Vec<&str>, out: &mut Vec<String>| {
+        if !block.is_empty() {
+            hang_wrap_block(block, width, out);
+            block.clear();
+        }
+    };
     for line in text.split('\n') {
         let prose = !line.is_empty() && !line.starts_with(' ');
-        if !prose {
-            flush(&mut paragraph, &mut out);
-            out.push(hang_wrap_line(line, width));
+        if prose {
+            flush_block(&mut block, &mut out);
+            paragraph.push(line);
+            // A line that ends a sentence or introduces a list closes its paragraph.
+            if line.ends_with(['.', ':', ';']) {
+                flush_paragraph(&mut paragraph, &mut out);
+            }
             continue;
         }
-        paragraph.push(line);
-        // A line that ends a sentence or introduces a list closes its paragraph.
-        if line.ends_with(['.', ':', ';']) {
-            flush(&mut paragraph, &mut out);
+        flush_paragraph(&mut paragraph, &mut out);
+        if line.is_empty() {
+            flush_block(&mut block, &mut out);
+            out.push(String::new());
+            continue;
+        }
+        block.push(line);
+    }
+    flush_paragraph(&mut paragraph, &mut out);
+    flush_block(&mut block, &mut out);
+    out.join("\n")
+}
+
+/// Char-index where an indented two-column row starts its description, if the
+/// line holds a command, a run of two or more spaces, then an explanation.
+fn aligned_description_column(line: &str) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    if lead == 0 || lead >= chars.len() {
+        return None;
+    }
+    if !chars[lead..].iter().any(|c| *c != ' ') {
+        return None;
+    }
+    let mut index = lead;
+    while index < chars.len() {
+        if chars[index] != ' ' {
+            index += 1;
+            continue;
+        }
+        let run_start = index;
+        while index < chars.len() && chars[index] == ' ' {
+            index += 1;
+        }
+        let run_len = index - run_start;
+        if run_len >= 2 && chars[lead..run_start].iter().any(|c| *c != ' ') && index < chars.len() {
+            return Some(index);
         }
     }
-    flush(&mut paragraph, &mut out);
-    out.join("\n")
+    None
+}
+
+/// Wrap one block of contiguous indented lines. Blocks without a shared
+/// description column, or where every row fits, keep the previous per-line
+/// behavior so piped and wide output stays byte-identical.
+fn hang_wrap_block(block: &[&str], width: usize, out: &mut Vec<String>) {
+    if block.iter().all(|line| line.chars().count() <= width) {
+        out.extend(block.iter().map(|line| line.to_string()));
+        return;
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for line in block {
+        if let Some(column) = aligned_description_column(line) {
+            *counts.entry(column).or_insert(0usize) += 1;
+        }
+    }
+    let Some((&column, _)) = counts.iter().max_by_key(|(_, count)| **count) else {
+        for line in block {
+            out.push(hang_wrap_line(line, width));
+        }
+        return;
+    };
+    if counts.get(&column).is_none_or(|count| *count < 2) {
+        for line in block {
+            out.push(hang_wrap_line(line, width));
+        }
+        return;
+    }
+    for line in block {
+        if line.chars().count() <= width {
+            out.push(line.to_string());
+            continue;
+        }
+        if aligned_description_column(line) == Some(column) {
+            out.push(hang_wrap_aligned_row(line, column, width));
+        } else {
+            out.push(hang_wrap_line(line, width));
+        }
+    }
+}
+
+/// Wrap one over-wide aligned row keeping its shared description `column`.
+/// The explanation wraps with continuations indented to the column; when the
+/// column leaves no room the explanation stacks onto its own indented lines.
+fn hang_wrap_aligned_row(line: &str, column: usize, width: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    if column >= chars.len() || column == 0 {
+        return hang_wrap_line(line, width);
+    }
+    let prefix: String = chars[..column].iter().collect();
+    let explanation: String = chars[column..].iter().collect();
+    let explanation = explanation.trim();
+    if explanation.is_empty() {
+        return hang_wrap_line(line, width);
+    }
+    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    if width <= column
+        || explanation
+            .split_whitespace()
+            .next()
+            .is_none_or(|word| word.chars().count() > width - column)
+    {
+        let command = prefix.trim_end().to_string();
+        if command.chars().count() > width {
+            let mut stacked = hang_wrap_line(&command, width);
+            stacked.push('\n');
+            stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
+            return stacked;
+        }
+        let mut stacked = command;
+        stacked.push('\n');
+        stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
+        return stacked;
+    }
+    let available = width - column;
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in explanation.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= available {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            chunks.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    if chunks.is_empty() {
+        return prefix.trim_end().to_string();
+    }
+    let mut wrapped = String::from(&prefix);
+    wrapped.push_str(&chunks[0]);
+    for chunk in chunks.iter().skip(1) {
+        wrapped.push('\n');
+        wrapped.push_str(&" ".repeat(column));
+        wrapped.push_str(chunk);
+    }
+    wrapped
+}
+
+/// Wrap a stacked explanation onto its own lines indented past `lead`.
+fn hang_wrap_stacked_explanation(explanation: &str, lead: usize, width: usize) -> String {
+    let indent = lead + HANG_INDENT;
+    let indent = if indent + 1 >= width {
+        lead.min(width.saturating_sub(1))
+    } else {
+        indent
+    };
+    let available = width.saturating_sub(indent);
+    if available == 0 {
+        return format!("{}{}", " ".repeat(indent), explanation.trim());
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in explanation.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= available {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            lines.push(format!("{}{}", " ".repeat(indent), current));
+            current = word.to_string();
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(format!("{}{}", " ".repeat(indent), current));
+    }
+    if lines.is_empty() {
+        lines.push(" ".repeat(indent));
+    }
+    lines.join("\n")
 }
 
 fn hang_wrap_line(line: &str, width: usize) -> String {
