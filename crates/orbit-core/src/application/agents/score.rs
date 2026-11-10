@@ -169,6 +169,12 @@ pub(super) struct RowInput<'a> {
     /// denominator exposure. These are resampled for the interval; the row's
     /// score still uses the aggregate fields above.
     pub(super) sample_units: Vec<SampleUnit>,
+    /// Units outside the row's population that still carry counts or
+    /// denominator exposure for a term with its own denominator (settled
+    /// warnings on tasks the row did not assess). They are resampled as a
+    /// second stratum, so the interval describes the same evidence as the
+    /// score; they never change `units`.
+    pub(super) exposure_units: Vec<SampleUnit>,
     /// Tasks with a settled review behind them (implementers only):
     /// the population of the review terms' rates and expectations.
     /// Zero means unmeasured, with null rates and neutral contributions.
@@ -352,30 +358,28 @@ fn resampled_interval(
         expected: Vec<f64>,
         denominator_units: Vec<usize>,
     }
-    let pool: Vec<_> = input
-        .sample_units
-        .iter()
-        .map(|unit| DrawUnit {
-            counts: terms
-                .iter()
-                .map(|term| unit.counts.get(term.key).copied().unwrap_or(0.0))
-                .collect(),
-            expected: terms
-                .iter()
-                .map(|term| unit.expected.get(term.key).copied().unwrap_or(0.0))
-                .collect(),
-            denominator_units: terms
-                .iter()
-                .map(|term| {
-                    if input.denominators.contains_key(term.key) {
-                        unit.denominator_terms.get(term.key).copied().unwrap_or(0)
-                    } else {
-                        1
-                    }
-                })
-                .collect(),
-        })
-        .collect();
+    let draw_unit = |unit: &SampleUnit| DrawUnit {
+        counts: terms
+            .iter()
+            .map(|term| unit.counts.get(term.key).copied().unwrap_or(0.0))
+            .collect(),
+        expected: terms
+            .iter()
+            .map(|term| unit.expected.get(term.key).copied().unwrap_or(0.0))
+            .collect(),
+        denominator_units: terms
+            .iter()
+            .map(|term| {
+                if input.denominators.contains_key(term.key) {
+                    unit.denominator_terms.get(term.key).copied().unwrap_or(0)
+                } else {
+                    1
+                }
+            })
+            .collect(),
+    };
+    let pool: Vec<_> = input.sample_units.iter().map(draw_unit).collect();
+    let exposure_pool: Vec<_> = input.exposure_units.iter().map(draw_unit).collect();
     let units = input.units as f64;
     let mut rng = Rng::seeded(INTERVAL_SEED);
     let mut sums = vec![0.0; terms.len()];
@@ -386,8 +390,12 @@ fn resampled_interval(
         sums.iter_mut().for_each(|sum| *sum = 0.0);
         expected_sums.iter_mut().for_each(|sum| *sum = 0.0);
         sampled_denominators.iter_mut().for_each(|count| *count = 0);
-        for _ in 0..input.units {
-            let unit = &pool[rng.below(pool.len())];
+        for step in 0..input.units + exposure_pool.len() {
+            let unit = if step < input.units {
+                &pool[rng.below(pool.len())]
+            } else {
+                &exposure_pool[rng.below(exposure_pool.len())]
+            };
             for index in 0..terms.len() {
                 sums[index] += unit.counts[index];
                 expected_sums[index] += unit.expected[index];

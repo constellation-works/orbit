@@ -700,6 +700,18 @@ fn row_input<'a>(
         .collect();
     crews.extend(warnings.crews.iter().cloned());
     let crews: Vec<String> = crews.into_iter().collect();
+    let assessed_ids: BTreeSet<&str> = assessed.iter().map(|(_, task)| task.id.as_str()).collect();
+    // Warnings settle independently of the assessed cohort: tasks that are
+    // older, unlanded or assessed under another row still feed the warning
+    // terms and their denominator, so they stay in the interval's evidence.
+    let mut exposure_units = sample_units(
+        settled_units
+            .keys()
+            .filter(|id| !assessed_ids.contains(id.as_str()))
+            .cloned(),
+        TERMS,
+        &tallies,
+    );
     let mut sample_units = sample_units(
         assessed.iter().map(|(_, task)| task.id.clone()),
         TERMS,
@@ -709,6 +721,8 @@ fn row_input<'a>(
         if tiers.contains_key(unit.id.as_str()) {
             unit.denominator_terms.insert("tier_calibration", 1);
         }
+    }
+    for unit in sample_units.iter_mut().chain(&mut exposure_units) {
         if let Some(&settled) = settled_units.get(&unit.id) {
             unit.denominator_terms.extend(
                 [CONFIRMED, DISMISSED, MISSED]
@@ -735,6 +749,7 @@ fn row_input<'a>(
         unjudged: false,
         denominators,
         sample_units,
+        exposure_units,
         stats: [
             stat(
                 "recall_percent",

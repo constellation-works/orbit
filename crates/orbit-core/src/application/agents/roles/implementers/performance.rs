@@ -706,6 +706,7 @@ fn row_input<'a>(
         reviewed_units: Some(reviewed_units),
         unjudged: false,
         sample_units: Vec::new(),
+        exposure_units: Vec::new(),
         crew: crews_of(facts, window, &row, tasks)
             .first()
             .cloned()
