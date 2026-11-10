@@ -81,13 +81,16 @@ impl ClaudeCliTransport {
         // edit. Not `json --verbose`: that prints the whole session as one
         // line, which a run longer than the 1 MiB stdout capture loses, and
         // with it the terminal `result`. Completion reads only that terminal
-        // `result` (`project_claude_response`).
+        // `result` (`project_claude_response`). Partial messages supply final
+        // request usage; the runner drops redundant content-block stream
+        // events before bounded capture, retaining message start/delta/stop.
         let mut args = vec![
             "--json-schema".to_string(),
             response_envelope_json_schema_arg(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),
+            "--include-partial-messages".to_string(),
         ];
 
         if let Some(model) = &self.model {

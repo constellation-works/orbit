@@ -538,9 +538,10 @@ prices:
 # The key is per-request prompt size, never the invocation totals: an
 # invocation sums many requests. Invocation traces keep each request at or
 # over 100,000 prompt tokens (`LONG_PROMPT_CAPTURE_FLOOR_TOKENS`; the table
-# refuses a lower tier) from Codex's session rollout. Claude's message stream
-# shows only that no request reached the floor: it carries no request's final
-# output, so a long Claude request leaves per-request usage uncaptured.
+# refuses a lower tier) from Codex's session rollout or Claude's partial
+# message stream. Claude pairs starting input buckets with final output by
+# request ID and requires message completion and a terminal result. Missing
+# final usage, JSON-only output and truncated captures leave usage unknown.
 # Without per-request usage the derived cost is exact only when the totals
 # stay below the threshold; otherwise it is unknown (null), never estimated.
 # Grok output reports totals only.
