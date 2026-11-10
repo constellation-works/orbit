@@ -34,4 +34,5 @@ pub use hosts::{
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    blocked_workflow_owner_signoff_update,
 };

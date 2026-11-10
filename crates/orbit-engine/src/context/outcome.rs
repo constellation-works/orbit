@@ -119,6 +119,27 @@ pub fn blocked_workflow_failure_update(
     }
 }
 
+/// Block for a run that held on recorded owner approval
+/// (`owner_signoff_required`). The run did not fail; its task waits for the
+/// operator's sign-off, so the note says `held`, not `failed`. [ORB-23967]
+pub fn blocked_workflow_owner_signoff_update(
+    job_id: &str,
+    run_id: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> TaskAutomationUpdate {
+    TaskAutomationUpdate {
+        status_note: Some(workflow_run_note(
+            "held",
+            job_id,
+            run_id,
+            error_code,
+            error_message,
+        )),
+        ..blocked_workflow_failure_update(job_id, run_id, error_code, error_message)
+    }
+}
+
 pub fn blocked_workflow_interruption_update(
     job_id: &str,
     run_id: &str,

@@ -79,7 +79,7 @@ pub use context::{
     TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
     WORKFLOW_RUN_INTERRUPTED_EVENT, WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
     baseline_red_hold_update, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    blocked_workflow_interruption_update, blocked_workflow_owner_signoff_update,
 };
 pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;

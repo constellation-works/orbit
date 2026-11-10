@@ -69,6 +69,7 @@ use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
     TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    blocked_workflow_owner_signoff_update,
 };
 use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
@@ -303,6 +304,13 @@ impl RuntimeKernel {
         // out exactly as the failure it records, as does a local provider
         // capacity or usage-limit hold. Any other hold names its own
         // resumption and leaves its tasks alone.
+        // [ORB-23967] A run held on owner sign-off is not a failed run: its
+        // task is blocked under the held note, which the backstop does not own.
+        let owner_signoff_hold = state == JobRunState::Held
+            && matches!(
+                HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()),
+                Some(HeldFailure::OwnerSignoffRequired)
+            );
         let state = match state {
             JobRunState::Held => {
                 match HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()) {
@@ -317,6 +325,8 @@ impl RuntimeKernel {
         };
         let blocked_update = if state == JobRunState::Interrupted {
             blocked_workflow_interruption_update
+        } else if owner_signoff_hold {
+            blocked_workflow_owner_signoff_update
         } else {
             blocked_workflow_failure_update
         };
