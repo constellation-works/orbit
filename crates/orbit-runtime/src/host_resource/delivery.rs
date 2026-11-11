@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Utc};
 pub use orbit_types::task::work_class;
+use orbit_types::workflow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,13 +17,14 @@ pub const RESOURCE_CLASS_KEY: &str = "resource_class";
 pub const SUBMITTED_DELIVERY_JOBS: &[&str] = &[
     "task_auto_pipeline",
     "task_gate_pipeline",
-    "task_pr_pipeline",
-    "task_local_pipeline",
+    workflow::TASK_PR_PIPELINE_JOB,
+    workflow::TASK_LOCAL_PIPELINE_JOB,
 ];
 
 /// Leaf definitions that only a claim may run; each claimed leaf is a whole
-/// delivery.
-pub const CLAIMED_LEAF_JOBS: &[&str] = &["task_claimed_local_pipeline", "task_claimed_pr_pipeline"];
+/// delivery. Owned by `orbit_types::workflow::CLAIMED_DELIVERY_LEAF_JOBS`;
+/// this path stays for orbit-core's readers.
+pub const CLAIMED_LEAF_JOBS: &[&str] = workflow::CLAIMED_DELIVERY_LEAF_JOBS;
 
 /// Historical child jobs whose admission copied their parent's class.
 /// Retained so stored explorer minutes still join the parent delivery's

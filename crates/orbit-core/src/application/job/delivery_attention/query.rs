@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{self, JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -9,10 +9,6 @@ use crate::application::job::{run_display_steps, run_error_step};
 use crate::application::task::TaskRow;
 
 use super::{history, value};
-
-const DELIVERY_JOB: &str = "task_pr_pipeline";
-
-const CLAIMED_DELIVERY_JOB: &str = "task_claimed_pr_pipeline";
 
 pub(super) fn failed_step_id(runtime: &OrbitRuntime, run: &JobRun) -> Option<String> {
     if let Ok(Some(state)) = runtime.read_run_state(&run.run_id)
@@ -73,10 +69,11 @@ impl OrbitRuntime {
         if ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let runs = self
-            .stores()
-            .jobs()
-            .recent_job_runs_for_tasks(DELIVERY_JOB, &ids, 8)?;
+        let runs = self.stores().jobs().recent_job_runs_for_tasks(
+            workflow::TASK_PR_PIPELINE_JOB,
+            &ids,
+            8,
+        )?;
         let mut map = BTreeMap::new();
         for row in rows {
             let runs = runs
@@ -122,7 +119,10 @@ impl OrbitRuntime {
     ) -> Result<Option<JobRun>, OrbitError> {
         let ids = [task_id.to_string()];
         let mut best: Option<JobRun> = None;
-        for job in [DELIVERY_JOB, CLAIMED_DELIVERY_JOB] {
+        for job in [
+            workflow::TASK_PR_PIPELINE_JOB,
+            workflow::TASK_CLAIMED_PR_PIPELINE_JOB,
+        ] {
             let runs = self
                 .stores()
                 .jobs()

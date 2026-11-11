@@ -34,12 +34,6 @@ pub(crate) struct ClaimedLeaf {
     pub(crate) binding: WorkerInvocation,
 }
 
-/// Leaf definitions that only a claim may run. A run on one of these without
-/// a durable admission is a mis-dispatch, not a workload: every step below
-/// `worktree` reads claim context that will never resolve.
-pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
-    crate::runtime::host_resource::delivery::CLAIMED_LEAF_JOBS;
-
 impl ClaimedLeaf {
     /// The owner's gates this claim was admitted under [ORB-15622]: the
     /// receipt's capture, or else the lists the ship contract's review

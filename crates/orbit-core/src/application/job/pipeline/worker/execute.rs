@@ -30,9 +30,9 @@ impl OrbitRuntime {
         // worker bound to a different claim is refused too.
         if let Some(admission) = self.claimed_leaf_admission(run_id)? {
             self.authorize_claimed_leaf(run_id, admission)?;
-        } else if crate::application::job::claimed::CLAIMED_LEAF_JOBS
-            .contains(&self.show_job_run(run_id)?.job_id.as_str())
-        {
+        } else if orbit_types::workflow::is_claimed_delivery_leaf_job(
+            &self.show_job_run(run_id)?.job_id,
+        ) {
             // A claimed definition submitted by hand has no claim to execute
             // for. Refuse here rather than after `worktree_setup` and an
             // implementation step that can never reach a handoff.
@@ -175,7 +175,7 @@ impl OrbitRuntime {
                 run,
                 super::usage::tree::session_tree_reader(std::process::id()),
             )?;
-            if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
+            if orbit_types::workflow::is_claimed_delivery_leaf_job(&run.job_id) {
                 if let Some(selection) = self
                     .read_run_state(&run.run_id)?
                     .and_then(|state| state.crew_selection)

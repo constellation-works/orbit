@@ -43,7 +43,6 @@ pub(crate) use filing_tags::{
     CI_FAILURE_TAG, CODE_SCANNING_TAG, DEPENDABOT_TAG, RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
 };
 pub(crate) use host_provider_hold::{HostProviderHold, canonical_provider};
-pub(crate) use jobs::LOCAL_ROUTE_JOB;
 pub use jobs::{ESCALATION_TRIAGE_JOB, FINDING_VERIFICATION_JOB, PULL_DRAIN_JOB};
 pub use orbit_clock::{
     ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,

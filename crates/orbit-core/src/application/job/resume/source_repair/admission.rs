@@ -8,7 +8,7 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
+    self, JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
     SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
     SourceRepairBinding, pr_auto_fix_attempts,
 };
@@ -141,7 +141,9 @@ impl OrbitRuntime {
     // policy independent of task selectors allows the host's recorded delivery
     // widening while still refusing configuration changes before source effects.
     fn source_rework_policy(&self, actor: &str, provenance: &str) -> Result<String, OrbitError> {
-        let mut definition = self.load_v2_job_asset_by_name("task_pr_pipeline")?.1;
+        let mut definition = self
+            .load_v2_job_asset_by_name(workflow::TASK_PR_PIPELINE_JOB)?
+            .1;
         orbit_engine::resolve_job_catalog_refs_for_execution(
             &mut definition,
             &self
@@ -150,7 +152,7 @@ impl OrbitRuntime {
         )
         .map_err(|e| refuse(e.to_string()))?;
         let mut fresh = json!({"task_ids":[]});
-        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+        self.install_review_admission(workflow::TASK_PR_PIPELINE_JOB, &mut fresh, None, false)?;
         // Capture time is not policy; every inspection resolves it afresh.
         fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY]
             .as_object_mut()
@@ -256,7 +258,7 @@ impl OrbitRuntime {
                 .job_run_machine
                 .as_ref()
                 .is_none_or(|origin| origin.machine_id != binding.machine_id)
-            || run.job_id != "task_pr_pipeline"
+            || run.job_id != workflow::TASK_PR_PIPELINE_JOB
             || !matches!(run.state, JobRunState::Pending | JobRunState::Running)
             || run.retry_source_run_id.as_deref() != Some(binding.source_run_id.as_str())
             || task.job_run_id.as_deref() != Some(run_id)
@@ -310,7 +312,12 @@ impl OrbitRuntime {
                 let (source, _, binding) =
                     self.observe_source_repair(&source_id, &request.task_id, false)?;
                 let mut fresh = json!({"task_ids":[request.task_id]});
-                self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+                self.install_review_admission(
+                    workflow::TASK_PR_PIPELINE_JOB,
+                    &mut fresh,
+                    None,
+                    false,
+                )?;
                 Ok(
                     json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
                     "policy_digest":if super::inline_publication::requires_fresh_rework_authority(
@@ -526,7 +533,7 @@ impl OrbitRuntime {
         // before appending either reservation or fresh consent.
         let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let mut fresh = json!({"task_ids":[task.id]});
-        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+        self.install_review_admission(workflow::TASK_PR_PIPELINE_JOB, &mut fresh, None, false)?;
         let mut current: ReviewAdmission =
             serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
                 .map_err(|e| refuse(e.to_string()))?;
@@ -626,7 +633,7 @@ impl OrbitRuntime {
         }
         let submitted = self.submit_persisted_pipeline_run(PipelineSubmission {
             resume: Some(&plan),
-            ..PipelineSubmission::catalog("task_pr_pipeline", input, Some(actor))
+            ..PipelineSubmission::catalog(workflow::TASK_PR_PIPELINE_JOB, input, Some(actor))
         })?;
         self.source_repair_event(
             &task.id,
@@ -690,7 +697,7 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("local machine identity unavailable"))?;
         if !self.repairable_published_source(&source, task_id)?
             || source.finished_at.is_none()
-            || source.job_id != "task_pr_pipeline"
+            || source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
         {
             return Err(refuse(
