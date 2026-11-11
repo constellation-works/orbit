@@ -148,7 +148,13 @@ impl OrbitRuntime {
         }
         let change = outcome?;
         if let Some(limit) = &change.worker_limit {
-            self.record_combined_drain_worker_limit_completion(limit)?;
+            self.record_combined_drain_worker_limit_completion(
+                limit,
+                &request_id,
+                request.actor,
+                request.source,
+                request.reason,
+            )?;
         }
         Ok(change)
     }
