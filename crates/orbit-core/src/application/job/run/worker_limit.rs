@@ -165,6 +165,28 @@ impl OrbitRuntime {
         outcome
     }
 
+    /// Record the completion audit for a ceiling retuned inside a window
+    /// extension's transaction, which cannot reuse [`Self::set_drain_worker_limit`]
+    /// without reopening a second, separately authorized transaction.
+    pub(super) fn record_combined_drain_worker_limit_completion(
+        &self,
+        change: &DrainWorkerLimitChange,
+    ) -> Result<(), OrbitError> {
+        let request_id = audit_execution_id("workers");
+        self.record_drain_control_completion(
+            WORKER_LIMIT_COMPLETION_AUDIT,
+            Some(&change.run_id),
+            &request_id,
+            change.outcome.as_str(),
+            json!({
+                "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
+                "max_active_leaf_runs": change.max_active_leaf_runs,
+                "revision": change.revision,
+            }),
+            None,
+        )
+    }
+
     fn apply_drain_worker_limit(
         &self,
         request: DrainWorkerLimitRequest<'_>,
