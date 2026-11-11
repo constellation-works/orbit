@@ -22,6 +22,16 @@ For the resident's side of the channel, read
 [Resident cycle](resident-cycle.md). For raising decisions, read
 [Tool surface](tool-surface.md#raising-a-decision).
 
+## Operator CLI forms
+
+Use these shell forms with the mandate's assignment task as `<TASK_ID>`:
+
+- **Grant authority:** `orbit resident grant --add <RIGHT> --quote '<VERBATIM_AUTHORIZATION>' <TASK_ID>`; add `--add-workspace <WORKSPACE>` when widening workspace scope. For narrowing, use `--remove <RIGHT>`, `--drop-workspace <WORKSPACE>` or `--deadline <RFC3339>` instead. This widens or narrows authority according to the caller's authority. Verify with `orbit resident show <TASK_ID>`, checking effective authority and any open grant requests separately.
+- **Relay a direction:** `orbit resident relay --quote '<VERBATIM_WORDS>' --source '{"human":"<HUMAN>","via":"<CHANNEL>","said_at":"<RFC3339>"}' [--request-id <REQUEST_ID>] [--reverses <DECISION_ID>] <TASK_ID>`. This records the human's words unchanged and wakes the resident. Verify with `orbit resident show <TASK_ID>` after the next cycle, checking its checkpoint for the relayed direction; see [Resident cycle](resident-cycle.md).
+- **Control firing:** `orbit resident control --reason '<REASON>' <TASK_ID> <ACTION> [--status-request] [--by-session <SESSION>]`. This pauses, resumes, stops, wakes, takes over or releases a mandate. Verify the resulting state with `orbit resident show <TASK_ID>`; see [Resident cycle](resident-cycle.md) for cycle behavior.
+- **Append a checkpoint:** `orbit resident checkpoint --record '<CHECKPOINT_JSON>' <TASK_ID>`. This appends the live cycle's structured outcome and action record. Verify the latest checkpoint with `orbit resident show <TASK_ID>`; see [Resident cycle](resident-cycle.md) for the required record and outcomes.
+- **List mandates:** `orbit resident list [--all]`. This lists mandates in the workspace; `--all` includes ended mandates. Verify a selected mandate's details with `orbit resident show <TASK_ID>`.
+
 ## File a mandate
 
 A mandate is an `[orchestration]` assignment task tagged `resident`, carrying
