@@ -8,10 +8,12 @@ last_validated: 2026-11-09
 # Spec: Workspace Navigation Across Hosts
 
 > **Partly implemented.** The host × All workspaces drain controls in §4 reuse
-> the existing dashboard, and the rail's workspace dropdown now offers only the
-> workspaces the selected host owns (`checkout_role` on each `/api/workspaces`
-> row; no role counts as owned), so a follower's replica checkout has no board
-> on any host. Catalog, scope, host facets and host navigation below
+> the existing dashboard, and the rail's workspace dropdown is a single-select:
+> **All workspaces**, then only the workspaces the selected host owns
+> (`checkout_role` on each `/api/workspaces` row; no role counts as owned), so a
+> follower's replica checkout has no board on any host. Narrowing several owned
+> workspaces is a Tasks chip immediately after **More**, shown only under All
+> workspaces. Catalog, scope, host facets and host navigation below
 > remain proposed; [2_design.md](../2_design.md) describes the dashboard as it is.
 
 The dashboard navigates by logical workspace, never by host and workspace together. Each
@@ -52,10 +54,12 @@ jobs of these four workspaces" has to visit four boards.
 3. Rows are merged by logical workspace ID. A catalog entry holds the workspace ID and name,
    the owner host, and the capacity hosts.
 4. The workspace picker lists each catalog entry once, grouped under its owner's name. It is
-   the checkbox listbox the dashboard ships today, a multi-select, not a native select. Each
+   a multi-select over the catalog, not a native select. Each
    owner's entries sit in a `role="group"` labelled with the owner's name, and a non-selectable
    label row shows that name above them; the label row is not a `role="option"`, so it cannot
-   be ticked. The shipped listbox is flat, so the owner rows arrive with the catalog. The host
+   be ticked. The dashboard ships a single-select rail today (**All workspaces**, then the
+   selected host's owned workspaces) and a Tasks chip-row multi-select that narrows All
+   workspaces. That rail list is flat, so the owner rows arrive with the catalog. The host
    picker is the one that stays a native select. A replica checkout never produces its own
    entry.
 5. A workspace whose owner is not registered on the serving host, or does not answer, stays in
@@ -121,8 +125,8 @@ workspace and host selects, **Start a window** card and **Stop** control. It
 adds no Hosts list, lane controls, fields, markup or styles. A concrete
 host/workspace board, including a replica board, stays as it is.
 
-1. The Auto-drain card's workspace select is limited to the rail's selected
-   workspaces. Its host select lists the workspace's owner first, then the
+1. The Auto-drain card's workspace select lists the selected host's owned
+   workspaces (the same owned list as the rail, not the Tasks chip filter). Its host select lists the workspace's owner first, then the
    followers holding a replica. A host whose fleet read failed stays in the
    select, and when it is the chosen host the card shows that read's error.
    Both selections survive reloads; changing workspace resets the host to its
@@ -172,20 +176,22 @@ host/workspace board, including a replica board, stays as it is.
 ## Phasing
 
 The first delivered step is deliberately smaller than the catalog phase below:
-on one host, the rail workspace dropdown becomes a persisted, URL-addressed
-checkbox multi-select (one tick keeps the existing board; multiple ticks narrow
-All workspaces task rows and counts). All workspaces gains an owner-first
-Auto-drain host select and a separate Fleet dock tab. Its existing Start a
-window card and Stop control then start and stop the chosen pair, including
-follower pull drains, before replica entries leave the workspace dropdown.
-This step adds no All hosts entry, catalog or owner routing, and does not
-collapse follower workspaces. It precedes the original catalog phase 1; the
-revised phase 2 below describes the drain controls that build on it.
-Replica entries have since left the workspace dropdown: it offers only the
-selected host's owned workspaces, the All workspaces aggregate and the
-Auto-drain card's workspace select follow that owned list (its host select
-still lists follower hosts), and a remembered or linked replica falls back
-to the host's owned workspaces.
+on one host, the rail workspace dropdown became a persisted, URL-addressed
+checkbox multi-select. That multi-select now lives on the Tasks chip row,
+immediately after **More**, and only under All workspaces. The rail is a
+single-select again: **All workspaces** first, then the selected host's owned
+workspaces. Choosing one opens that board; All opens the aggregate. Several
+`workspaces=` values open All workspaces with the chip filter applied; one
+value opens that board. All workspaces keeps its owner-first Auto-drain host
+select and Fleet dock tab. This step adds no All hosts entry, catalog or
+owner routing, and does not collapse follower workspaces. It precedes the
+original catalog phase 1; the revised phase 2 below describes the drain
+controls that build on it.
+Replica entries have since left the workspace dropdown: the rail and the
+All workspaces aggregate list only the selected host's owned workspaces, and
+the Auto-drain card's workspace select follows that owned list rather than
+the Tasks chip filter (its host select still lists follower hosts). A
+remembered or linked replica falls back to the host's owned workspaces.
 
 | Phase | Change | Removes |
 |---|---|---|
