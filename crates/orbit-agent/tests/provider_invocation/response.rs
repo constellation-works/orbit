@@ -1,5 +1,7 @@
 #[path = "response/envelope.rs"]
 mod envelope;
+#[path = "response/long_prompt.rs"]
+mod long_prompt;
 #[path = "response/projection.rs"]
 mod projection;
 
@@ -869,12 +871,11 @@ fn claude_terminal_rollup_preserves_cache_ttl_without_counting_quotes() {
 }
 
 // [ORB-19680] Prompt-size price tiers bill one request by its own prompt, and
-// Claude's `result` reports only the run's totals. Its assistant messages show
-// each request's prompt but repeat the request's starting output count, so a
-// request that may be long leaves per-request usage unknown, never
-// underpriced.
+// Claude's `result` reports only the run's totals. Legacy streams without
+// partial message events have only starting output counts, so a possibly-long
+// request leaves per-request usage unknown, never underpriced.
 #[test]
-fn claude_stream_proves_only_that_no_request_reached_the_tier() {
+fn claude_legacy_stream_proves_only_that_no_request_reached_the_tier() {
     let message = |model: &str, cache_read: u64| {
         json!({"type": "assistant", "message": {
             "id": format!("msg_{cache_read}"), "model": model,

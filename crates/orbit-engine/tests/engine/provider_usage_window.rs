@@ -725,6 +725,58 @@ fn projected(outcome: &DispatchOutcome) -> (Value, TokenUsage) {
     (response, usage)
 }
 
+// ORB-23935: real partial-message output exceeded the 1 MiB capture limit.
+// Replay its usage frames with redundant content volume at the public dispatch
+// boundary; completion and final per-request output must both survive.
+fn claude_final_usage_survives_partial_content_over_capture_limit() {
+    let recorded = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/claude_final_usage.jsonl"
+    );
+    let mut frames: Vec<Value> = recorded
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let result = frames.pop().unwrap();
+    let delta = json!({"type":"stream_event", "event":{"type":"content_block_delta",
+        "index":0, "delta":{"type":"text_delta", "text":"rain ".repeat(1000)}}});
+    let mut stdout = frames[0].to_string();
+    stdout.push('\n');
+    for _ in 0..240 {
+        stdout.push_str(&delta.to_string());
+        stdout.push('\n');
+    }
+    for frame in &frames[1..] {
+        stdout.push_str(&frame.to_string());
+        stdout.push('\n');
+    }
+    stdout.push_str(&result.to_string());
+    stdout.push('\n');
+    assert!(stdout.len() > 1024 * 1024);
+    let (outcome, _) = with_capture_limit(1024 * 1024, || {
+        dispatch("claude", Provider::Claude, &stdout, &[])
+    });
+    assert!(
+        outcome.success,
+        "terminal result survives partial content: {outcome:?}"
+    );
+    let trace = invocation_trace(&outcome);
+    assert_eq!(
+        trace.long_prompt_requests,
+        Some(vec![TokenUsage {
+            input: 2,
+            cache_read: 2438,
+            cache_create: 0,
+            cache_create_1h: 360090,
+            output: 14159,
+        }])
+    );
+    assert_eq!(trace.usage.output, 14159);
+    assert!(
+        !trace.tool_calls_incomplete,
+        "discarding redundant partial content loses no tool calls"
+    );
+}
+
 fn a_claude_stream_records_both_windows_and_projects_as_its_result_alone() {
     let (outcome, limits) = dispatch("claude", Provider::Claude, CLAUDE_STREAM, &[]);
     assert!(outcome.success, "{:?}", outcome.message);
@@ -977,6 +1029,10 @@ fn usage_window_contracts_1() {
             (
                 "codex_long_prompt_telemetry_survives_truncated_stdout",
                 codex_long_prompt_telemetry_survives_truncated_stdout,
+            ),
+            (
+                "claude_final_usage_survives_partial_content_over_capture_limit",
+                claude_final_usage_survives_partial_content_over_capture_limit,
             ),
             (
                 "a_claude_stream_records_both_windows_and_projects_as_its_result_alone",

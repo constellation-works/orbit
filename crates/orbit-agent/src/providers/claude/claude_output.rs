@@ -11,9 +11,9 @@
 //!   (ORB-10906 / F2026-08-031).
 //! - The usage windows are the last `rate_limit_event`'s `rate_limit_info`,
 //!   which the CLI emits when a window's rounded percentage or reset moves.
-//! - Assistant messages' own `usage` shows whether any request's prompt may
-//!   reach a prompt-size price tier; it carries no request's final output, so
-//!   the totals stay the `result` frame's alone.
+//! - Partial message events pair each request's starting input buckets with
+//!   its final output for prompt-size pricing. Invocation totals still come
+//!   exclusively from the terminal `result`.
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
@@ -60,56 +60,184 @@ pub(crate) fn project_claude_response(stdout: &[u8]) -> Option<Vec<u8>> {
     saw_stream_message.then(|| terminal_result.unwrap_or_default().to_vec())
 }
 
-/// The usage of each API request on a Claude message stream whose prompt may
-/// reach a prompt-size price tier: empty when the stream shows none can, and
-/// `None` when that is unknown.
-///
-/// The CLI writes one `assistant` message per content block, each repeating
-/// its request's `usage` as of the request's start, so a message's
-/// `output_tokens` is not the request's final output (ORB-19680 measured 232
-/// streamed against 73,963 billed). The input-side buckets are final, so a
-/// stream whose requests all stay below the capture floor proves no request
-/// reached a tier; one that may reach it leaves the run's per-request usage
-/// unknown rather than underpriced. A stream without its `result` (cut off)
-/// or the single document of `--output-format json` is `None` too. A request
-/// on another model than `model` (a subagent's, say) is not priced at this
-/// invocation's tier and is left out; a context-window suffix such as `[1m]`
-/// does not make a model another one.
+/// Final usage of each possibly-long request on the invocation's model.
+/// Assistant content blocks repeat starting usage, not final output. Partial
+/// message events supply the final output, correlated by `api_message_id`.
+/// Missing request completion, terminal result or stream capture stays unknown.
 pub(crate) fn claude_long_prompt_requests(
     stdout: &[u8],
     model: Option<&str>,
 ) -> Option<Vec<TokenUsage>> {
+    let mut requests = std::collections::BTreeMap::<String, ClaudeRequestUsage>::new();
     let mut saw_result = false;
     let mut saw_stream_message = false;
     for (_, frame) in top_level_frames(stdout) {
         match frame.get("type").and_then(Value::as_str) {
             Some("result") => saw_result = true,
             Some("assistant") => {
+                saw_result = false;
                 saw_stream_message = true;
-                let Some(message) = frame.get("message").and_then(Value::as_object) else {
-                    continue;
-                };
-                let request_model = message.get("model").and_then(Value::as_str);
-                if model
-                    .zip(request_model)
-                    .is_some_and(|(model, request)| base_model(model) != base_model(request))
-                {
-                    continue;
-                }
-                if message
-                    .get("usage")
-                    .and_then(Value::as_object)
-                    .and_then(request_usage)
-                    .is_some_and(|usage| usage.may_reach_long_prompt_floor())
-                {
-                    return None;
+                record_request_start(&mut requests, frame.get("message")?, model, false)?;
+            }
+            Some("stream_event") => {
+                saw_result = false;
+                saw_stream_message = true;
+                let event = frame.get("event")?;
+                match event.get("type").and_then(Value::as_str) {
+                    Some("message_start") => {
+                        let message = event.get("message")?;
+                        // An explicit correlation key must agree with the start.
+                        if let Some(id) = frame.get("api_message_id")
+                            && Some(id) != message.get("id")
+                        {
+                            return None;
+                        }
+                        record_request_start(&mut requests, message, model, true)?;
+                    }
+                    Some("message_delta" | "message_stop") => {
+                        let id = frame.get("api_message_id")?.as_str()?;
+                        let request = requests.get_mut(id)?;
+                        if request.excluded {
+                            continue;
+                        }
+                        if event.get("type").and_then(Value::as_str) == Some("message_stop") {
+                            request.stopped = true;
+                        } else {
+                            if request.stopped {
+                                return None;
+                            }
+                            let usage = event.get("usage")?.as_object()?;
+                            let output = usage.get("output_tokens")?.as_u64()?;
+                            if output < request.usage.output {
+                                return None;
+                            }
+                            // Input buckets are final at message_start. Refuse
+                            // a contradictory delta rather than mix two versions.
+                            for (key, expected) in [
+                                ("input_tokens", request.usage.input),
+                                ("cache_read_input_tokens", request.usage.cache_read),
+                                (
+                                    "cache_creation_input_tokens",
+                                    request
+                                        .usage
+                                        .cache_create
+                                        .checked_add(request.usage.cache_create_1h)?,
+                                ),
+                            ] {
+                                if usage
+                                    .get(key)
+                                    .is_some_and(|value| value.as_u64() != Some(expected))
+                                {
+                                    return None;
+                                }
+                            }
+                            if event.get("delta")?.get("stop_reason")?.as_str().is_some() {
+                                request.final_output = Some(output);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Some(_) => saw_stream_message = true,
             None => {}
         }
     }
-    (saw_result && saw_stream_message).then(Vec::new)
+    if !saw_result || !saw_stream_message {
+        return None;
+    }
+    requests
+        .into_values()
+        .filter(|request| !request.excluded && request.usage.may_reach_long_prompt_floor())
+        .map(|request| {
+            if !request.started || !request.stopped || !request.cache_ttl_split_complete {
+                return None;
+            }
+            Some(TokenUsage {
+                output: request.final_output?,
+                ..request.usage
+            })
+        })
+        .collect()
+}
+
+struct ClaudeRequestUsage {
+    usage: TokenUsage,
+    excluded: bool,
+    started: bool,
+    stopped: bool,
+    cache_ttl_split_complete: bool,
+    final_output: Option<u64>,
+}
+
+fn record_request_start(
+    requests: &mut std::collections::BTreeMap<String, ClaudeRequestUsage>,
+    message: &Value,
+    model: Option<&str>,
+    started: bool,
+) -> Option<()> {
+    let id = message.get("id")?.as_str()?;
+    let request_model = message.get("model").and_then(Value::as_str);
+    let excluded = model
+        .zip(request_model)
+        .is_some_and(|(model, request)| base_model(model) != base_model(request));
+    let (usage, cache_ttl_split_complete) = if excluded {
+        (TokenUsage::default(), true)
+    } else {
+        let fields = message.get("usage")?.as_object()?;
+        // Missing buckets are not zero: they cannot bound the prompt.
+        for key in [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ] {
+            fields.get(key)?.as_u64()?;
+        }
+        if let Some(split) = fields.get("cache_creation") {
+            let split = split.as_object()?;
+            for key in ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"] {
+                if let Some(count) = split.get(key) {
+                    count.as_u64()?;
+                }
+            }
+        }
+        let usage = request_usage(fields)?;
+        if usage.cache_create.checked_add(usage.cache_create_1h)?
+            != fields.get("cache_creation_input_tokens")?.as_u64()?
+        {
+            return None;
+        }
+        let cache_creation_split_present = fields
+            .get("cache_creation")
+            .and_then(Value::as_object)
+            .is_some_and(|split| {
+                split.contains_key("ephemeral_5m_input_tokens")
+                    || split.contains_key("ephemeral_1h_input_tokens")
+            });
+        let cache_ttl_split_complete = cache_creation_split_present || usage.cache_create == 0;
+        (usage, cache_ttl_split_complete)
+    };
+    if let Some(request) = requests.get_mut(id) {
+        if request.usage != usage || request.excluded != excluded {
+            return None;
+        }
+        request.started |= started;
+        request.cache_ttl_split_complete |= cache_ttl_split_complete;
+    } else {
+        requests.insert(
+            id.to_string(),
+            ClaudeRequestUsage {
+                usage,
+                excluded,
+                started,
+                stopped: false,
+                cache_ttl_split_complete,
+                final_output: None,
+            },
+        );
+    }
+    Some(())
 }
 
 /// `model` without a trailing context-window marker like `[1m]`.

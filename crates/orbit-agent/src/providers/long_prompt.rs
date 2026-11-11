@@ -3,8 +3,8 @@
 //! A tier prices one model request by its own prompt, so invocation totals
 //! cannot say which requests reached it. Codex writes each request's
 //! `last_token_usage` to its session rollout under `CODEX_HOME`. Claude's
-//! message stream shows each request's prompt but not its final output, so it
-//! can only show that no request reached a tier. Other providers report only
+//! partial message stream pairs each request's input buckets with its final
+//! output, requiring correlated message start/delta/stop and a terminal result. Other providers report only
 //! totals, and record none.
 
 use std::path::Path;

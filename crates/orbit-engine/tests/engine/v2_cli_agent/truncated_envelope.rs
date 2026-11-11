@@ -33,8 +33,10 @@ fn stream_ending_on_terminal(answer: &str, terminal: serde_json::Value) -> Strin
 }
 
 fn stream_with_tail(answer: &str, terminal: Option<serde_json::Value>) -> String {
-    let padding = json!({"type":"stream_event","event":{"type":"content_block_delta",
-        "delta":{"type":"text_delta","text":"padding ".repeat(16)}}});
+    // A tool result, not a partial content event: the capture drops redundant
+    // Claude `content_block_*` stream events, so they would not outgrow it.
+    let padding = json!({"type":"user","message":{"role":"user","content":[
+        {"type":"tool_result","tool_use_id":"toolu_padding","content":"padding ".repeat(16)}]}});
     let assistant = json!({"type":"assistant","message":{"role":"assistant",
         "content":[{"type":"text","text":answer}]}});
     let mut frames = vec![padding; 128];
