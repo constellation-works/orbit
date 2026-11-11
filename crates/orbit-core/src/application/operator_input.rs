@@ -6,14 +6,14 @@ use orbit_common::OrbitError;
 
 /// Longest accepted replay key, in bytes. Long enough for a UUID or a digest,
 /// short enough that a caller cannot use the mutation key as storage.
-pub(crate) const MAX_REPLAY_KEY_BYTES: usize = 128;
+pub const MAX_REPLAY_KEY_BYTES: usize = 128;
 /// Longest accepted operator reason, in bytes. It is stored as a status note.
-pub(crate) const MAX_REASON_BYTES: usize = 2000;
+pub const MAX_REASON_BYTES: usize = 2000;
 
 /// Trim and check a replay key: 1..=128 bytes of ASCII letters, digits, `-`
 /// or `_`. The key names one decision so a retry replays it instead of
 /// recording a second one.
-pub(crate) fn replay_key(raw: &str) -> Result<String, OrbitError> {
+pub fn replay_key(raw: &str) -> Result<String, OrbitError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -40,7 +40,7 @@ pub(crate) fn replay_key(raw: &str) -> Result<String, OrbitError> {
 
 /// Trim and check an operator reason: 1..=2000 bytes. `action` names the
 /// operation in the refusal, for example `claim recovery`.
-pub(crate) fn reason(raw: &str, action: &str) -> Result<String, OrbitError> {
+pub fn reason(raw: &str, action: &str) -> Result<String, OrbitError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
