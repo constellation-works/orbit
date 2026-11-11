@@ -20,7 +20,7 @@ use orbit_types::record::{AuthorClass, EffectiveStatus, Notice, NoticeKind, Noti
 use serde::Serialize;
 
 pub use authority::NoticeCaller;
-pub use post::{NoticePostRequest, NoticePostResult};
+pub use post::{NoticePostRawFields, NoticePostRequest, NoticePostResult};
 
 /// Which notice a close names.
 #[derive(Debug, Clone)]
