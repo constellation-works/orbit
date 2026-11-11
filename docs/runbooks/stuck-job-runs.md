@@ -869,7 +869,9 @@ history entry records it as `reason` (`source_machine`, `task_machine`,
 `local_identity_missing`). Discard the candidate
 (`orbit task update <task-id> --status backlog --discard-candidate`) so the
 next run implements fresh, or use explicit source repair. Source-repair
-refusals of the same identity end with the same reason code.
+refusals of the same identity end with the same reason code, except
+`local_identity_missing`, which keeps the retained `source repair refused:
+local identity missing` refusal.
 
 ### An escalated run that published its own pull request
 
