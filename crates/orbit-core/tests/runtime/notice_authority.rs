@@ -1157,26 +1157,46 @@ fn post_parse_refusals_come_from_core() {
         assert!(error.starts_with("notice_invalid_field"), "{error}");
         assert!(error.contains(message), "{error} does not name {message}");
     }
+    for field in ["scope", "dedupe_key", "linked_task", "expires_at"] {
+        let mut input = json!({"kind": "info", "title": "Blank optional field"});
+        input[field] = json!("  ");
+        let error = call(&runtime, "orbit.notice.post", input, &operator)
+            .expect_err("a present blank optional string stays refused on the tool surface");
+        assert!(
+            error.starts_with("invalid input:"),
+            "blank {field} keeps the tool input refusal: {error}"
+        );
+    }
+    let error = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"title": "Missing kind"}),
+        &operator,
+    )
+    .expect_err("a missing kind stays refused on the tool surface");
     assert!(
-        call(
-            &runtime,
-            "orbit.notice.post",
-            json!({"kind": "info", "title": "Blank scope", "scope": ""}),
-            &operator,
-        )
-        .is_err(),
-        "a present blank scope stays refused on the tool surface"
+        error.starts_with("invalid input:"),
+        "missing kind keeps the required-field refusal: {error}"
     );
-    assert!(
-        call(
-            &runtime,
-            "orbit.notice.post",
-            json!({"title": "Missing kind"}),
-            &operator,
-        )
-        .is_err(),
-        "a missing kind stays refused on the tool surface"
-    );
+    for input in [
+        json!({"kind": "info"}),
+        json!({"kind": "info", "title": null}),
+    ] {
+        let error = call(&runtime, "orbit.notice.post", input, &operator)
+            .expect_err("a missing or null title stays refused on the tool surface");
+        assert!(
+            error.starts_with("invalid input:"),
+            "missing or null title keeps the required-field refusal: {error}"
+        );
+    }
+    let numeric_string = call(
+        &runtime,
+        "orbit.notice.post",
+        json!({"kind": "info", "title": "Numeric string expiry", "expires_in_hours": "1"}),
+        &operator,
+    )
+    .unwrap();
+    assert_eq!(numeric_string["outcome"], "created");
 }
 
 fn runtime_at_roots(global: &Path, orbit: &Path) -> OrbitRuntime {

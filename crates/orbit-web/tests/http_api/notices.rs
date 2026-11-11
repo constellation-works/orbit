@@ -248,6 +248,15 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
                 assert_eq!(payload["code"], "notice_invalid_field", "{payload}");
                 assert_eq!(payload["error"], message, "{payload}");
             }
+            // The HTTP body remains typed; numeric strings are accepted only
+            // by the tool input parser, not by this API.
+            let response = server.send(
+                "POST",
+                "/api/notices",
+                json!({"kind": "info", "title": "String expiry", "expires_in_hours": "1"}),
+            );
+            assert_eq!(response.status().as_u16(), 422);
+
             // Blank form fields mean absent, not a refusal.
             let payload = json_ok(server.send(
                 "POST",
@@ -259,10 +268,15 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
                     "dedupe_key": "",
                     "linked_task": "",
                     "expires_at": "",
+                    "evidence": [{"type": "run", "value": "ignored"}],
                 }),
             ));
             assert_eq!(payload["outcome"], "created");
+            assert!(payload["notice"].is_object());
+            assert!(payload["notice"].get("ended_label").is_some());
+            assert!(payload["notice"].get("ended_at").is_some());
             assert_eq!(payload["notice"]["scope"], "workspace");
+            assert_eq!(payload["notice"]["evidence"], json!([]));
         },
     );
 }
