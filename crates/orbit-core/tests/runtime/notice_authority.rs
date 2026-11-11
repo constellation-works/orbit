@@ -1489,6 +1489,87 @@ fn cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick() {
     assert_eq!(reposted["outcome"], "created");
 }
 
+/// The local list refuses an out-of-range `limit` with the notice
+/// `invalid_field` refusal the workspace-less federated list also gives
+/// (ORB-24017), and orders by kind, then newest update.
+fn list_limit_and_order_follow_the_shared_rules() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    for limit in [json!(0), json!(201), json!(500)] {
+        let error = call(
+            &runtime,
+            "orbit.notice.list",
+            json!({"limit": limit}),
+            &operator,
+        )
+        .expect_err("an out-of-range limit is refused");
+        assert_eq!(
+            error,
+            "notice_invalid_field: `limit` must be between 1 and 200"
+        );
+    }
+    for (kind, title) in [
+        ("info", "First info"),
+        ("incident", "Older incident"),
+        ("maintenance", "Planned swap"),
+        ("incident", "Newer incident"),
+    ] {
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": kind, "title": title}),
+            &operator,
+        )
+        .unwrap();
+    }
+    let listed = call(
+        &runtime,
+        "orbit.notice.list",
+        json!({"limit": 3}),
+        &operator,
+    )
+    .unwrap();
+    let titles: Vec<&str> = listed["notices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|notice| notice["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Newer incident", "Older incident", "Planned swap"]);
+}
+
+/// The local tool applies the shared default limit when the caller omits it.
+fn list_uses_the_shared_default_limit() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    for index in 0..51 {
+        let posted = call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": format!("Default limit {index}")}),
+            &operator,
+        )
+        .unwrap();
+        call(
+            &runtime,
+            "orbit.notice.close",
+            json!({"id": posted["notice"]["id"], "reason": "default limit fixture"}),
+            &operator,
+        )
+        .unwrap();
+    }
+    let listed = call(
+        &runtime,
+        "orbit.notice.list",
+        json!({"status": "all"}),
+        &operator,
+    )
+    .unwrap();
+    assert_eq!(listed["notices"].as_array().unwrap().len(), 50);
+}
+
 crate::scenario_table!(
     notice_authority,
     agent_posting_baseline_governs_managed_runs,
@@ -1502,6 +1583,8 @@ crate::scenario_table!(
     close_preserves_corroboration_committed_after_close_read,
     linked_task_this_owner_does_not_hold_is_refused,
     post_parse_refusals_come_from_core,
+    list_limit_and_order_follow_the_shared_rules,
+    list_uses_the_shared_default_limit,
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
     attention_pages_home_notices,
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
