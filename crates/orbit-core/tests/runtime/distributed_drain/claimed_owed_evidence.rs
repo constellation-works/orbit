@@ -994,7 +994,114 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
     assert_eq!(certificate.final_candidate.tree, hold.candidate.tree);
 }
 
+/// A failed record is an answer, not missing evidence, even when a
+/// workspace rule owes that same check: settlement must retain the failure
+/// and block instead of resetting or excluding it into an evidence hold.
+/// Covers the exact owed command, another invocation of the same CodeQL
+/// program, and a configured `host_sandbox_test` check.
+fn a_failed_check_matching_a_workspace_rule_still_blocks() {
+    // Exact owed CodeQL command, on a Mac leaf whose rule owes it on Linux.
+    {
+        let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
+        leaf.put_report(&report(
+            &admitted,
+            ReviewVerdict::Incomplete,
+            Vec::new(),
+            vec![ci_fast(), record("V2", CODEQL, ValidationOutcome::Failed)],
+            Some("the owed CodeQL check failed on the candidate"),
+        ));
+        let refused = leaf.settle().expect_err("a failed owed check cannot land");
+        assert!(refused.contains("review_gate_blocked"), "{refused}");
+        assert!(
+            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "no hold for a failed owed check"
+        );
+        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let failed = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == CODEQL)
+            .expect("the owed CodeQL record stays on the certificate");
+        assert_eq!(
+            (failed.role, failed.outcome),
+            (ValidationRole::Required, ValidationOutcome::Failed)
+        );
+    }
+    // Another invocation of the same CodeQL program as the owed command.
+    {
+        let variant = "scripts/codeql-rust-local.sh --ram 8192 \
+                       codeql/rust-queries:codeql-suites/rust-security-and-quality.qls";
+        let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
+        leaf.put_report(&report(
+            &admitted,
+            ReviewVerdict::Incomplete,
+            Vec::new(),
+            vec![ci_fast(), record("V2", variant, ValidationOutcome::Failed)],
+            Some("the CodeQL check failed on the candidate"),
+        ));
+        let refused = leaf
+            .settle()
+            .expect_err("a failed CodeQL check cannot land");
+        assert!(refused.contains("review_gate_blocked"), "{refused}");
+        assert!(
+            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "no hold for a failed same-program CodeQL check"
+        );
+        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let failed = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == variant)
+            .expect("the same-program CodeQL record stays on the certificate");
+        assert_eq!(
+            (failed.role, failed.outcome),
+            (ValidationRole::Required, ValidationOutcome::Failed)
+        );
+    }
+    // A configured `host_sandbox_test` check owed on this Linux host.
+    {
+        let rule = format!(
+            "\n[[review.host_evidence]]\nkind = \"host_sandbox_test\"\n\
+             name = \"Sandbox (Linux)\"\npaths = [\"**/*.rs\"]\nos = \"linux\"\n\
+             command = \"{SANDBOX}\"\nartifact = \"{SANDBOX_ARTIFACT}\"\n"
+        );
+        let mut leaf = ReviewedLeaf::admit_with_configs(&rule, "");
+        leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Linux));
+        let admitted = leaf.admit_review();
+        leaf.put_report(&report(
+            &admitted,
+            ReviewVerdict::Incomplete,
+            Vec::new(),
+            vec![ci_fast(), record("V2", SANDBOX, ValidationOutcome::Failed)],
+            Some("the configured sandbox check failed on the candidate"),
+        ));
+        let refused = leaf
+            .settle()
+            .expect_err("a failed sandbox check cannot land");
+        assert!(refused.contains("review_gate_blocked"), "{refused}");
+        assert!(
+            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "no hold for a failed configured sandbox check"
+        );
+        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let failed = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == SANDBOX)
+            .expect("the configured sandbox record stays on the certificate");
+        assert_eq!(
+            (failed.role, failed.outcome),
+            (ValidationRole::Required, ValidationOutcome::Failed)
+        );
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_failed_check_matching_a_workspace_rule_still_blocks_scenarios,
+    a_failed_check_matching_a_workspace_rule_still_blocks
+);
+
 crate::scenario_table!(
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it_scenarios,
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it,
