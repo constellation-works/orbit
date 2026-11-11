@@ -3,11 +3,11 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 last_validated: 2026-11-04
 status: Draft
 stage: shipped
-next: "Release-readiness example (ORB-20166) stays disabled until its owner prerequisites are met; completion contracts/history (ORB-20165), historical reuse (ORB-22649) and condition facts over accepted history (ORB-20397) shipped"
+next: "Release-readiness example stays disabled until owner prerequisites (ORB-20166)"
 feature: activity-job
 doc_role: overview
 tags: ["activity-job"]

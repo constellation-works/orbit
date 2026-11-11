@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-11-07
+last_updated: 2026-11-11
 last_validated: 2026-10-31
 status: Draft
 feature: activity-job
@@ -13,7 +13,7 @@ tags: ["activity-job"]
 
 # Activity / Job — Design
 
-This document describes the shipped Activity / Job substrate across `orbit-types`, `orbit-engine`, `orbit-core`, and `orbit-cli`: asset shape, normalization, dispatch boundaries, DAG execution, audit, and retained legacy edges. Section 8.14 distinguishes shipped auto-task execution from the remaining readiness proposal. See [1_overview.md](./1_overview.md) for purpose and [3_vision.md](./3_vision.md) for open questions.
+This document describes the shipped Activity / Job substrate across `orbit-types`, `orbit-engine`, `orbit-core`, and `orbit-cli`: asset shape, normalization, dispatch boundaries, DAG execution, audit, and retained legacy edges. Section 8.14 records shipped auto-task execution, shipped completion contracts ([ORB-20165], [ORB-22649], [ORB-20397]) and the disabled release-readiness example ([ORB-20166]). See [1_overview.md](./1_overview.md) for purpose and [3_vision.md](./3_vision.md) for open questions.
 
 ---
 
