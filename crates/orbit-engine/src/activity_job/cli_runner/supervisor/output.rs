@@ -19,7 +19,8 @@ pub(super) struct OutputLineContext {
 
 /// One provider output stream: every chunk goes into the shared rolling
 /// capture (excluding redundant Claude partial content) and becomes per-line
-/// tracing events. The capture keeps going past its limit, so the sink never
+/// tracing events, with the same redundant Claude partial content excluded
+/// from the relay. The capture keeps going past its limit, so the sink never
 /// stops the run.
 pub(super) struct TracedCaptureSink {
     capture: SharedOutputCapture,
@@ -123,10 +124,25 @@ fn emit_output_chunk(context: &OutputLineContext, raw: &[u8], line_buf: &mut Vec
         return;
     }
 
+    // Keep the relay consistent with the bounded capture: a complete,
+    // recognized Claude `content_block_*` stream event is repeated in full
+    // by its `assistant` frame, so it earns no `agent_output` record. Lines
+    // past the event limit are emitted in pieces as before (the capture
+    // passes oversized lines through unchanged), and a final unterminated
+    // line is flushed by `finish`, so only whole lines at or under the
+    // limit can be recognized and dropped here. Observed-byte accounting
+    // has already counted every byte before this relay decision.
+    let drop_redundant_claude = context.provider == "claude" && context.stream == "stdout";
     for segment in raw.split_inclusive(|byte| *byte == b'\n') {
         line_buf.extend_from_slice(segment);
         if segment.ends_with(b"\n") || line_buf.len() >= OUTPUT_LINE_EVENT_LIMIT_BYTES {
-            emit_output_line(context, line_buf);
+            let redundant = drop_redundant_claude
+                && segment.ends_with(b"\n")
+                && line_buf.len() <= OUTPUT_LINE_EVENT_LIMIT_BYTES
+                && redundant_claude_content_event(line_buf);
+            if !redundant {
+                emit_output_line(context, line_buf);
+            }
             line_buf.clear();
         }
     }
