@@ -9,10 +9,7 @@ use orbit_core::JobRunState;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::agents_fixture::{
-    AgentsFixture, SeedRun, assert_contains, assert_excludes, assert_report, refused_stderr,
-    refused_text, refused_tool, tool_json,
-};
+use crate::agents_fixture::{self, AgentsFixture, SeedRun};
 use crate::bound_server::{Announcement, BoundServer};
 
 /// The fields that differ between two reads of the same scan: when it ran,
@@ -81,18 +78,6 @@ fn agents_cli_and_tools_serve_the_api_payload() {
             landed = id;
         }
     }
-    implement(
-        "jrun-opus-2",
-        "opus",
-        "claude-opus-5-5",
-        TaskStatus::InProgress,
-    );
-    implement(
-        "jrun-sonnet-1",
-        "sonnet",
-        "claude-sonnet-5-5",
-        TaskStatus::InProgress,
-    );
 
     let selection = ["--window", "30d", "--min-support", "2"];
     let input = json!({ "role": "implementers", "window": "30d", "min_support": 2 });
@@ -125,7 +110,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
         sonnet["interval"].is_null(),
         "below-support row has no interval: {sonnet}"
     );
-    let tool = tool_json(fixture, "orbit.agents.scorecard", &input);
+    let tool = agents_fixture::tool_json(fixture, "orbit.agents.scorecard", &input);
     assert_eq!(tool["cache_ttl_seconds"], 0, "{tool}");
     assert_eq!(
         scan_independent(scorecard.clone()),
@@ -167,7 +152,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     );
     assert_eq!(detail["row"]["crew"], "sonnet", "{detail}");
     assert_eq!(detail["cache_ttl_seconds"], 0, "{detail}");
-    let tool_detail = tool_json(fixture, "orbit.agents.show", &detail_input);
+    let tool_detail = agents_fixture::tool_json(fixture, "orbit.agents.show", &detail_input);
     assert_eq!(
         scan_independent(detail.clone()),
         scan_independent(tool_detail),
@@ -224,13 +209,16 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     }
 
     // An unknown role is refused by name on both surfaces.
-    let refused = refused_stderr(fixture, &["agents", "scorecard", "--role", "orchestrators"]);
-    assert_contains(
+    let refused = agents_fixture::refused_stderr(
+        fixture,
+        &["agents", "scorecard", "--role", "orchestrators"],
+    );
+    agents_fixture::assert_contains(
         "the refusal names the role and the choices",
         &refused,
         &["orchestrators", "implementers"],
     );
-    let refused = refused_text(
+    let refused = agents_fixture::refused_text(
         fixture,
         &[
             "tool",
@@ -240,7 +228,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
             &json!({ "role": "orchestrators" }).to_string(),
         ],
     );
-    assert_contains(
+    agents_fixture::assert_contains(
         "the tool refusal names the role and the choices",
         &refused,
         &["orchestrators", "implementers"],
@@ -347,7 +335,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
         "an empty scorecard still explains itself on stderr"
     );
 
-    let refused = refused_stderr(
+    let refused = agents_fixture::refused_stderr(
         fixture,
         &[
             "agents",
@@ -358,7 +346,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
             "nobody",
         ],
     );
-    assert_contains(
+    agents_fixture::assert_contains(
         "a crew with no row is refused by name",
         &refused,
         &["nobody"],
@@ -367,7 +355,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     // offers a usable scorecard or window-selection next step instead of
     // implying the crew is unconfigured: a configured crew with no work in
     // the window also has no row.
-    assert_contains(
+    agents_fixture::assert_contains(
         "ORB-19171: the missing-row refusal names a recovery step",
         &refused,
         &[
@@ -379,7 +367,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
             "no work in the window has no row",
         ],
     );
-    assert_excludes(
+    agents_fixture::assert_excludes(
         "ORB-19171: the CLI refusal excludes other surfaces and configuration diagnoses",
         &refused,
         &[
@@ -393,14 +381,14 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     );
 
     // The tool surface refuses with the same code and recovery step.
-    let refused = refused_tool(
+    let refused = agents_fixture::refused_tool(
         fixture,
         "orbit.agents.show",
         json!({ "role": "implementers", "crew": "nobody" }),
     );
     assert_eq!(refused["code"], "invalid_input", "{refused}");
     let message = refused["error"].as_str().unwrap();
-    assert_contains(
+    agents_fixture::assert_contains(
         "ORB-19171: the tool refusal names a recovery step",
         message,
         &[
@@ -412,7 +400,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
             "no work in the window has no row",
         ],
     );
-    assert_excludes(
+    agents_fixture::assert_excludes(
         "ORB-19171: the tool refusal only names its own surface",
         message,
         &["--window", "orbit agents", "orbit_agents_", "dashboard"],
@@ -457,20 +445,20 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
         .stderr
         .clone();
     let refused = String::from_utf8_lossy(&refused);
-    assert_contains("the CLI names --model", &refused, &["--model"]);
-    assert_contains("a candidate model", &refused, &MODELS);
+    agents_fixture::assert_contains("the CLI names --model", &refused, &["--model"]);
+    agents_fixture::assert_contains("a candidate model", &refused, &MODELS);
 
     // Over MCP and `orbit tool run` the selector is `row_model`, and the
     // refusal keeps its error code. The JSON error payload goes to stderr.
-    let refused = refused_tool(
+    let refused = agents_fixture::refused_tool(
         fixture,
         "orbit.agents.show",
         json!({ "role": "implementers", "crew": "sol", "window": "30d" }),
     );
     assert_eq!(refused["code"], "invalid_input", "{refused}");
     let message = refused["error"].as_str().unwrap();
-    assert_contains("the tool names row_model", message, &["row_model"]);
-    assert_contains("a candidate model", message, &MODELS);
+    agents_fixture::assert_contains("the tool names row_model", message, &["row_model"]);
+    agents_fixture::assert_contains("a candidate model", message, &MODELS);
 
     // A listed model is accepted through each surface's selector.
     let by_row_model = fixture.json(&[
@@ -1054,7 +1042,7 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let report = &report["dispatch_effort_backfill"];
-    assert_report(
+    agents_fixture::assert_report(
         report,
         &[
             ("examined", 9),
@@ -1088,7 +1076,7 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let again = &again["dispatch_effort_backfill"];
-    assert_report(
+    agents_fixture::assert_report(
         again,
         &[
             ("examined", 2),
@@ -1249,49 +1237,10 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
         dispatch_at + chrono::Duration::seconds(50),
         json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
     );
-    let audit = |event_id: &str, event_type: &str, at: chrono::DateTime<Utc>, payload: Value| {
-        agents.audit(
-            run_id,
-            format!("v2evt-{run_id}-{event_id}"),
-            event_type,
-            at,
-            payload,
-        );
-    };
-    audit(
-        "step-start",
-        "step.started",
-        dispatch_at - chrono::Duration::seconds(1),
-        json!({ "body_kind": "step_started", "step_id": "implement_one" }),
-    );
-    audit(
-        "unreadable",
-        "cli.invocation.started",
-        dispatch_at,
-        json!({
-            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
-            "reasoning_effort": "low", "argv_redacted": ["claude", "--effort", "[REDACTED]"],
-        }),
-    );
-    audit(
-        "later-high",
-        "cli.invocation.started",
-        dispatch_at + chrono::Duration::seconds(30),
-        json!({
-            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
-            "reasoning_effort": "high", "argv_redacted": ["claude", "--effort", "high"],
-        }),
-    );
-    audit(
-        "step-end",
-        "step.finished",
-        dispatch_at + chrono::Duration::seconds(50),
-        json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
-    );
 
     let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let report = &report["dispatch_effort_backfill"];
-    assert_report(
+    agents_fixture::assert_report(
         report,
         &[
             ("examined", 0),
@@ -1353,7 +1302,7 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
 
     let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let again = &again["dispatch_effort_backfill"];
-    assert_report(
+    agents_fixture::assert_report(
         again,
         &[
             ("examined", 0),
