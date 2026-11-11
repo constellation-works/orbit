@@ -259,12 +259,7 @@ pub(super) async fn list_notices(
                 .iter()
                 .filter(|notice| notice.status == EffectiveStatus::Open)
                 .collect();
-            open.sort_by(|a, b| {
-                a.kind
-                    .cmp(&b.kind)
-                    .then_with(|| b.updated_at.cmp(&a.updated_at))
-                    .then_with(|| a.id.cmp(&b.id))
-            });
+            open.sort_by(|a, b| a.cmp_list_order(b));
             let mut recent: Vec<&Notice> = notices
                 .iter()
                 .filter(|notice| {

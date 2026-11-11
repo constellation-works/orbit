@@ -722,6 +722,103 @@ mod notice_aggregation {
         }
     }
 
+    /// An out-of-range `limit` on the workspace-less route is the same
+    /// notice `invalid_field` refusal, with the same message, the local list
+    /// gives, and no owner is read. ORB-24017: it was a generic
+    /// `invalid_input` here.
+    #[test]
+    fn workspaceless_notice_list_refuses_a_bad_limit_like_the_local_list() {
+        for limit in [json!(0), json!(500)] {
+            let (host, log) = mux();
+            let error = host
+                .call_tool(
+                    "orbit.notice.list",
+                    json!({ "limit": limit }),
+                    ToolSessionContext::default(),
+                )
+                .expect_err("an out-of-range limit is refused");
+            assert!(
+                matches!(
+                    error,
+                    OrbitError::NoticeRefused {
+                        code: orbit_common::NoticeRefusalCode::InvalidField,
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+            assert_eq!(
+                error.to_string(),
+                "notice_invalid_field: `limit` must be between 1 and 200"
+            );
+            assert!(log.calls().is_empty());
+        }
+    }
+
+    /// Merged notices keep the shared list order across owners: kind, then
+    /// newest `updated_at`, then id for a tie.
+    #[test]
+    fn workspaceless_notice_list_orders_ties_like_the_local_list() {
+        let probe = ScriptedProbe::new()
+            .answering(
+                OWNER_MACHINE,
+                snapshot(
+                    OWNER_MACHINE,
+                    vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+                ),
+            )
+            .answering(
+                OTHER_MACHINE,
+                snapshot(
+                    OTHER_MACHINE,
+                    vec![workspace("ws_other", Some(OTHER_MACHINE))],
+                ),
+            )
+            .on_call(
+                OWNER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [
+                        notice("ntc_b", "incident", "2026-11-02T07:00:00Z"),
+                        notice("ntc_old", "incident", "2026-11-02T06:00:00Z"),
+                    ],
+                    "degraded": [],
+                })),
+            )
+            .on_call(
+                OTHER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [
+                        notice("ntc_info", "info", "2026-11-02T09:00:00Z"),
+                        notice("ntc_a", "incident", "2026-11-02T07:00:00+00:00"),
+                    ],
+                    "degraded": [],
+                })),
+            );
+        let host = FederatedMcpHost::new(
+            vec![
+                destination("orbit-owner", OWNER_MACHINE),
+                destination("orbit-other", OTHER_MACHINE),
+            ],
+            Arc::new(probe),
+        );
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({}),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        let ids: Vec<&str> = answer["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["ntc_a", "ntc_b", "ntc_old", "ntc_info"], "{answer}");
+    }
+
     /// With a selector the same tool is one routed workspace read, not an
     /// aggregation: the replica destination gets the call it was addressed
     /// (its own core then refuses the class it does not hold).

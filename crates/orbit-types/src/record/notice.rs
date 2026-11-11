@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -247,7 +249,46 @@ pub struct Notice {
     pub status: EffectiveStatus,
 }
 
+/// The fields that place a notice in a listing. Its `Ord` is the notice
+/// list order every surface uses: kind (incident, maintenance, info), then
+/// the newest `updated_at` first, then id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoticeListOrderKey<'a> {
+    pub kind: NoticeKind,
+    pub updated_at: DateTime<Utc>,
+    pub id: &'a str,
+}
+
+impl Ord for NoticeListOrderKey<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.kind
+            .cmp(&other.kind)
+            .then_with(|| other.updated_at.cmp(&self.updated_at))
+            .then_with(|| self.id.cmp(other.id))
+    }
+}
+
+impl PartialOrd for NoticeListOrderKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Notice {
+    /// This notice's place in the notice list order.
+    pub fn list_order_key(&self) -> NoticeListOrderKey<'_> {
+        NoticeListOrderKey {
+            kind: self.kind,
+            updated_at: self.updated_at,
+            id: &self.id,
+        }
+    }
+
+    /// Compare two notices in the notice list order.
+    pub fn cmp_list_order(&self, other: &Self) -> Ordering {
+        self.list_order_key().cmp(&other.list_order_key())
+    }
+
     /// The effective state at `now`, given the linked task's status when it
     /// was readable. Closure by a done linked task is reported in `closed`.
     pub fn resolve_effective_status(

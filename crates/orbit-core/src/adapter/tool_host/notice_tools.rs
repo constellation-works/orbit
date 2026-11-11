@@ -1,7 +1,7 @@
 //! `orbit.notice.*`: translate canonical tool input into the notice use
 //! cases. Every decision is the application layer's.
 
-use orbit_common::governance::notice::NoticeVerb;
+use orbit_common::governance::notice::{NoticeVerb, notice_list_limit};
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_tools::OrbitTaskScope;
@@ -109,13 +109,8 @@ fn list_filter(input: &OperationInput) -> Result<NoticeListFilter, OrbitError> {
     let all_workspaces = input.optional_bool("all")?.unwrap_or(false);
     // An owner-local aggregate read (`all: true`) without a limit returns
     // every match; the aggregating caller limits once after the merge.
-    let limit = match input.optional_count("limit")? {
-        Some(limit) => {
-            if !(1..=200).contains(&limit) {
-                return Err(invalid("`limit` must be between 1 and 200"));
-            }
-            Some(limit)
-        }
+    let limit = match notice_list_limit(input)? {
+        Some(limit) => Some(limit),
         None if all_workspaces => None,
         None => defaults.limit,
     };

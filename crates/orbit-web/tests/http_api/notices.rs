@@ -364,3 +364,54 @@ fn aggregate_notices_report_broken_config_and_recover_without_warming() {
         },
     );
 }
+
+/// The dashboard's open list uses the shared notice list order: kind
+/// (incident, maintenance, info), then newest update (ORB-24017).
+#[test]
+fn open_notices_follow_the_shared_list_order() {
+    isolated("notices::open_notices_follow_the_shared_list_order", || {
+        let fixture = Fixture::new();
+        let info = post(
+            &fixture.runtime,
+            NoticeKind::Info,
+            "first info",
+            "order-info",
+        );
+        let older = post(
+            &fixture.runtime,
+            NoticeKind::Incident,
+            "older incident",
+            "order-older",
+        );
+        let maintenance = post(
+            &fixture.runtime,
+            NoticeKind::Maintenance,
+            "planned swap",
+            "order-maintenance",
+        );
+        let newer = post(
+            &fixture.runtime,
+            NoticeKind::Incident,
+            "newer incident",
+            "order-newer",
+        );
+        let server = fixture.server(false);
+        let payload = json_ok(server.get("/api/notices"));
+        let ids: Vec<&str> = payload["open"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                newer.as_str(),
+                older.as_str(),
+                maintenance.as_str(),
+                info.as_str()
+            ],
+            "{payload}"
+        );
+    });
+}

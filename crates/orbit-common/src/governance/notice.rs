@@ -8,11 +8,13 @@
 //! caller's session in core, never from input, which is why post and close
 //! refuse unknown fields.
 use crate::governance::operation::{
-    CliArgKind, CliConstraint, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only,
+    CliArgKind, CliConstraint, CliHelp, Effect, EnumValue, NounSpec, OperationInput, OperationSpec,
+    ParamSpec, ParamType, ToolOnlyRegistration, UnknownFields, both, cli_only, free_text, mcp_only,
     operation_registry, required,
 };
+use crate::{NoticeRefusalCode, OrbitError};
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
+use serde_json::{Value, json};
 
 operation_registry! {
     noun: NOTICE;
@@ -301,6 +303,38 @@ const LIST_PARAMS: &[ParamSpec] = &[
         "At most this many notices (default 50)",
     ),
 ];
+
+/// The `limit` a notice list read applies when the call gives none.
+pub const NOTICE_LIST_DEFAULT_LIMIT: usize = 50;
+/// The largest `limit` a notice list call accepts; the smallest is 1.
+pub const NOTICE_LIST_MAX_LIMIT: usize = 200;
+
+/// The explicit `limit` of a parsed `orbit.notice.list` call, `None` when the
+/// call gives none. A limit outside 1..=[`NOTICE_LIST_MAX_LIMIT`] is refused
+/// as a notice `invalid_field` refusal, on every route.
+pub fn notice_list_limit(input: &OperationInput) -> Result<Option<usize>, OrbitError> {
+    let Some(limit) = input.optional_count("limit")? else {
+        return Ok(None);
+    };
+    if !(1..=NOTICE_LIST_MAX_LIMIT).contains(&limit) {
+        return Err(OrbitError::notice_refused(
+            NoticeRefusalCode::InvalidField,
+            format!("`limit` must be between 1 and {NOTICE_LIST_MAX_LIMIT}"),
+        ));
+    }
+    Ok(Some(limit))
+}
+
+/// The explicit `limit` of a raw `orbit.notice.list` call, parsed and
+/// refused exactly as [`notice_list_limit`] does after the list operation
+/// parses its input. Only `limit` is read: the call's other fields are left
+/// to the read that receives them.
+pub fn notice_list_limit_in_call(call: &Value) -> Result<Option<usize>, OrbitError> {
+    match call.get("limit") {
+        None => Ok(None),
+        Some(limit) => notice_list_limit(&LIST.parse_input(json!({ "limit": limit }))?),
+    }
+}
 
 const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
