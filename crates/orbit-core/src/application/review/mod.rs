@@ -82,7 +82,7 @@ pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 /// coordinator captured, and the follower's pull drain, which declares its
 /// captured value on every pull [ORB-13992].
 ///
-/// A claimed leaf (`CLAIMED_LEAF_JOBS`) is never submitted: the pull store
+/// A claimed leaf (`orbit_types::workflow::CLAIMED_DELIVERY_LEAF_JOBS`) is never submitted: the pull store
 /// creates it with the admission its claim's ship contract captured, so this
 /// host's settings never decide its review, and a submission naming the
 /// reserved key for one is refused like any other [ORB-13908].
@@ -91,8 +91,8 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "workspace_pull_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
-    "task_pr_pipeline",
-    "task_local_pipeline",
+    orbit_types::workflow::TASK_PR_PIPELINE_JOB,
+    orbit_types::workflow::TASK_LOCAL_PIPELINE_JOB,
 ];
 
 /// Longest resume chain followed back to its first run.

@@ -18,15 +18,15 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
 use orbit_types::workflow::{
-    REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE,
-    ReviewAdmission, ReviewLayer, ReviewTiming,
+    self, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY,
+    REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ReviewTiming,
 };
 use serde_json::Value;
 
 use super::REVIEW_ADMITTED_JOBS;
 use super::crew::pre_landing_review_crew_unset;
 use crate::OrbitRuntime;
-use crate::application::contracts::{LOCAL_ROUTE_JOB, review_layer_json};
+use crate::application::contracts::review_layer_json;
 use crate::application::job::ReviewAdmissionHook;
 
 /// Whether caller-shaped run input names the reserved review key.
@@ -83,7 +83,7 @@ fn install_review_admission(
         Some(admission) => admission,
         None => resolve(runtime, request)?,
     };
-    if job_name == LOCAL_ROUTE_JOB
+    if job_name == workflow::TASK_LOCAL_PIPELINE_JOB
         && let Some(layer) = ReviewLayer::from_timing(admission.timing)
     {
         return Err(OrbitError::InvalidInput(local_route_conflict(

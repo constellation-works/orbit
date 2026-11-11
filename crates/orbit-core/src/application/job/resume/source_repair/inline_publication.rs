@@ -172,7 +172,7 @@ impl OrbitRuntime {
         let mut evidence = Vec::new();
         let mut newest_binding = source.run_id.as_str();
         for run in runs[..source_at].iter().rev() {
-            if !is_delivery(&run.job_id) {
+            if !orbit_types::workflow::is_delivery_leaf_job_by_claimed_prefix(&run.job_id) {
                 continue;
             }
             if run.created_at <= source.created_at {
@@ -198,7 +198,9 @@ impl OrbitRuntime {
                         .as_deref()
                         .and_then(|id| runs.iter().find(|parent| parent.run_id == id))
                         .ok_or_else(|| refuse("inline publication retry lineage is incomplete"))?;
-                    if !is_delivery(&parent.job_id) {
+                    if !orbit_types::workflow::is_delivery_leaf_job_by_claimed_prefix(
+                        &parent.job_id,
+                    ) {
                         return Err(refuse("inline publication retry parent is not a delivery"));
                     }
                     if parent.created_at >= child.created_at {
@@ -570,10 +572,6 @@ impl OrbitRuntime {
         }
         Ok(json!({"record":record,"origin":origin,"marker":marker}))
     }
-}
-
-fn is_delivery(job: &str) -> bool {
-    matches!(job, "task_pr_pipeline" | "task_local_pipeline") || job.starts_with("task_claimed_")
 }
 
 /// Whether an out-of-run repair grant names what it resumed delivery for: a

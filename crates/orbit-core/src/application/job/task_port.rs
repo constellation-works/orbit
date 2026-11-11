@@ -8,8 +8,8 @@ use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
 };
 use orbit_types::workflow::{
-    CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
-    ShipMode, SourceRepairBinding,
+    self, CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
+    RunDeliveryObservation, ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
 
@@ -32,10 +32,7 @@ impl TaskJobPort for OrbitRuntime {
                 | "task_gate_pipeline"
                 | "workspace_auto_pipeline"
                 | "workspace_pull_pipeline"
-        ) && (matches!(
-            run.job_id.as_str(),
-            "task_pr_pipeline" | "task_local_pipeline"
-        ) || super::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str())
+        ) && (workflow::is_delivery_leaf_job(&run.job_id)
             || run
                 .input
                 .as_ref()
@@ -49,8 +46,8 @@ impl TaskJobPort for OrbitRuntime {
             self.automatic_delivery_ship_mode(),
         )?;
         Ok(match route.job_name.as_str() {
-            "task_pr_pipeline" => Some(ShipMode::Pr),
-            "task_local_pipeline" => Some(ShipMode::Local),
+            workflow::TASK_PR_PIPELINE_JOB => Some(ShipMode::Pr),
+            workflow::TASK_LOCAL_PIPELINE_JOB => Some(ShipMode::Local),
             _ => None,
         })
     }

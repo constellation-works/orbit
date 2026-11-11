@@ -87,7 +87,9 @@ impl OrbitRuntime {
         let ReservationOutcome::Denied { conflicts } = denied else {
             return Ok(None);
         };
-        if input.get("delivery_job").and_then(Value::as_str) != Some("task_pr_pipeline") {
+        if input.get("delivery_job").and_then(Value::as_str)
+            != Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB)
+        {
             return Ok(None);
         }
         let task_ids = parse_task_ids(input)?;

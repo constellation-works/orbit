@@ -21,15 +21,11 @@ use orbit_engine::review_gate::{
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::TaskComment;
-use orbit_types::workflow::JobRun;
+use orbit_types::workflow::{self, JobRun};
 use serde_json::{Value, json};
 
 use super::projection::job_run_task_ids;
 use crate::OrbitRuntime;
-
-/// Claimed leaves, whose task lives on the owner: their record reaches it
-/// through the settlement, not a comment here.
-const CLAIMED_PIPELINES: [&str; 2] = ["task_claimed_pr_pipeline", "task_claimed_local_pipeline"];
 
 impl OrbitRuntime {
     /// Keep the uncommitted repair of the review `run` stopped inside, if
@@ -110,7 +106,9 @@ impl OrbitRuntime {
                 }
                 Ok(())
             })?;
-        if !CLAIMED_PIPELINES.contains(&run.job_id.as_str())
+        // A claimed leaf's task lives on the owner: its record reaches it
+        // through the settlement, not a comment here.
+        if !workflow::is_claimed_delivery_leaf_job(&run.job_id)
             && let Some(commit) = record["repair_commit"].as_str()
         {
             let at = if record["carried"] == json!(true) {

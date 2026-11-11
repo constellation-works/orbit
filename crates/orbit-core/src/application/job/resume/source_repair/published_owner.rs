@@ -7,7 +7,7 @@
 //! full from the immutable source when the next run adopts them.
 use super::*;
 use orbit_common::SourceRepairRunStateRefusal;
-use orbit_types::workflow::{HeldFailure, JobRunStep};
+use orbit_types::workflow::{self, HeldFailure, JobRunStep};
 use serde::{Deserialize, Serialize};
 
 const PRESERVED: &str = "published_owner_requeued";
@@ -149,7 +149,7 @@ impl OrbitRuntime {
         let Some(state) = self.read_run_state(run_id)? else {
             return Ok(None);
         };
-        if source.job_id != "task_pr_pipeline"
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
             || !["push", "pr_open"]
                 .iter()
@@ -190,7 +190,7 @@ impl OrbitRuntime {
         let Some(source) = self.get_job_run_backend(source_id)? else {
             return Ok(None);
         };
-        if source.job_id != "task_pr_pipeline"
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || source.input.as_ref().is_none_or(|i| {
                 i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
             })
@@ -332,7 +332,7 @@ impl OrbitRuntime {
         }
         if let Some(run_id) = task.job_run_id.as_deref() {
             let owner_pr = self.get_job_run_backend(run_id)?.is_some_and(|run| {
-                run.job_id == "task_pr_pipeline"
+                run.job_id == workflow::TASK_PR_PIPELINE_JOB
                     && run
                         .input
                         .as_ref()
@@ -386,7 +386,7 @@ impl OrbitRuntime {
             return Err(refuse("an operator discarded this run's candidate"));
         }
         let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".into()),
+            job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
             task_id: Some(task.id.clone()),
             limit: Some(1),
             include_steps: false,
@@ -408,7 +408,7 @@ impl OrbitRuntime {
         let local = self
             .automation_machine_identity()
             .ok_or_else(|| refuse("local identity missing"))?;
-        if source.job_id != "task_pr_pipeline"
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || source
                 .executed_on
                 .as_ref()
@@ -453,7 +453,7 @@ impl OrbitRuntime {
         // Claimed and local-only deliveries retain their existing candidate
         // contracts; this path authenticates owner PR publications only.
         if current.as_ref().is_some_and(|run| {
-            run.job_id != "task_pr_pipeline"
+            run.job_id != workflow::TASK_PR_PIPELINE_JOB
                 || run.input.as_ref().is_some_and(|i| i["claimed"] == true)
         }) {
             return Ok(None);
@@ -474,7 +474,7 @@ impl OrbitRuntime {
                 .as_ref()
                 .ok_or_else(|| refuse("current execution missing"))?;
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-                job_id: Some("task_pr_pipeline".into()),
+                job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
                 task_id: Some(task_id.into()),
                 limit: Some(2),
                 include_steps: false,
@@ -504,7 +504,8 @@ impl OrbitRuntime {
         };
         let source = self.get_job_run_backend(source_id)?;
         if source.as_ref().is_some_and(|run| {
-            run.job_id.starts_with("task_claimed_")
+            run.job_id
+                .starts_with(workflow::CLAIMED_DELIVERY_LEAF_PREFIX)
                 || run.input.as_ref().is_some_and(|i| i["claimed"] == true)
         }) {
             return Ok(None);
@@ -650,7 +651,7 @@ impl OrbitRuntime {
                 ..Default::default()
             })?
             .into_iter()
-            .filter(|run| super::successor::binds_task(&run.job_id))
+            .filter(|run| workflow::is_delivery_leaf_job_by_claimed_prefix(&run.job_id))
             .collect::<Vec<_>>();
         if runs.first().is_none_or(|run| run.run_id != current.run_id)
             || runs.get(1).is_none_or(|run| run.run_id != source_id)

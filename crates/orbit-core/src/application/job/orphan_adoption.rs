@@ -58,7 +58,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState};
+use orbit_types::workflow::{self, DeliveryRefusal, JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -67,9 +67,6 @@ use crate::runtime::run_input::carried_task_ids;
 
 /// Audit tool name of every adoption decision about an interrupted leaf.
 pub(crate) const ORPHAN_ADOPTION_AUDIT: &str = "pipeline.run.orphan_adoption";
-
-/// The delivery leaf that opens and watches a pull request.
-const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
 
 /// How long after its last recorded activity an interrupted leaf is still
 /// adopted.
@@ -156,7 +153,7 @@ impl OrbitRuntime {
             return json!({ "adopted": [], "skipped": [], "resource_throttle": throttle });
         }
         // A worker that died since the last pass still reads as running.
-        if let Err(error) = self.reconcile_stale_job_runs(Some(DELIVERY_LEAF_JOB)) {
+        if let Err(error) = self.reconcile_stale_job_runs(Some(workflow::TASK_PR_PIPELINE_JOB)) {
             tracing::warn!(
                 target: "orbit.core.drain",
                 error = %error,
@@ -164,7 +161,7 @@ impl OrbitRuntime {
             );
         }
         let interrupted = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_LEAF_JOB.to_string()),
+            job_id: Some(workflow::TASK_PR_PIPELINE_JOB.to_string()),
             states: vec![JobRunState::Interrupted, JobRunState::Held],
             order_by: JobRunOrder::Recency,
             limit: Some(ADOPTION_SCAN_LIMIT),
