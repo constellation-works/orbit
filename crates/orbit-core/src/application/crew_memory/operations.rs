@@ -287,21 +287,12 @@ impl OrbitRuntime {
                     "`revision` needs a memory key".to_string(),
                 ));
             }
-            let spaces = store
-                .crew_memory_current(&workspace_id)?
-                .iter()
-                .map(|row| {
-                    let files = crew_memory_revision_files(row)?;
-                    Ok(json!({
-                        "key": row.memory_key,
-                        "revision": row.revision,
-                        "file_count": files.len(),
-                        "bytes": byte_count(&files),
-                        "digest": row.content_digest,
-                        "created_at": row.created_at,
-                    }))
-                })
-                .collect::<Result<Vec<_>, OrbitError>>()?;
+            let mut spaces = self.crew_memory_space_rows()?;
+            // While crew memory is off, the operator still reads what is
+            // stored (to read and reset it); unwritten spaces are not listed.
+            if !enabled {
+                spaces.retain(|space| !space["revision"].is_null());
+            }
             return Ok(json!({ "enabled": enabled, "count": spaces.len(), "spaces": spaces }));
         };
         let key = self.operator_memory_key(raw)?;
@@ -316,23 +307,39 @@ impl OrbitRuntime {
         Ok(view)
     }
 
-    /// Every memory key the dashboard lists, as a read that writes nothing:
-    /// `global` first, then each model with a revision by key, then each
-    /// configured crew's model or proposing key with none yet. Each row carries its current revision's
-    /// usage against the key's caps, its writer and its open proposal count.
-    /// While `crew_memory.enabled` is false the list is empty, as the
-    /// operator CLI reads no proposals then.
+    /// The dashboard's memory spaces, as a read that writes nothing. While
+    /// `crew_memory.enabled` is false the list is empty.
     pub fn crew_memory_spaces(&self) -> Result<Value, OrbitError> {
-        let enabled = self.current_crew_memory_enabled();
-        if !enabled {
+        if !self.current_crew_memory_enabled() {
             return Ok(
                 json!({ "enabled": false, "enabled_key": ENABLED_KEY, "count": 0, "keys": [] }),
             );
         }
+        let rows = self.crew_memory_space_rows()?;
+        Ok(json!({
+            "enabled": true,
+            "enabled_key": ENABLED_KEY,
+            "count": rows.len(),
+            "keys": rows,
+        }))
+    }
+
+    /// The space summary rows both the dashboard and `orbit.memory.show`
+    /// with no key list, as a read that writes nothing: `global` first, then
+    /// each key with a stored revision by key, then each configured crew's
+    /// model key and each proposing key with none yet. Every row has one
+    /// shape: its current revision's usage against the key's caps, its
+    /// writer and its open proposal count. Open proposals are read only
+    /// while `crew_memory.enabled` is set.
+    pub(super) fn crew_memory_space_rows(&self) -> Result<Vec<Value>, OrbitError> {
         let store = self.crew_memory_store()?;
         let workspace_id = self.workspace_id()?;
         let current = store.crew_memory_current(&workspace_id)?;
-        let open = self.unexpired_crew_memory_proposals()?;
+        let open = if self.current_crew_memory_enabled() {
+            self.unexpired_crew_memory_proposals()?
+        } else {
+            Vec::new()
+        };
         let mut keys: BTreeSet<MemoryKey> = BTreeSet::new();
         for row in &current {
             keys.insert(parse_memory_key(&row.memory_key)?);
@@ -350,7 +357,7 @@ impl OrbitRuntime {
         let (written, empty): (Vec<_>, Vec<_>) = keys
             .into_iter()
             .partition(|key| current.iter().any(|row| row.memory_key == key.as_str()));
-        let rows = std::iter::once(global)
+        std::iter::once(global)
             .chain(written)
             .chain(empty)
             .map(|key| {
@@ -368,13 +375,7 @@ impl OrbitRuntime {
                 );
                 Ok(view)
             })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
-        Ok(json!({
-            "enabled": true,
-            "enabled_key": ENABLED_KEY,
-            "count": rows.len(),
-            "keys": rows,
-        }))
+            .collect()
     }
 
     /// One space's revisions, newest first, and its audit events in order.

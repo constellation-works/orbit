@@ -40,7 +40,8 @@ While the key is false:
 
 - `orbit memory write`, `reset`, `copy`, `proposals`, `proposal accept` and
   `proposal reject` are refused, and the error names `crew_memory.enabled`.
-- `orbit memory show`, `history` and `export` still work.
+- `orbit memory show`, `history` and `export` still work. The summary lists
+  only the spaces with a stored revision.
 - `orbit experiment start` refuses an experiment whose arm has a memory
   overlay. Drafts can still be defined.
 - A running memory arm delivers nothing.
@@ -161,7 +162,7 @@ command is the operator's.
 
 | Command | What it does |
 |---|---|
-| `orbit memory show [KEY] [--revision N]` | Print one space's newest revision, or revision `N`, or summarise every space when `KEY` is omitted. |
+| `orbit memory show [KEY] [--revision N]` | Print one space's newest revision, or revision `N`, or summarise every space when `KEY` is omitted: `global`, each key with a revision, and each configured or proposing key with none yet. |
 | `orbit memory history <KEY>` | List that space's revisions, newest first, and its audit events. |
 | `orbit memory export [--dir DIR]` | Write a reading copy of every current space. The default directory is the workspace's `.orbit/memory`. |
 | `orbit memory write <KEY> --file PATH …` | Replace the whole space with a new revision. |
@@ -183,7 +184,8 @@ orbit memory history <model-id>
 orbit memory history global
 ```
 
-A summary with no spaces prints `no crew memory yet`. A key that has no
+A summary with nothing stored and crew memory off prints `no crew memory yet`;
+with crew memory on, the summary always lists `global`. A key that has no
 revision prints `No revision yet: the space is empty.` A space that exists
 prints its revision, file count against the cap, byte count against the cap,
 digest, evidence, writer (`operator` or `run`), reason and the file text.
