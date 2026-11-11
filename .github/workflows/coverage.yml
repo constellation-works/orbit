@@ -147,14 +147,15 @@ jobs:
           cargo llvm-cov nextest --workspace --locked --no-report \
             --no-fail-fast --lib --bins --tests
 
-      # [ORB-24096] A test process killed while LLVM writes its profile at exit
-      # leaves one truncated `.profraw`; `llvm-profdata merge` then refuses the
-      # whole merge ("file header is corrupt", "no profile can be merged") even
-      # though every test passed (runs of 2026-10-06 and 2026-11-11). A
-      # truncated profile holds no usable counters, so drop the files the merge
-      # names and render again, with a `::warning::` per file. A merge error
-      # that names no profile, or more than MAX_DROPPED_PROFILES of them, still
-      # fails the step: a systematic truncation (ORB-14387) must stay red.
+      # [ORB-24096] When a `.profraw` is left truncated (for example, a test
+      # process killed while LLVM writes its profile at exit), `llvm-profdata
+      # merge` refuses the whole merge ("file header is corrupt", "no profile
+      # can be merged") even though every test passed (runs of 2026-10-06 and
+      # 2026-11-11). A truncated profile holds no usable counters for the
+      # merge, so drop the files the merge names and render again, with a
+      # `::warning::` per file. A merge error that names no profile, or more
+      # than five of them, still fails the step: a systematic truncation
+      # (ORB-14387) must stay red.
       - name: Render lcov report
         run: |
           set -uo pipefail
