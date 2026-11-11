@@ -198,9 +198,9 @@ guaranteed to start.
 Common reasons a backlog task waits:
 
 - **Unsatisfied dependencies.**
-- **An active file lock.** Two tasks whose selectors overlap cannot run at
-  once. `orbit task locks contention` shows which files the backlog collides
-  on, which is what really limits your parallelism.
+- **An active file lock.** Two tasks whose selectors overlap on a locked path
+  cannot run at once. `orbit task locks contention` shows which files the
+  backlog collides on, which is what really limits your parallelism.
 - **`surface_reserved`**: a critical or high-priority task ahead of it in the
   queue is waiting on file locks, and this task overlaps the files it needs.
   It waits so the higher-priority task gets each lock as it frees, instead of
