@@ -1171,6 +1171,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The operator took the claim back.",
+                "operator-recover",
                 "recover",
             )
             .expect("the operator revokes the claim");
@@ -1186,6 +1187,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The claim outlived its reservation.",
+                "operator-recover",
                 "recover",
             )
             .expect("the operator recovers the expired claim");
@@ -1343,6 +1345,7 @@ fn a_recovered_claim_replays_the_same_recovery_request() {
             status,
             "operator",
             reason,
+            "operator-recover",
             request_id,
         )
     };

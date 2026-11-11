@@ -1127,6 +1127,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
             &expected,
             "operator",
             "authority withdrawn before provider call",
+            "operator-revoke",
             "withdraw-update-authority",
         )
         .unwrap();
@@ -1490,6 +1491,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
             &expected,
             "operator",
             "authority withdrawn before provider call",
+            "operator-revoke",
             "withdraw-light-base-update",
         )
         .unwrap();
