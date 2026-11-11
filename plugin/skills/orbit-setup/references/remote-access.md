@@ -176,6 +176,21 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+In the left rail, the **Workspace** picker lists the workspaces for the selected
+host and marks unavailable ones. Open it to check or uncheck workspaces. With
+multiple workspaces selected, the picker reads **All workspaces** and the Tasks
+board contains tasks only from those checked workspaces; their workspace badges
+show which workspace each task belongs to. Select one workspace to see only its
+Tasks board. In that aggregate view, the Tasks dock adds a **Fleet** tab. Open it
+to see fleet drain rows across the registered hosts and their workspaces; the
+tab is available only while **All workspaces** is selected.
+
+The Tasks dock's **Drain** pane contains the **Auto-drain** card and its
+quick-start form. The card is headed **Start a window**. When a window is
+already active, the **Start another window** control expands the form on narrow
+layouts. In an aggregate view, choose the target workspace and host in the
+Auto-drain panel before starting a window.
+
 A visible dashboard with a workspace selected opens a change stream for that
 workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,
 the connected stream sends change notices to the panels that subscribe to them,
