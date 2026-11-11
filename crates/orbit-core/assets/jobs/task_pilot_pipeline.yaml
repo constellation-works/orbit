@@ -37,8 +37,14 @@
 # passes it as held: the applied tasks' receipts stand, and each unresolved
 # task is held for the operator (apply records failed stale repilots, and a
 # drain also records unresolved children as `pilot_unresolved`) instead of
-# being piloted again on the next pass against unchanged requirements. An apply
-# that applied nothing fails the guard. Targets admitted to
+# being piloted again on the next pass against unchanged requirements. An
+# apply whose unresolved tasks are all apply-rejected assessments (`invalid`
+# after the targeted repair round) is likewise passed as held regardless of
+# its applied count, counted in the guard's `rejected_apply_held_count`: the
+# refusal is fail-closed by design and its tasks are already held. An apply
+# that failed for another reason — a failed or skipped partition whose tasks
+# are not all `invalid`, a missing apply envelope, or no unresolved tasks —
+# still fails the guard. Targets admitted to
 # execution, claimed by a follower, or retired during preparation settle as
 # superseded without pilot writes. Durable material edits by an operator or
 # another writer likewise refuse the stale write and settle as superseded.
