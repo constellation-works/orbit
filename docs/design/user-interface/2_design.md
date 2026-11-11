@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Design"
 owner: gemini
 last_updated: 2026-11-10
-last_validated: 2026-11-03
+last_validated: 2026-11-11
 status: Draft
 feature: user-interface
 doc_role: design
@@ -461,8 +461,12 @@ snapshot still reports Idle. A forwarding-write refusal disables Start and
 Stop with the existing read-only reason; a missing replica or unavailable
 owner disables Start with the replica card's existing unavailable-owner
 message. Switching either select retires pending readbacks from the previous
-pair. Single-workspace boards, including replica boards, keep their existing
-controls and behavior. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
+pair. An owner's concrete workspace board shows the same Drain host select,
+without the workspace select: that workspace's owner first and selected by
+default, then each follower holding a replica. The owner's selection keeps
+the board's existing request path and body. Choosing a follower says **Start
+pulling on <host>** and uses the same pull start, stop, confirmation and
+refusal as All workspaces. A replica board keeps its existing controls. The separate **Fleet** tab shows fleet drains with one tab per host, live workspaces first, their
 phase, leaf slots, eligible work, waits, holds and queued windows. Rows switch
 host and workspace. Its cache and cadence are shared with the rail reading.
 

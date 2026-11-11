@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -21,6 +21,12 @@ let aggregateDrainWorkspace = null;
 // The operator's own picks, held here for a page whose storage refuses them.
 let chosenAggregateHost = null;
 let chosenAggregateWorkspace = null;
+// On an owner's concrete board, a follower pick (null means the board's own
+// host, which keeps today's request path). Storage is separate from the All
+// workspaces pick, so opening the board still starts on the owner.
+let boardDrainHost = null;
+let chosenBoardHost = null;
+let chosenBoardWorkspace = null;
 const aggregateDrainScopes = new WeakMap();
 const PULL_OWNER_UNAVAILABLE = "The owner's host and workspace are unavailable. Reload the page before starting a pull window.";
 
@@ -35,14 +41,19 @@ function resetAggregateDrainSelection() {
   feedback("auto-drain-operation-feedback", "", "");
 }
 
-function aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable) {
+function aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable, mode = "aggregate") {
   const host = findRegisteredHost(hostName)?.local ? "" : hostName;
   const revision = getWorkspaceRevision();
   const refusal = hostWriteRefusal(host, connection?.forward_writes) || (checkoutUnavailable ? PULL_OWNER_UNAVAILABLE : "");
   return {
     workspace, host, hostName, refusal,
-    isCurrent: () => generation === drainScopeGeneration && revision === getWorkspaceRevision()
-      && isAggregateView() && aggregateDrainWorkspace === workspace.id && aggregateDrainHost === hostName,
+    isCurrent: () => {
+      if (generation !== drainScopeGeneration || revision !== getWorkspaceRevision()) return false;
+      if (mode === "board") {
+        return !isAggregateView() && selectedWorkspace()?.id === workspace.id && boardDrainHost === hostName;
+      }
+      return isAggregateView() && aggregateDrainWorkspace === workspace.id && aggregateDrainHost === hostName;
+    },
     writeRefusal: () => refusal,
     path: path => `${host ? `/api/on/${encodeURIComponent(host)}` : "/api"}/${path.slice("/api/".length)}?workspace=${encodeURIComponent(workspace.id)}`,
   };
@@ -74,6 +85,29 @@ function chooseAggregateHost(name) {
     if (name) window.localStorage.setItem(AGGREGATE_HOST_STORAGE_KEY, name);
     else window.localStorage.removeItem(AGGREGATE_HOST_STORAGE_KEY);
   } catch { /* the in-memory choice serves */ }
+}
+// A follower chosen on the concrete board, remembered with the workspace it
+// belongs to. The owner is the default and is not stored, so the board keeps
+// today's path until the operator picks a follower here.
+const BOARD_HOST_STORAGE_KEY = "orbit.dashboard.concreteDrainHost";
+function rememberedBoardHost(workspaceId) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(BOARD_HOST_STORAGE_KEY) || "null");
+    if (parsed && parsed.workspace === workspaceId && parsed.host) return parsed.host;
+  } catch { /* storage refused; the in-memory choice follows */ }
+  return chosenBoardWorkspace === workspaceId ? chosenBoardHost : null;
+}
+function chooseBoardHost(workspaceId, host) {
+  chosenBoardWorkspace = workspaceId || null;
+  chosenBoardHost = host || null;
+  try {
+    if (workspaceId && host) window.localStorage.setItem(BOARD_HOST_STORAGE_KEY, JSON.stringify({ workspace: workspaceId, host }));
+    else window.localStorage.removeItem(BOARD_HOST_STORAGE_KEY);
+  } catch { /* the in-memory choice serves */ }
+}
+// The host this board already addresses. The serving host has no rail host.
+function boardHostName() {
+  return getHost() || getServingHost()?.name || "";
 }
 // The selected host's owned workspaces, in alphabetical order. All workspaces
 // is the whole aggregate board, so the Tasks chip filter does not narrow this
@@ -118,6 +152,91 @@ function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
 // carry their own `error` and are left to the readiness read.
 function hostFleetFailure(row) {
   return Boolean(row?.host && row.error && !row.workspace_id && !row.pending);
+}
+// The Drain host select shared by All workspaces and an owner's concrete
+// board. One listener covers both: the select is removed when the scope resets.
+function paintDrainHostSelect(ordered, selected) {
+  const phase = $("auto-drain-phase");
+  if (!phase) return;
+  let select = $("auto-drain-host");
+  if (!select) {
+    select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
+    select.addEventListener("change", () => onDrainHostChanged(select.value));
+    phase.before(select);
+  }
+  const signature = JSON.stringify(ordered);
+  if (select.dataset.hosts !== signature) {
+    select.replaceChildren(...ordered.map(name => {
+      const node = el("option", { text: name });
+      node.value = name;
+      return node;
+    }));
+    select.dataset.hosts = signature;
+  }
+  select.value = selected || "";
+}
+function onDrainHostChanged(value) {
+  if (isAggregateView()) {
+    chooseAggregateWorkspace(aggregateDrainWorkspace);
+    chooseAggregateHost(value);
+    aggregateDrainHost = value || null;
+  } else {
+    const workspace = selectedWorkspace();
+    const follower = Boolean(value) && Boolean(boardHostName()) && value !== boardHostName();
+    if (workspace) chooseBoardHost(workspace.id, follower ? value : null);
+    boardDrainHost = follower ? value : null;
+  }
+  resetAggregateDrainSelection();
+  fetchAndRenderAutoDrain().catch(error => console.error(error));
+}
+// Readiness, connection and refusal for one chosen host. All workspaces and a
+// concrete board's follower use this; the owner's own board does not.
+async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation, mode, stillCurrent }) {
+  const failure = (fleet?.items || []).find(item => item.host === hostName && hostFleetFailure(item));
+  if (failure) throw new Error(failure.error);
+  const row = (fleet?.items || []).find(item => item.host === hostName && item.workspace_id === workspace.id);
+  let checkoutUnavailable = !row || row.pending;
+  const unavailable = () => ({ capacity: { drain_phase: "idle" }, replica: true,
+    start_options: { checkout: "replica", workspace_id: workspace.id, pull_refusal: PULL_OWNER_UNAVAILABLE } });
+  const [connection, readiness] = await Promise.all([
+    findRegisteredHost(hostName)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(hostName)}/connection`),
+    checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(workspace.id)}`)
+      .catch(error => {
+        // Only a replica reads as an unavailable owner; an owner whose
+        // workspace is inactive keeps the error its readiness returned.
+        if (error.code !== "workspace_unavailable" || !row?.owner_machine_id) throw error;
+        checkoutUnavailable = true;
+        return unavailable();
+      }),
+  ]);
+  if (stillCurrent && !stillCurrent()) return null;
+  const scope = aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable, mode);
+  // A failed connection read must never leave a usable forwarded control.
+  if (connection && !connection.reachable) throw new Error(connection.error?.message || "Host unavailable");
+  aggregateDrainScopes.set(readiness, scope);
+  return readiness;
+}
+// Hosts for this workspace once a fleet row places it. Before that, the
+// all-hosts fallback would offer machines that do not hold a replica.
+function concreteHostOptions(fleet, workspaceId) {
+  const items = fleet?.items || [];
+  if (!items.some(row => row.workspace_id === workspaceId && !row.pending)) return null;
+  return aggregateWorkspaceHosts(fleet, workspaceId, getRegisteredHosts());
+}
+function paintConcreteHostSelect(fleet, workspace) {
+  if (!workspace || isAggregateView()) return null;
+  const ordered = concreteHostOptions(fleet, workspace.id);
+  if (!ordered?.length) {
+    $("auto-drain-host")?.remove();
+    return null;
+  }
+  const own = boardHostName();
+  const remembered = rememberedBoardHost(workspace.id);
+  // The board's own host stays the default even when the fleet lists it after
+  // a failed read. A stored follower applies only while it is still listed.
+  const selected = ordered.includes(remembered) ? remembered : ordered.includes(own) ? own : ordered[0];
+  paintDrainHostSelect(ordered, selected);
+  return { ordered, selected, follower: Boolean(own) && selected !== own };
 }
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
@@ -256,7 +375,7 @@ function autoDrainQueuedRow(payload, drain) {
   const head = el("div", { class: "drain-queued-head" }, [
     runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)),
     el("span", { class: "drain-queued-state", text: capacity.drain_run_id ? "Waiting for the live window" : "Waiting for its slot" }),
-    isAggregateView() ? null : autoDrainQueuedCancel(payload, runId),
+    isAggregateView() || boardDrainHost ? null : autoDrainQueuedCancel(payload, runId),
   ]);
   const crews = Array.isArray(drain.allowed_crews) && drain.allowed_crews.length ? drain.allowed_crews.join(", ") : "all crews";
   const facts = el("div", { class: "drain-queued-facts" }, [
@@ -360,12 +479,30 @@ function autoDrainApprovals(approvals) {
 // A Start-card field's label with its help as an info hint beside it; `warn`
 // tints the hint amber. The hint sits outside the <label>, so pressing it never
 // focuses or toggles the control.
+// Run and task links follow the host the card is showing, including a
+// modified click or a new tab. The owner's own board leaves them on the rail.
+function retargetDrainLinks(body, scope) {
+  const hostName = scope?.hostName;
+  const workspaceId = scope?.workspace?.id;
+  if (!hostName || !workspaceId) return;
+  for (const anchor of body.querySelectorAll("a[href]")) {
+    const url = new URL(anchor.href, window.location.href);
+    if (url.origin !== window.location.origin) continue;
+    url.searchParams.set("host", hostName);
+    url.searchParams.set("workspace", workspaceId);
+    url.searchParams.delete("workspaces");
+    anchor.href = url.href;
+    anchor.addEventListener("click", event => event.stopImmediatePropagation(), { capture: true });
+  }
+}
+
 function renderAutoDrain(payload, generation = drainScopeGeneration) {
-  const scope = isAggregateView() ? aggregateDrainScopes.get(payload) : null;
+  const scope = aggregateDrainScopes.get(payload) || null;
   if (generation !== drainScopeGeneration || scope?.isCurrent() === false) return;
   operationsState.lastAutoDrain = payload;
-  // This independent host card is not the aggregate board's readiness snapshot.
-  setDrainReadiness(isAggregateView() ? {} : payload);
+  // A scoped card (All workspaces, or a follower on the owner's board) is that
+  // host's drain, not the task list's readiness snapshot.
+  setDrainReadiness(scope ? {} : payload);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds both cards; keep keyboard focus on the
@@ -381,8 +518,11 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     drainCrewNote(payload),
     drainPilotNote(payload),
   ].filter(Boolean);
-  if (reasons.submit && !isAggregateView()) {
+  // A follower scope keeps Start and Stop on the card, disabled, the way All
+  // workspaces does. Only the board's own read-only reason replaces the body.
+  if (reasons.submit && !isAggregateView() && !scope) {
     body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    retargetDrainLinks(body, scope);
     renderAutoDrainStart(payload, reasons);
     return;
   }
@@ -394,19 +534,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
     autoDrainFoot(payload),
     autoDrainQueued(payload),
   ].filter(Boolean));
-  if (isAggregateView()) {
-    // The card reads a host independently of the rail. Its existing links
-    // must carry that displayed scope too, including modified/new-tab clicks.
-    for (const anchor of body.querySelectorAll("a[href]")) {
-      const url = new URL(anchor.href, window.location.href);
-      if (url.origin !== window.location.origin || !aggregateDrainWorkspace) continue;
-      url.searchParams.set("host", aggregateDrainHost);
-      url.searchParams.set("workspace", aggregateDrainWorkspace);
-      url.searchParams.delete("workspaces");
-      anchor.href = url.href;
-      anchor.addEventListener("click", event => event.stopImmediatePropagation(), { capture: true });
-    }
-  }
+  retargetDrainLinks(body, scope);
   if (!isAggregateView() || scope) renderAutoDrainStart(payload, reasons);
   else clearStartCard("auto-drain-quick-start");
   if (focusKey) document.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
@@ -446,6 +574,9 @@ registerOperationsReset(() => {
   aggregateDrainWorkspace = null;
   chosenAggregateHost = null;
   chosenAggregateWorkspace = null;
+  boardDrainHost = null;
+  chosenBoardHost = null;
+  chosenBoardWorkspace = null;
   $("auto-drain-host")?.remove();
   $("auto-drain-workspace")?.remove();
   clearDrainChrome();
@@ -504,60 +635,15 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       // shows the owner for now and stays stored.
       const rememberedHost = aggregateDrainWorkspace === rememberedWorkspace ? rememberedAggregateHost() : null;
       aggregateDrainHost = ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null;
-      let select = $("auto-drain-host");
-      if (!select) {
-        select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
-        select.addEventListener("change", () => {
-          // The pick is stored with the workspace it was made for, so a later
-          // workspace default cannot inherit this host.
-          chooseAggregateWorkspace(aggregateDrainWorkspace);
-          chooseAggregateHost(select.value);
-          aggregateDrainHost = select.value || null;
-          resetAggregateDrainSelection();
-          fetchAndRenderAutoDrain().catch(error => console.error(error));
-        });
-        $("auto-drain-phase").before(select);
-      }
-      const signature = JSON.stringify(ordered);
-      if (select.dataset.hosts !== signature) {
-        select.replaceChildren(...ordered.map(name => {
-          const node = el("option", { text: name });
-          node.value = name;
-          return node;
-        }));
-        select.dataset.hosts = signature;
-      }
-      select.value = aggregateDrainHost || "";
+      paintDrainHostSelect(ordered, aggregateDrainHost);
       if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
-      // The chosen host's fleet read failed: its state is unknown, so the card
-      // shows that error rather than the Idle an absent workspace row reads as.
-      const failure = (fleet.items || []).find(item => item.host === aggregateDrainHost && hostFleetFailure(item));
-      if (failure) throw new Error(failure.error);
-      const row = (fleet.items || []).find(item => item.host === aggregateDrainHost && item.workspace_id === aggregateDrainWorkspace);
       const chosenWorkspace = options.find(option => option.id === aggregateDrainWorkspace);
-      const chosenHost = aggregateDrainHost;
-      let checkoutUnavailable = !row || row.pending;
-      // Idle hosts need readiness too: checkout/owner information and policy
-      // are required to start the same window their concrete board would.
-      const unavailable = () => ({ capacity: { drain_phase: "idle" }, replica: true,
-        start_options: { checkout: "replica", workspace_id: chosenWorkspace.id, pull_refusal: PULL_OWNER_UNAVAILABLE } });
-      const [connection, readiness] = await Promise.all([
-        findRegisteredHost(chosenHost)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(chosenHost)}/connection`),
-        checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(chosenHost)}/workflows/auto/readiness?workspace=${encodeURIComponent(chosenWorkspace.id)}`)
-          .catch(error => {
-            // Only a replica reads as an unavailable owner; an owner whose
-            // workspace is inactive keeps the error its readiness returned.
-            if (error.code !== "workspace_unavailable" || !row?.owner_machine_id) throw error;
-            checkoutUnavailable = true;
-            return unavailable();
-          }),
-      ]);
-      if (!guard()) return null;
-      const scope = aggregateDrainScope(chosenWorkspace, chosenHost, connection, generation, checkoutUnavailable);
-      // A failed connection read must never leave a usable forwarded control.
-      if (connection && !connection.reachable) throw new Error(connection.error?.message || "Host unavailable");
-      aggregateDrainScopes.set(readiness, scope);
-      return readiness;
+      if (!chosenWorkspace) return { capacity: { drain_phase: "idle" } };
+      // Idle hosts need readiness too: checkout and owner information are
+      // required to start the same window their concrete board would.
+      return loadScopedDrainReadiness({
+        fleet, workspace: chosenWorkspace, hostName: aggregateDrainHost, generation, mode: "aggregate", stillCurrent: guard,
+      });
     }, payload => {
       if (guard() && payload) renderAutoDrain(payload, generation);
     }, "auto-drain-phase-label").catch(error => {
@@ -570,23 +656,57 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       throw error;
     });
   }
-  const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
-  const params = new URLSearchParams();
-  if (concurrency) params.set("concurrency", concurrency);
-  if (detailTaskId) params.set("also_task", detailTaskId);
-  const query = params.size ? `?${params.toString()}` : "";
-  const scope = "/api/workflows/auto/readiness";
-  const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
-  const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), payload => {
-    renderAutoDrain(payload, generation);
+  const remembered = rememberedBoardHost(workspace.id);
+  // The owner's panel key stays the readiness path, so a poll does not reset
+  // the card. A remembered follower is a different read and resets on switch.
+  const panelScope = remembered ? `board:${workspace.id}:${remembered}` : "/api/workflows/auto/readiness";
+  const fleet = loadFleetSnapshot({ refreshWhenStale: false });
+  const ownerPath = () => {
+    const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
+    const params = new URLSearchParams();
+    if (concurrency) params.set("concurrency", concurrency);
+    if (detailTaskId) params.set("also_task", detailTaskId);
+    const query = params.size ? `?${params.toString()}` : "";
+    return `/api/workflows/auto/readiness${query}`;
+  };
+  const readiness = requestPanel("auto-drain-body", panelScope, async () => {
+    if (!remembered) {
+      if (generation !== drainScopeGeneration) return null;
+      boardDrainHost = null;
+      void fleet.then(snapshot => {
+        if (generation !== drainScopeGeneration || selectedWorkspace()?.id !== workspace.id) return;
+        paintConcreteHostSelect(snapshot, workspace);
+      }).catch(error => console.error(error));
+      return fetchJson(ownerPath());
+    }
+    const snapshot = await fleet;
+    if (generation !== drainScopeGeneration) return null;
+    const resolved = paintConcreteHostSelect(snapshot, workspace);
+    if (!resolved?.follower) {
+      boardDrainHost = null;
+      return fetchJson(ownerPath());
+    }
+    boardDrainHost = resolved.selected;
+    return loadScopedDrainReadiness({
+      fleet: snapshot,
+      workspace,
+      hostName: resolved.selected,
+      generation,
+      mode: "board",
+      stillCurrent: () => generation === drainScopeGeneration && selectedWorkspace()?.id === workspace.id && boardDrainHost === resolved.selected,
+    });
+  }, payload => {
+    if (payload && generation === drainScopeGeneration) renderAutoDrain(payload, generation);
   }, "auto-drain-phase-label").catch(error => {
-    if (detailTaskId && visit.isCurrent()) {
+    if (detailTaskId && visit.isCurrent() && generation === drainScopeGeneration && !boardDrainHost) {
       setDrainReadinessFailure({ id: detailTaskId, workspace_id: workspace.id }, error.message || String(error));
+    }
+    if (boardDrainHost && generation === drainScopeGeneration) {
+      for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
     }
     throw error;
   });
-  const fleet = loadFleetSnapshot({ refreshWhenStale: false });
   // The optional summary paints itself and contains its failures. A slow
   // forecast must not delay dashboard refresh or release of action controls.
   // The Tasks page's 30 s tick leaves it to the page's slow reads.
@@ -596,7 +716,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
 
 
 configureOperationsDrainControls({
-  scope: payload => isAggregateView() ? aggregateDrainScopes.get(payload) : null,
+  scope: payload => aggregateDrainScopes.get(payload) || null,
   render: renderAutoDrain,
   fetch: () => {
     // Action refreshes replace the shared snapshot just like a poll. Keep

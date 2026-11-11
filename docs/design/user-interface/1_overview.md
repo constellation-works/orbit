@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Overview"
 owner: gemini
 last_updated: 2026-10-20
-last_validated: 2026-10-30
+last_validated: 2026-11-11
 status: Draft
 stage: shipped
 next: "—"
@@ -70,7 +70,9 @@ With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**,
 The workspace select lists the selected host's owned workspaces in alphabetical order,
 defaulting to the first with a live drain on any host; the host select lists
 that workspace's owner first and selected by default, then its follower hosts,
-and changing the workspace resets the host to the owner. Followers are readable
+and changing the workspace resets the host to the owner. The owner's concrete
+board shows the same host select, without a workspace select, and the owner
+stays the default there. Followers are readable
 through the host forward. The chosen workspace's drain on the chosen host is
 shown, or Idle when none is live there; both choices survive a reload, with a
 remembered value that no longer exists falling back to those defaults.
