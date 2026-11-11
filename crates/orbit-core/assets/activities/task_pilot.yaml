@@ -905,10 +905,10 @@ spec:
 
     ## Findings
 
-    - `blocked_by`: real IDs of other tasks, never the task itself. Report waiting
-      for another task's delivery only here, never in utility or surface warnings.
-      Prerequisites already in `dependencies` or `blocked_by` relations need no
-      holding finding.
+    - `blocked_by`: real IDs of other tasks, never the task itself. Entries are
+      strings, not objects. Report waiting for another task's delivery only here,
+      never in utility or surface warnings. Prerequisites already in `dependencies`
+      or `blocked_by` relations need no holding finding.
     - `start_prerequisites`: report each explicit, unresolved condition that
       forbids implementation from starting as `{"evidence":"<condition and
       source>"}`. Include the concrete future instant and unresolved external
@@ -929,13 +929,13 @@ spec:
       (an operator decision). Return `verified_no_diff` with empty
       `context_files_after`. Otherwise,
       and for every other task, return null.
-    - `adr_conflicts`: only concrete conflicts with current code or a current
-      contract; a historical ADR alone is no reason to block or reshape work.
-    - `contract_conflicts`: follow Contract contradiction above.
-    - `adr_conflicts` is an array of strings combining each current conflict and
-      its citation, for example `Current module still exports Bar (path:line at
-      source_revision)`; each entry holds promotion. Keep `blocked_by` as
-      prerequisite task IDs under its rule above. Neither field accepts objects.
+    - `adr_conflicts`: an array of strings. Each entry combines one concrete
+      conflict with current code or a current contract and its citation, for
+      example `Current module still exports Bar (path:line at source_revision)`.
+      A historical ADR alone is no reason to block or reshape work. Each entry
+      holds promotion. The field does not accept objects.
+    - `contract_conflicts`: follow Contract contradiction above. Entries are
+      objects, not strings.
     - `utility_warnings` and `surface_warnings` are arrays of
       `{"text":"<finding and citation>","holds_promotion":true|false}`.
     - `duplicate_of`, `already_landed`, `release_action_required`,
