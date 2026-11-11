@@ -215,7 +215,14 @@ but approval then fails deterministically, the drain records the task
 until the task changes or an operator approves it. An apply that applied
 at least one task while leaving others unresolved still reports `failed`
 with its counts, but the pipeline guard passes it as held, so the applied
-tasks' receipts stand and only the unresolved tasks are held.
+tasks' receipts stand and only the unresolved tasks are held. An apply
+whose unresolved tasks are all apply-rejected assessments (`invalid`
+after the targeted repair round) is likewise passed as held regardless of
+its applied count, counted in the guard's `rejected_apply_held_count`: the
+refusal is fail-closed by design and its tasks are already held. An apply
+that failed for another reason — a failed or skipped partition whose
+tasks are not all `invalid`, a missing apply envelope, or no unresolved
+tasks — still fails the guard.
 
 **Applied pilot holds.** The latest applied assessment's typed holds are read on
 every admission path from its atomic audit (`OrbitRuntime::pilot_admission_hold`).
