@@ -1359,12 +1359,18 @@ the installed binary, not a live loop. Envelope validation is unchanged, so exit
 **The output is a message stream.** Claude reports its usage windows only as
 `rate_limit_event` messages, which `--output-format json` drops [ORB-14696].
 `ClaudeCliTransport::args` therefore appends `--output-format stream-json
---verbose`, which wins over the executor's static `--output-format json` (the
-later flag wins), so neither `claude.yaml` copy needs an edit. Not `json
---verbose`: that prints the whole session as one line, so a run longer than the
-1 MiB stdout capture would lose its terminal `result`; the stream's JSONL keeps
-it in the capture's tail. `normalize_cli_stdout` reduces the stream to its last
-`result` frame, the document `--output-format json` printed, before response,
+--verbose --include-partial-messages`, which wins over the executor's static
+`--output-format json` (the later flag wins), so neither `claude.yaml` copy
+needs an edit. Not `json --verbose`: that prints the whole session as one line,
+so a run longer than the 1 MiB stdout capture would lose its terminal `result`;
+the stream's JSONL keeps it in the capture's tail. Partial messages supply final
+request usage. Their `content_block_start`, `content_block_delta` and
+`content_block_stop` events carry partial content that the later assistant
+frames repeat, so the runner drops these redundant content-block events before
+the bounded capture, discarding only complete, recognized ones; usage events and
+the terminal `result` stay intact. Oversized or malformed lines pass through
+unchanged. `normalize_cli_stdout` reduces the stream to its last `result` frame,
+the document `--output-format json` printed, before response,
 completion and usage projection. Assistant messages carry their own `usage`, and
 the `StructuredOutput` call quotes the envelope, so neither reaches the answer
 or the token totals; a stream with no `result` has no answer.
