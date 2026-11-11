@@ -2,7 +2,7 @@
 title: Operator Attention — Vision
 owner: claude
 last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_validated: 2026-11-11
 status: Draft
 feature: operator-attention
 doc_role: vision
@@ -62,7 +62,8 @@ The remaining questions are speculative; the committed scope is in
    [resident-orchestrator](../resident-orchestrator/2_design.md#6-the-manager--resident-channel)
    design reports through attention: resident escalations are `decision_open`, handoffs
    `review_waiting`, and it added one kind, `resident_stalled` (no checkpoint for twice the
-   heartbeat, or three incomplete cycles in a row), implemented by [ORB-21245]. The manager session reads
+   heartbeat, three incomplete cycles in a row, or a disabled workspace cycle routine),
+   implemented by [ORB-21245]. The manager session reads
    attention instead of keeping an inbox.
 
 ## 2. Prior Work

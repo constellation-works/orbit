@@ -2,7 +2,7 @@
 title: Owner Failover — Design
 owner: claude
 last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_validated: 2026-11-11
 status: Draft
 feature: owner-failover
 doc_role: design

@@ -4,7 +4,7 @@ type: design
 title: "Task Search — Overview"
 owner: codex
 last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_validated: 2026-11-11
 status: Implemented
 stage: shipped
 next: "—"
