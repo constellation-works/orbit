@@ -123,11 +123,11 @@ A leaf `#[path]` declaration is the same child module with the file moved. It is
 
 The test-layout sweep reads this list. One shape is admitted.
 
-- **Sibling `tests/` (admitted).** The parent module declares `#[cfg(test)] mod tests;`. Rust resolves that to `<parent>/tests.rs` when the file exists, and otherwise to `<parent>/tests/mod.rs`. Each `<parent>/tests/<stem>.rs` covers the sibling source `<stem>.rs` and is not a child of that source. On a directory module's `mod.rs`, or on `lib.rs` / `main.rs` for files directly under `src/`, an explicit `#[path = "tests/mod.rs"] mod tests;` is this same shape, not the leaf form below. Prefer the bare `mod tests;` spelling when a `tests.rs` file does not shadow `tests/mod.rs`.
+- **Sibling `tests/` (admitted).** The parent module declares `#[cfg(test)] mod tests;`. Rust resolves that to `<parent>/tests.rs` or `<parent>/tests/mod.rs`; having both is error E0761, so keep one. Each `<parent>/tests/<stem>.rs` covers the sibling source `<stem>.rs` and is not a child of that source. An explicit `#[path]` in a module root that names that same `tests/mod.rs` is this same shape, not the leaf form below. A module root is a `mod.rs`, a `lib.rs` or `main.rs` directly under `src/`, or a `<name>.rs` that owns a `<name>/` directory. `#[path]` resolves from the declaring file's directory, so write `"tests/mod.rs"` in a `mod.rs`, `lib.rs` or `main.rs`, and `"<name>/tests/mod.rs"` in `<name>.rs`. Prefer the bare `mod tests;` spelling.
 - **Inline `mod tests { ... }` (violation).** A test module written inside a source file is a child of that file. Migrate it with the recipe below.
 - **`*_tests.rs` beside the source (violation).** A sibling file whose name carries a `_tests` suffix. Move it under `<parent>/tests/` and drop the suffix.
 - **Nested `<file>/tests/` (violation).** The directory anti-pattern above. The test module is a child of the leaf.
-- **Leaf `#[path]` test module (violation).** A fault, security or platform harness still uses the sibling file. In a leaf source file — any source file other than the module root named above — this declaration makes `tests` a child of the leaf:
+- **Leaf `#[path]` test module (violation).** A fault, security or platform harness keeps its body in the sibling file. Wiring that file from a leaf source file (any source file that is not a module root, as defined above) makes `tests` a child of the leaf:
 
 ```rust
 #[cfg(test)]
@@ -201,7 +201,7 @@ For each leaf `#[cfg(test)] #[path = "tests/<stem>.rs"] mod tests;` (see [Layout
 5. Carry the leaf declaration's `cfg` (platform gates included) onto the sibling `mod <stem>;`.
 6. `cargo test -p <crate>` must pass.
 
-Module-root `#[path = "tests/mod.rs"] mod tests;` is already the sibling layout. Leave it, or spell it `#[cfg(test)] mod tests;` when a `tests.rs` file does not shadow `tests/mod.rs`.
+A module-root `#[path]` that names the sibling `tests/mod.rs` is already the sibling layout. Leave it, or spell it `#[cfg(test)] mod tests;`, which resolves to the same file while no `tests.rs` sits beside `tests/mod.rs` (E0761).
 
 ## What tests assert (invariants vs. policy)
 
