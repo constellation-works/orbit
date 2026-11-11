@@ -701,6 +701,12 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
 /// no task row; accepting and replaying the handoff records the decision once.
 #[test]
 fn claimed_baseline_known_red_is_recorded_only_on_the_owner() {
+    if !isolated(
+        module_path!(),
+        "claimed_baseline_known_red_is_recorded_only_on_the_owner",
+    ) {
+        return;
+    }
     use orbit_types::task::TaskDecision;
     use orbit_types::workflow::{
         KNOWN_RED_VALIDATION_EVENT, ReviewBaselineClaim, ReviewCertificate,

@@ -191,6 +191,12 @@ impl Judgement {
     /// the check is reset, one naming the same program with another command
     /// is excluded in its favour, and a missing one is added. A passing
     /// verdict that has not seen the evidence becomes `incomplete`.
+    ///
+    /// A required record that already failed is an answer, not missing
+    /// evidence: it stays required and failed (an exact match, or another
+    /// invocation of the same CodeQL program), is not replaced in
+    /// `external_evidence`, and does not turn a passing verdict into an
+    /// evidence hold, so settlement blocks on it as on any other failure.
     pub(super) fn require_owed_evidence(&mut self, owed: &[ReviewEvidenceRequirement]) {
         if owed.is_empty() {
             return;
@@ -203,7 +209,19 @@ impl Judgement {
                 required.os.map_or("its host", EvidenceHostOs::as_str)
             )
         };
+        let mut pending = Vec::new();
         for required in owed {
+            let failed = self.validation.iter().any(|record| {
+                record.role == ValidationRole::Required
+                    && record.outcome == ValidationOutcome::Failed
+                    && (record.command.trim() == required.command.trim()
+                        || (required.kind == ReviewEvidenceKind::CodeQl
+                            && program(&record.command) == program(&required.command)))
+            });
+            if failed {
+                continue;
+            }
+            pending.push(required);
             self.external_evidence.retain(|named| {
                 !(named.artifact == required.artifact
                     || (named.kind == required.kind
@@ -252,12 +270,13 @@ impl Judgement {
                 });
             }
         }
-        if self.verdict.passed() {
+        if self.verdict.passed() && !pending.is_empty() {
             self.verdict = ReviewVerdict::Incomplete;
             self.validation_complete = false;
             self.escalate(&format!(
                 "owed_evidence: {} not yet run on the host that owes it",
-                owed.iter()
+                pending
+                    .iter()
                     .map(|required| format!("`{}`", required.name))
                     .collect::<Vec<_>>()
                     .join(", ")
