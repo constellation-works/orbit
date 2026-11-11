@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Mid-Run Operator Steering"
-last_validated: 2026-11-04
+last_validated: 2026-11-11
 ---
 
 # Glossary: Mid-Run Operator Steering
