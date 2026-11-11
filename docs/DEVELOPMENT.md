@@ -1073,6 +1073,8 @@ macOS `TMPDIR` is under `/var/folders`, and `/var` is a symlink to `/private/var
 
 File-size fault injection keeps the hard limit and restores the soft `RLIMIT_FSIZE` before the child exits, even on unwind: LLVM writes profiles at exit, and a lowered limit truncates them and fails `cargo llvm-cov report`.
 
+If a test process is killed while LLVM writes its profile, one `.profraw` is left unreadable and `llvm-profdata merge` rejects every profile (`file header is corrupt`, `no profile can be merged`) although all tests passed. The `Render lcov report` step drops up to five profiles the merge names, with a `::warning::` annotation for each, and renders again; more than five, or an error that names no profile, still fails the step. A `::warning::` that recurs for the same test is a defect to fix at the process that writes the profile.
+
 Line-coverage **targets** steer test investment; they do not fail CI. Check the CI log or run `cargo llvm-cov nextest -p <crate> --summary-only`.
 
 | Crate | Target | Why |
