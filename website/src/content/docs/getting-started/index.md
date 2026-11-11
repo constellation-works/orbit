@@ -64,8 +64,9 @@ The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
 this machine. Keep it running in its own terminal.
 
 In **All workspaces**, use the **Workspaces** picker to narrow the task board;
-the **Fleet** tab groups tasks by workspace, and the **Auto-drain** card lets
-you choose a host and start or stop its drain.
+each status section groups tasks by workspace, the **Fleet** tab shows fleet
+drains, and the **Auto-drain** card lets you choose a host and start or stop
+its drain.
 
 ![The Tasks view's status cards with Approve, View run and Ship actions, and the Drain, Locks held and Log dock tabs.](../../../assets/dashboard/dashboard-tasks.png)
 
