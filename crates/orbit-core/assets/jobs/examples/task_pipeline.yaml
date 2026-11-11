@@ -25,8 +25,9 @@ spec:
         task_id: "{{ input.task_id }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
 
-    # Assessment and fixes share one loop. Each iteration feeds the previous
-    # verdict forward through the loop input.
+    # Assessment and fixes share one loop. Each iteration assesses, then fixes
+    # the findings that verdict raised. The loop ends on approval or at
+    # max_iterations.
     - id: assess_fix
       loop:
         max_iterations: 5
