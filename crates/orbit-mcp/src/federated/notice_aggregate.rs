@@ -257,10 +257,15 @@ fn notice_id(notice: &Value) -> Option<&str> {
 /// Read a wire notice's list-order key.
 fn notice_list_order_key(notice: &Value) -> Option<NoticeListOrderKey<'_>> {
     Some(NoticeListOrderKey {
-        kind: NoticeKind::parse(notice.get("kind")?.as_str()?)?,
-        updated_at: DateTime::parse_from_rfc3339(notice.get("updated_at")?.as_str()?)
-            .ok()?
-            .with_timezone(&Utc),
+        kind: notice
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(NoticeKind::parse),
+        updated_at: notice
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|at| at.with_timezone(&Utc)),
         id: notice_id(notice)?,
     })
 }

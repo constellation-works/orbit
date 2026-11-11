@@ -722,6 +722,48 @@ mod notice_aggregation {
         }
     }
 
+    /// The workspace-less route applies the shared default after collecting
+    /// the owner's unbounded result.
+    #[test]
+    fn workspaceless_notice_list_uses_the_shared_default_limit() {
+        let notices: Vec<Value> = (0..51)
+            .map(|index| notice(&format!("ntc_{index:03}"), "info", "2026-11-02T07:00:00Z"))
+            .collect();
+        let probe = ScriptedProbe::new()
+            .answering(
+                OWNER_MACHINE,
+                snapshot(
+                    OWNER_MACHINE,
+                    vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+                ),
+            )
+            .on_call(
+                OWNER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({"notices": notices, "degraded": []})),
+            );
+        let host = FederatedMcpHost::new(
+            vec![destination("orbit-owner", OWNER_MACHINE)],
+            Arc::new(probe),
+        );
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({}),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        let ids: Vec<&str> = answer["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 50);
+        assert_eq!(ids.first(), Some(&"ntc_000"));
+        assert_eq!(ids.last(), Some(&"ntc_049"));
+    }
+
     /// An out-of-range `limit` on the workspace-less route is the same
     /// notice `invalid_field` refusal, with the same message, the local list
     /// gives, and no owner is read. ORB-24017: it was a generic
@@ -817,6 +859,56 @@ mod notice_aggregation {
             .map(|notice| notice["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["ntc_a", "ntc_b", "ntc_old", "ntc_info"], "{answer}");
+    }
+
+    /// A future kind or unreadable timestamp retains the previous federated
+    /// fallback order: unknown kinds sort last, with readable update times
+    /// before unreadable ones and id breaking ties.
+    #[test]
+    fn workspaceless_notice_list_preserves_fallback_order_for_unknown_values() {
+        let probe = ScriptedProbe::new()
+            .answering(
+                OWNER_MACHINE,
+                snapshot(
+                    OWNER_MACHINE,
+                    vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+                ),
+            )
+            .on_call(
+                OWNER_MACHINE,
+                "orbit.notice.list",
+                ScriptedToolResult::Answer(json!({
+                    "notices": [
+                        notice("ntc_zz_old", "future_kind", "2026-11-02T06:00:00Z"),
+                        notice("ntc_known", "incident", "2026-11-02T09:00:00Z"),
+                        notice("ntc_aa_new", "future_kind", "2026-11-02T07:00:00Z"),
+                        notice("ntc_mm_unreadable", "future_kind", "not-a-timestamp"),
+                    ],
+                    "degraded": [],
+                })),
+            );
+        let host = FederatedMcpHost::new(
+            vec![destination("orbit-owner", OWNER_MACHINE)],
+            Arc::new(probe),
+        );
+        let answer = host
+            .call_tool(
+                "orbit.notice.list",
+                json!({}),
+                ToolSessionContext::default(),
+            )
+            .unwrap();
+        let ids: Vec<&str> = answer["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["ntc_known", "ntc_aa_new", "ntc_zz_old", "ntc_mm_unreadable"],
+            "{answer}"
+        );
     }
 
     /// With a selector the same tool is one routed workspace read, not an

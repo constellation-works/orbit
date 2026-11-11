@@ -1539,6 +1539,37 @@ fn list_limit_and_order_follow_the_shared_rules() {
     assert_eq!(titles, ["Newer incident", "Older incident", "Planned swap"]);
 }
 
+/// The local tool applies the shared default limit when the caller omits it.
+fn list_uses_the_shared_default_limit() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    for index in 0..51 {
+        let posted = call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": format!("Default limit {index}")}),
+            &operator,
+        )
+        .unwrap();
+        call(
+            &runtime,
+            "orbit.notice.close",
+            json!({"id": posted["notice"]["id"], "reason": "default limit fixture"}),
+            &operator,
+        )
+        .unwrap();
+    }
+    let listed = call(
+        &runtime,
+        "orbit.notice.list",
+        json!({"status": "all"}),
+        &operator,
+    )
+    .unwrap();
+    assert_eq!(listed["notices"].as_array().unwrap().len(), 50);
+}
+
 crate::scenario_table!(
     notice_authority,
     agent_posting_baseline_governs_managed_runs,
@@ -1553,6 +1584,7 @@ crate::scenario_table!(
     linked_task_this_owner_does_not_hold_is_refused,
     post_parse_refusals_come_from_core,
     list_limit_and_order_follow_the_shared_rules,
+    list_uses_the_shared_default_limit,
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
     attention_pages_home_notices,
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,
