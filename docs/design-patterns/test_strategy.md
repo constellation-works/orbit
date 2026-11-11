@@ -782,6 +782,25 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-engine`'s `executor/automation/vcs/operations/tests/push_retry.rs` cases
+  `timed_out_evidence_push_lands_when_the_ref_names_the_commit`,
+  `timed_out_evidence_push_fails_when_the_ref_is_absent`,
+  `timed_out_evidence_push_fails_when_the_ref_names_another_sha`,
+  `timed_out_evidence_push_fails_when_confirmation_is_unreadable`,
+  `permanent_push_refusal_fails_without_confirmation_success` and
+  `invalid_evidence_ref_and_head_are_refused_before_push` are a criterion 2
+  regression for ORB-23936 (F2026-11-230). They drive `push.evidence_ref` and
+  `push.candidate_ref` through the private VCS operation boundary. A substitute
+  receive-pack applies the update, or leaves the ref alone, and then stalls;
+  the supervision clock expires the production deadline once that stall is in
+  place. The landed case returns the pushed commit. An absent ref, a ref at
+  another sha, and an unreadable confirmation each fail once and do not push
+  again. A non-fast-forward refusal fails on its own diagnostic while the ref
+  already names the commit. Invalid tree, evidence-ref and head input are
+  refused before any push. A crate-root integration test cannot install the
+  supervision clock or the receive-pack stall without waiting out the 60s
+  production timeout.
+
 - `orbit-core`'s
   `application/agents/tests/api.rs::reviewer_interval_resamples_review_units_not_task_groups`
   is a criterion 1 regression for ORB-23843. It drives the public
