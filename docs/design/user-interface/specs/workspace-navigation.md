@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Workspace Navigation Across Hosts"
 tags: ["user-interface", "host-registry", "distributed-drain"]
-last_validated: 2026-11-09
+last_validated: 2026-11-11
 ---
 
 # Spec: Workspace Navigation Across Hosts
@@ -18,7 +18,8 @@ last_validated: 2026-11-09
 
 The dashboard navigates by logical workspace, never by host and workspace together. Each
 workspace appears once, its requests go to the host that owns it, and the hosts that hold a
-replica checkout of it remain selectable in the All workspaces Auto-drain card.
+replica checkout of it remain selectable in the All workspaces Auto-drain card
+and on the owner's concrete workspace board.
 One scope, a set of workspaces plus the time window, applies to every view.
 
 ## Why This Exists
@@ -122,8 +123,12 @@ jobs of these four workspaces" has to visit four boards.
 
 The host × **All workspaces** view reuses the existing Auto-drain card's
 workspace and host selects, **Start a window** card and **Stop** control. It
-adds no Hosts list, lane controls, fields, markup or styles. A concrete
-host/workspace board, including a replica board, stays as it is.
+adds no Hosts list, lane controls, fields, markup or styles. An owner's
+concrete workspace board shows that same Drain host select and no workspace
+select: the owner first and selected by default, then each follower with a
+replica of that workspace. Choosing a follower uses the Start and Stop path
+in this section. With the owner selected, the card keeps the board's existing
+request path and body. A replica board stays as it is.
 
 1. The Auto-drain card's workspace select lists the selected host's owned
    workspaces (the same owned list as the rail, not the Tasks chip filter). Its host select lists the workspace's owner first, then the
@@ -191,12 +196,15 @@ Replica entries have since left the workspace dropdown: the rail and the
 All workspaces aggregate list only the selected host's owned workspaces, and
 the Auto-drain card's workspace select follows that owned list rather than
 the Tasks chip filter (its host select still lists follower hosts). A
-remembered or linked replica falls back to the host's owned workspaces.
+remembered or linked replica falls back to the host's owned workspaces. The
+owner's concrete board shows that same host select, so a follower pull drain
+starts and stops there without opening All workspaces. The owner stays selected
+by default and keeps the board's existing request path.
 
 | Phase | Change | Removes |
 |---|---|---|
 | 1 | Catalog and owner routing (§1, §2 rules 1 to 3 and 5). The host picker gains **All hosts** as its first and default entry, which shows the catalog. Choosing one host still shows that host's own board, as today, so a follower's pull drain stays reachable. | Duplicate workspace entries in the default view. |
-| 2 | Reuse Start a window and Stop for the workspace/host selected in the All workspaces Auto-drain card (§4), including follower pull drains. No new controls, styles or mocks; concrete boards stay unchanged. Replica entries can then leave the workspace dropdown. The host facet (§5) and `?host=` normalization (§2 rule 4) remain later work. | The need to open a follower board to start or stop a pull drain. |
+| 2 | Reuse Start a window and Stop for the workspace/host selected in the All workspaces Auto-drain card (§4), including follower pull drains. No new controls, styles or mocks. The owner's concrete board uses the same host select; a replica board stays unchanged. Replica entries can then leave the workspace dropdown. The host facet (§5) and `?host=` normalization (§2 rule 4) remain later work. | The need to open a follower board to start or stop a pull drain. |
 | 3 | Multi-workspace scope in every view (§3). | The aggregate placeholder. |
 | 4 | Hosts page; the host picker is removed (§6). | Host as a navigation level. |
 
@@ -250,7 +258,8 @@ The host column and filter on Jobs and Leases (§5) are not mocked.
 
 - With 3 registered hosts and 12 logical workspaces, the picker lists 12 entries.
 - A pull drain on any capacity host can be started and stopped under All workspaces
-  using the existing Start a window card and Auto-drain Stop, without opening a replica board.
+  or from the owner's concrete board, using the existing Start a window card and
+  Auto-drain Stop, without opening a replica board.
 - `?workspace=a,b` shows rows from both workspaces in Tasks, Jobs, Leases and Automation, and
   a row action reaches the row's own workspace on its owner.
 - An unreachable owner is named on the view and its rows are absent; no replica store is read.
