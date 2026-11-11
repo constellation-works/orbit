@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: every orbit attention filter, its tool-input twin, and how filters combine, validate and order"
-last_validated: 2026-11-04
+last_validated: 2026-11-11
 title: Spec — Attention filters
 owner: claude
 status: Draft
