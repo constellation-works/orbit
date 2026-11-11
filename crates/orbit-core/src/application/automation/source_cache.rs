@@ -80,14 +80,9 @@ impl SourceCache {
         workspace: &str,
         fetch: impl FnOnce() -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError>,
     ) -> Result<std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>, OrbitError> {
-        if let Some(snapshot) = self.task_snapshots.borrow().get(workspace) {
-            return Ok(snapshot.clone());
-        }
-        let snapshot = std::rc::Rc::new(fetch()?);
-        self.task_snapshots
-            .borrow_mut()
-            .insert(workspace.to_string(), snapshot.clone());
-        Ok(snapshot)
+        memoize_success(&self.task_snapshots, workspace.to_string(), || {
+            fetch().map(std::rc::Rc::new)
+        })
     }
 
     /// One workspace's indexed task statuses, fetched once per request and
@@ -97,14 +92,9 @@ impl SourceCache {
         workspace: &str,
         fetch: impl FnOnce() -> Result<BTreeMap<String, TaskStatus>, OrbitError>,
     ) -> Result<std::rc::Rc<BTreeMap<String, TaskStatus>>, OrbitError> {
-        if let Some(index) = self.status_indexes.borrow().get(workspace) {
-            return Ok(index.clone());
-        }
-        let index = std::rc::Rc::new(fetch()?);
-        self.status_indexes
-            .borrow_mut()
-            .insert(workspace.to_string(), index.clone());
-        Ok(index)
+        memoize_success(&self.status_indexes, workspace.to_string(), || {
+            fetch().map(std::rc::Rc::new)
+        })
     }
 
     pub(super) fn task(
@@ -113,13 +103,7 @@ impl SourceCache {
         id: &str,
         fetch: impl FnOnce() -> Result<Task, OrbitError>,
     ) -> Result<Task, OrbitError> {
-        let key = (workspace.to_string(), id.to_string());
-        if let Some(task) = self.tasks.borrow().get(&key) {
-            return Ok(task.clone());
-        }
-        let task = fetch()?;
-        self.tasks.borrow_mut().insert(key, task.clone());
-        Ok(task)
+        memoize_success(&self.tasks, (workspace.to_string(), id.to_string()), fetch)
     }
 
     pub(super) fn preparations(
@@ -128,15 +112,7 @@ impl SourceCache {
         kind: &'static str,
         fetch: impl FnOnce() -> Result<Preparations, OrbitError>,
     ) -> Result<Preparations, OrbitError> {
-        let key = (workspace.to_string(), kind);
-        if let Some(preparations) = self.preparations.borrow().get(&key) {
-            return Ok(preparations.clone());
-        }
-        let preparations = fetch()?;
-        self.preparations
-            .borrow_mut()
-            .insert(key, preparations.clone());
-        Ok(preparations)
+        memoize_success(&self.preparations, (workspace.to_string(), kind), fetch)
     }
 
     pub(super) fn lookup(
@@ -152,6 +128,24 @@ impl SourceCache {
             lookup,
         )
     }
+}
+
+/// Success-only memo shared by the workspace-scoped task caches: a cached
+/// value is cloned back, otherwise `fetch` runs and only its success is
+/// stored. Errors are never inserted, so a later call retries the fetch.
+fn memoize_success<K: Ord, V: Clone, E>(
+    entries: &RefCell<BTreeMap<K, V>>,
+    key: K,
+    fetch: impl FnOnce() -> Result<V, E>,
+) -> Result<V, E> {
+    if let Some(cached) = entries.borrow().get(&key).cloned() {
+        return Ok(cached);
+    }
+    // Release the read borrow before `fetch` runs: it may call back into
+    // other cache entries.
+    let value = fetch()?;
+    entries.borrow_mut().insert(key, value.clone());
+    Ok(value)
 }
 
 fn cached<K: Ord, T: Clone>(
