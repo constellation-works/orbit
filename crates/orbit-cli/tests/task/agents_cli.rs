@@ -1,18 +1,19 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chrono::Utc;
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
+use orbit_core::JobRunState;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::agents_fixture::{
+    AgentsFixture, SeedRun, assert_contains, assert_excludes, assert_report, refused_stderr,
+    refused_text, refused_tool, tool_json,
+};
 use crate::bound_server::{Announcement, BoundServer};
-use crate::isolated_cli_fixture::Fixture;
 
 /// The fields that differ between two reads of the same scan: when it ran,
 /// the window start derived from it, the reported window end, and how long
@@ -35,108 +36,63 @@ fn agents_cli_and_tools_serve_the_api_payload() {
         return;
     }
 
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    let landed = {
-        // A managed run exports worker authority that would bind the fixture
-        // runtime to the live store.
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        let workspace = runtime.workspace_id().unwrap();
-        // One implemented task per call: the agent's move into in-progress
-        // starts the attempt, and the implementation run on `crew` and
-        // `model` that began before it and finished during it worked it.
-        let implement = |run_id: &str, crew: &str, model: &str, status| {
-            let id = runtime
-                .add_task(TaskAddParams {
-                    title: format!("implemented by {run_id}"),
-                    description: "agent scorecard fixture".into(),
-                    plan: "implement the change".into(),
-                    complexity: TaskComplexity::Hard,
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-                .to_string();
-            runtime
-                .update_task_with_identity(
-                    &id,
-                    TaskUpdateParams {
-                        status: Some(TaskStatus::InProgress),
-                        ..Default::default()
-                    },
-                    Some("claude".into()),
-                    Some(model.into()),
-                )
-                .unwrap();
-            let finished = Utc::now();
-            let started = finished - chrono::Duration::hours(1);
-            runtime
-                .sqlite_store()
-                .unwrap()
-                .upsert_job_run_for_workspace(
-                    &workspace,
-                    &JobRun {
-                        build: None,
-                        run_id: run_id.into(),
-                        job_id: "task_pr_pipeline".into(),
-                        attempt: 1,
-                        state: JobRunState::Success,
-                        scheduled_at: started,
-                        created_at: started,
-                        started_at: Some(started),
-                        finished_at: Some(finished),
-                        duration_ms: None,
-                        pid: None,
-                        pid_start_time: None,
-                        input: Some(json!({ "task_ids": [id] })),
-                        retry_source_run_id: None,
-                        knowledge_metrics: None,
-                        resolved_crew: Some(crew.into()),
-                        crew_model: Some(model.into()),
-                        steps: Vec::new(),
-                        executed_on: None,
-                    },
-                    None,
-                )
-                .unwrap();
-            if status != TaskStatus::InProgress {
-                runtime
-                    .force_update_task_with_identity(
-                        &id,
-                        TaskUpdateParams {
-                            status: Some(status),
-                            ..Default::default()
-                        },
-                        None,
-                        None,
-                    )
-                    .unwrap();
-            }
-            id
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    // One implemented task per call, worked by its run on `crew`/`model`.
+    let implement = |run_id: &str, crew: &str, model: &str, status: TaskStatus| {
+        let seed = SeedRun {
+            title: format!("implemented by {run_id}"),
+            description: "agent scorecard fixture",
+            complexity: Some(TaskComplexity::Hard),
+            tags: Vec::new(),
+            model,
+            run_id,
+            crew,
+            state: JobRunState::Success,
         };
-        let landed = implement("jrun-opus-1", "opus", "claude-opus-5-5", TaskStatus::Done);
-        implement(
+        let id = agents.seed_with_run(&seed);
+        if status != TaskStatus::InProgress {
+            agents.finish_task(&id, status);
+        }
+        id
+    };
+    // Table rows: (run, crew, model, final status); the first row lands.
+    let mut landed = String::new();
+    for (index, (run_id, crew, model, status)) in [
+        ("jrun-opus-1", "opus", "claude-opus-5-5", TaskStatus::Done),
+        (
             "jrun-opus-2",
             "opus",
             "claude-opus-5-5",
             TaskStatus::InProgress,
-        );
-        implement(
+        ),
+        (
             "jrun-sonnet-1",
             "sonnet",
             "claude-sonnet-5-5",
             TaskStatus::InProgress,
-        );
-        landed
-    };
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = implement(run_id, crew, model, status);
+        if index == 0 {
+            landed = id;
+        }
+    }
+    implement(
+        "jrun-opus-2",
+        "opus",
+        "claude-opus-5-5",
+        TaskStatus::InProgress,
+    );
+    implement(
+        "jrun-sonnet-1",
+        "sonnet",
+        "claude-sonnet-5-5",
+        TaskStatus::InProgress,
+    );
 
     let selection = ["--window", "30d", "--min-support", "2"];
     let input = json!({ "role": "implementers", "window": "30d", "min_support": 2 });
@@ -169,14 +125,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
         sonnet["interval"].is_null(),
         "below-support row has no interval: {sonnet}"
     );
-    let tool = fixture.json(&[
-        "tool",
-        "run",
-        "orbit.agents.scorecard",
-        "--full",
-        "--input",
-        &input.to_string(),
-    ]);
+    let tool = tool_json(fixture, "orbit.agents.scorecard", &input);
     assert_eq!(tool["cache_ttl_seconds"], 0, "{tool}");
     assert_eq!(
         scan_independent(scorecard.clone()),
@@ -218,14 +167,7 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     );
     assert_eq!(detail["row"]["crew"], "sonnet", "{detail}");
     assert_eq!(detail["cache_ttl_seconds"], 0, "{detail}");
-    let tool_detail = fixture.json(&[
-        "tool",
-        "run",
-        "orbit.agents.show",
-        "--full",
-        "--input",
-        &detail_input.to_string(),
-    ]);
+    let tool_detail = tool_json(fixture, "orbit.agents.show", &detail_input);
     assert_eq!(
         scan_independent(detail.clone()),
         scan_independent(tool_detail),
@@ -282,38 +224,26 @@ fn agents_cli_and_tools_serve_the_api_payload() {
     }
 
     // An unknown role is refused by name on both surfaces.
-    let refused = fixture
-        .command(&["agents", "scorecard", "--role", "orchestrators"])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
-    let refused = String::from_utf8_lossy(&refused);
-    assert!(
-        refused.contains("orchestrators") && refused.contains("implementers"),
-        "the refusal names the role and the choices: {refused}"
+    let refused = refused_stderr(fixture, &["agents", "scorecard", "--role", "orchestrators"]);
+    assert_contains(
+        "the refusal names the role and the choices",
+        &refused,
+        &["orchestrators", "implementers"],
     );
-    let refused = fixture
-        .command(&[
+    let refused = refused_text(
+        fixture,
+        &[
             "tool",
             "run",
             "orbit.agents.scorecard",
             "--input",
             &json!({ "role": "orchestrators" }).to_string(),
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .clone();
-    let refused = format!(
-        "{}{}",
-        String::from_utf8_lossy(&refused.stdout),
-        String::from_utf8_lossy(&refused.stderr)
+        ],
     );
-    assert!(
-        refused.contains("orchestrators") && refused.contains("implementers"),
-        "the tool refusal names the role and the choices: {refused}"
+    assert_contains(
+        "the tool refusal names the role and the choices",
+        &refused,
+        &["orchestrators", "implementers"],
     );
 
     // The human views list each row and the tasks behind a count.
@@ -417,92 +347,76 @@ fn agents_cli_and_tools_serve_the_api_payload() {
         "an empty scorecard still explains itself on stderr"
     );
 
-    let refused = fixture
-        .command(&[
+    let refused = refused_stderr(
+        fixture,
+        &[
             "agents",
             "show",
             "--role",
             "implementers",
             "--crew",
             "nobody",
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
-    let refused = String::from_utf8_lossy(&refused);
-    assert!(
-        refused.contains("nobody"),
-        "a crew with no row is refused by name: {refused}"
+        ],
+    );
+    assert_contains(
+        "a crew with no row is refused by name",
+        &refused,
+        &["nobody"],
     );
     // [ORB-19171] The missing-row refusal keeps crew, role and window and
     // offers a usable scorecard or window-selection next step instead of
     // implying the crew is unconfigured: a configured crew with no work in
     // the window also has no row.
-    for part in [
-        "implementers",
-        "30d",
-        "scorecard",
-        "orbit agents scorecard --role implementers",
-        "--window",
-        "no work in the window has no row",
-    ] {
-        assert!(
-            refused.contains(part),
-            "ORB-19171: the missing-row refusal names a recovery step ({part}): {refused}"
-        );
-    }
-    for part in [
-        "unconfigured",
-        "not configured",
-        "unknown crew",
-        "orbit_agents_",
-        "orbit.agents.",
-        "dashboard",
-    ] {
-        assert!(
-            !refused.contains(part),
-            "ORB-19171: the CLI refusal excludes other surfaces and configuration diagnoses ({part}): {refused}"
-        );
-    }
+    assert_contains(
+        "ORB-19171: the missing-row refusal names a recovery step",
+        &refused,
+        &[
+            "implementers",
+            "30d",
+            "scorecard",
+            "orbit agents scorecard --role implementers",
+            "--window",
+            "no work in the window has no row",
+        ],
+    );
+    assert_excludes(
+        "ORB-19171: the CLI refusal excludes other surfaces and configuration diagnoses",
+        &refused,
+        &[
+            "unconfigured",
+            "not configured",
+            "unknown crew",
+            "orbit_agents_",
+            "orbit.agents.",
+            "dashboard",
+        ],
+    );
 
     // The tool surface refuses with the same code and recovery step.
-    let refused = fixture
-        .command(&[
-            "tool",
-            "run",
-            "orbit.agents.show",
-            "--input",
-            &json!({ "role": "implementers", "crew": "nobody" }).to_string(),
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
-    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    let refused = refused_tool(
+        fixture,
+        "orbit.agents.show",
+        json!({ "role": "implementers", "crew": "nobody" }),
+    );
     assert_eq!(refused["code"], "invalid_input", "{refused}");
     let message = refused["error"].as_str().unwrap();
-    for part in [
-        "nobody",
-        "implementers",
-        "30d",
-        "orbit.agents.scorecard",
-        "window",
-        "no work in the window has no row",
-    ] {
-        assert!(
-            message.contains(part),
-            "ORB-19171: the tool refusal names a recovery step ({part}): {message}"
-        );
-    }
-    for part in ["--window", "orbit agents", "orbit_agents_", "dashboard"] {
-        assert!(
-            !message.contains(part),
-            "ORB-19171: the tool refusal only names its own surface ({part}): {message}"
-        );
-    }
+    assert_contains(
+        "ORB-19171: the tool refusal names a recovery step",
+        message,
+        &[
+            "nobody",
+            "implementers",
+            "30d",
+            "orbit.agents.scorecard",
+            "window",
+            "no work in the window has no row",
+        ],
+    );
+    assert_excludes(
+        "ORB-19171: the tool refusal only names its own surface",
+        message,
+        &["--window", "orbit agents", "orbit_agents_", "dashboard"],
+    );
 }
 
 /// A crew that ran two models in the window has two implementers rows, so
@@ -518,82 +432,14 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
     }
 
     const MODELS: [&str; 2] = ["claude-haiku-5-5", "claude-sonnet-5-5"];
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    {
-        // A managed run exports worker authority that would bind the fixture
-        // runtime to the live store.
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        let workspace = runtime.workspace_id().unwrap();
-        for (index, model) in MODELS.iter().enumerate() {
-            let id = runtime
-                .add_task(TaskAddParams {
-                    title: format!("implemented {index}"),
-                    description: "agent detail fixture".into(),
-                    plan: "implement the change".into(),
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-                .to_string();
-            // An agent's move into in-progress starts the attempt the run worked.
-            runtime
-                .update_task_with_identity(
-                    &id,
-                    TaskUpdateParams {
-                        status: Some(TaskStatus::InProgress),
-                        ..Default::default()
-                    },
-                    Some("claude".into()),
-                    Some((*model).into()),
-                )
-                .unwrap();
-            // The implementation run that worked the task, on the crew and
-            // model its implementers row is keyed by. It began before the
-            // attempt and finished during it, so no run owned the status move.
-            let finished = Utc::now();
-            let started = finished - chrono::Duration::hours(1);
-            runtime
-                .sqlite_store()
-                .unwrap()
-                .upsert_job_run_for_workspace(
-                    &workspace,
-                    &JobRun {
-                        build: None,
-                        run_id: format!("jrun-sol-{index}"),
-                        job_id: "task_pr_pipeline".into(),
-                        attempt: 1,
-                        state: JobRunState::Success,
-                        scheduled_at: started,
-                        created_at: started,
-                        started_at: Some(started),
-                        finished_at: Some(finished),
-                        duration_ms: None,
-                        pid: None,
-                        pid_start_time: None,
-                        input: Some(json!({ "task_ids": [id] })),
-                        retry_source_run_id: None,
-                        knowledge_metrics: None,
-                        resolved_crew: Some("sol".into()),
-                        crew_model: Some((*model).into()),
-                        steps: Vec::new(),
-                        executed_on: None,
-                    },
-                    None,
-                )
-                .unwrap();
-        }
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    for (index, model) in MODELS.iter().enumerate() {
+        let run_id = format!("jrun-sol-{index}");
+        agents.seed_ok(format!("implemented {index}"), None, "sol", model, &run_id);
     }
 
-    // The CLI's selector is `--model`.
+    // The CLI refusal exits with code 1.
     let refused = fixture
         .command(&[
             "agents",
@@ -611,39 +457,20 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
         .stderr
         .clone();
     let refused = String::from_utf8_lossy(&refused);
-    assert!(
-        refused.contains("--model"),
-        "the CLI names --model: {refused}"
-    );
-    for model in MODELS {
-        assert!(refused.contains(model), "a candidate model: {refused}");
-    }
+    assert_contains("the CLI names --model", &refused, &["--model"]);
+    assert_contains("a candidate model", &refused, &MODELS);
 
     // Over MCP and `orbit tool run` the selector is `row_model`, and the
     // refusal keeps its error code. The JSON error payload goes to stderr.
-    let refused = fixture
-        .command(&[
-            "tool",
-            "run",
-            "orbit.agents.show",
-            "--input",
-            &json!({ "role": "implementers", "crew": "sol", "window": "30d" }).to_string(),
-        ])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
-    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    let refused = refused_tool(
+        fixture,
+        "orbit.agents.show",
+        json!({ "role": "implementers", "crew": "sol", "window": "30d" }),
+    );
     assert_eq!(refused["code"], "invalid_input", "{refused}");
     let message = refused["error"].as_str().unwrap();
-    assert!(
-        message.contains("row_model"),
-        "the tool names row_model: {message}"
-    );
-    for model in MODELS {
-        assert!(message.contains(model), "a candidate model: {message}");
-    }
+    assert_contains("the tool names row_model", message, &["row_model"]);
+    assert_contains("a candidate model", message, &MODELS);
 
     // A listed model is accepted through each surface's selector.
     let by_row_model = fixture.json(&[
@@ -652,11 +479,8 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
         "orbit.agents.show",
         "--full",
         "--input",
-        &json!({
-            "role": "implementers", "crew": "sol", "window": "30d",
-            "row_model": MODELS[1],
-        })
-        .to_string(),
+        &json!({ "role": "implementers", "crew": "sol", "window": "30d", "row_model": MODELS[1] })
+            .to_string(),
     ]);
     assert_eq!(by_row_model["row"]["model"], MODELS[1], "{by_row_model}");
     let by_model = fixture.json(&[
@@ -684,10 +508,9 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
     ) {
         return;
     }
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    let config_path = workspace_root.join("config.toml");
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let config_path = agents.workspace_root.join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     std::fs::write(
         &config_path,
@@ -696,75 +519,17 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
         ),
     )
     .unwrap();
-
-    // Seed one counted implementation attempt so the cell matrix is
-    // nonempty: a tagged task moved into in-progress by its crew/model,
-    // worked by a finished implementation run in the window.
-    {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        let workspace = runtime.workspace_id().unwrap();
-        let id = runtime
-            .add_task(TaskAddParams {
-                title: "by-type implemented".into(),
-                description: "by-type scorecard fixture".into(),
-                plan: "implement the change".into(),
-                tags: vec!["audit-work".to_string()],
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let finished = Utc::now();
-        let started = finished - chrono::Duration::hours(1);
-        runtime
-            .sqlite_store()
-            .unwrap()
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: "jrun-by-type-0".into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Success,
-                    scheduled_at: started,
-                    created_at: started,
-                    started_at: Some(started),
-                    finished_at: Some(finished),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("sol".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-    }
+    // Seed one counted implementation attempt so the cell matrix is nonempty.
+    agents.seed_with_run(&SeedRun {
+        title: "by-type implemented".into(),
+        description: "by-type scorecard fixture",
+        complexity: Some(TaskComplexity::Low),
+        tags: vec!["audit-work".to_string()],
+        model: "model-fixture",
+        run_id: "jrun-by-type-0",
+        crew: "sol",
+        state: JobRunState::Success,
+    });
 
     let card = fixture.json(&[
         "agents",
@@ -844,107 +609,36 @@ fn agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows() {
         ("sol", Some(None)),
         ("sol", None),
     ];
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let runtime = &agents.runtime;
+    for (index, (crew, effort)) in specs.iter().enumerate() {
+        let run_id = format!("jrun-effort-{index}");
+        let id = agents.seed_ok(
+            format!("effort-row {index}"),
+            Some(TaskComplexity::Low),
+            crew,
+            "model-fixture",
+            &run_id,
         );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        let workspace = runtime.workspace_id().unwrap();
-        for (index, (crew, effort)) in specs.iter().enumerate() {
-            let id = runtime
-                .add_task(TaskAddParams {
-                    title: format!("effort-row {index}"),
-                    description: "plain effort-row fixture".into(),
-                    plan: "implement the change".into(),
-                    complexity: TaskComplexity::Low,
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-                .to_string();
+        if let Some(effort) = effort {
+            let execution_id = agents.begin_execution(&run_id, "fixture", crew, *effort);
             runtime
-                .update_task_with_identity(
-                    &id,
-                    TaskUpdateParams {
-                        status: Some(TaskStatus::InProgress),
+                .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                    agent_execution_id: Some(execution_id),
+                    job_run_id: run_id,
+                    account: None,
+                    activity_id: "implement_one".into(),
+                    agent: "fixture".into(),
+                    provider: None,
+                    model: Some("model-fixture".into()),
+                    task_ids: vec![id],
+                    trace: orbit_types::telemetry::InvocationTrace {
+                        duration_ms: 60_000,
                         ..Default::default()
                     },
-                    Some("claude".into()),
-                    Some("model-fixture".into()),
-                )
+                })
                 .unwrap();
-            let run_id = format!("jrun-effort-{index}");
-            let finished = Utc::now();
-            let started = finished - chrono::Duration::hours(1);
-            runtime
-                .sqlite_store()
-                .unwrap()
-                .upsert_job_run_for_workspace(
-                    &workspace,
-                    &JobRun {
-                        build: None,
-                        run_id: run_id.clone(),
-                        job_id: "task_pr_pipeline".into(),
-                        attempt: 1,
-                        state: JobRunState::Success,
-                        scheduled_at: started,
-                        created_at: started,
-                        started_at: Some(started),
-                        finished_at: Some(finished),
-                        duration_ms: None,
-                        pid: None,
-                        pid_start_time: None,
-                        input: Some(json!({ "task_ids": [id] })),
-                        retry_source_run_id: None,
-                        knowledge_metrics: None,
-                        resolved_crew: Some((*crew).into()),
-                        crew_model: Some("model-fixture".into()),
-                        steps: Vec::new(),
-                        executed_on: None,
-                    },
-                    None,
-                )
-                .unwrap();
-            if let Some(effort) = effort {
-                let execution_id = runtime
-                    .sqlite_store()
-                    .unwrap()
-                    .begin_agent_execution(
-                        &workspace,
-                        &run_id,
-                        "implement_one",
-                        "fixture",
-                        Some("model-fixture"),
-                        &orbit_types::telemetry::AgentExecutionIdentity {
-                            crew: Some((*crew).into()),
-                            reasoning_effort: *effort,
-                        },
-                    )
-                    .unwrap();
-                runtime
-                    .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                        agent_execution_id: Some(execution_id),
-                        job_run_id: run_id,
-                        account: None,
-                        activity_id: "implement_one".into(),
-                        agent: "fixture".into(),
-                        provider: None,
-                        model: Some("model-fixture".into()),
-                        task_ids: vec![id],
-                        trace: orbit_types::telemetry::InvocationTrace {
-                            duration_ms: 60_000,
-                            ..Default::default()
-                        },
-                    })
-                    .unwrap();
-            }
         }
     }
 
@@ -1000,40 +694,36 @@ fn agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows() {
             .collect()
     }
 
+    // Table rows: (case, plain output) — each must distinguish every label.
     let by_type = plain(&["--by-type"]);
-    let header: Vec<&str> = by_type.lines().next().unwrap().split('\t').collect();
-    assert_eq!(header[0], "CREWS", "{by_type}");
-    assert_eq!(header[1], "ROW", "{by_type}");
-    let cells = records(&by_type);
-    for label in labels {
-        assert!(
-            cells.iter().any(|fields| fields[1] == label),
-            "plain by-type distinguishes {label}:\n{by_type}"
-        );
+    let per_task = plain(&["--per-task"]);
+    for (case, output) in [("by-type", &by_type), ("per-task", &per_task)] {
+        let header: Vec<&str> = output.lines().next().unwrap().split('\t').collect();
+        assert_eq!(header[0], "CREWS", "{case}: {output}");
+        assert_eq!(header[1], "ROW", "{case}: {output}");
+        let rows = records(output);
+        for label in labels {
+            assert!(
+                rows.iter().any(|f| f[1] == label),
+                "plain {case} distinguishes {label}:\n{output}"
+            );
+        }
+        if case == "per-task" {
+            assert_eq!(rows.len(), specs.len(), "one row per task:\n{output}");
+        }
     }
+    let cells = records(&by_type);
     let medium = cells.iter().find(|fields| fields[1] == labels[0]).unwrap();
     assert!(
         medium[0].contains("other") && medium[0].contains("sol"),
         "the medium by-type cell lists both contributing crews:\n{by_type}"
     );
-
-    let per_task = plain(&["--per-task"]);
-    let header: Vec<&str> = per_task.lines().next().unwrap().split('\t').collect();
-    assert_eq!(header[0], "CREWS", "{per_task}");
-    assert_eq!(header[1], "ROW", "{per_task}");
     let tasks = records(&per_task);
-    assert_eq!(tasks.len(), specs.len(), "one row per task:\n{per_task}");
-    for label in labels {
-        assert!(
-            tasks.iter().any(|fields| fields[1] == label),
-            "plain per-task retains {label}:\n{per_task}"
-        );
-    }
     assert!(
         tasks
             .iter()
-            .filter(|fields| fields[1] == labels[0])
-            .any(|fields| fields[0].contains("other")),
+            .filter(|f| f[1] == labels[0])
+            .any(|f| f[0].contains("other")),
         "a medium per-task row lists its contributing crew:\n{per_task}"
     );
 }
@@ -1047,91 +737,20 @@ fn agents_scorecard_and_show_use_launch_effort_when_invocation_never_completed()
     }
     use orbit_types::identity::ReasoningEffort::High;
 
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
-        );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        let workspace = runtime.workspace_id().unwrap();
-        let id = runtime
-            .add_task(TaskAddParams {
-                title: "launched but unfinished".into(),
-                description: "plain launch-effort fixture".into(),
-                plan: "implement the change".into(),
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let run_id = "jrun-launch-only";
-        let finished = Utc::now();
-        let started = finished - chrono::Duration::hours(1);
-        runtime
-            .sqlite_store()
-            .unwrap()
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: run_id.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Failed,
-                    scheduled_at: started,
-                    created_at: started,
-                    started_at: Some(started),
-                    finished_at: Some(finished),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("sol".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-        // The agent launched at high effort, but its invocation never
-        // completed, so no invocation record follows this launch.
-        runtime
-            .sqlite_store()
-            .unwrap()
-            .begin_agent_execution(
-                &workspace,
-                run_id,
-                "implement_one",
-                "fixture",
-                Some("model-fixture"),
-                &orbit_types::telemetry::AgentExecutionIdentity {
-                    crew: Some("sol".into()),
-                    reasoning_effort: Some(High),
-                },
-            )
-            .unwrap();
-    }
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let run_id = "jrun-launch-only";
+    agents.seed_fixture_run(
+        "launched but unfinished".into(),
+        Some(TaskComplexity::Low),
+        "sol",
+        "model-fixture",
+        run_id,
+        JobRunState::Failed,
+    );
+    // The agent launched at high effort, but its invocation never
+    // completed, so no invocation record follows this launch.
+    agents.begin_execution(run_id, "fixture", "sol", Some(High));
 
     let card = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
     let rows = card["rows"].as_array().unwrap();
@@ -1169,530 +788,235 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
     }
     use orbit_types::identity::ReasoningEffort;
 
-    // (crew, recorded dispatch effort, launch argvs audited for the run).
-    struct Spec {
-        crew: &'static str,
-        dispatch: Option<ReasoningEffort>,
-        launches: Vec<Vec<&'static str>>,
-    }
-    let specs = [
+    // Table rows: (crew, recorded dispatch effort, launch argvs for the run).
+    type BackfillSpec<'a> = (&'a str, Option<ReasoningEffort>, Vec<Vec<&'a str>>);
+    let specs: [BackfillSpec<'_>; 8] = [
         // 0: claude
-        Spec {
-            crew: "claude-crew",
-            dispatch: None,
-            launches: vec![vec![
+        (
+            "claude-crew",
+            None,
+            vec![vec![
                 "claude",
                 "--model",
                 "model-fixture",
                 "--effort",
                 "high",
             ]],
-        },
+        ),
         // 1: codex
-        Spec {
-            crew: "codex-crew",
-            dispatch: None,
-            launches: vec![vec![
+        (
+            "codex-crew",
+            None,
+            vec![vec![
                 "codex",
                 "exec",
                 "--config",
                 "model_reasoning_effort=\"xhigh\"",
             ]],
-        },
+        ),
         // 2: grok
-        Spec {
-            crew: "grok-crew",
-            dispatch: None,
-            launches: vec![vec!["grok", "--reasoning-effort", "high"]],
-        },
+        (
+            "grok-crew",
+            None,
+            vec![vec!["grok", "--reasoning-effort", "high"]],
+        ),
         // 3: muse
-        Spec {
-            crew: "muse-crew",
-            dispatch: None,
-            launches: vec![vec!["muse", "exec", "--reasoning-effort", "medium"]],
-        },
-        // 4: no effort flag rendered → provider default
-        Spec {
-            crew: "default-crew",
-            dispatch: None,
-            launches: vec![vec!["claude", "--model", "model-fixture"]],
-        },
-        // 5: no matching launch → unknown
-        Spec {
-            crew: "unknown-crew",
-            dispatch: None,
-            launches: vec![],
-        },
-        // 6: two candidate launches disagree → unknown
-        Spec {
-            crew: "unknown-crew",
-            dispatch: None,
-            launches: vec![
+        (
+            "muse-crew",
+            None,
+            vec![vec!["muse", "exec", "--reasoning-effort", "medium"]],
+        ),
+        // 4: no effort flag rendered -> provider default
+        (
+            "default-crew",
+            None,
+            vec![vec!["claude", "--model", "model-fixture"]],
+        ),
+        // 5: no matching launch -> unknown
+        ("unknown-crew", None, vec![]),
+        // 6: two candidate launches disagree -> unknown
+        (
+            "unknown-crew",
+            None,
+            vec![
                 vec!["claude", "--effort", "high"],
                 vec!["claude", "--effort", "medium"],
             ],
-        },
+        ),
         // 7: identity recorded at dispatch; its launch says otherwise
-        Spec {
-            crew: "low-crew",
-            dispatch: Some(ReasoningEffort::Low),
-            launches: vec![vec!["claude", "--effort", "max"]],
-        },
+        (
+            "low-crew",
+            Some(ReasoningEffort::Low),
+            vec![vec!["claude", "--effort", "max"]],
+        ),
     ];
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    let workspace;
-    {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let workspace = agents.workspace.clone();
+    for (index, (crew, dispatch, launches)) in specs.iter().enumerate() {
+        let run_id = format!("jrun-backfill-{index}");
+        let id = agents.seed_ok(
+            format!("backfill {index}"),
+            Some(TaskComplexity::Low),
+            crew,
+            "model-fixture",
+            &run_id,
         );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        workspace = runtime.workspace_id().unwrap();
-        let store = runtime.sqlite_store().unwrap();
-        for (index, spec) in specs.iter().enumerate() {
-            let id = runtime
-                .add_task(TaskAddParams {
-                    title: format!("backfill {index}"),
-                    description: "dispatch effort backfill fixture".into(),
-                    plan: "implement the change".into(),
-                    complexity: TaskComplexity::Low,
-                    ..Default::default()
-                })
-                .unwrap()
-                .id
-                .to_string();
-            runtime
-                .update_task_with_identity(
-                    &id,
-                    TaskUpdateParams {
-                        status: Some(TaskStatus::InProgress),
-                        ..Default::default()
-                    },
-                    Some("claude".into()),
-                    Some("model-fixture".into()),
-                )
-                .unwrap();
-            let run_id = format!("jrun-backfill-{index}");
-            let finished = Utc::now();
-            let started = finished - chrono::Duration::hours(1);
-            store
-                .upsert_job_run_for_workspace(
-                    &workspace,
-                    &JobRun {
-                        build: None,
-                        run_id: run_id.clone(),
-                        job_id: "task_pr_pipeline".into(),
-                        attempt: 1,
-                        state: JobRunState::Success,
-                        scheduled_at: started,
-                        created_at: started,
-                        started_at: Some(started),
-                        finished_at: Some(finished),
-                        duration_ms: None,
-                        pid: None,
-                        pid_start_time: None,
-                        input: Some(json!({ "task_ids": [id] })),
-                        retry_source_run_id: None,
-                        knowledge_metrics: None,
-                        resolved_crew: Some(spec.crew.into()),
-                        crew_model: Some("model-fixture".into()),
-                        steps: Vec::new(),
-                        executed_on: None,
-                    },
-                    None,
-                )
-                .unwrap();
-            // The invocation is recorded now and ran for a minute, so its
-            // launch was a minute ago.
-            let launched = Utc::now() - chrono::Duration::seconds(60);
-            let audit = |seq: usize, model: &str, argv: &[&str]| {
-                store
-                    .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                        workspace_id: workspace.clone(),
-                        event_id: format!("v2evt-{run_id}-{seq}"),
-                        source: "fixture".into(),
-                        schema_version: 1,
-                        event_type: "cli.invocation.started".into(),
-                        ts: launched,
-                        run_id: run_id.clone(),
-                        agent_identity: "system".into(),
-                        parent_event_id: None,
-                        workspace_path: None,
-                        payload_json: json!({
-                            "body_kind": "cli_invocation_started",
-                            "model": model,
-                            "argv_redacted": argv,
-                        })
-                        .to_string(),
-                    })
-                    .unwrap();
-            };
-            for (seq, argv) in spec.launches.iter().enumerate() {
-                audit(seq, "model-fixture", argv);
-            }
-            let invoke = |activity: &str, model: &str, execution: Option<i64>| {
-                runtime
-                    .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                        agent_execution_id: execution,
-                        job_run_id: run_id.clone(),
-                        account: None,
-                        activity_id: activity.into(),
-                        agent: "claude".into(),
-                        provider: None,
-                        model: Some(model.into()),
-                        task_ids: vec![id.clone()],
-                        trace: orbit_types::telemetry::InvocationTrace {
-                            duration_ms: 60_000,
-                            ..Default::default()
-                        },
-                    })
-                    .unwrap();
-            };
-            let execution = spec.dispatch.map(|effort| {
-                store
-                    .begin_agent_execution(
-                        &workspace,
-                        &run_id,
-                        "implement_one",
-                        "claude",
-                        Some("model-fixture"),
-                        &orbit_types::telemetry::AgentExecutionIdentity {
-                            crew: Some(spec.crew.into()),
-                            reasoning_effort: Some(effort),
-                        },
-                    )
-                    .unwrap()
-            });
-            invoke("implement_one", "model-fixture", execution);
-            if index == 0 {
-                // A pilot in the same run is not the run's executor: its
-                // effort is backfilled, its crew is not guessed.
-                audit(9, "model-pilot", &["claude", "--effort", "low"]);
-                invoke("pilot", "model-pilot", None);
-            }
-        }
-        // A launch event that records the effort directly, with no argv:
-        // the recorded effort alone is evidence for its invocation.
-        let recorded_id = runtime
-            .add_task(TaskAddParams {
-                title: "backfill recorded effort".into(),
-                description: "dispatch effort backfill fixture".into(),
-                plan: "implement the change".into(),
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &recorded_id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let recorded_run = "jrun-backfill-recorded";
-        let finished = Utc::now();
-        let started = finished - chrono::Duration::hours(1);
-        store
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: recorded_run.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Success,
-                    scheduled_at: started,
-                    created_at: started,
-                    started_at: Some(started),
-                    finished_at: Some(finished),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [recorded_id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("recorded-crew".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-        store
-            .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                workspace_id: workspace.clone(),
-                event_id: format!("v2evt-{recorded_run}-0"),
-                source: "fixture".into(),
-                schema_version: 1,
-                event_type: "cli.invocation.started".into(),
-                ts: Utc::now() - chrono::Duration::seconds(60),
-                run_id: recorded_run.into(),
-                agent_identity: "system".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: json!({
-                    "body_kind": "cli_invocation_started",
-                    "provider": "claude",
-                    "model": "model-fixture",
-                    "reasoning_effort": "low",
-                })
-                .to_string(),
-            })
-            .unwrap();
-        runtime
-            .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                agent_execution_id: None,
-                job_run_id: recorded_run.into(),
-                account: None,
-                activity_id: "implement_one".into(),
-                agent: "claude".into(),
-                provider: None,
-                model: Some("model-fixture".into()),
-                task_ids: vec![recorded_id],
-                trace: orbit_types::telemetry::InvocationTrace {
-                    duration_ms: 60_000,
-                    ..Default::default()
-                },
-            })
-            .unwrap();
-        // A run whose agent launched twice, at different efforts, but whose
-        // invocation never completed. No invocation exists, so the backfill
-        // records each launch on its own, proven to its own step interval.
-        let launch_id = runtime
-            .add_task(TaskAddParams {
-                title: "backfill launch only".into(),
-                description: "dispatch effort backfill fixture".into(),
-                plan: "implement the change".into(),
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &launch_id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let launch_run = "jrun-backfill-launch-only";
-        let launch_now = Utc::now();
-        let launch_started = launch_now - chrono::Duration::hours(2);
-        store
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: launch_run.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Failed,
-                    scheduled_at: launch_started,
-                    created_at: launch_started,
-                    started_at: Some(launch_started),
-                    finished_at: Some(launch_now),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [launch_id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("launch-crew".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-        let step_event =
-            |seq: usize, event_type: &str, body: serde_json::Value, at: chrono::DateTime<Utc>| {
-                store
-                    .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                        workspace_id: workspace.clone(),
-                        event_id: format!("v2evt-{launch_run}-{seq}"),
-                        source: "fixture".into(),
-                        schema_version: 1,
-                        event_type: event_type.into(),
-                        ts: at,
-                        run_id: launch_run.into(),
-                        agent_identity: "system".into(),
-                        parent_event_id: None,
-                        workspace_path: None,
-                        payload_json: body.to_string(),
-                    })
-                    .unwrap();
-            };
-        let launch_body = |effort: &str| {
-            json!({
-                "body_kind": "cli_invocation_started",
-                "provider": "claude",
-                "model": "model-fixture",
-                "argv_redacted": ["claude", "--model", "model-fixture", "--effort", effort],
-            })
+        // The invocation is recorded now and ran for a minute, so its
+        // launch was a minute ago.
+        let launched = Utc::now() - chrono::Duration::seconds(60);
+        let audit = |seq: usize, model: &str, argv: &[&str]| {
+            agents.audit(
+                &run_id,
+                format!("v2evt-{run_id}-{seq}"),
+                "cli.invocation.started",
+                launched,
+                json!({ "body_kind": "cli_invocation_started", "model": model, "argv_redacted": argv }),
+            );
         };
-        step_event(
+        for (seq, argv) in launches.iter().enumerate() {
+            audit(seq, "model-fixture", argv);
+        }
+        let invoke = |activity: &str, model: &str, execution: Option<i64>| {
+            agents.invoke(&run_id, activity, model, &id, execution);
+        };
+        let execution =
+            dispatch.map(|effort| agents.begin_execution(&run_id, "claude", crew, Some(effort)));
+        invoke("implement_one", "model-fixture", execution);
+        if index == 0 {
+            // A pilot in the same run is not the run's executor: its
+            // effort is backfilled, its crew is not guessed.
+            audit(9, "model-pilot", &["claude", "--effort", "low"]);
+            invoke("pilot", "model-pilot", None);
+        }
+    }
+    // A launch event that records the effort directly, with no argv:
+    // the recorded effort alone is evidence for its invocation.
+    let recorded_run = "jrun-backfill-recorded";
+    let recorded_id = agents.seed_ok(
+        "backfill recorded effort".into(),
+        Some(TaskComplexity::Low),
+        "recorded-crew",
+        "model-fixture",
+        recorded_run,
+    );
+    agents.audit(recorded_run, format!("v2evt-{recorded_run}-0"), "cli.invocation.started",
+        Utc::now() - chrono::Duration::seconds(60),
+        json!({ "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture", "reasoning_effort": "low" }));
+    agents.invoke(
+        recorded_run,
+        "implement_one",
+        "model-fixture",
+        &recorded_id,
+        None,
+    );
+    // A run whose agent launched twice, at different efforts, but whose
+    // invocation never completed. No invocation exists, so the backfill
+    // records each launch on its own, proven to its own step interval.
+    let launch_id = agents.seed_task(
+        "backfill launch only".into(),
+        "dispatch effort backfill fixture",
+    );
+    let launch_run = "jrun-backfill-launch-only";
+    let launch_now = Utc::now();
+    let launch_started = launch_now - chrono::Duration::hours(2);
+    agents.record_run_window(
+        launch_run,
+        &launch_id,
+        "launch-crew",
+        "model-fixture",
+        JobRunState::Failed,
+        (launch_started, launch_now),
+    );
+    let step_event = |seq: usize, event_type: &str, body: Value, at: chrono::DateTime<Utc>| {
+        agents.audit(
+            launch_run,
+            format!("v2evt-{launch_run}-{seq}"),
+            event_type,
+            at,
+            body,
+        );
+    };
+    let launch_body = |effort: &str| {
+        json!({
+            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
+            "argv_redacted": ["claude", "--model", "model-fixture", "--effort", effort],
+        })
+    };
+    // Table rows: (seq, event type, body, minutes before the last launch).
+    let start_body = json!({ "body_kind": "step_started", "step_id": "implement_one" });
+    let finish_body = json!({ "body_kind": "step_finished", "step_id": "implement_one" });
+    for (seq, event_type, body, at) in [
+        (
             0,
             "step.started",
-            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+            start_body.clone(),
             launch_now - chrono::Duration::hours(2),
-        );
-        step_event(
+        ),
+        (
             1,
             "cli.invocation.started",
             launch_body("high"),
             launch_now - chrono::Duration::minutes(90),
-        );
-        step_event(
+        ),
+        (
             2,
             "step.finished",
-            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+            finish_body.clone(),
             launch_now - chrono::Duration::minutes(80),
-        );
-        step_event(
+        ),
+        (
             3,
             "step.started",
-            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+            start_body,
             launch_now - chrono::Duration::minutes(70),
-        );
-        step_event(
+        ),
+        (
             4,
             "cli.invocation.started",
             launch_body("medium"),
             launch_now - chrono::Duration::minutes(40),
-        );
-        step_event(
+        ),
+        (
             5,
             "step.finished",
-            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+            finish_body,
             launch_now - chrono::Duration::minutes(30),
-        );
-        // A launch Orbit already recorded at dispatch. The backfill must
-        // leave that row as it is, not write a second one from the audit.
-        let covered_id = runtime
-            .add_task(TaskAddParams {
-                title: "backfill dispatch covered".into(),
-                description: "dispatch effort backfill fixture".into(),
-                plan: "implement the change".into(),
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &covered_id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let covered_run = "jrun-backfill-dispatch-covered";
-        let covered_now = Utc::now();
-        let covered_started = covered_now - chrono::Duration::hours(1);
-        store
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: covered_run.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Failed,
-                    scheduled_at: covered_started,
-                    created_at: covered_started,
-                    started_at: Some(covered_started),
-                    finished_at: Some(covered_now),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [covered_id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("covered-crew".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-        store
-            .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                workspace_id: workspace.clone(),
-                event_id: format!("v2evt-{covered_run}-0"),
-                source: "fixture".into(),
-                schema_version: 1,
-                event_type: "step.started".into(),
-                ts: covered_now - chrono::Duration::minutes(1),
-                run_id: covered_run.into(),
-                agent_identity: "system".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: json!({
-                    "body_kind": "step_started",
-                    "step_id": "implement_one",
-                })
-                .to_string(),
-            })
-            .unwrap();
-        let covered_launch = Utc::now();
-        store
-            .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                workspace_id: workspace.clone(),
-                event_id: format!("v2evt-{covered_run}-1"),
-                source: "fixture".into(),
-                schema_version: 1,
-                event_type: "cli.invocation.started".into(),
-                ts: covered_launch,
-                run_id: covered_run.into(),
-                agent_identity: "system".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: json!({
-                    "body_kind": "cli_invocation_started",
-                    "provider": "claude",
-                    "model": "model-fixture",
-                    "argv_redacted": ["claude", "--model", "model-fixture", "--effort", "high"],
-                })
-                .to_string(),
-            })
-            .unwrap();
-        store
-            .begin_agent_execution(
-                &workspace,
-                covered_run,
-                "implement_one",
-                "claude",
-                Some("model-fixture"),
-                &orbit_types::telemetry::AgentExecutionIdentity {
-                    crew: Some("covered-crew".into()),
-                    reasoning_effort: Some(ReasoningEffort::Low),
-                },
-            )
-            .unwrap();
+        ),
+    ] {
+        step_event(seq, event_type, body, at);
     }
+    // A launch Orbit already recorded at dispatch. The backfill must
+    // leave that row as it is, not write a second one from the audit.
+    let covered_id = agents.seed_task(
+        "backfill dispatch covered".into(),
+        "dispatch effort backfill fixture",
+    );
+    let covered_run = "jrun-backfill-dispatch-covered";
+    let covered_now = Utc::now();
+    agents.record_run_window(
+        covered_run,
+        &covered_id,
+        "covered-crew",
+        "model-fixture",
+        JobRunState::Failed,
+        (covered_now - chrono::Duration::hours(1), covered_now),
+    );
+    agents.audit(
+        covered_run,
+        format!("v2evt-{covered_run}-0"),
+        "step.started",
+        covered_now - chrono::Duration::minutes(1),
+        json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+    );
+    agents.audit(covered_run, format!("v2evt-{covered_run}-1"), "cli.invocation.started", Utc::now(),
+        json!({ "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture", "argv_redacted": ["claude", "--model", "model-fixture", "--effort", "high"] }));
+    agents.begin_execution(
+        covered_run,
+        "claude",
+        "covered-crew",
+        Some(ReasoningEffort::Low),
+    );
 
     let rows = || {
         let card = fixture.json(&[
@@ -1730,15 +1054,20 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let report = &report["dispatch_effort_backfill"];
-    assert_eq!(report["examined"], 9, "{report}");
-    assert_eq!(report["recorded"], 7, "{report}");
-    assert_eq!(report["no_launch_event"], 1, "{report}");
-    assert_eq!(report["conflicting"], 1, "{report}");
-    assert_eq!(report["launch_only_recorded"], 2, "{report}");
-    assert_eq!(report["launch_only_no_step"], 10, "{report}");
-    assert_eq!(report["launch_only_no_provider"], 0, "{report}");
-    assert_eq!(report["launch_only_unreadable"], 0, "{report}");
-    assert_eq!(report["launch_only_unmatched"], 10, "{report}");
+    assert_report(
+        report,
+        &[
+            ("examined", 9),
+            ("recorded", 7),
+            ("no_launch_event", 1),
+            ("conflicting", 1),
+            ("launch_only_recorded", 2),
+            ("launch_only_no_step", 10),
+            ("launch_only_no_provider", 0),
+            ("launch_only_unreadable", 0),
+            ("launch_only_unmatched", 10),
+        ],
+    );
 
     let after = rows();
     assert_eq!(
@@ -1759,25 +1088,24 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
 
     let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let again = &again["dispatch_effort_backfill"];
-    assert_eq!(again["examined"], 2, "{again}");
-    assert_eq!(again["recorded"], 0, "{again}");
-    assert_eq!(again["launch_only_recorded"], 0, "{again}");
-    assert_eq!(again["launch_only_no_step"], 10, "{again}");
-    assert_eq!(again["launch_only_no_provider"], 0, "{again}");
-    assert_eq!(again["launch_only_unreadable"], 0, "{again}");
-    assert_eq!(again["launch_only_unmatched"], 10, "{again}");
+    assert_report(
+        again,
+        &[
+            ("examined", 2),
+            ("recorded", 0),
+            ("launch_only_recorded", 0),
+            ("launch_only_no_step", 10),
+            ("launch_only_no_provider", 0),
+            ("launch_only_unreadable", 0),
+            ("launch_only_unmatched", 10),
+        ],
+    );
     assert_eq!(rows(), after, "a second run changes nothing");
 
-    let _authority = orbit_common::test_env::unset(
-        orbit_common::test_env::INHERITED_AUTHORITY_ENV
-            .iter()
-            .copied(),
-    );
-    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root).unwrap();
+    let runtime = agents.reopen();
     let store = runtime.sqlite_store().unwrap();
-    let backfilled = store
-        .agent_executions(&workspace, "jrun-backfill-0")
-        .unwrap();
+    let executions = |run_id: &str| store.agent_executions(&workspace, run_id).unwrap();
+    let backfilled = executions("jrun-backfill-0");
     assert_eq!(backfilled.len(), 2, "{backfilled:?}");
     let executor = backfilled
         .iter()
@@ -1799,18 +1127,14 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
         .unwrap();
     assert_eq!(pilot.identity.crew, None, "{pilot:?}");
     assert_eq!(pilot.identity.reasoning_effort, Some(ReasoningEffort::Low));
-    let dispatched = store
-        .agent_executions(&workspace, "jrun-backfill-7")
-        .unwrap();
+    let dispatched = executions("jrun-backfill-7");
     assert_eq!(dispatched.len(), 1, "{dispatched:?}");
     assert!(dispatched[0].backfill.is_none(), "{dispatched:?}");
     assert_eq!(
         dispatched[0].identity.reasoning_effort,
         Some(ReasoningEffort::Low)
     );
-    let mut launch_only = store
-        .agent_executions(&workspace, "jrun-backfill-launch-only")
-        .unwrap();
+    let mut launch_only = executions("jrun-backfill-launch-only");
     launch_only.sort_by_key(|record| record.started_at);
     assert_eq!(launch_only.len(), 2, "{launch_only:?}");
     assert!(launch_only[0].started_at < launch_only[1].started_at);
@@ -1836,9 +1160,7 @@ fn migrate_backfill_dispatch_effort_attributes_pre_identity_invocations() {
         })
         .collect();
     assert_ne!(event_ids[0], event_ids[1], "{launch_only:?}");
-    let covered = store
-        .agent_executions(&workspace, "jrun-backfill-dispatch-covered")
-        .unwrap();
+    let covered = executions("jrun-backfill-dispatch-covered");
     assert_eq!(covered.len(), 1, "{covered:?}");
     assert!(covered[0].backfill.is_none(), "{covered:?}");
     assert_eq!(
@@ -1861,163 +1183,133 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
     }
     use orbit_types::identity::ReasoningEffort;
 
-    let fixture = Fixture::new();
-    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
-    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
-    let workspace;
-    let dispatch_at;
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let runtime = &agents.runtime;
+    let workspace = agents.workspace.clone();
     let run_id = "jrun-backfill-unreadable-sibling";
-    {
-        let _authority = orbit_common::test_env::unset(
-            orbit_common::test_env::INHERITED_AUTHORITY_ENV
-                .iter()
-                .copied(),
+    let task_id = agents.seed_task(
+        "backfill unreadable sibling".into(),
+        "dispatch effort backfill fixture",
+    );
+    let now = Utc::now();
+    agents.record_run_window(
+        run_id,
+        &task_id,
+        "review-crew",
+        "model-fixture",
+        JobRunState::Failed,
+        (now, now + chrono::Duration::seconds(50)),
+    );
+    let store = runtime.sqlite_store().unwrap();
+    agents.begin_execution(run_id, "claude", "review-crew", Some(ReasoningEffort::Low));
+    let dispatch_at = store.agent_executions(&workspace, run_id).unwrap()[0].started_at;
+    let audit = |event_id: &str, event_type: &str, at: chrono::DateTime<Utc>, payload: Value| {
+        agents.audit(
+            run_id,
+            format!("v2evt-{run_id}-{event_id}"),
+            event_type,
+            at,
+            payload,
         );
-        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
-            .unwrap()
-            .with_actor(ActorIdentity::human("agents-fixture"));
-        workspace = runtime.workspace_id().unwrap();
-        let store = runtime.sqlite_store().unwrap();
-        let task_id = runtime
-            .add_task(TaskAddParams {
-                title: "backfill unreadable sibling".into(),
-                description: "dispatch effort backfill fixture".into(),
-                plan: "implement the change".into(),
-                complexity: TaskComplexity::Low,
-                ..Default::default()
-            })
-            .unwrap()
-            .id
-            .to_string();
-        runtime
-            .update_task_with_identity(
-                &task_id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::InProgress),
-                    ..Default::default()
-                },
-                Some("claude".into()),
-                Some("model-fixture".into()),
-            )
-            .unwrap();
-        let now = Utc::now();
-        store
-            .upsert_job_run_for_workspace(
-                &workspace,
-                &JobRun {
-                    build: None,
-                    run_id: run_id.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state: JobRunState::Failed,
-                    scheduled_at: now,
-                    created_at: now,
-                    started_at: Some(now),
-                    finished_at: Some(now + chrono::Duration::seconds(50)),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [task_id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some("review-crew".into()),
-                    crew_model: Some("model-fixture".into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
-            .unwrap();
-        store
-            .begin_agent_execution(
-                &workspace,
-                run_id,
-                "implement_one",
-                "claude",
-                Some("model-fixture"),
-                &orbit_types::telemetry::AgentExecutionIdentity {
-                    crew: Some("review-crew".into()),
-                    reasoning_effort: Some(ReasoningEffort::Low),
-                },
-            )
-            .unwrap();
-        dispatch_at = store.agent_executions(&workspace, run_id).unwrap()[0].started_at;
-        let audit = |event_id: &str, event_type: &str, at, payload: serde_json::Value| {
-            store
-                .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                    workspace_id: workspace.clone(),
-                    event_id: format!("v2evt-{run_id}-{event_id}"),
-                    source: "fixture".into(),
-                    schema_version: 1,
-                    event_type: event_type.into(),
-                    ts: at,
-                    run_id: run_id.into(),
-                    agent_identity: "system".into(),
-                    parent_event_id: None,
-                    workspace_path: None,
-                    payload_json: payload.to_string(),
-                })
-                .unwrap();
-        };
-        audit(
-            "step-start",
-            "step.started",
-            dispatch_at - chrono::Duration::seconds(1),
-            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+    };
+    audit(
+        "step-start",
+        "step.started",
+        dispatch_at - chrono::Duration::seconds(1),
+        json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+    );
+    audit(
+        "unreadable",
+        "cli.invocation.started",
+        dispatch_at,
+        json!({
+            "body_kind": "cli_invocation_started",
+            "provider": "claude",
+            "model": "model-fixture",
+            "reasoning_effort": "low",
+            "argv_redacted": ["claude", "--effort", "[REDACTED]"],
+        }),
+    );
+    audit(
+        "later-high",
+        "cli.invocation.started",
+        dispatch_at + chrono::Duration::seconds(30),
+        json!({
+            "body_kind": "cli_invocation_started",
+            "provider": "claude",
+            "model": "model-fixture",
+            "reasoning_effort": "high",
+            "argv_redacted": ["claude", "--effort", "high"],
+        }),
+    );
+    audit(
+        "step-end",
+        "step.finished",
+        dispatch_at + chrono::Duration::seconds(50),
+        json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+    );
+    let audit = |event_id: &str, event_type: &str, at: chrono::DateTime<Utc>, payload: Value| {
+        agents.audit(
+            run_id,
+            format!("v2evt-{run_id}-{event_id}"),
+            event_type,
+            at,
+            payload,
         );
-        audit(
-            "unreadable",
-            "cli.invocation.started",
-            dispatch_at,
-            json!({
-                "body_kind": "cli_invocation_started",
-                "provider": "claude",
-                "model": "model-fixture",
-                "reasoning_effort": "low",
-                "argv_redacted": ["claude", "--effort", "[REDACTED]"],
-            }),
-        );
-        audit(
-            "later-high",
-            "cli.invocation.started",
-            dispatch_at + chrono::Duration::seconds(30),
-            json!({
-                "body_kind": "cli_invocation_started",
-                "provider": "claude",
-                "model": "model-fixture",
-                "reasoning_effort": "high",
-                "argv_redacted": ["claude", "--effort", "high"],
-            }),
-        );
-        audit(
-            "step-end",
-            "step.finished",
-            dispatch_at + chrono::Duration::seconds(50),
-            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
-        );
-    }
+    };
+    audit(
+        "step-start",
+        "step.started",
+        dispatch_at - chrono::Duration::seconds(1),
+        json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+    );
+    audit(
+        "unreadable",
+        "cli.invocation.started",
+        dispatch_at,
+        json!({
+            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
+            "reasoning_effort": "low", "argv_redacted": ["claude", "--effort", "[REDACTED]"],
+        }),
+    );
+    audit(
+        "later-high",
+        "cli.invocation.started",
+        dispatch_at + chrono::Duration::seconds(30),
+        json!({
+            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
+            "reasoning_effort": "high", "argv_redacted": ["claude", "--effort", "high"],
+        }),
+    );
+    audit(
+        "step-end",
+        "step.finished",
+        dispatch_at + chrono::Duration::seconds(50),
+        json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+    );
 
     let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let report = &report["dispatch_effort_backfill"];
-    assert_eq!(report["examined"], 0, "{report}");
-    assert_eq!(report["recorded"], 0, "{report}");
-    assert_eq!(report["launch_only_recorded"], 1, "{report}");
-    assert_eq!(report["launch_only_unreadable"], 1, "{report}");
-    assert_eq!(report["launch_only_no_step"], 0, "{report}");
-    assert_eq!(report["launch_only_no_provider"], 0, "{report}");
-    assert_eq!(report["launch_only_unmatched"], 1, "{report}");
+    assert_report(
+        report,
+        &[
+            ("examined", 0),
+            ("recorded", 0),
+            ("launch_only_recorded", 1),
+            ("launch_only_unreadable", 1),
+            ("launch_only_no_step", 0),
+            ("launch_only_no_provider", 0),
+            ("launch_only_unmatched", 1),
+        ],
+    );
     assert_eq!(report["recorded_by_effort"]["high"], 1, "{report}");
     assert!(
         report["recorded_by_effort"].get("low").is_none(),
         "the unreadable launch must not be recorded at an inferred effort: {report}"
     );
 
-    let _authority = orbit_common::test_env::unset(
-        orbit_common::test_env::INHERITED_AUTHORITY_ENV
-            .iter()
-            .copied(),
-    );
-    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root).unwrap();
+    let runtime = agents.reopen();
     let store = runtime.sqlite_store().unwrap();
     let rows = store.agent_executions(&workspace, run_id).unwrap();
     assert_eq!(rows.len(), 2, "{rows:?}");
@@ -2061,11 +1353,16 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
 
     let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
     let again = &again["dispatch_effort_backfill"];
-    assert_eq!(again["examined"], 0, "{again}");
-    assert_eq!(again["recorded"], 0, "{again}");
-    assert_eq!(again["launch_only_recorded"], 0, "{again}");
-    assert_eq!(again["launch_only_unreadable"], 1, "{again}");
-    assert_eq!(again["launch_only_unmatched"], 1, "{again}");
+    assert_report(
+        again,
+        &[
+            ("examined", 0),
+            ("recorded", 0),
+            ("launch_only_recorded", 0),
+            ("launch_only_unreadable", 1),
+            ("launch_only_unmatched", 1),
+        ],
+    );
     let quiet = store.agent_executions(&workspace, run_id).unwrap();
     assert_eq!(quiet.len(), 2, "{quiet:?}");
     assert_eq!(quiet[0].id, rows[0].id, "{quiet:?}");
