@@ -26,14 +26,14 @@ modify:
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
   <ROOT>/repo/.orbit/tasks
   <ROOT>/repo/.orbit/frictions
   <ROOT>/repo/.orbit/state/audit
   <ROOT>/repo/.orbit/state/logs
   <ROOT>/repo/.orbit/state/job-runs
-  <ROOT>/repo/.orbit/state/semantic.db
-  <ROOT>/repo/.orbit/state/semantic.db-wal
-  <ROOT>/repo/.orbit/state/semantic.db-shm
   <ROOT>/home/.orbit/cache
   <ROOT>/home/.codex
   <ROOT>/home/.claude
@@ -47,14 +47,14 @@ runtime write authority:
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
   <ROOT>/repo/.orbit/tasks
   <ROOT>/repo/.orbit/frictions
   <ROOT>/repo/.orbit/state/audit
   <ROOT>/repo/.orbit/state/logs
   <ROOT>/repo/.orbit/state/job-runs
-  <ROOT>/repo/.orbit/state/semantic.db
-  <ROOT>/repo/.orbit/state/semantic.db-wal
-  <ROOT>/repo/.orbit/state/semantic.db-shm
   <ROOT>/home/.orbit/cache
 bwrap:
   --die-with-parent
@@ -80,14 +80,14 @@ bwrap:
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-wal
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-shm
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-wal
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-shm
   --bind-fd <fd> <ROOT>/repo/.orbit/tasks
   --bind-fd <fd> <ROOT>/repo/.orbit/frictions
   --bind-fd <fd> <ROOT>/repo/.orbit/state/audit
   --bind-fd <fd> <ROOT>/repo/.orbit/state/logs
   --bind-fd <fd> <ROOT>/repo/.orbit/state/job-runs
-  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db
-  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-wal
-  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-shm
   --bind-fd <fd> <ROOT>/home/.orbit/cache
   --bind <ROOT>/home/.codex <ROOT>/home/.codex
   --bind <ROOT>/home/.claude <ROOT>/home/.claude

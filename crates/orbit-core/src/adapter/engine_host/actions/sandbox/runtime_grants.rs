@@ -28,6 +28,14 @@ pub(super) fn append_linux_runtime_write_roots(
     }
     append_runtime_sqlite_grants(&global, "orbit.db", resolved, authority)?;
 
+    // The workspace lexical index rides with the global task store, not with
+    // the workspace-modify gate: lanes under a read-only checkout profile
+    // (the resident cycle's `reviewer`) still write tasks through nested
+    // Orbit tools, and every such write indexes the task it saved. Granting
+    // only the database and its WAL/SHM sidecars keeps `state/**` — other
+    // runs' worktrees included — read-only for those lanes. [ORB-24077]
+    append_runtime_sqlite_grants(&workspace, "state/semantic.db", resolved, authority)?;
+
     if !grants_workspace_modify {
         return Ok(());
     }
@@ -41,7 +49,6 @@ pub(super) fn append_linux_runtime_write_roots(
     ] {
         append_runtime_directory_grant(&workspace, relative, resolved, authority)?;
     }
-    append_runtime_sqlite_grants(&workspace, "state/semantic.db", resolved, authority)?;
 
     // Language-neutral host cache for toolchain artifacts shared across
     // worktrees (compiler caches, etc.). Implementer-only so read-only

@@ -20,6 +20,9 @@ modify:
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
   <ROOT>/home/.codex
   <ROOT>/home/.claude
   <ROOT>/home/.gemini
@@ -32,6 +35,9 @@ runtime write authority:
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
+  <ROOT>/repo/.orbit/state/semantic.db
+  <ROOT>/repo/.orbit/state/semantic.db-wal
+  <ROOT>/repo/.orbit/state/semantic.db-shm
 bwrap:
   --die-with-parent
   --new-session
@@ -51,6 +57,9 @@ bwrap:
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-wal
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-shm
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-wal
+  --bind-fd <fd> <ROOT>/repo/.orbit/state/semantic.db-shm
   --bind <ROOT>/home/.codex <ROOT>/home/.codex
   --bind <ROOT>/home/.claude <ROOT>/home/.claude
   --bind <ROOT>/home/.gemini <ROOT>/home/.gemini

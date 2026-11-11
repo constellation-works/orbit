@@ -495,7 +495,12 @@ pub(super) fn append_codex_side_write_roots(
 /// Global runtime stores are granted when they resolve inside the global root.
 /// The host cache and workspace stores also require `grants_workspace_modify`,
 /// so a read-only activity profile never becomes a primary-workspace writer.
-/// Every store must stay inside its runtime root after symlink resolution.
+/// The one exception is the workspace lexical index (`state/semantic.db*`):
+/// it rides with the global task store, because a read-only profile lane that
+/// writes tasks through nested Orbit tools (the resident cycle) indexes each
+/// task it saves, and the grant names only the database and its sidecars,
+/// never `state/**` [ORB-24077]. Every store must stay inside its runtime root
+/// after symlink resolution.
 #[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
 pub(super) fn append_orbit_child_runtime_write_roots(
     runtime: &OrbitRuntime,
@@ -520,6 +525,7 @@ pub(super) fn append_orbit_child_runtime_write_roots(
     ] {
         append_contained_runtime_modify_root(&global_root, relative, suffix, resolved);
     }
+    append_contained_runtime_modify_root(&workspace_orbit, "state/semantic.db", "*", resolved);
 
     if !grants_workspace_modify {
         return;
@@ -534,7 +540,6 @@ pub(super) fn append_orbit_child_runtime_write_roots(
         ("frictions", "/**"),
         ("state/audit", "/**"),
         ("state/logs", "/**"),
-        ("state/semantic.db", "*"),
     ] {
         append_contained_runtime_modify_root(&workspace_orbit, relative, suffix, resolved);
     }
