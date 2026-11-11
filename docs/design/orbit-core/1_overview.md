@@ -202,14 +202,16 @@ moved the backlog forecast out of `task` to its own place in the order:
   filing tags job's crew pools route to the sweep purpose
   (`CI_FAILURE_TAG`, `DEPENDABOT_TAG`, `CODE_SCANNING_TAG` and
   `RECONCILIATION_FOLLOW_UP_TAG_PREFIX`) and the `PublishedDelivery` a
-  deferred gate grant reports (the local delivery-leaf job id moved to
-  `TASK_LOCAL_PIPELINE_JOB` in `orbit-types` with [ORB-24042]); since [ORB-17939] also the
+  deferred gate grant reports; the local delivery-leaf job id moved to
+  `TASK_LOCAL_PIPELINE_JOB` in `orbit-types` with [ORB-24042]. Since
+  [ORB-17939], `application::contracts` also holds the
   `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` build gate that `distributed`
   enforces and `review`'s handoff console reports. It imports none of the
   ten modules in the order above it, and every consumer, including `orbit-cli` and `orbit-cmd`,
   imports these items from there. These shapes are still internal to Orbit,
-  so they stay in Core rather than `orbit-types`. Their string values and
-  serde shapes did not change.
+  so the other listed items stay in Core rather than `orbit-types`; the local
+  delivery-leaf job id is the exception described above. Their string values
+  and serde shapes did not change.
 - **Ports.** A lower module that needs behaviour from a higher one owns a
   trait. The higher module implements it on `OrbitRuntime`, so composing the
   runtime binds it, and the lower module never names the higher one.
