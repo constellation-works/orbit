@@ -104,14 +104,64 @@ fn dispatch_with_prelude_and_launcher(
     launcher: Option<(&str, &[String])>,
     conversation_ref: Option<&str>,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    let fake = FakeProvider::with_usage_command(binary, stdout, "", 0, "", prelude);
+    dispatch_with_options(
+        binary,
+        provider,
+        stdout,
+        agent_env,
+        DispatchOptions {
+            stderr: "",
+            prelude,
+            launcher,
+            conversation_ref,
+        },
+    )
+}
+
+struct DispatchOptions<'a> {
+    stderr: &'a str,
+    prelude: &'a str,
+    launcher: Option<(&'a str, &'a [String])>,
+    conversation_ref: Option<&'a str>,
+}
+
+fn dispatch_with_streams(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    stderr: &str,
+    agent_env: &[(&str, &Path)],
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    dispatch_with_options(
+        binary,
+        provider,
+        stdout,
+        agent_env,
+        DispatchOptions {
+            stderr,
+            prelude: "",
+            launcher: None,
+            conversation_ref: None,
+        },
+    )
+}
+
+fn dispatch_with_options(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    agent_env: &[(&str, &Path)],
+    options: DispatchOptions<'_>,
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    let fake =
+        FakeProvider::with_usage_command(binary, stdout, options.stderr, 0, "", options.prelude);
     let audit = tempfile::tempdir().unwrap();
     let mut host = CapacityHost::new(&fake.path, audit.path());
     host.agent_env = agent_env
         .iter()
         .map(|(key, value)| (key.to_string(), value.display().to_string()))
         .collect();
-    let (cli_command, cli_args) = if let Some((interpreter, extra_args)) = launcher {
+    let (cli_command, cli_args) = if let Some((interpreter, extra_args)) = options.launcher {
         let mut args = vec![fake.path.display().to_string()];
         args.extend(extra_args.iter().cloned());
         (Some(interpreter.to_string()), args)
@@ -130,7 +180,7 @@ fn dispatch_with_prelude_and_launcher(
         activity_name: "usage_window_fixture",
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
-        input: json!({ "prompt": "implement", "crew": "fixture-crew", "conversation_ref":conversation_ref }),
+        input: json!({ "prompt": "implement", "crew": "fixture-crew", "conversation_ref":options.conversation_ref }),
         audit: outcome_writer("usage-run"),
         run_id: "usage-run",
         host: Some(&host),
@@ -1008,19 +1058,29 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::{Layer, layer::SubscriberExt};
 
-    struct RelayedLine(Option<String>, bool);
+    #[derive(Default)]
+    struct RelayedLine {
+        line: Option<String>,
+        stream: Option<String>,
+        agent_output: bool,
+    }
     impl tracing::field::Visit for RelayedLine {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
             if field.name() == "line" {
-                self.0 = Some(value.to_string());
+                self.line = Some(value.to_string());
             }
             if field.name() == "stream" {
-                self.1 = value == "stdout";
+                self.stream = Some(value.to_string());
+            }
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            if field.name() == "agent_output" {
+                self.agent_output = value;
             }
         }
         fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
     }
-    struct Capture(Arc<Mutex<Vec<String>>>);
+    struct Capture(Arc<Mutex<Vec<(String, String)>>>);
     impl<S: tracing::Subscriber> Layer<S> for Capture {
         fn on_event(
             &self,
@@ -1028,12 +1088,12 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
             _: tracing_subscriber::layer::Context<'_, S>,
         ) {
             if event.metadata().target() == "orbit_engine::activity_job::cli_runner::supervisor" {
-                let mut line = RelayedLine(None, false);
+                let mut line = RelayedLine::default();
                 event.record(&mut line);
-                if line.1
-                    && let Some(line) = line.0
+                if line.agent_output
+                    && let (Some(stream), Some(line)) = (line.stream, line.line)
                 {
-                    self.0.lock().unwrap().push(line);
+                    self.0.lock().unwrap().push((stream, line));
                 }
             }
         }
@@ -1078,7 +1138,13 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
     let relayed = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
     let (outcome, _) = tracing::subscriber::with_default(subscriber, || {
-        dispatch("claude", Provider::Claude, &stdout, &[])
+        dispatch_with_streams(
+            "claude",
+            Provider::Claude,
+            &stdout,
+            content_delta.as_str(),
+            &[],
+        )
     });
     assert!(outcome.success, "{:?}", outcome.message);
 
@@ -1086,8 +1152,8 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|line| !line.is_empty())
-        .map(|line| {
+        .filter(|(stream, line)| stream == "stdout" && !line.is_empty())
+        .map(|(_, line)| {
             let frame: Value = serde_json::from_str(line).unwrap();
             (
                 frame["type"].as_str().unwrap().to_string(),
@@ -1114,6 +1180,13 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
         ],
         "content_block_* stream events must not reach the agent_output relay"
     );
+    assert!(
+        relayed
+            .lock()
+            .unwrap()
+            .contains(&("stderr".to_string(), content_delta.clone())),
+        "Claude stderr content-shaped output remains relayed"
+    );
     // Stall/progress accounting counts every raw byte, dropped ones included
     // (the fake provider's heredoc adds one trailing newline to `stdout`).
     assert_eq!(
@@ -1125,6 +1198,74 @@ fn claude_partial_content_events_are_not_relayed_as_agent_output() {
     assert!(!captured.contains("content_block_"), "{captured}");
     assert!(captured.contains("\"type\":\"assistant\""), "{captured}");
     assert!(captured.contains("\"type\":\"result\""), "{captured}");
+
+    // The process pump reads at most 8192 bytes at a time. This fixed 64 KiB
+    // prefix therefore crosses the relay's line limit before the valid JSON
+    // suffix arrives, without relying on timing or stress.
+    let oversized_delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"fragment"}}}"#;
+    let split_prefix_len = 8 * 8192;
+    for prefix_byte in *b" x" {
+        let prefix = String::from_utf8(vec![prefix_byte; split_prefix_len]).unwrap();
+        let physical_line = format!("{prefix}{oversized_delta}");
+        relayed.lock().unwrap().clear();
+        let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+        let (outcome, _) = tracing::subscriber::with_default(subscriber, || {
+            with_capture_limit(1024 * 1024, || {
+                dispatch("claude", Provider::Claude, &physical_line, &[])
+            })
+        });
+
+        let relayed_fragments: Vec<String> = relayed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(stream, _)| stream == "stdout")
+            .map(|(_, line)| line.clone())
+            .collect();
+        assert_eq!(
+            relayed_fragments.len(),
+            2,
+            "the fixed prefix and JSON suffix reach dispatch as separate chunks"
+        );
+        assert_eq!(
+            relayed_fragments[1], oversized_delta,
+            "the final fragment is independently valid content-block JSON"
+        );
+        let suffix: Value = serde_json::from_str(&relayed_fragments[1]).unwrap();
+        assert_eq!(
+            suffix["event"]["type"], "content_block_delta",
+            "the suffix independently matches the Claude event filter"
+        );
+        assert_eq!(
+            relayed_fragments.concat(),
+            physical_line,
+            "oversized and malformed lines retain every relay fragment"
+        );
+        assert_eq!(
+            outcome.output["stdout_text_original_bytes"],
+            json!(physical_line.len() + 1),
+            "observed-byte accounting includes the entire physical line and fixture newline"
+        );
+        assert_eq!(
+            outcome.output["stdout_text_captured_bytes"],
+            json!(physical_line.len() + 1),
+            "bounded capture retains every byte before the separate text preview"
+        );
+        assert_eq!(outcome.output["stdout_capture_truncated"], json!(false));
+    }
+
+    relayed.lock().unwrap().clear();
+    let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+    let _ = tracing::subscriber::with_default(subscriber, || {
+        dispatch("codex", Provider::Codex, &content_delta, &[])
+    });
+    assert!(
+        relayed
+            .lock()
+            .unwrap()
+            .contains(&("stdout".to_string(), content_delta)),
+        "other providers keep relaying content-shaped output"
+    );
 }
 
 /// Behavior-distinct rows share one bounded family process.
