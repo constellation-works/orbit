@@ -37,14 +37,24 @@ fn comment_as(runtime: &OrbitRuntime, task: &str, message: &str, actor: &str) {
         .unwrap();
 }
 
+fn runtime_at(global: &std::path::Path, workspace: &std::path::Path) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("task_context_comment_budget::runtime_at");
+    OrbitRuntime::from_roots(global, workspace).unwrap()
+}
+
 #[test]
 fn human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget() {
+    if !crate::dispatch_admission::isolated(
+        "task_context_comment_budget::human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget",
+    ) {
+        return;
+    }
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let runtime = runtime_at(&global, &workspace);
     let task = runtime
         .add_task(TaskAddParams {
             title: "Budget fixture".into(),
@@ -99,12 +109,17 @@ fn human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget() {
 
 #[test]
 fn pilot_summary_replacement_marks_comments_truncated_without_omitting_a_comment() {
+    if !crate::dispatch_admission::isolated(
+        "task_context_comment_budget::pilot_summary_replacement_marks_comments_truncated_without_omitting_a_comment",
+    ) {
+        return;
+    }
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let runtime = runtime_at(&global, &workspace);
     let task = runtime
         .add_task(TaskAddParams {
             title: "Oversized pilot comment budget fixture".into(),
