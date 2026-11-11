@@ -18,6 +18,7 @@ use orbit_types::workflow::handoff::{
 use crate::OrbitRuntime;
 use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::JobDrainPort;
+use crate::application::operator_input;
 use crate::application::review::ReviewLandingDispatchPort;
 use crate::application::task;
 
@@ -445,13 +446,16 @@ impl OrbitRuntime {
         expected: &ExpectedCandidate,
         actor: &str,
         reason: &str,
-        request_id: &str,
+        replay_scope: &str,
+        request_key: &str,
     ) -> Result<serde_json::Value, OrbitError> {
-        if reason.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "revoking completion authority requires a reason".to_string(),
-            ));
-        }
+        let reason = operator_input::reason(reason, "revoking completion authority")?;
+        let request_key = operator_input::replay_key(request_key)?;
+        let request_id = operator_input::scoped_replay_key(replay_scope, handoff_id, &request_key);
+        let expected = ExpectedCandidate {
+            candidate_commit: expected.candidate_commit.trim().to_string(),
+            base_commit: expected.base_commit.trim().to_string(),
+        };
         let (claim, accepted) = self.console_handoff(handoff_id)?;
         expected.check(&accepted.handoff.candidate)?;
         let context = ClaimInvocation::trusted_operator(
@@ -459,12 +463,8 @@ impl OrbitRuntime {
             claim.claim.claim_id.clone(),
             actor.to_string(),
         );
-        let result = self.revoke_task_handoff(
-            &context,
-            request_id,
-            accepted.handoff_id.clone(),
-            reason.to_string(),
-        )?;
+        let result =
+            self.revoke_task_handoff(&context, &request_id, accepted.handoff_id.clone(), reason)?;
         Ok(mutation_json(&accepted.handoff_id, &result))
     }
 
@@ -479,6 +479,7 @@ impl OrbitRuntime {
     /// this request is an identical replay of the recovery that moved it:
     /// the phase precondition is enforced inside the store transaction,
     /// after the recorded receipt has had its chance to replay.
+    #[allow(clippy::too_many_arguments)]
     pub fn recover_claim_as_operator(
         &self,
         claim_id: &str,
@@ -486,13 +487,13 @@ impl OrbitRuntime {
         status: TaskStatus,
         actor: &str,
         reason: &str,
-        request_id: &str,
+        replay_scope: &str,
+        request_key: &str,
     ) -> Result<serde_json::Value, OrbitError> {
-        if reason.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "claim recovery requires a reason".to_string(),
-            ));
-        }
+        let reason = operator_input::reason(reason, "claim recovery")?;
+        let request_key = operator_input::replay_key(request_key)?;
+        let request_id = operator_input::scoped_replay_key(replay_scope, claim_id, &request_key);
+        let expected_phase = expected_phase.trim();
         self.ensure_coordination_task_write_permitted()?;
         let claim = self
             .stores()
@@ -534,7 +535,7 @@ impl OrbitRuntime {
         );
         let result = self.mutate_execution_claim(
             Some(&context),
-            request_id,
+            &request_id,
             &ClaimMutation::Recover {
                 status,
                 reason: reason.to_string(),

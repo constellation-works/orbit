@@ -327,6 +327,7 @@ fn a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr() {
             orbit_types::task::TaskStatus::Blocked,
             "operator",
             "The follower stopped; the PR was rescued by hand",
+            "operator-recover",
             "recover-pending-handoff",
         )
         .unwrap();
@@ -593,6 +594,7 @@ fn a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed() 
             orbit_types::task::TaskStatus::Blocked,
             "operator",
             "The follower stopped; the PR was rescued by hand",
+            "operator-recover",
             "recover-delivery-refused-handoff",
         )
         .unwrap();

@@ -327,3 +327,64 @@ fn a_replica_checkout_reads_empty_and_refuses_every_owner_action() {
         },
     );
 }
+
+/// Each operator route refuses a bad reason or replay key with a 400 `{error}`
+/// from the core operation, before any receipt is written. The 2000-byte
+/// reason and 128-byte key are the accepted boundary; they pass the bounds
+/// and fail later for the absent handoff or claim.
+#[test]
+fn operator_handoff_reason_and_replay_key_are_bounded_on_every_route() {
+    isolated(
+        "distributed_contracts::operator_handoff_reason_and_replay_key_are_bounded_on_every_route",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            fn retry_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":reason,"request_key":key})
+            }
+            fn revoke_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","reason":reason,"request_id":key})
+            }
+            fn recover_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_phase":"running","status":"blocked","reason":reason,"request_id":key})
+            }
+            type BodyFor = fn(&str, &str) -> Value;
+            let routes: [(&str, BodyFor); 3] = [
+                (
+                    "/api/distributed/handoffs/abc123/retry?workspace=ws_http_fixture",
+                    retry_body,
+                ),
+                (
+                    "/api/distributed/handoffs/abc123/revoke?workspace=ws_http_fixture",
+                    revoke_body,
+                ),
+                (
+                    "/api/distributed/claims/claim1/recover?workspace=ws_http_fixture",
+                    recover_body,
+                ),
+            ];
+            let long_reason = "r".repeat(2001);
+            let long_key = "k".repeat(129);
+            for (uri, body) in routes {
+                for (reason, key) in [
+                    (long_reason.as_str(), "ok-key"),
+                    ("retry safely", "has space"),
+                    ("retry safely", long_key.as_str()),
+                ] {
+                    let response = server.send("POST", uri, body(reason, key));
+                    assert_eq!(response.status(), 400, "{uri} {reason:.12} {key}");
+                    let json: Value = response.json().unwrap();
+                    assert!(json["error"].is_string(), "{uri}: {json}");
+                }
+                // The boundary values pass the bounds and fail later, on the
+                // absent handoff or claim, not on the reason or key.
+                let boundary = server.send("POST", uri, body(&"r".repeat(2000), &"k".repeat(128)));
+                let json: Value = boundary.json().unwrap();
+                assert!(
+                    !json["error"].as_str().unwrap_or_default().contains("bytes"),
+                    "{uri}: {json}"
+                );
+            }
+        },
+    );
+}

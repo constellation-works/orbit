@@ -59,7 +59,7 @@ impl OrbitRuntime {
             ),
             request_key: format!("owner-waiting-gate:{}", attempt.attempt),
         };
-        self.retry_handoff_as_operator(&self.workspace_id()?, &request, "owner-landing")
+        self.reserve_landing_retry(&self.workspace_id()?, &request, "owner-landing")
             .map(Some)
     }
 }

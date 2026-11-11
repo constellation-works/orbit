@@ -66,12 +66,9 @@ use crate::state::{DashboardState, Ws};
 /// process itself runs inside a managed run whose ambient identity is a model.
 const OPERATOR_ACTOR: &str = "human";
 
-/// Longest accepted replay identity. Long enough for a UUID or a digest,
-/// short enough that a client cannot use the mutation key as storage.
+/// Longest accepted approve replay identity. Approve has no tool surface, so
+/// its key stays checked here; recover, revoke and retry check theirs in core.
 const MAX_REQUEST_ID: usize = 128;
-/// Longest accepted operator reason, matching what the store records as a
-/// status note.
-const MAX_REASON: usize = 2000;
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -236,22 +233,14 @@ pub(super) async fn retry_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_key = match validate_request_id(&body.request_key) {
-        Ok(key) => key,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "retrying a handoff") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
     let request = orbit_types::workflow::handoff::LandingRetryRequest {
         handoff_id: handoff_id.clone(),
         expected_candidate_commit: body.expected_candidate_commit,
         expected_base_commit: body.expected_base_commit,
         expected_latest_attempt: body.expected_latest_attempt,
         expected_latest_state: body.expected_latest_state,
-        reason,
-        request_key,
+        reason: body.reason,
+        request_key: body.request_key,
     };
     let arguments = json!(request);
     run_owner_action(
@@ -295,18 +284,12 @@ pub(super) async fn revoke_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match validate_request_id(&body.request_id) {
-        Ok(request_id) => request_id,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "revoking completion authority") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
     let expected = ExpectedCandidate {
         candidate_commit: body.expected_candidate_commit,
         base_commit: body.expected_base_commit,
     };
+    let reason = body.reason;
+    let request_id = body.request_id;
     let arguments = json!({
         "handoff_id": handoff_id,
         "candidate": expected.candidate_commit,
@@ -330,7 +313,8 @@ pub(super) async fn revoke_handoff_action(
                 &expected,
                 OPERATOR_ACTOR,
                 &reason,
-                &format!("dashboard-revoke:{handoff_id}:{request_id}"),
+                "dashboard-revoke",
+                &request_id,
             )
         },
     )
@@ -355,14 +339,6 @@ pub(super) async fn recover_claim_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match validate_request_id(&body.request_id) {
-        Ok(request_id) => request_id,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "claim recovery") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
     // Any task status parses here; the owner's lifecycle and completion
     // gates decide which target this claim's task may take.
     let status = match body.status.parse::<TaskStatus>() {
@@ -370,6 +346,8 @@ pub(super) async fn recover_claim_action(
         Err(message) => return bad_request(message),
     };
     let expected_phase = body.expected_phase;
+    let reason = body.reason;
+    let request_id = body.request_id;
     let arguments = json!({
         "claim_id": claim_id,
         "expected_phase": expected_phase,
@@ -394,7 +372,8 @@ pub(super) async fn recover_claim_action(
                 status,
                 OPERATOR_ACTOR,
                 &reason,
-                &format!("dashboard-recover:{claim_id}:{request_id}"),
+                "dashboard-recover",
+                &request_id,
             )
         },
     )
@@ -577,15 +556,4 @@ fn validate_request_id(raw: &str) -> Result<String, String> {
         ));
     }
     validate_id(trimmed).map(ToString::to_string)
-}
-
-fn validate_reason(raw: &str, action: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(format!("{action} requires a reason"));
-    }
-    if trimmed.len() > MAX_REASON {
-        return Err(format!("reason must be at most {MAX_REASON} characters"));
-    }
-    Ok(trimmed.to_string())
 }

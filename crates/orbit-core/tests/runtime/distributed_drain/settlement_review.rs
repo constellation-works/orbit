@@ -109,6 +109,7 @@ fn refused_settlements_leave_review_ledgers_unchanged() {
                         "operator",
                         "operator revoked attempt",
                         "operator-recover",
+                        "operator-recover",
                     )
                     .unwrap();
             }

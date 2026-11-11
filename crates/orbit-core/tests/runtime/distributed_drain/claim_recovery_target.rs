@@ -42,6 +42,7 @@ fn recover(
         status,
         "operator",
         "operator decision after the follower stopped",
+        "operator-recover",
         key,
     )
 }
@@ -196,3 +197,91 @@ crate::scenario_table!(
     a_handed_off_claim_recovers_to_done_with_its_completion_evidence,
     a_historical_failed_claim_has_no_recovery_targets_after_a_new_pull,
 );
+
+/// The same recovery through the `orbit.task.recover_claim` tool, which is the
+/// CLI, MCP and remote-host path for the operator console.
+fn recover_through_tool(
+    pair: &Pair,
+    claim_id: &str,
+    reason: &str,
+    request_key: &str,
+) -> Result<Value, OrbitError> {
+    let input = json!({
+        "claim_id": claim_id,
+        "expected_phase": "running",
+        "status": "blocked",
+        "reason": reason,
+        "request_key": request_key,
+    });
+    pair.wire.owner.run_tool_with_context_and_role(
+        "orbit.task.recover_claim",
+        input,
+        Role::Admin,
+        ToolContext {
+            session_context: ToolSessionContext {
+                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+}
+
+/// Recovery bounds its replay key and reason in core before any claim changes:
+/// the key needs 1..=128 bytes of ASCII letters, digits, `-` or `_` after
+/// trimming, and the reason 1..=2000 bytes. Surrounding space is trimmed.
+#[test]
+fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_changes() {
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let claim = claim_id(&pair, &leaf);
+
+    for key in ["has space", &"k".repeat(129)] {
+        let error = recover(&pair, &claim, "running", TaskStatus::Blocked, key).unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{key}: {error}"
+        );
+        let error = recover_through_tool(&pair, &claim, "reason", key).unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{key}: {error}"
+        );
+    }
+    let long_reason = "r".repeat(2001);
+    let error = pair
+        .wire
+        .owner
+        .recover_claim_as_operator(
+            &claim,
+            "running",
+            TaskStatus::Blocked,
+            "operator",
+            &long_reason,
+            "operator-recover",
+            "reason-bound",
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    let error = recover_through_tool(&pair, &claim, &long_reason, "reason-bound").unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    assert_eq!(pair.owner_claim(&claim)["claim"]["phase"], "running");
+
+    // The boundary values pass, and padding around the key and expected phase
+    // is trimmed in core, as the tool already did.
+    let recovered = pair
+        .wire
+        .owner
+        .recover_claim_as_operator(
+            &claim,
+            " running ",
+            TaskStatus::Blocked,
+            "operator",
+            &"r".repeat(2000),
+            "operator-recover",
+            &format!("  {}  ", "k".repeat(128)),
+        )
+        .unwrap();
+    assert_eq!(recovered["task_status"], "blocked", "{recovered}");
+}

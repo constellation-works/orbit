@@ -666,6 +666,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
                     },
                     "operator",
                     "authority withdrawn before retry submission",
+                    "operator-revoke",
                     "revoke-reserved",
                 )
                 .unwrap();
@@ -766,6 +767,7 @@ fn revoked_changed_and_repair_pending_handoffs_refuse_operator_retry() {
                         },
                         "operator",
                         "authority withdrawn",
+                        "operator-revoke",
                         "revoke-before-retry",
                     )
                     .unwrap();
@@ -833,3 +835,69 @@ crate::scenario_table!(
     operator_retry_reservations_recover_before_submission_and_after_lost_attachment,
     revoked_changed_and_repair_pending_handoffs_refuse_operator_retry
 );
+
+/// Retry and revoke bound their reason and replay key in core, so the tool and
+/// the dashboard refuse the same input before any attempt is reserved. Padded
+/// candidate and base commits are trimmed before the candidate check.
+#[test]
+fn an_operator_retry_and_revoke_bound_their_reason_and_key_in_core() {
+    let evidence = json!({
+        "schema_version":1, "kind":"owner_landing_refusal",
+        "reason":{"value":"required provider review was not yet satisfied"},
+        "observation":{"required_checks":{"state":"not_collected"}},
+    });
+    let (owner, _task, request, _stopped) =
+        retry_fixture_with_evidence(true, Some(JobRunState::Cancelled), &evidence.to_string());
+    let runtime = &owner.pair.wire.owner;
+
+    let mut long_reason = request.clone();
+    long_reason.reason = "r".repeat(2001);
+    let error = retry_tool(runtime, &long_reason, McpCapability::Operator).unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    let mut spaced_key = request.clone();
+    spaced_key.request_key = "has space".into();
+    let error = retry_tool(runtime, &spaced_key, McpCapability::Operator).unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+
+    let exact = orbit_core::application::review::ExpectedCandidate {
+        candidate_commit: request.expected_candidate_commit.clone(),
+        base_commit: request.expected_base_commit.clone(),
+    };
+    let error = runtime
+        .revoke_handoff_as_operator(
+            &request.handoff_id,
+            &exact,
+            "operator",
+            &"r".repeat(2001),
+            "operator-revoke",
+            "revoke-bound",
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    let error = runtime
+        .revoke_handoff_as_operator(
+            &request.handoff_id,
+            &exact,
+            "operator",
+            "withdrawn",
+            "operator-revoke",
+            "has space",
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+
+    let padded = orbit_core::application::review::ExpectedCandidate {
+        candidate_commit: format!(" {} ", request.expected_candidate_commit),
+        base_commit: format!(" {} ", request.expected_base_commit),
+    };
+    runtime
+        .revoke_handoff_as_operator(
+            &request.handoff_id,
+            &padded,
+            "operator",
+            " withdrawn ",
+            "operator-revoke",
+            "revoke-trimmed",
+        )
+        .expect("padded candidate, base and reason are trimmed and the revoke lands");
+}

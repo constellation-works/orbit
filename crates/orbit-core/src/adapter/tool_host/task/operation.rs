@@ -197,7 +197,8 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 status,
                 &actor,
                 &reason,
-                &format!("operator-recover:{claim_id}:{request_key}"),
+                "operator-recover",
+                &request_key,
             )?;
             // The response names the claim, not its task; resolve the task for
             // the redaction audit from the claim console's task id if present.
@@ -231,7 +232,8 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 &expected,
                 &actor,
                 &reason,
-                &format!("operator-revoke:{handoff_id}:{request_key}"),
+                "operator-revoke",
+                &request_key,
             )?;
             let persisted = response
                 .get("claim_id")
