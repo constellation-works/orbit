@@ -38,7 +38,7 @@ fn internal_helper() { ... }                       // private — invisible to s
 ```rust
 // src/command/tests/mod.rs
 mod skill;
-mod render;
+mod render;   // a stem that a leaf binds as a test double needs `pub(super) mod`; see Layout shapes
 ```
 
 ```rust
@@ -146,7 +146,7 @@ Keep an admitted harness in the sibling file.
 - Call items that are already `pub`, `pub(crate)` or `pub(super)`.
 - When the harness must drive an item that stays private in production builds, add a `#[cfg(test)]` probe with `pub(super)` or `pub(crate)` and call the probe. The production item stays private.
 - `pub(super)` on the production item itself fits when that item is already the parent module's seam, such as a trait the sibling fixture implements. Do not widen it to `pub` or `pub(crate)` only so a test can call it.
-- A leaf that binds a test double (`use tests as ...` under `cfg(test)`) binds the sibling module instead (`use super::tests::<stem> as ...`). The double's functions are `pub(crate)` inside that `#[cfg(test)]` module, so the production build does not see them.
+- A leaf that binds a test double (`use tests as ...` under `cfg(test)`) binds the sibling module instead (`use super::tests::<stem> as ...`). That import needs the sibling declared `pub(super) mod <stem>;` in `<parent>/tests/mod.rs`: a plain `mod <stem>;` there is private to `<parent>::tests`, and the leaf `<parent>::<stem>` sits outside it, so the import fails with E0603 even when the double's functions are `pub(crate)`. The double's functions are `pub(crate)` inside that `#[cfg(test)]` module, so the production build does not see them.
 
 ### `#[path]` that is not this shape
 
@@ -195,9 +195,9 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 For each leaf `#[cfg(test)] #[path = "tests/<stem>.rs"] mod tests;` (see [Layout shapes](#layout-shapes)):
 
 1. Keep the test body at `<parent>/tests/<stem>.rs` when it already lives there. Otherwise move it to that path.
-2. Declare it from the parent, once: `#[cfg(test)] mod tests;` on the parent module root, and `mod <stem>;` in `<parent>/tests/mod.rs`. Remove the leaf `#[path]` declaration in the same change. Declaring both compiles the file twice.
+2. Declare it from the parent, once: `#[cfg(test)] mod tests;` on the parent module root, and `mod <stem>;` in `<parent>/tests/mod.rs`, written `pub(super) mod <stem>;` when a leaf binds the sibling as a test double (step 4). Remove the leaf `#[path]` declaration in the same change. Declaring both compiles the file twice.
 3. Replace `use super::*;` and `use super::<item>` with `use super::super::<stem>::<item>;`. Those items must be `pub`, `pub(crate)` or `pub(super)`.
-4. When the harness calls, constructs or assigns a private item, add a `#[cfg(test)]` probe with `pub(super)` or `pub(crate)` and call that probe. Leave the production item private. A leaf that imported its own test module (`use tests as ...` under `cfg(test)`) imports `super::tests::<stem>` instead, and the double's functions are `pub(crate)` inside the `#[cfg(test)]` sibling module.
+4. When the harness calls, constructs or assigns a private item, add a `#[cfg(test)]` probe with `pub(super)` or `pub(crate)` and call that probe. Leave the production item private. A leaf that imported its own test module (`use tests as ...` under `cfg(test)`) imports `super::tests::<stem>` instead; its sibling declaration must be `pub(super) mod <stem>;` (step 2), or the import is E0603. The double's functions are `pub(crate)` inside the `#[cfg(test)]` sibling module.
 5. Carry the leaf declaration's `cfg` (platform gates included) onto the sibling `mod <stem>;`.
 6. `cargo test -p <crate>` must pass.
 
