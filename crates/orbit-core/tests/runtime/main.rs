@@ -14,6 +14,8 @@
 
 #[path = "../support/admission.rs"]
 mod admission_test_support;
+#[path = "../support/external_merge_fixture.rs"]
+mod external_merge_fixture;
 #[path = "../support/git.rs"]
 mod git_test_support;
 #[path = "../support/task_params.rs"]
