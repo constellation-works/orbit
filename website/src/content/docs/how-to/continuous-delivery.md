@@ -483,6 +483,12 @@ review, or dependency problem first; do not rerun blindly.
    show routed to another host prints the same line, and the dashboard task
    detail carries the same `next_step`.
 
+   When a blocked task's failure-handoff pull request is green, and a required
+   pre-landing review has settled for that exact candidate, its block decision
+   offers **Approve and land** (`orbit decision answer <request-id> land`).
+   That merges the reviewed head and completes the task. Agents, drains, and
+   automatic rules cannot choose it.
+
 A cancelled task leaf is already back in `backlog` by default, with its
 candidate resumable on the next delivery. If you cancelled with `--block`,
 return it to `backlog` when it is ready to run again.

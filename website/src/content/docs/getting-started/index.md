@@ -73,6 +73,7 @@ this machine. Keep it running in its own terminal.
 | **Analytics** | Follow delivery trends: run durations, reliability, costly paths, and cost. |
 | **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, run a delivery window, and set up resident orchestrator mandates. |
 | **Notices** | Read the fleet notices that agents and operators post across your hosts, and close the ones that no longer apply. |
+| **Knowledge** | Read friction records, and crew memory with the proposals waiting for review. |
 | **Settings** | Inspect and edit configuration and crews. |
 
 It listens on loopback only. To reach the dashboard on another machine over
@@ -87,7 +88,9 @@ SSH, run `orbit web connect <ssh-host>`. See
 2. **Click Approve.** The task moves to the backlog.
 3. **Click Ship.** Orbit locks the task's context files and runs an agent in an
    isolated worktree to plan, execute, and check the change. A second agent
-   reviews it only when review is turned on. Follow the run from **View run**.
+   reviews it when `review.timing` is on. A new pull-request workspace sets
+   that to `before_landing` if `luna`, `haiku`, or `muse-spark` is enabled,
+   and to `off` otherwise. Follow the run from **View run**.
 4. **Review the pull request.** The run stops with the task in `review` and
    the pull request open. Merge it on GitHub. Then click **Approve** on the
    task, or let Orbit close it: a later `orbit run auto` delivery window
