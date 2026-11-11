@@ -545,6 +545,10 @@ fn combined_extension_resize_audit_links_to_the_extension_request() {
         assert_eq!(worker_requests.len(), 1, "{job}: {worker_requests:?}");
         assert_eq!(worker_requests[0]["request_id"], initiating_id, "{job}");
         assert_eq!(
+            worker_requests[0]["requested_at"], extend_requests[0]["requested_at"],
+            "{job}: the resize request carries its extension's request time"
+        );
+        assert_eq!(
             worker_requests[0]["requested_max_active_leaf_runs"], 5,
             "{job}"
         );
@@ -586,6 +590,10 @@ fn combined_extension_resize_audit_links_to_the_extension_request() {
             drains.audits(&drain, WORKERS_REQUEST_AUDIT, AuditEventStatus::Success);
         assert_eq!(worker_requests.len(), 2, "{job}: {worker_requests:?}");
         assert_eq!(worker_requests[0]["request_id"], second_id, "{job}");
+        assert_eq!(
+            worker_requests[0]["requested_at"], extend_requests[0]["requested_at"],
+            "{job}"
+        );
         let worker_completed =
             drains.audits(&drain, WORKERS_COMPLETED_AUDIT, AuditEventStatus::Success);
         assert_eq!(worker_completed.len(), 2, "{job}: {worker_completed:?}");

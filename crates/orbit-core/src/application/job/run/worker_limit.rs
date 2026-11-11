@@ -18,6 +18,7 @@
 //! it never signals, cancels, or reassigns a child, because a running leaf is
 //! held by its own detached run, not by this ceiling.
 
+use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
@@ -170,16 +171,17 @@ impl OrbitRuntime {
     /// without reopening a second, separately authorized transaction.
     ///
     /// Both records carry the extension's `request_id` (also named as
-    /// `parent_request_id`/`initiating_request_id`), so a client joining by
-    /// request id finds the initiating extension and its actor/source/reason
-    /// alongside the resize request and completion.
-    pub(super) fn record_combined_drain_worker_limit_completion(
+    /// `parent_request_id`/`initiating_request_id`) and its `requested_at`, so a
+    /// client joining by request id finds the initiating extension and its
+    /// actor/source/reason alongside the resize request and completion.
+    pub(super) fn record_combined_drain_worker_limit_audit(
         &self,
         change: &DrainWorkerLimitChange,
         request_id: &str,
         actor: &str,
         source: &str,
         reason: Option<&str>,
+        requested_at: DateTime<Utc>,
     ) -> Result<(), OrbitError> {
         self.record_pipeline_audit(
             WORKER_LIMIT_REQUEST_AUDIT,
@@ -197,7 +199,7 @@ impl OrbitRuntime {
                 "reason": reason,
                 "actor": actor,
                 "source": source,
-                "requested_at": chrono::Utc::now().to_rfc3339(),
+                "requested_at": requested_at.to_rfc3339(),
             }),
             None,
         )?;
