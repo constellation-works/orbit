@@ -905,10 +905,10 @@ spec:
 
     ## Findings
 
-    - `blocked_by`: real IDs of other tasks, never the task itself. Report waiting
-      for another task's delivery only here, never in utility or surface warnings.
-      Prerequisites already in `dependencies` or `blocked_by` relations need no
-      holding finding.
+    - `blocked_by`: real IDs of other tasks, never the task itself. Entries are
+      strings, not objects. Report waiting for another task's delivery only here,
+      never in utility or surface warnings. Prerequisites already in `dependencies`
+      or `blocked_by` relations need no holding finding.
     - `start_prerequisites`: report each explicit, unresolved condition that
       forbids implementation from starting as `{"evidence":"<condition and
       source>"}`. Include the concrete future instant and unresolved external
