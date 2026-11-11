@@ -381,6 +381,10 @@ impl OrbitRuntime {
                         "The failure keeps recurring; fix its cause before moving the task back \
                          to backlog.",
                     )
+                } else if let Some(plan) =
+                    self.unresumable_publication(task, request, &header, "requeue")?
+                {
+                    plan
                 } else {
                     Plan {
                         status: TaskStatus::Backlog,
@@ -541,6 +545,59 @@ impl OrbitRuntime {
                 ) && entry.at >= since
             })
             .count())
+    }
+
+    /// The escalation a requeue of `task` (by `step`) takes instead when the
+    /// failed run published a candidate whose source the next run's
+    /// candidate resume would refuse: preserving it would only admit a
+    /// successor that fails before implementation. The plan records the
+    /// failed identity predicate as a typed history entry and asks for a
+    /// discard. `None` when nothing is published or the source passes.
+    pub(super) fn unresumable_publication(
+        &self,
+        task: &Task,
+        request: &FinalRecoveryRequest,
+        header: &str,
+        step: &str,
+    ) -> Result<Option<Plan>, OrbitError> {
+        let Some(reason) = self.published_requeue_identity_refusal(task, &request.run_id)? else {
+            return Ok(None);
+        };
+        let diagnosis = format!(
+            "{step} refused: run {} published a candidate the next run cannot resume; its \
+             source is not an exact owner-local single-task execution: {reason}",
+            request.run_id
+        );
+        let human_action = format!(
+            "Discard the candidate (orbit task update {} --status backlog --discard-candidate) \
+             so the next run implements fresh, or repair the published pull request through \
+             explicit source repair.",
+            task.id
+        );
+        let note = serde_json::json!({
+            "source_run_id": request.run_id,
+            "step": step,
+            "reason": reason.code(),
+        });
+        let mut plan = Plan::escalated(
+            request,
+            header,
+            &diagnosis,
+            &format!("human_action: {human_action}"),
+            Some(diagnosis.clone()),
+        )
+        .with_human_request(&diagnosis, &human_action);
+        plan.history.push(TaskHistoryEntry {
+            at: Utc::now(),
+            by: SYSTEM_ACTOR_LABEL.to_string(),
+            event: super::FINAL_RECOVERY_UNRESUMABLE_PUBLICATION_EVENT.to_string(),
+            note: Some(note.to_string()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        });
+        Ok(Some(plan))
     }
 
     fn write_plan(

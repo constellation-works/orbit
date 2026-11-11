@@ -6,6 +6,7 @@
 //! the blocked task keeps (`failure_handoff`). Both are re-authenticated in
 //! full from the immutable source when the next run adopts them.
 use super::*;
+use crate::application::contracts::OwnerSourceIdentityRefusal;
 use orbit_common::SourceRepairRunStateRefusal;
 use orbit_types::workflow::{self, HeldFailure, JobRunStep};
 use serde::{Deserialize, Serialize};
@@ -134,12 +135,13 @@ pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(
 }
 
 impl OrbitRuntime {
-    /// Called under the final-recovery task lock; stored atomically with its decision.
-    pub(crate) fn published_owner_requeue_record(
+    /// `run_id`, when a requeue of `task` would preserve its publication: a
+    /// local, unclaimed owner PR run that pushed or opened its pull request.
+    fn published_owner_requeue_source(
         &self,
         task: &Task,
         run_id: &str,
-    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+    ) -> Result<Option<JobRun>, OrbitError> {
         if !self.task_run_is_local(task) {
             return Ok(None);
         }
@@ -157,6 +159,37 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
+        Ok(Some(source))
+    }
+
+    /// Why a requeue of `task` must not preserve `run_id`'s publication: the
+    /// run published, but is not the exact owner-local single-task execution
+    /// the next run's candidate resume authenticates, so a successor would
+    /// only fail there. `None` when nothing is published or the source passes
+    /// that identity check.
+    pub(crate) fn published_owner_requeue_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        match self.published_owner_requeue_source(task, run_id)? {
+            Some(source) => self.owner_source_identity_refusal(&source, task),
+            None => Ok(None),
+        }
+    }
+
+    /// Called under the final-recovery task lock; stored atomically with its
+    /// decision. Refuses a publication candidate resume would refuse
+    /// ([`Self::published_owner_requeue_refusal`]) rather than preserve it.
+    pub(crate) fn published_owner_requeue_record(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let Some(source) = self.published_owner_requeue_source(task, run_id)? else {
+            return Ok(None);
+        };
+        self.owner_source_identity(&source, task)?;
         let record = PreservedPublication {
             schema_version: 1,
             source_run_id: run_id.into(),
@@ -400,41 +433,76 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// Refuse unless `source` is an exact owner-local single-task execution
+    /// of `task`, naming the predicate that failed
+    /// ([`Self::owner_source_identity_refusal`]).
     pub(super) fn owner_source_identity(
         &self,
         source: &JobRun,
         task: &Task,
     ) -> Result<(), OrbitError> {
-        let local = self
-            .automation_machine_identity()
-            .ok_or_else(|| refuse("local identity missing"))?;
-        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
-            || source
-                .executed_on
-                .as_ref()
-                .is_none_or(|o| o.machine_id != local)
-            || task
-                .job_run_machine
-                .as_ref()
-                .is_none_or(|o| o.machine_id != local)
-            || source.input.as_ref().is_none_or(|i| {
-                i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
-            })
-            || self
-                .stores()
-                .jobs()
-                .local_pull_for_run(&source.run_id)?
-                .is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|c| c.claim.task_id == task.id)
-        {
-            return Err(refuse(
-                "published candidate is not an exact owner-local single-task execution",
-            ));
+        match self.owner_source_identity_refusal(source, task)? {
+            None => Ok(()),
+            Some(OwnerSourceIdentityRefusal::LocalIdentityMissing) => {
+                Err(refuse("local identity missing"))
+            }
+            Some(reason) => Err(refuse(format!(
+                "published candidate is not an exact owner-local single-task execution: {reason}"
+            ))),
         }
-        Ok(())
+    }
+
+    /// The first owner-source identity predicate `source` fails for `task`,
+    /// or `None` when it is an exact owner-local single-task execution. The
+    /// predicates run in a fixed order and the store reads only after the
+    /// record checks pass, so each failing source reports one reason.
+    pub(crate) fn owner_source_identity_refusal(
+        &self,
+        source: &JobRun,
+        task: &Task,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        let Some(local) = self.automation_machine_identity() else {
+            return Ok(Some(OwnerSourceIdentityRefusal::LocalIdentityMissing));
+        };
+        let reason = if source.job_id != workflow::TASK_PR_PIPELINE_JOB {
+            OwnerSourceIdentityRefusal::JobKind
+        } else if source
+            .executed_on
+            .as_ref()
+            .is_none_or(|o| o.machine_id != local)
+        {
+            OwnerSourceIdentityRefusal::SourceMachine
+        } else if task
+            .job_run_machine
+            .as_ref()
+            .is_none_or(|o| o.machine_id != local)
+        {
+            OwnerSourceIdentityRefusal::TaskMachine
+        } else if source.input.as_ref().is_some_and(|i| i["claimed"] == true) {
+            OwnerSourceIdentityRefusal::ClaimedInput
+        } else if source
+            .input
+            .as_ref()
+            .is_none_or(|i| carried_task_ids(i) != BTreeSet::from([task.id.clone()]))
+        {
+            OwnerSourceIdentityRefusal::TaskSet
+        } else if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(&source.run_id)?
+            .is_some()
+        {
+            OwnerSourceIdentityRefusal::LocalPull
+        } else if self
+            .resolve_execution_claims()?
+            .iter()
+            .any(|c| c.claim.task_id == task.id)
+        {
+            OwnerSourceIdentityRefusal::ExecutionClaim
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(reason))
     }
 
     pub(crate) fn owner_published_candidate(

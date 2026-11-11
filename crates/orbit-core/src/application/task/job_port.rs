@@ -32,7 +32,7 @@ use serde_json::Value;
 use super::TaskRow;
 use crate::application::contracts::{
     AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
-    RetryKey,
+    OwnerSourceIdentityRefusal, RetryKey,
 };
 
 /// The crew pools an admitting pipeline captured, as task code names them.
@@ -201,6 +201,15 @@ pub(in crate::application) trait TaskJobPort {
         task: &Task,
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError>;
+
+    /// Why a requeue of `task` must not preserve `run_id`'s published
+    /// candidate: the next run's candidate resume would refuse its source
+    /// identity. `None` when nothing is published or the source passes.
+    fn published_requeue_identity_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError>;
 
     /// The authenticated failure-handoff preservation record for `task` and
     /// the binding its next run resumes.

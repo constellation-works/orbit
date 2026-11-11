@@ -21,6 +21,7 @@ mod experiment;
 mod filing_tags;
 mod host_provider_hold;
 mod jobs;
+mod owner_source_identity;
 mod pilot;
 mod published_delivery;
 mod pull_settlement;
@@ -48,6 +49,7 @@ pub use orbit_clock::{
     ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
     save_clock_settings,
 };
+pub(crate) use owner_source_identity::OwnerSourceIdentityRefusal;
 pub(in crate::application) use pilot::SUPERSEDED_BY_SOURCE;
 pub(crate) use pilot::{PilotFingerprints, PilotTaskReservation};
 pub(crate) use published_delivery::PublishedDelivery;
