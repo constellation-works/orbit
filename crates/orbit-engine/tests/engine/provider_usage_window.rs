@@ -1001,11 +1001,141 @@ cat '{}'
     assert!(limits.is_empty());
 }
 
+/// [ORB-24019] The `agent_output` relay must drop the same redundant Claude
+/// partial content events the bounded capture drops, while relaying every
+/// other frame and still counting the dropped bytes as observed.
+fn claude_partial_content_events_are_not_relayed_as_agent_output() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+    struct RelayedLine(Option<String>, bool);
+    impl tracing::field::Visit for RelayedLine {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "line" {
+                self.0 = Some(value.to_string());
+            }
+            if field.name() == "stream" {
+                self.1 = value == "stdout";
+            }
+        }
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+    struct Capture(Arc<Mutex<Vec<String>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit_engine::activity_job::cli_runner::supervisor" {
+                let mut line = RelayedLine(None, false);
+                event.record(&mut line);
+                if line.1
+                    && let Some(line) = line.0
+                {
+                    self.0.lock().unwrap().push(line);
+                }
+            }
+        }
+    }
+
+    let recorded = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/claude_final_usage.jsonl"
+    );
+    let recorded_lines: Vec<&str> = recorded.lines().collect();
+    // message_start, assistant, message_delta, message_stop, result.
+    let (message_start, assistant, message_delta, message_stop, result) = (
+        recorded_lines[0],
+        recorded_lines[1],
+        recorded_lines[2],
+        recorded_lines[3],
+        recorded_lines[4],
+    );
+    let rate_limit_event = CLAUDE_STREAM
+        .lines()
+        .find(|line| line.contains("\"rate_limit_event\""))
+        .unwrap();
+    let content_start = json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}).to_string();
+    let content_delta = json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fragment"}}}).to_string();
+    let content_stop =
+        json!({"type":"stream_event","event":{"type":"content_block_stop","index":0}}).to_string();
+    let user = json!({"type":"user","message":{"role":"user","content":"next"}}).to_string();
+    let frames: [&str; 10] = [
+        message_start,
+        content_start.as_str(),
+        content_delta.as_str(),
+        content_stop.as_str(),
+        assistant,
+        user.as_str(),
+        message_delta,
+        message_stop,
+        rate_limit_event,
+        result,
+    ];
+    let mut stdout = frames.join("\n");
+    stdout.push('\n');
+
+    let relayed = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+    let (outcome, _) = tracing::subscriber::with_default(subscriber, || {
+        dispatch("claude", Provider::Claude, &stdout, &[])
+    });
+    assert!(outcome.success, "{:?}", outcome.message);
+
+    let relayed_kinds: Vec<(String, Option<String>)> = relayed
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let frame: Value = serde_json::from_str(line).unwrap();
+            (
+                frame["type"].as_str().unwrap().to_string(),
+                frame["event"]["type"].as_str().map(str::to_string),
+            )
+        })
+        .collect();
+    assert_eq!(
+        relayed_kinds,
+        [
+            (
+                "stream_event".to_string(),
+                Some("message_start".to_string())
+            ),
+            ("assistant".to_string(), None),
+            ("user".to_string(), None),
+            (
+                "stream_event".to_string(),
+                Some("message_delta".to_string())
+            ),
+            ("stream_event".to_string(), Some("message_stop".to_string())),
+            ("rate_limit_event".to_string(), None),
+            ("result".to_string(), None),
+        ],
+        "content_block_* stream events must not reach the agent_output relay"
+    );
+    // Stall/progress accounting counts every raw byte, dropped ones included
+    // (the fake provider's heredoc adds one trailing newline to `stdout`).
+    assert_eq!(
+        outcome.output["stdout_text_original_bytes"],
+        json!(stdout.len() + 1)
+    );
+    // The bounded capture keeps the same frames it kept before the relay fix.
+    let captured = outcome.output["stdout_text"].as_str().unwrap();
+    assert!(!captured.contains("content_block_"), "{captured}");
+    assert!(captured.contains("\"type\":\"assistant\""), "{captured}");
+    assert!(captured.contains("\"type\":\"result\""), "{captured}");
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn usage_window_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "usage_window_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            (
+                "claude_partial_content_events_are_not_relayed_as_agent_output",
+                claude_partial_content_events_are_not_relayed_as_agent_output,
+            ),
             (
                 "antigravity_records_native_quota_and_unavailable_readings_are_advisory",
                 antigravity_records_native_quota_and_unavailable_readings_are_advisory,
