@@ -17,27 +17,16 @@ pub fn attention_digest(bytes: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-fn canonical(value: &Value) -> Value {
-    match value {
-        Value::Object(values) => {
-            let sorted: std::collections::BTreeMap<_, _> = values
-                .iter()
-                .map(|(k, v)| (k.clone(), canonical(v)))
-                .collect();
-            json!(sorted)
-        }
-        Value::Array(values) => Value::Array(values.iter().map(canonical).collect()),
-        _ => value.clone(),
-    }
-}
 /// `fp_` digest over the item's identity, severity and canonical material state.
 pub fn attention_fingerprint(item: &AttentionItem, state: Value) -> String {
     format!(
         "fp_{}",
         attention_digest(
-            canonical(&json!({"id": item.id, "severity": item.severity, "state": state}))
-                .to_string()
-                .as_bytes()
+            crate::protocol::sorted_keys_json_value(
+                &json!({"id": item.id, "severity": item.severity, "state": state}),
+            )
+            .to_string()
+            .as_bytes()
         )
     )
 }
