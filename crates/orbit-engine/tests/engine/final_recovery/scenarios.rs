@@ -1,24 +1,12 @@
 //! [ORB-13907] The job-level final recovery hook, run through
-//! `execute_job_with_resume` against a scripted host.
-//!
-//! The job is `setup → work → deliver` with a `failure_activity` and a
-//! deterministic `final_recovery_activity` whose output is the decision. The
-//! host stands in for Core: it admits (or skips) the hook and acts on each
-//! decision the way the applier's outcome maps — `resume` back to the engine,
-//! `escalate` as escalated, anything else as settled.
-
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+//! `execute_job_with_resume` against a scripted host (`host.rs`). The job is
+//! `setup → work → deliver` with a `failure_activity` and a deterministic
+//! `final_recovery_activity` whose output is the decision.
 
 use chrono::Utc;
-use orbit_agent::loop_engine::InMemorySink;
-use orbit_common::{ConflictedFile, OrbitError, RecoverableVcsConflict};
+use orbit_common::{ConflictedFile, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{
-    CompletionObservationAdmission, DispatchError, FinalRecoveryAdmission,
-    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, JobOutcome,
-    TaskAutomationUpdate, V2AuditWriter, V2SqliteSink, execute_job_with_resume,
-};
+use orbit_engine::{CompletionObservationAdmission, DispatchError, FinalRecoveryApplication};
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
@@ -26,264 +14,15 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+#[path = "host.rs"]
+mod host;
+use host::{RecoveryHost, Reply, Run, evidence_hold, run, run_with_evidence, run_with_input};
+
 const RUN_ID: &str = "jrun-final-recovery";
 
 #[cfg(unix)]
 #[path = "prompt.rs"]
 mod prompt;
-
-/// How a scripted deterministic call ends.
-#[derive(Clone)]
-enum Reply {
-    Ok(Value),
-    Fail,
-    Permanent,
-    Observation,
-    Diagnostic(String),
-    Conflict(RecoverableVcsConflict),
-    /// A settled review awaiting named external evidence.
-    EvidenceHold,
-    /// A child run the step waited on was cancelled.
-    ChildCancelled,
-}
-
-struct RecoveryHost {
-    replies: Mutex<HashMap<String, VecDeque<Reply>>>,
-    calls: Mutex<Vec<(String, Value)>>,
-    /// Success checkpoints, in call order: `(step_id, output)`.
-    checkpoints: Mutex<Vec<(String, Value)>>,
-    /// Diagnostic checkpoints, in call order: `(step_id, output)`.
-    diagnostics: Mutex<Vec<(String, Value)>>,
-    admission: FinalRecoveryAdmission,
-    admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
-    applications: Mutex<Vec<FinalRecoveryApplication>>,
-    updates: Mutex<Vec<(String, TaskAutomationUpdate)>>,
-    logs: HashMap<String, String>,
-    workspace_path: String,
-    primary_root: Option<std::path::PathBuf>,
-    cli: Option<orbit_engine::ResolvedCliExecutor>,
-    completion_admission: CompletionObservationAdmission,
-}
-
-impl RecoveryHost {
-    fn new<const N: usize>(replies: [(&str, Vec<Reply>); N]) -> Self {
-        Self {
-            replies: Mutex::new(
-                replies
-                    .into_iter()
-                    .map(|(action, queue)| (action.to_string(), queue.into()))
-                    .collect(),
-            ),
-            calls: Mutex::new(Vec::new()),
-            checkpoints: Mutex::new(Vec::new()),
-            diagnostics: Mutex::new(Vec::new()),
-            admission: FinalRecoveryAdmission::Admitted,
-            admissions: Mutex::new(Vec::new()),
-            applications: Mutex::new(Vec::new()),
-            updates: Mutex::new(Vec::new()),
-            logs: HashMap::from([(RUN_ID.to_string(), "this run's failure log".to_string())]),
-            workspace_path: "/worktrees/run".to_string(),
-            primary_root: None,
-            cli: None,
-            completion_admission: CompletionObservationAdmission::Unavailable,
-        }
-    }
-
-    /// Answer admission like a host whose `workflow.final_recovery_crews` is
-    /// `[]`.
-    fn with_empty_pool(mut self) -> Self {
-        self.admission = FinalRecoveryAdmission::Skipped {
-            reason: "final recovery is disabled: `workflow.final_recovery_crews` is []".to_string(),
-        };
-        self
-    }
-
-    fn inputs(&self, action: &str) -> Vec<Value> {
-        self.calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(name, _)| name == action)
-            .map(|(_, input)| input.clone())
-            .collect()
-    }
-
-    fn count(&self, action: &str) -> usize {
-        self.inputs(action).len()
-    }
-
-    fn actions(&self) -> Vec<String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
-    fn applications(&self) -> Vec<FinalRecoveryApplication> {
-        self.applications.lock().unwrap().clone()
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        let reply = self
-            .replies
-            .lock()
-            .unwrap()
-            .get_mut(action)
-            .and_then(VecDeque::pop_front);
-        match reply {
-            Some(Reply::Ok(value)) => Ok(value),
-            Some(Reply::Observation) => Err(DispatchError::CompletionObservationUnavailable {
-                action: action.to_string(),
-                message: "TLS handshake timeout".into(),
-            }),
-            Some(Reply::Fail) => Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{action} failed"),
-            }),
-            Some(Reply::Diagnostic(message)) => Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message,
-            }),
-            Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
-                "{action}: sandbox unavailable"
-            ))),
-            Some(Reply::Conflict(conflict)) => {
-                Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
-            }
-            Some(Reply::EvidenceHold) => {
-                Err(DispatchError::ReviewEvidenceHold(Box::new(evidence_hold())))
-            }
-            Some(Reply::ChildCancelled) => Err(DispatchError::ChildRunCancelled {
-                message: "child run jrun-child was cancelled".to_string(),
-            }),
-            None if action == "setup" => Ok(json!({
-                "workspace_path": self.workspace_path,
-                "base_ref": "main",
-                "base_sha": "0123456789abcdef0123456789abcdef01234567",
-            })),
-            None => Ok(json!({ "action": action })),
-        }
-    }
-
-    fn checkpoint_step(
-        &self,
-        _: &str,
-        _: u32,
-        step_id: &str,
-        output: &Value,
-        _: &std::collections::BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        self.checkpoints
-            .lock()
-            .unwrap()
-            .push((step_id.to_string(), output.clone()));
-        Ok(())
-    }
-
-    fn checkpoint_step_diagnostic(
-        &self,
-        _: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        self.diagnostics
-            .lock()
-            .unwrap()
-            .push((step_id.to_string(), output.clone()));
-        Ok(())
-    }
-
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(self.logs.get(run_id).cloned())
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.updates
-            .lock()
-            .unwrap()
-            .push((task_id.to_string(), update));
-        Ok(())
-    }
-
-    fn resolve_cli_executor(
-        &self,
-        _provider: &str,
-    ) -> Result<orbit_engine::ResolvedCliExecutor, DispatchError> {
-        self.cli.clone().ok_or_else(|| {
-            DispatchError::JobExecution("this fixture has no provider CLI".to_string())
-        })
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: self.primary_root.clone(),
-            ..Default::default()
-        }
-    }
-
-    fn completion_observation_admission(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<CompletionObservationAdmission, OrbitError> {
-        Ok(self.completion_admission.clone())
-    }
-
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.admissions.lock().unwrap().push(request.clone());
-        Ok(self.admission.clone())
-    }
-
-    fn apply_final_recovery(
-        &self,
-        _run_id: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        self.applications.lock().unwrap().push(application.clone());
-        Ok(match &application.decision {
-            FinalRecoveryDecision::Resume { .. } => FinalRecoveryApplied::Resume,
-            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
-                outcome: "blocked for a human".to_string(),
-            },
-            other => FinalRecoveryApplied::Settled {
-                outcome: other.kind().to_string(),
-            },
-        })
-    }
-}
 
 fn deterministic_activity(name: &str) -> ActivityV2 {
     let asset = json!({
@@ -302,6 +41,34 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
         .spec
 }
 
+fn det_step(id: &str, action: &str) -> Value {
+    json!({ "id": id, "spec": { "type": "deterministic", "action": action, "config": {} } })
+}
+
+fn with_final_recovery(mut job: JobV2) -> JobV2 {
+    job.final_recovery_activity = Some("decide".to_string());
+    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    job
+}
+
+fn with_handoff(mut job: JobV2) -> JobV2 {
+    job.failure_activity = Some("handoff".to_string());
+    job.resolved_failure_activity = Some(deterministic_activity("handoff"));
+    job
+}
+
+fn job_from_steps(name: &str, steps: Vec<Value>) -> JobV2 {
+    let asset = json!({
+        "schemaVersion": 2, "kind": "Job", "metadata": { "name": name },
+        "spec": { "state": "enabled", "kind": "workflow", "steps": steps },
+    });
+    with_final_recovery(
+        load_job_asset(&asset.to_string())
+            .expect("fixture job loads")
+            .spec,
+    )
+}
+
 /// `setup → work → deliver`, with `handoff` as the failure activity and
 /// `decide` as the final recovery activity. `work` may name `step_fix` as
 /// its step recovery.
@@ -309,31 +76,20 @@ fn pipeline(step_recovery: bool) -> JobV2 {
     pipeline_acting("work", step_recovery)
 }
 
+fn three_step_job(middle_id: &str, middle_action: &str) -> JobV2 {
+    with_handoff(job_from_steps(
+        "final_recovery_fixture",
+        vec![
+            det_step("setup", "setup"),
+            det_step(middle_id, middle_action),
+            det_step("deliver", "deliver"),
+        ],
+    ))
+}
+
 /// `setup → <middle> → deliver`, otherwise exactly [`pipeline`].
 fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
-    let step = |id: &str| {
-        json!({
-            "id": id,
-            "spec": { "type": "deterministic", "action": id, "config": {} },
-        })
-    };
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Job",
-        "metadata": { "name": "final_recovery_fixture" },
-        "spec": {
-            "state": "enabled",
-            "kind": "workflow",
-            "steps": [step("setup"), step(middle), step("deliver")],
-        },
-    });
-    let mut job = load_job_asset(&asset.to_string())
-        .expect("fixture job loads")
-        .spec;
-    job.failure_activity = Some("handoff".to_string());
-    job.resolved_failure_activity = Some(deterministic_activity("handoff"));
-    job.final_recovery_activity = Some("decide".to_string());
-    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    let mut job = three_step_job(middle, middle);
     if step_recovery {
         job.steps[1].recovery_activity = Some("step_fix".to_string());
         job.steps[1].resolved_recovery_activity = Some(deterministic_activity("step_fix"));
@@ -343,145 +99,105 @@ fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
 
 /// `setup → <step_id:action> → deliver`, otherwise exactly [`pipeline`].
 fn pipeline_step_acting(step_id: &str, action: &str) -> JobV2 {
-    let step = |id: &str, action: &str| {
-        json!({
-            "id": id,
-            "spec": { "type": "deterministic", "action": action, "config": {} },
-        })
-    };
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Job",
-        "metadata": { "name": "final_recovery_fixture" },
-        "spec": {
-            "state": "enabled",
-            "kind": "workflow",
-            "steps": [step("setup", "setup"), step(step_id, action), step("deliver", "deliver")],
-        },
-    });
-    let mut job = load_job_asset(&asset.to_string())
-        .expect("fixture job loads")
-        .spec;
-    job.failure_activity = Some("handoff".to_string());
-    job.resolved_failure_activity = Some(deterministic_activity("handoff"));
-    job.final_recovery_activity = Some("decide".to_string());
-    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
-    job
+    three_step_job(step_id, action)
 }
 
-struct Run {
-    result: Result<JobOutcome, DispatchError>,
-    /// `(outcome, decision)` of every `job.final_recovery_attempted` event.
-    attempts: Vec<(String, Option<String>)>,
-    /// Detail of each attempt, in the same order as `attempts`.
-    details: Vec<Option<String>>,
-    /// `outcome` of every `step.post_recovery_attempt` event.
-    post_recovery: Vec<String>,
-}
+const FAULT_EVIDENCE: &str = "run fixture: the candidate failed its check";
 
-fn run(job: &JobV2, host: &RecoveryHost, resume: Option<&PipelineState>) -> Run {
-    run_with_evidence(job, host, resume, Vec::new())
-}
-
-fn run_with_evidence(
-    job: &JobV2,
-    host: &RecoveryHost,
-    resume: Option<&PipelineState>,
-    prior_events: Vec<(&str, V2AuditEventKind)>,
-) -> Run {
-    run_with_input(
-        job,
-        host,
-        resume,
-        prior_events,
-        json!({ "task_ids": ["T-1"] }),
-    )
-}
-
-fn run_with_input(
-    job: &JobV2,
-    host: &RecoveryHost,
-    resume: Option<&PipelineState>,
-    prior_events: Vec<(&str, V2AuditEventKind)>,
-    input: Value,
-) -> Run {
-    let audit_root = tempfile::tempdir().expect("audit tempdir");
-    let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
-    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
-    let mut own_events = Vec::new();
-    for (run_id, event) in prior_events {
-        if run_id == RUN_ID {
-            own_events.push(event);
-            continue;
-        }
-        let sink = Arc::new(V2SqliteSink::for_audit_root(
-            store.clone(),
-            "ws_final_recovery",
-            run_id,
-            "test-agent",
-            None,
-            audit_root.path(),
-        ));
-        let writer =
-            V2AuditWriter::new(run_id, "test-agent", inner.clone()).with_envelope_sink(sink);
-        writer.emit(event).expect("persist prior event");
-    }
-    let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        store,
-        "ws_final_recovery",
-        RUN_ID,
-        "test-agent",
-        None,
-        audit_root.path(),
-    ));
-    let writer =
-        Arc::new(V2AuditWriter::new(RUN_ID, "test-agent", inner).with_envelope_sink(envelope));
-    for event in own_events {
-        writer.emit(event).expect("persist own prior event");
-    }
-    let result = execute_job_with_resume(job, input, RUN_ID, writer.clone(), host, resume);
-    let mut attempts = Vec::new();
-    let mut details = Vec::new();
-    let mut post_recovery = Vec::new();
-    for event in writer.events_snapshot().expect("audit events") {
-        match event.kind {
-            V2AuditEventKind::FinalRecoveryAttempted {
-                outcome,
-                decision,
-                detail,
-                ..
-            } => {
-                attempts.push((outcome, decision));
-                details.push(detail);
-            }
-            V2AuditEventKind::StepPostRecoveryAttempt { outcome, .. } => {
-                post_recovery.push(outcome);
-            }
-            _ => {}
-        }
-    }
-    Run {
-        result,
-        attempts,
-        details,
-        post_recovery,
-    }
+fn resume_reply(step_id: &str, rationale: &str) -> Reply {
+    Reply::Ok(json!({
+        "decision": "resume", "fault": "implementer", "fault_evidence": FAULT_EVIDENCE,
+        "step_id": step_id, "rationale": rationale,
+    }))
 }
 
 fn resume_to(step_id: &str) -> Reply {
-    Reply::Ok(json!({
-        "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
-        "step_id": step_id,
-        "rationale": "repaired the worktree",
-    }))
+    resume_reply(step_id, "repaired the worktree")
 }
 
 fn escalate() -> Reply {
     Reply::Ok(json!({
-        "decision": "escalate", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
+        "decision": "escalate", "fault": "implementer", "fault_evidence": FAULT_EVIDENCE,
         "diagnosis": "the provider rejected the push",
         "human_action": "grant the token repository write access",
     }))
+}
+
+/// `setup → implement_bundle(loop of one `work` step) → deliver` with
+/// final recovery; `claimed` adds the nested step's claimed default input.
+fn bundle_job(claimed: Option<bool>) -> JobV2 {
+    let mut step = json!({"id": "implement_one", "spec": {"type": "deterministic", "action": "work", "config": {}}});
+    if let Some(claimed) = claimed {
+        step["default_input"] =
+            json!({"claimed": claimed, "base_sha": "0123456789abcdef0123456789abcdef01234567"});
+    }
+    let asset = json!({
+        "schemaVersion": 2, "kind": "Job", "metadata": {"name": "implement_bundle_fixture"},
+        "spec": {"state": "enabled", "kind": "workflow", "steps": [
+            {"id": "setup", "spec": {"type": "deterministic", "action": "setup", "config": {}}},
+            {"id": "implement_bundle", "loop": {"items": "one", "max_iterations": 1, "steps": [step]}},
+            {"id": "deliver", "spec": {"type": "deterministic", "action": "deliver", "config": {}}}
+        ]}
+    });
+    with_final_recovery(load_job_asset(&asset.to_string()).unwrap().spec)
+}
+
+fn run_pipeline(step_recovery: bool, host: &RecoveryHost) -> Run {
+    run(&pipeline(step_recovery), host, None)
+}
+
+/// Host scripting `work` replies and a single `decide` reply.
+fn work_decide_host(work: Vec<Reply>, decide: Reply) -> RecoveryHost {
+    RecoveryHost::new([("work", work), ("decide", vec![decide])])
+}
+
+/// `work` fails once, then `decide` replies; run the standard pipeline.
+fn failing_run(step_recovery: bool, decide: Reply) -> (RecoveryHost, Run) {
+    let host = work_decide_host(vec![Reply::Fail], decide);
+    let run = run_pipeline(step_recovery, &host);
+    (host, run)
+}
+
+fn decide_input(host: &RecoveryHost) -> Value {
+    host.inputs("decide")
+        .into_iter()
+        .next()
+        .expect("decide was dispatched")
+}
+
+fn step_attempts(host: &RecoveryHost) -> Vec<Value> {
+    decide_input(host)["step_recovery_attempts"]
+        .as_array()
+        .expect("attempts")
+        .clone()
+}
+
+fn first_application(host: &RecoveryHost) -> FinalRecoveryApplication {
+    host.applications()
+        .into_iter()
+        .next()
+        .expect("one application")
+}
+
+fn assert_count(host: &RecoveryHost, action: &str, expected: usize) {
+    assert_eq!(host.count(action), expected, "{action} count");
+}
+
+fn assert_actions(host: &RecoveryHost, expected: &[&str]) {
+    assert_eq!(host.actions(), expected, "action sequence");
+}
+
+/// Final recovery was skipped: no dispatch, and today's failure path runs.
+fn assert_skipped(run: &Run, host: &RecoveryHost) {
+    assert!(run.result.is_err());
+    assert_count(host, "decide", 0);
+    assert_count(host, "handoff", 1);
+    assert_attempts(&run.attempts, &[("skipped", None)]);
+}
+
+fn assert_attempts(actual: &[(String, Option<String>)], expected: &[(&str, Option<&str>)]) {
+    let expected: Vec<_> = expected.iter().map(|&(o, d)| attempt(o, d)).collect();
+    assert_eq!(actual, expected.as_slice(), "final recovery attempts");
 }
 
 fn attempt(outcome: &str, decision: Option<&str>) -> (String, Option<String>) {
@@ -507,26 +223,18 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
             }))],
         ),
     ]);
-    let run = run(&pipeline(false), &host, None);
+    let run = run_pipeline(false, &host);
 
     let outcome = run.result.expect("the resumed run completes");
     assert!(outcome.success, "the rerun from `work` must deliver");
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "decide", "work", "deliver"],
-        "only `work` and what follows it run again; setup is not repeated"
-    );
-    assert_eq!(
-        host.count("handoff"),
-        0,
-        "a resumed run opens no failure handoff"
-    );
+    assert_actions(&host, &["setup", "work", "decide", "work", "deliver"]);
+    assert_count(&host, "handoff", 0);
     let applications = host.applications();
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].resume_step_index, Some(1));
-    assert_eq!(run.attempts, [attempt("resume", Some("resume"))]);
+    assert_attempts(&run.attempts, &[("resume", Some("resume"))]);
 
-    let input = &host.inputs("decide")[0];
+    let input = decide_input(&host);
     assert_eq!(input["task_id"], "T-1");
     assert_eq!(input["failed_step_id"], "work");
     assert_eq!(input["workspace_path"], "/worktrees/run");
@@ -551,22 +259,14 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
 fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     let refusal = "The record contains an unresolved {{ input.missing }} template";
     let rationale = "Keep {{ input.missing }} literal while repairing the record";
-    let host = RecoveryHost::new([
-        (
-            "work",
-            vec![
-                Reply::Diagnostic(refusal.to_string()),
-                Reply::Ok(json!({"repaired": true})),
-            ],
-        ),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "work", "rationale": rationale,
-            }))],
-        ),
-    ]);
-    let observed = run(&pipeline(false), &host, None);
+    let host = work_decide_host(
+        vec![
+            Reply::Diagnostic(refusal.to_string()),
+            Reply::Ok(json!({"repaired": true})),
+        ],
+        resume_reply("work", rationale),
+    );
+    let observed = run_pipeline(false, &host);
     assert!(
         observed.result.expect("the resumed run completes").success,
         "repair context is data, not another template to evaluate"
@@ -574,12 +274,10 @@ fn resume_context_is_opaque_when_the_target_inherits_job_input() {
     let inputs = host.inputs("work");
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[1]["final_recovery_resume"]["rationale"], rationale);
-    assert!(
-        inputs[1]["final_recovery_resume"]["refusal"]
-            .as_str()
-            .unwrap()
-            .contains(refusal)
-    );
+    let delivered_refusal = inputs[1]["final_recovery_resume"]["refusal"]
+        .as_str()
+        .unwrap();
+    assert!(delivered_refusal.contains(refusal));
 }
 
 fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
@@ -596,42 +294,17 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
             }
         });
         let rationale = "Name only the gate summary instead of hand-writing the deferral record";
-        let host = RecoveryHost::new([
-            (
-                "work",
-                vec![
-                    Reply::Ok(refused.clone()),
-                    Reply::Ok(json!({"repaired": true})),
-                ],
-            ),
-            (
-                "decide",
-                vec![Reply::Ok(json!({
-                    "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle", "rationale": rationale,
-                }))],
-            ),
-        ]);
-        let asset = json!({
-            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "resume_deferral_fixture"},
-            "spec": {"state": "enabled", "kind": "workflow", "steps": [
-                {"id": "setup", "spec": {"type": "deterministic", "action": "setup", "config": {}}},
-                {"id": "implement_bundle", "loop": {"items": "one", "max_iterations": 1, "steps": [
-                    {"id": "implement_one", "spec": {"type": "deterministic", "action": "work", "config": {}},
-                     "default_input": {"claimed": claimed, "base_sha": "0123456789abcdef0123456789abcdef01234567"}}
-                ]}},
-                {"id": "deliver", "spec": {"type": "deterministic", "action": "deliver", "config": {}}}
-            ]}
-        });
-        let mut job = load_job_asset(&asset.to_string()).unwrap().spec;
-        job.final_recovery_activity = Some("decide".to_string());
-        job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+        let host = work_decide_host(
+            vec![
+                Reply::Ok(refused.clone()),
+                Reply::Ok(json!({"repaired": true})),
+            ],
+            resume_reply("implement_bundle", rationale),
+        );
+        let job = bundle_job(Some(claimed));
         let observed = run(&job, &host, None);
         assert!(observed.result.unwrap().success);
-        assert_eq!(
-            host.count("work"),
-            2,
-            "one refusal and one resumed invocation"
-        );
+        assert_count(&host, "work", 2);
         let inputs = host.inputs("work");
         assert!(inputs[0].get("final_recovery_resume").is_none());
         let context: FinalRecoveryResume =
@@ -668,7 +341,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
         state.final_recovery.as_mut().unwrap().resume_context = Some(context.clone());
         let restarted = RecoveryHost::new([]);
         assert!(run(&job, &restarted, Some(&state)).result.unwrap().success);
-        assert_eq!(restarted.count("decide"), 0);
+        assert_count(&restarted, "decide", 0);
         assert_eq!(
             restarted.inputs("work")[0]["final_recovery_resume"],
             serde_json::to_value(context).unwrap()
@@ -686,22 +359,14 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
 /// context names the admitted step even when the decision's id is padded.
 fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id() {
     let refusal = format!("probe refused: {}", "x".repeat(512 * 1024));
-    let host = RecoveryHost::new([
-        (
-            "work",
-            vec![
-                Reply::Diagnostic(refusal.clone()),
-                Reply::Ok(json!({"repaired": true})),
-            ],
-        ),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": " work ", "rationale": "repair the probe",
-            }))],
-        ),
-    ]);
-    let observed = run(&pipeline(false), &host, None);
+    let host = work_decide_host(
+        vec![
+            Reply::Diagnostic(refusal.clone()),
+            Reply::Ok(json!({"repaired": true})),
+        ],
+        resume_reply(" work ", "repair the probe"),
+    );
+    let observed = run_pipeline(false, &host);
     assert!(observed.result.expect("the resumed run completes").success);
     let inputs = host.inputs("work");
     assert_eq!(inputs.len(), 2);
@@ -716,7 +381,7 @@ fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id()
         host.applications()[0]
             .resume_context
             .as_ref()
-            .map(|context| context.refusal.as_str()),
+            .map(|c| c.refusal.as_str()),
         Some(delivered),
         "the persisted context is the delivered one"
     );
@@ -724,38 +389,19 @@ fn an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id()
 
 fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     let summary = "y".repeat(256 * 1024);
-    let host = RecoveryHost::new([
-        (
-            "work",
-            vec![
-                Reply::Ok(json!({
-                    "summary": summary,
-                    "deferred_sandbox_validation": {"probe": {"exit_code": 1}},
-                })),
-                Reply::Ok(json!({"repaired": true})),
-            ],
+    let host = work_decide_host(
+        vec![
+            Reply::Ok(
+                json!({ "summary": summary, "deferred_sandbox_validation": {"probe": {"exit_code": 1}} }),
+            ),
+            Reply::Ok(json!({"repaired": true})),
+        ],
+        resume_reply(
+            "implement_bundle",
+            "Name only the gate summary instead of hand-writing the deferral record",
         ),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle",
-                "rationale": "Name only the gate summary instead of hand-writing the deferral record",
-            }))],
-        ),
-    ]);
-    let asset = json!({
-        "schemaVersion": 2, "kind": "Job", "metadata": {"name": "bounded_refused_output"},
-        "spec": {"state": "enabled", "kind": "workflow", "steps": [
-            {"id": "setup", "spec": {"type": "deterministic", "action": "setup", "config": {}}},
-            {"id": "implement_bundle", "loop": {"items": "one", "max_iterations": 1, "steps": [
-                {"id": "implement_one", "spec": {"type": "deterministic", "action": "work", "config": {}}}
-            ]}},
-            {"id": "deliver", "spec": {"type": "deterministic", "action": "deliver", "config": {}}}
-        ]}
-    });
-    let mut job = load_job_asset(&asset.to_string()).unwrap().spec;
-    job.final_recovery_activity = Some("decide".to_string());
-    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    );
+    let job = bundle_job(None);
     assert!(run(&job, &host, None).result.unwrap().success);
     let inputs = host.inputs("work");
     assert_eq!(inputs.len(), 2, "one refusal and one resumed invocation");
@@ -769,85 +415,57 @@ fn an_oversized_refused_output_reaches_the_resumed_implementer_bounded() {
     assert!(serde_json::to_string(refused).unwrap().len() <= 64 * 1024);
 }
 
-fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail]),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "archive", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
-                "reason": "superseded by the landed rewrite",
-            }))],
-        ),
-    ]);
-    let run = run(&pipeline(false), &host, None);
+fn archive_reply(reason: &str) -> Reply {
+    Reply::Ok(
+        json!({ "decision": "archive", "fault": "implementer", "fault_evidence": FAULT_EVIDENCE, "reason": reason }),
+    )
+}
 
+fn a_settling_decision_ends_the_run_without_the_failure_handoff() {
+    let (host, run) = failing_run(false, archive_reply("superseded by the landed rewrite"));
     let error = run
         .result
         .expect_err("the original failure stays authoritative");
     assert!(error.to_string().contains("work failed"), "{error}");
-    assert_eq!(host.count("handoff"), 0, "settled work gets no blocked PR");
-    assert_eq!(host.count("deliver"), 0);
-    let applications = host.applications();
+    assert_count(&host, "handoff", 0);
+    assert_count(&host, "deliver", 0);
     assert!(matches!(
-        applications[0].decision,
+        first_application(&host).decision,
         FinalRecoveryDecision::Archive { .. }
     ));
-    assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
+    assert_attempts(&run.attempts, &[("settled", Some("archive"))]);
 }
 
 fn an_escalation_still_runs_the_failure_handoff() {
-    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
-    let run = run(&pipeline(false), &host, None);
-
+    let (host, run) = failing_run(false, escalate());
     assert!(run.result.is_err());
-    assert_eq!(
-        host.count("handoff"),
-        1,
-        "escalation preserves today's handoff"
-    );
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "decide", "handoff"],
-        "final recovery runs before the failure activity"
-    );
-    assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
+    assert_count(&host, "handoff", 1);
+    assert_actions(&host, &["setup", "work", "decide", "handoff"]);
+    assert_attempts(&run.attempts, &[("escalated", Some("escalate"))]);
 }
 
 fn an_error_that_skips_step_recovery_still_reaches_final_recovery() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Permanent]),
-        ("decide", vec![escalate()]),
-    ]);
-    let run = run(&pipeline(true), &host, None);
-
+    let host = work_decide_host(vec![Reply::Permanent], escalate());
+    let run = run_pipeline(true, &host);
     assert!(matches!(
         run.result,
         Err(DispatchError::CliInvocationPermanent(_))
     ));
-    assert_eq!(
-        host.count("step_fix"),
-        0,
-        "a permanent error bypasses step recovery"
-    );
-    assert_eq!(host.count("decide"), 1, "but not the job's final recovery");
-    assert_eq!(host.count("handoff"), 1);
+    assert_count(&host, "step_fix", 0);
+    assert_count(&host, "decide", 1);
+    assert_count(&host, "handoff", 1);
 }
 
 fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail, Reply::Fail]),
-        ("decide", vec![escalate()]),
-    ]);
-    let run = run(&pipeline(true), &host, None);
-
+    let host = work_decide_host(vec![Reply::Fail, Reply::Fail], escalate());
+    let run = run_pipeline(true, &host);
     assert!(run.result.is_err());
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "step_fix", "work", "decide", "handoff"]
+    assert_actions(
+        &host,
+        &["setup", "work", "step_fix", "work", "decide", "handoff"],
     );
-    let input = &host.inputs("decide")[0];
-    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    let input = decide_input(&host);
+    let attempts = step_attempts(&host);
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0]["activity"], "step_fix");
     assert_eq!(attempts[0]["phase"], "recovery");
@@ -864,76 +482,42 @@ fn step_recovery_runs_first_and_final_recovery_only_once_it_is_spent() {
     assert_eq!(input["log_tail"], "this run's failure log");
 }
 
-fn evidence_hold() -> orbit_types::workflow::ReviewEvidenceHold {
-    orbit_types::workflow::ReviewEvidenceHold {
-        schema_version: 1,
-        attempt_id: "attempt-1".to_string(),
-        lineage_key: "lineage-1".to_string(),
-        run_id: RUN_ID.to_string(),
-        candidate: orbit_types::workflow::automation::SourceRevision {
-            commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
-            tree: "89abcdef0123456789abcdef0123456789abcdef".to_string(),
-        },
-        task_meaning_digest: "meaning".to_string(),
-        requirements: Vec::new(),
-        task_spec_digest: None,
-        published_ref: None,
-        candidate_carry: None,
-    }
-}
-
 /// ORB-21581: a step that fails, admits its step recovery, and then reaches
 /// a settled review awaiting evidence on the retry holds the run, exactly as
-/// a direct hold does.
-fn an_evidence_hold_after_step_recovery_holds_the_run() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail, Reply::EvidenceHold]),
-        ("decide", vec![escalate()]),
-    ]);
-    let run = run(&pipeline(true), &host, None);
-
-    let outcome = run.result.expect("a hold ends the run without an error");
-    assert!(!outcome.success);
-    assert_eq!(outcome.evidence_hold, Some(evidence_hold()));
-    assert!(!outcome.child_cancelled);
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "step_fix", "work"],
-        "no further attempt, final recovery, failure handoff or delivery runs"
-    );
-    assert!(run.attempts.is_empty(), "final recovery is not attempted");
-    assert_eq!(run.post_recovery, ["held"]);
-}
-
-/// ORB-21581: a child found cancelled on the retry after step recovery
-/// cancels the parent rather than failing it.
-fn a_cancelled_child_after_step_recovery_cancels_the_run() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail, Reply::ChildCancelled]),
-        ("decide", vec![escalate()]),
-    ]);
-    let run = run(&pipeline(true), &host, None);
-
+/// a direct hold does; a child found cancelled on the retry instead cancels
+/// the parent rather than failing it.
+fn hold_or_cancel_after_step_recovery(second: Reply, held: bool) {
+    let host = work_decide_host(vec![Reply::Fail, second], escalate());
+    let run = run_pipeline(true, &host);
     let outcome = run
         .result
-        .expect("a cancelled child ends the run without an error");
+        .expect("a hold or cancellation ends the run without an error");
     assert!(!outcome.success);
-    assert!(outcome.child_cancelled);
-    assert!(outcome.evidence_hold.is_none());
-    let message = outcome.message.expect("cancellation message");
-    assert!(
-        message.contains("child run jrun-child was cancelled")
-            && message.contains("original error before recovery")
-            && message.contains("work failed"),
-        "{message}"
-    );
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "step_fix", "work"],
-        "no further attempt, final recovery, failure handoff or delivery runs"
-    );
+    if held {
+        assert_eq!(outcome.evidence_hold, Some(evidence_hold()));
+        assert!(!outcome.child_cancelled);
+    } else {
+        assert!(outcome.child_cancelled);
+        assert!(outcome.evidence_hold.is_none());
+        let message = outcome.message.expect("cancellation message");
+        assert!(
+            message.contains("child run jrun-child was cancelled")
+                && message.contains("original error before recovery")
+                && message.contains("work failed"),
+            "{message}"
+        );
+    }
+    assert_actions(&host, &["setup", "work", "step_fix", "work"]);
     assert!(run.attempts.is_empty(), "final recovery is not attempted");
-    assert_eq!(run.post_recovery, ["cancelled"]);
+    assert_eq!(run.post_recovery, [if held { "held" } else { "cancelled" }]);
+}
+
+fn an_evidence_hold_after_step_recovery_holds_the_run() {
+    hold_or_cancel_after_step_recovery(Reply::EvidenceHold, true);
+}
+
+fn a_cancelled_child_after_step_recovery_cancels_the_run() {
+    hold_or_cancel_after_step_recovery(Reply::ChildCancelled, false);
 }
 
 fn final_recovery_runs_at_most_once_per_run() {
@@ -943,15 +527,14 @@ fn final_recovery_runs_at_most_once_per_run() {
         ("work", vec![Reply::Fail, Reply::Fail]),
         ("decide", vec![resume_to("deliver"), resume_to("work")]),
     ]);
-    let run = run(&pipeline(false), &host, None);
-
+    let run = run_pipeline(false, &host);
     assert!(run.result.is_err());
-    assert_eq!(host.count("decide"), 1);
+    assert_count(&host, "decide", 1);
     assert_eq!(host.admissions.lock().unwrap().len(), 1);
-    assert_eq!(host.count("handoff"), 1);
-    assert_eq!(
-        run.attempts,
-        [attempt("resume", Some("resume")), attempt("skipped", None),]
+    assert_count(&host, "handoff", 1);
+    assert_attempts(
+        &run.attempts,
+        &[("resume", Some("resume")), ("skipped", None)],
     );
 }
 
@@ -996,14 +579,13 @@ fn a_run_resumed_after_a_final_recovery_resume_never_runs_it_again() {
         },
         Some(FinalRecoveryCheckpointOutcome::Resume),
     );
-    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
+    let host = work_decide_host(vec![Reply::Fail], escalate());
     let run = run(&pipeline(false), &host, Some(&state));
-
     assert!(run.result.is_err());
-    assert_eq!(host.count("decide"), 0);
+    assert_count(&host, "decide", 0);
     assert!(host.admissions.lock().unwrap().is_empty());
     assert!(host.applications().is_empty());
-    assert_eq!(host.count("handoff"), 1);
+    assert_count(&host, "handoff", 1);
 }
 
 fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
@@ -1015,22 +597,17 @@ fn a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision() {
         reason: "superseded by the landed rewrite".to_string(),
     };
     let state = resumed_after(archive.clone(), None);
-    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
+    let host = work_decide_host(vec![Reply::Fail], escalate());
     let run = run(&pipeline(false), &host, Some(&state));
-
     assert!(run.result.is_err());
-    assert_eq!(
-        host.count("decide"),
-        0,
-        "the decision is not asked for twice"
-    );
+    assert_count(&host, "decide", 0);
     assert!(host.admissions.lock().unwrap().is_empty());
     let applications = host.applications();
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].decision, archive);
     assert_eq!(applications[0].resume_step_index, None);
-    assert_eq!(host.count("handoff"), 0, "settled work gets no blocked PR");
-    assert_eq!(run.attempts, [attempt("settled", Some("archive"))]);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&run.attempts, &[("settled", Some("archive"))]);
 }
 
 fn a_provider_authentication_failure_skips_final_recovery() {
@@ -1046,40 +623,34 @@ fn a_provider_authentication_failure_skips_final_recovery() {
         ("step_fix", vec![Reply::Ok(json!({ "repaired": true }))]),
         ("decide", vec![escalate()]),
     ]);
-    let run = run(&pipeline(true), &host, None);
-
+    let run = run_pipeline(true, &host);
     assert!(
         run.result.is_err(),
         "authentication is not a successful job"
     );
-    assert_eq!(
-        host.count("step_fix"),
-        0,
-        "step recovery cannot sign the provider in"
-    );
-    assert_eq!(host.count("decide"), 0, "final recovery is not dispatched");
+    assert_count(&host, "step_fix", 0);
+    assert_count(&host, "decide", 0);
     assert!(
         host.admissions.lock().unwrap().is_empty(),
         "the hook is not admitted"
     );
-    assert_eq!(host.count("handoff"), 1, "the failure path still runs");
-    assert_eq!(run.attempts, [attempt("skipped", None)]);
+    assert_count(&host, "handoff", 1);
+    assert_attempts(&run.attempts, &[("skipped", None)]);
     assert!(
         run.details
             .first()
-            .and_then(|detail| detail.as_deref())
-            .is_some_and(|detail| detail.contains("could not be used on this host")),
+            .and_then(|d| d.as_deref())
+            .is_some_and(|d| d.contains("could not be used on this host")),
         "the skip is recorded: {:?}",
         run.details
     );
 }
 
 /// A delivery step that lost only to a busy lock or a locked store is blocked
-/// on that condition without an agent, so the cleared-infra requeue can
-/// bring it back; a validation failure whose output merely contains the same
-/// text is still the candidate's, and goes to the agent.
-/// `reserve_locks` stands for every delivery action: the host runs it, and
-/// the classifier lists it.
+/// on that condition without an agent, so the cleared-infra requeue can bring
+/// it back; a validation failure whose output merely contains the same text is
+/// still the candidate's, and goes to the agent. `reserve_locks` stands for
+/// every delivery action: the host runs it, and the classifier lists it.
 fn transient_infrastructure_is_escalated_without_an_agent() {
     for (message, class) in [
         (
@@ -1100,7 +671,6 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
             ("decide", vec![escalate()]),
         ]);
         let run = run(&pipeline_acting("reserve_locks", false), &host, None);
-
         assert!(run.result.is_err(), "{message}");
         assert_eq!(host.count("decide"), 0, "no agent judges it: {message}");
         let applications = host.applications();
@@ -1113,8 +683,8 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
             ),
             "{message}"
         );
-        assert_eq!(host.count("handoff"), 1, "the candidate is published");
-        assert_eq!(run.attempts, [attempt("escalated", Some("escalate"))]);
+        assert_count(&host, "handoff", 1);
+        assert_attempts(&run.attempts, &[("escalated", Some("escalate"))]);
     }
 
     // Each of these goes to the recovery agent as before: a lock display a
@@ -1160,9 +730,8 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
 }
 
 /// A `worktree_setup` failure caused by a dependency lookup `not_found` is
-/// not transient: final recovery must not dispatch an agent that could
-/// requeue it on an unchanged environment. The same text from another step
-/// still reaches the agent.
+/// not transient: final recovery must not dispatch an agent that could requeue
+/// it on an unchanged environment. The same text from another step still reaches the agent.
 fn worktree_setup_dependency_not_found_skips_final_recovery() {
     // The failing step is the job's `worktree_setup` step; its action is
     // scripted here so the host, not the engine's own worktree code, fails it
@@ -1179,75 +748,59 @@ fn worktree_setup_dependency_not_found_skips_final_recovery() {
     ]);
     let skipped = run(&job, &host, None);
     assert!(skipped.result.is_err());
-    assert_eq!(host.count("decide"), 0, "no recovery agent is dispatched");
+    assert_count(&host, "decide", 0);
     assert!(
         host.applications().is_empty(),
         "no resume or requeue decision is applied"
     );
-    assert_eq!(host.count("handoff"), 1, "the failure path still runs");
-    assert_eq!(skipped.attempts, [attempt("skipped", None)]);
+    assert_count(&host, "handoff", 1);
+    assert_attempts(&skipped.attempts, &[("skipped", None)]);
     assert!(
         skipped
             .details
             .first()
-            .and_then(|detail| detail.as_deref())
-            .is_some_and(|detail| detail.contains("could not resolve a dependency")),
+            .and_then(|d| d.as_deref())
+            .is_some_and(|d| d.contains("could not resolve a dependency")),
         "the skip is recorded: {:?}",
         skipped.details
     );
 
-    let host = RecoveryHost::new([
-        (
-            "work",
-            vec![Reply::Diagnostic(
-                "remote tool failed (not_found): hm_test: task not found: ORB-99999".into(),
-            )],
-        ),
-        ("decide", vec![escalate()]),
-    ]);
-    let other = run(&pipeline(false), &host, None);
-    assert!(other.result.is_err());
-    assert_eq!(
-        host.count("decide"),
-        1,
-        "the same text from another step reaches the agent"
+    let host = work_decide_host(
+        vec![Reply::Diagnostic(
+            "remote tool failed (not_found): hm_test: task not found: ORB-99999".into(),
+        )],
+        escalate(),
     );
+    let other = run_pipeline(false, &host);
+    assert!(other.result.is_err());
+    assert_count(&host, "decide", 1);
 }
 
 fn an_empty_crew_pool_skips_final_recovery() {
-    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])])
-        .with_empty_pool();
-    let run = run(&pipeline(false), &host, None);
-
-    assert!(run.result.is_err());
-    assert_eq!(host.count("decide"), 0, "a skipped hook dispatches nothing");
+    let host = work_decide_host(vec![Reply::Fail], escalate()).with_empty_pool();
+    let run = run_pipeline(false, &host);
+    assert_skipped(&run, &host);
     assert!(host.applications().is_empty());
-    assert_eq!(host.count("handoff"), 1, "and today's failure path follows");
-    assert_eq!(run.attempts, [attempt("skipped", None)]);
 }
 
 fn a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail, Reply::Ok(json!({"built": true}))]),
-        ("decide", vec![resume_to("deliver")]),
-    ]);
-    let run = run(&pipeline(false), &host, None);
-
-    assert!(run.result.unwrap().success);
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "decide", "work", "deliver"]
+    let host = work_decide_host(
+        vec![Reply::Fail, Reply::Ok(json!({"built": true}))],
+        resume_to("deliver"),
     );
+    let run = run_pipeline(false, &host);
+    assert!(run.result.unwrap().success);
+    assert_actions(&host, &["setup", "work", "decide", "work", "deliver"]);
     let applications = host.applications();
     assert_eq!(applications[0].resume_step_index, Some(1));
     assert_eq!(
         applications[0].decision,
         FinalRecoveryDecision::Resume {
             step_id: "work".to_string(),
-            rationale: "repaired the worktree".to_string(),
+            rationale: "repaired the worktree".to_string()
         }
     );
-    assert_eq!(run.attempts, [attempt("resume", Some("resume"))]);
+    assert_attempts(&run.attempts, &[("resume", Some("resume"))]);
     let detail = run.details[0].as_ref().unwrap();
     assert!(
         detail.contains("downgraded resume from `deliver` to failed step `work`"),
@@ -1274,15 +827,15 @@ fn a_resume_to_an_earlier_step_keeps_the_named_target() {
         ),
         ("decide", vec![resume_to("work")]),
     ]);
-    let run = run(&pipeline(false), &host, None);
+    let run = run_pipeline(false, &host);
     assert!(run.result.unwrap().success);
-    assert_eq!(
-        host.actions(),
-        ["setup", "work", "deliver", "decide", "work", "deliver"]
+    assert_actions(
+        &host,
+        &["setup", "work", "deliver", "decide", "work", "deliver"],
     );
     assert_eq!(host.applications()[0].resume_step_index, Some(1));
     assert_eq!(
-        host.inputs("decide")[0]["allowed_resume_step_ids"],
+        decide_input(&host)["allowed_resume_step_ids"],
         json!(["work", "deliver"])
     );
     assert!(host.updates.lock().unwrap().is_empty());
@@ -1290,12 +843,7 @@ fn a_resume_to_an_earlier_step_keeps_the_named_target() {
 
 fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
     for target in ["setup", "no_such_step"] {
-        let host = RecoveryHost::new([
-            ("work", vec![Reply::Fail]),
-            ("decide", vec![resume_to(target)]),
-        ]);
-        let run = run(&pipeline(false), &host, None);
-
+        let (host, run) = failing_run(false, resume_to(target));
         assert!(run.result.is_err(), "{target}");
         let applications = host.applications();
         let FinalRecoveryDecision::Escalate { diagnosis, .. } = &applications[0].decision else {
@@ -1304,9 +852,9 @@ fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
         assert_eq!(
             diagnosis,
             &format!(
-                "final recovery asked to resume from `{target}`, which is neither the failed step \
-             `work` nor an earlier step of its phase"
-            )
+                "final recovery asked to resume from `{target}`, which is neither the failed step `work` nor an earlier step of its phase"
+            ),
+            "{target}"
         );
         assert_eq!(applications[0].resume_step_index, None);
         assert_eq!(host.count("deliver"), 0, "{target}");
@@ -1315,39 +863,28 @@ fn a_resume_to_an_admission_or_nonexistent_step_is_escalated() {
 }
 
 fn a_malformed_decision_is_escalated() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail]),
-        ("decide", vec![Reply::Ok(json!({ "decision": "resume" }))]),
-    ]);
-    let run = run(&pipeline(false), &host, None);
-
+    let (host, run) = failing_run(false, Reply::Ok(json!({ "decision": "resume" })));
     assert!(run.result.is_err());
     assert!(matches!(
-        host.applications()[0].decision,
+        first_application(&host).decision,
         FinalRecoveryDecision::Escalate { .. }
     ));
-    assert_eq!(host.count("handoff"), 1);
+    assert_count(&host, "handoff", 1);
 }
 
 fn a_decision_carries_its_fault_and_one_without_a_fault_escalates() {
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail]),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "requeue",
-                "reason": "the task was rewritten",
-                "fault": "specification",
-                "fault_evidence": "file docs/spec.md contradicts criterion 2",
-                // Only Orbit's observation names the judge.
-                "fault_judged_by": "claimed-by-the-agent",
-            }))],
-        ),
-    ]);
-    run(&pipeline(false), &host, None);
-    let application = &host.applications()[0];
+    let (host, _) = failing_run(
+        false,
+        Reply::Ok(json!({
+            "decision": "requeue", "reason": "the task was rewritten",
+            "fault": "specification", "fault_evidence": "file docs/spec.md contradicts criterion 2",
+            // Only Orbit's observation names the judge.
+            "fault_judged_by": "claimed-by-the-agent",
+        })),
+    );
+    let application = first_application(&host);
     assert!(matches!(
-        application.decision,
+        &application.decision,
         FinalRecoveryDecision::Requeue { .. }
     ));
     assert_eq!(application.fault.fault, RecoveryFault::Specification);
@@ -1357,20 +894,16 @@ fn a_decision_carries_its_fault_and_one_without_a_fault_escalates() {
     );
     assert_eq!(application.fault.judged_by, None);
 
-    let host = RecoveryHost::new([
-        ("work", vec![Reply::Fail]),
-        (
-            "decide",
-            vec![Reply::Ok(json!({
-                "decision": "requeue",
-                "reason": "the task was rewritten",
-            }))],
-        ),
-    ]);
-    run(&pipeline(false), &host, None);
-    let application = &host.applications()[0];
+    let (host, _) = failing_run(
+        false,
+        Reply::Ok(json!({ "decision": "requeue", "reason": "the task was rewritten" })),
+    );
+    let application = first_application(&host);
     assert!(
-        matches!(application.decision, FinalRecoveryDecision::Escalate { .. }),
+        matches!(
+            &application.decision,
+            FinalRecoveryDecision::Escalate { .. }
+        ),
         "a decision without its fault is malformed: {application:?}"
     );
     assert_eq!(application.fault.fault, RecoveryFault::Unknown);
@@ -1406,7 +939,7 @@ fn the_recovery_packet_withholds_the_implementers_model() {
         Vec::new(),
         json!({ "task_ids": ["T-1"], "crew": "opus@high" }),
     );
-    let packet = host.inputs("decide").remove(0);
+    let packet = decide_input(&host);
     let text = packet.to_string();
     for name in [
         "claude-opus-5-5",
@@ -1435,12 +968,11 @@ fn the_recovery_packet_withholds_the_implementers_model() {
 
 fn a_failure_before_the_worktree_exists_skips_final_recovery() {
     let host = RecoveryHost::new([("setup", vec![Reply::Fail]), ("decide", vec![escalate()])]);
-    let run = run(&pipeline(false), &host, None);
-
+    let run = run_pipeline(false, &host);
     assert!(run.result.is_err());
-    assert_eq!(host.count("decide"), 0);
+    assert_count(&host, "decide", 0);
     assert!(host.admissions.lock().unwrap().is_empty());
-    assert_eq!(host.count("handoff"), 1);
+    assert_count(&host, "handoff", 1);
 }
 
 fn failed_recovery_dispatch_is_injected_before_final_recovery() {
@@ -1449,10 +981,10 @@ fn failed_recovery_dispatch_is_injected_before_final_recovery() {
         ("step_fix", vec![Reply::Fail]),
         ("decide", vec![escalate()]),
     ]);
-    let run = run(&pipeline(true), &host, None);
+    let run = run_pipeline(true, &host);
     assert!(run.result.is_err());
-    let input = &host.inputs("decide")[0];
-    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    let input = decide_input(&host);
+    let attempts = step_attempts(&host);
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0]["activity"], "step_fix");
     assert_eq!(attempts[0]["outcome"], "failed");
@@ -1500,8 +1032,8 @@ fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
         ],
     );
     assert!(run.result.is_err());
-    let input = &host.inputs("decide")[0];
-    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    let input = decide_input(&host);
+    let attempts = step_attempts(&host);
     assert_eq!(
         attempts.len(),
         3,
@@ -1544,15 +1076,12 @@ fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
 
 fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows() {
     for (attempt_count, distinct_failures) in [(500, 5), (500, 500), (1000, 1000)] {
-        let host = RecoveryHost::new([
-            ("work", vec![Reply::Fail]),
-            (
-                "decide",
-                vec![Reply::Ok(
-                    json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "retry later"}),
-                )],
+        let host = work_decide_host(
+            vec![Reply::Fail],
+            Reply::Ok(
+                json!({"decision": "requeue", "fault": "implementer", "fault_evidence": FAULT_EVIDENCE, "reason": "retry later"}),
             ),
-        ]);
+        );
         let events = (0..attempt_count)
             .map(|index| {
                 (
@@ -1576,19 +1105,14 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
             run.result.is_err(),
             "a settled recovery preserves the original job failure"
         );
-        assert_eq!(
-            host.count("decide"),
-            1,
-            "oversized evidence must still reach the final-recovery activity"
-        );
+        assert_count(&host, "decide", 1);
         assert!(matches!(
-            host.applications()[0].decision,
+            &first_application(&host).decision,
             FinalRecoveryDecision::Requeue { .. }
         ));
-        let input = &host.inputs("decide")[0];
-        let attempts = input["step_recovery_attempts"].as_array().unwrap();
+        let attempts = step_attempts(&host);
         assert!(
-            serde_json::to_vec(attempts).unwrap().len() <= 64 * 1024,
+            serde_json::to_vec(&attempts).unwrap().len() <= 64 * 1024,
             "the serialized evidence, including the summary, stays within its bound"
         );
         let summary = &attempts[0];
@@ -1605,7 +1129,7 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
         assert_eq!(
             signatures
                 .iter()
-                .map(|signature| signature["count"].as_u64().unwrap())
+                .map(|s| s["count"].as_u64().unwrap())
                 .sum::<u64>()
                 + summary["omitted_signature_attempts"].as_u64().unwrap(),
             attempt_count as u64
@@ -1618,7 +1142,7 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
         assert_eq!(
             signatures
                 .iter()
-                .map(|signature| signature["sha256"].as_str().unwrap())
+                .map(|s| s["sha256"].as_str().unwrap())
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             signatures.len()
@@ -1649,9 +1173,7 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
             }
         } else {
             assert!(
-                signatures
-                    .iter()
-                    .all(|signature| signature.get("error_message").is_none()),
+                signatures.iter().all(|s| s.get("error_message").is_none()),
                 "many distinct failures retain compact hashes and counts"
             );
         }
@@ -1667,7 +1189,7 @@ fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_ev
             attempts.last().unwrap()["output"]["attempt_index"],
             attempt_count - 1
         );
-        assert_eq!(host.count("handoff"), 0);
+        assert_count(&host, "handoff", 0);
     }
 }
 
@@ -1680,11 +1202,10 @@ fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
         ("deliver", vec![Reply::Fail]),
         ("decide", vec![escalate()]),
     ]);
-    let run = run(&pipeline(true), &host, None);
+    let run = run_pipeline(true, &host);
     assert!(run.result.is_err());
-    let input = &host.inputs("decide")[0];
-    assert_eq!(input["failed_step_id"], "deliver");
-    let attempts = input["step_recovery_attempts"].as_array().unwrap();
+    assert_eq!(decide_input(&host)["failed_step_id"], "deliver");
+    let attempts = step_attempts(&host);
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[1]["phase"], "post_recovery");
     assert_eq!(attempts[1]["outcome"], "success");
@@ -1709,31 +1230,14 @@ fn conflict(paths: &[&str], resolvable: bool) -> RecoverableVcsConflict {
 }
 
 fn conflict_resume_job() -> JobV2 {
-    let step = |id: &str| {
-        json!({
-            "id": id,
-            "spec": {"type": "deterministic", "action": id, "config": {}},
-        })
-    };
-    let asset = json!({
-        "schemaVersion": 2,
-        "kind": "Job",
-        "metadata": {"name": "conflict_diagnostic_resume"},
-        "spec": {
-            "state": "enabled",
-            "kind": "workflow",
-            "steps": [
-                step("setup"),
-                step("sync_base"),
-                step("deliver"),
-            ],
-        },
-    });
-    let mut job = load_job_asset(&asset.to_string())
-        .expect("fixture job loads")
-        .spec;
-    job.final_recovery_activity = Some("decide".to_string());
-    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    let mut job = job_from_steps(
+        "conflict_diagnostic_resume",
+        vec![
+            det_step("setup", "setup"),
+            det_step("sync_base", "sync_base"),
+            det_step("deliver", "deliver"),
+        ],
+    );
     let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) = &mut job.steps[2].body
     else {
         panic!("deliver is a target step");
@@ -1745,11 +1249,7 @@ fn conflict_resume_job() -> JobV2 {
 }
 
 fn old_conflict_resume() -> PipelineState {
-    let setup = json!({
-        "workspace_path": "/worktrees/run",
-        "base_ref": "main",
-        "base_sha": "0123456789abcdef0123456789abcdef01234567",
-    });
+    let setup = json!({ "workspace_path": "/worktrees/run", "base_ref": "main", "base_sha": "0123456789abcdef0123456789abcdef01234567" });
     let mut state = PipelineState::new(
         RUN_ID.into(),
         "conflict_diagnostic_resume".into(),
@@ -1761,10 +1261,7 @@ fn old_conflict_resume() -> PipelineState {
         "sync_base",
         json!({
             "conflicting_paths": ["old.rs"],
-            "conflicting_files": [{
-                "path": "old.rs",
-                "deterministically_resolvable": false,
-            }],
+            "conflicting_files": [{ "path": "old.rs", "deterministically_resolvable": false }],
             "failed_only": "discard me",
         }),
     );
@@ -1774,13 +1271,8 @@ fn old_conflict_resume() -> PipelineState {
 /// [ORB-15889] Final recovery clears the pipeline entry a newer conflict
 /// recorded. The success checkpoint must keep that newer evidence, including
 /// an explicit empty list, and must not restore the resumed `old.rs` paths.
-///
-/// Ordinary resume and step recovery are the controls in
-/// `incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint`:
-/// that test also shows a diagnostic-only checkpoint does not skip `sync_base`
-/// or expose `failed_only` to a template before the step runs. This one shows
-/// the same exclusion after final-recovery invalidation, on the output the
-/// next step renders.
+/// (Ordinary resume and step recovery are the controls in
+/// `incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint`.)
 fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
     enum Latest {
         Newer(RecoverableVcsConflict),
@@ -1816,11 +1308,7 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
             ),
             (
                 "decide",
-                vec![Reply::Ok(json!({
-                    "decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
-                    "step_id": "sync_base",
-                    "rationale": "resolved the stopped rebase",
-                }))],
+                vec![resume_reply("sync_base", "resolved the stopped rebase")],
             ),
             ("deliver", vec![Reply::Ok(json!({"delivered": true}))]),
         ]);
@@ -1834,12 +1322,8 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
             ["sync_base", "decide", "sync_base", "deliver"],
             "{name}: an incomplete sync_base executes, final recovery resumes it, and diagnostics do not skip it"
         );
-        assert_eq!(observed.attempts, [attempt("resume", Some("resume"))]);
-        let expected = json!({
-            "rebased": true,
-            "conflicting_paths": paths.clone(),
-            "conflicting_files": files.clone(),
-        });
+        assert_attempts(&observed.attempts, &[("resume", Some("resume"))]);
+        let expected = json!({ "rebased": true, "conflicting_paths": paths.clone(), "conflicting_files": files.clone() });
         let output = &outcome.pipeline["sync_base"];
         assert!(
             output.get("conflicting_paths").is_some() && output.get("conflicting_files").is_some(),
@@ -1896,165 +1380,22 @@ fn final_recovery_resume_checkpoints_the_latest_conflict_diagnostics() {
     }
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn recovery_contracts_1() {
-    crate::git_fixture::isolated(module_path!(), "recovery_contracts_1", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "a_resume_reruns_from_the_named_step_and_the_run_completes",
-                a_resume_reruns_from_the_named_step_and_the_run_completes,
-            ),
-            (
-                "resume_context_is_opaque_when_the_target_inherits_job_input",
-                resume_context_is_opaque_when_the_target_inherits_job_input,
-            ),
-            (
-                "a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart",
-                a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart,
-            ),
-            (
-                "an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id",
-                an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id,
-            ),
-            (
-                "an_oversized_refused_output_reaches_the_resumed_implementer_bounded",
-                an_oversized_refused_output_reaches_the_resumed_implementer_bounded,
-            ),
-            (
-                "a_settling_decision_ends_the_run_without_the_failure_handoff",
-                a_settling_decision_ends_the_run_without_the_failure_handoff,
-            ),
-        ]);
-    });
+/// Behavior-distinct rows share one bounded family process; the row name
+/// is the scenario function name, so failures still name the case.
+macro_rules! recovery_contracts {
+    ($name:ident: $($row:ident),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[$((stringify!($row), $row as fn())),+]);
+            });
+        }
+    };
 }
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn recovery_contracts_2() {
-    crate::git_fixture::isolated(module_path!(), "recovery_contracts_2", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "an_escalation_still_runs_the_failure_handoff",
-                an_escalation_still_runs_the_failure_handoff,
-            ),
-            (
-                "an_error_that_skips_step_recovery_still_reaches_final_recovery",
-                an_error_that_skips_step_recovery_still_reaches_final_recovery,
-            ),
-            (
-                "step_recovery_runs_first_and_final_recovery_only_once_it_is_spent",
-                step_recovery_runs_first_and_final_recovery_only_once_it_is_spent,
-            ),
-            (
-                "final_recovery_runs_at_most_once_per_run",
-                final_recovery_runs_at_most_once_per_run,
-            ),
-            (
-                "a_run_resumed_after_a_final_recovery_resume_never_runs_it_again",
-                a_run_resumed_after_a_final_recovery_resume_never_runs_it_again,
-            ),
-            (
-                "a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision",
-                a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision,
-            ),
-            (
-                "an_evidence_hold_after_step_recovery_holds_the_run",
-                an_evidence_hold_after_step_recovery_holds_the_run,
-            ),
-            (
-                "a_cancelled_child_after_step_recovery_cancels_the_run",
-                a_cancelled_child_after_step_recovery_cancels_the_run,
-            ),
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn recovery_contracts_3() {
-    crate::git_fixture::isolated(module_path!(), "recovery_contracts_3", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "a_provider_authentication_failure_skips_final_recovery",
-                a_provider_authentication_failure_skips_final_recovery,
-            ),
-            (
-                "an_empty_crew_pool_skips_final_recovery",
-                an_empty_crew_pool_skips_final_recovery,
-            ),
-            (
-                "a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade",
-                a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade,
-            ),
-            (
-                "a_resume_to_an_earlier_step_keeps_the_named_target",
-                a_resume_to_an_earlier_step_keeps_the_named_target,
-            ),
-            (
-                "a_resume_to_an_admission_or_nonexistent_step_is_escalated",
-                a_resume_to_an_admission_or_nonexistent_step_is_escalated,
-            ),
-            (
-                "a_malformed_decision_is_escalated",
-                a_malformed_decision_is_escalated,
-            ),
-            (
-                "a_decision_carries_its_fault_and_one_without_a_fault_escalates",
-                a_decision_carries_its_fault_and_one_without_a_fault_escalates,
-            ),
-            (
-                "the_recovery_packet_withholds_the_implementers_model",
-                the_recovery_packet_withholds_the_implementers_model,
-            ),
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn recovery_contracts_4() {
-    crate::git_fixture::isolated(module_path!(), "recovery_contracts_4", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "completion_observation_classifies_retry_policy_and_candidate_refusal",
-                completion_observation_classifies_retry_policy_and_candidate_refusal,
-            ),
-            (
-                "a_failure_before_the_worktree_exists_skips_final_recovery",
-                a_failure_before_the_worktree_exists_skips_final_recovery,
-            ),
-            (
-                "failed_recovery_dispatch_is_injected_before_final_recovery",
-                failed_recovery_dispatch_is_injected_before_final_recovery,
-            ),
-            (
-                "final_recovery_injects_only_its_runs_bounded_evidence_in_order",
-                final_recovery_injects_only_its_runs_bounded_evidence_in_order,
-            ),
-            (
-                "final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows",
-                final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows,
-            ),
-            (
-                "final_recovery_keeps_post_recovery_output_when_a_later_step_fails",
-                final_recovery_keeps_post_recovery_output_when_a_later_step_fails,
-            ),
-            (
-                "final_recovery_resume_checkpoints_the_latest_conflict_diagnostics",
-                final_recovery_resume_checkpoints_the_latest_conflict_diagnostics,
-            ),
-            (
-                "transient_infrastructure_is_escalated_without_an_agent",
-                transient_infrastructure_is_escalated_without_an_agent,
-            ),
-            (
-                "worktree_setup_dependency_not_found_skips_final_recovery",
-                worktree_setup_dependency_not_found_skips_final_recovery,
-            ),
-        ]);
-    });
-}
+recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_and_the_run_completes, resume_context_is_opaque_when_the_target_inherits_job_input, a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart, an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id, an_oversized_refused_output_reaches_the_resumed_implementer_bounded, a_settling_decision_ends_the_run_without_the_failure_handoff);
+recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
+recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
+recovery_contracts!(recovery_contracts_4: completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
 
 /// The executor cannot turn a policy refusal into completion authority, and
 /// the deterministic retry spends the existing once-only recovery budget.
@@ -2088,8 +1429,8 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
             orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
         assert!(observed.result.is_err());
         assert_eq!(host.count("work"), count);
-        assert_eq!(host.count("decide"), 0, "classification is host-owned");
-        assert_eq!(host.count("setup"), 1);
+        assert_count(&host, "decide", 0);
+        assert_count(&host, "setup", 1);
         let applications = host.applications();
         assert_eq!(
             applications.len(),
