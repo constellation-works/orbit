@@ -560,7 +560,11 @@ spec:
       selectors are known: follow the unestablished-footprint rule in
       Assessment, naming the source IDs or artifact paths and the
       reconciliation needed before re-piloting. Do not present provisional
-      selectors as a verified batch. Before returning selectors, drop every
+      selectors as a verified batch. Return `selectors` with the selectors of
+      the identifiable repair that were verified at `source_revision`. Do not
+      put the unverified oldest batch, or any path whose date was not
+      established, into `context_files_after`. An empty list is not a substitute
+      for that hold. Before returning selectors, drop every
       path the brief's exclusion rule removes, using the same lists as the
       worker-selected rule above. An excluded path is never a selector,
       even when a ledger names it. This grants no unrelated-task reads,
@@ -873,7 +877,11 @@ spec:
       artifact or related task that is missing or unreadable under your read
       authority. Name the unread source in `evidence_gaps`, and return a
       `utility_warnings` object with `holds_promotion: true` naming it. The task
-      stays held on that finding whatever its tier or selectors. A consulted
+      stays held on that finding whatever its tier or selectors. Return
+      `selectors` with the selectors of the identifiable repair that were
+      verified at `source_revision`. Do not put the unverified oldest batch, or
+      any path whose date was not established, into `context_files_after`. An
+      empty list is not a substitute for that hold. A consulted
       reference document is not a verified footprint on its own. A
       worker-selected batch inside a kept template footprint does not
       direct that lookup: a missing ledger does not hold promotion and is
