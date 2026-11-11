@@ -1,7 +1,10 @@
 //! Task crew assignment and durable assignment provenance.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{CrewSource, Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement};
+use orbit_types::task::{
+    CREW_REDRAWN_EVENT, CrewAssignmentState, CrewSource, RecordedCrewAssignment, Task,
+    TaskComplexity, TaskDecision, TaskHistoryEntry, TaskOsRequirement,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -22,28 +25,16 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let history = self.get_task_history(&task.id)?;
-        let Some(note) = history
+        let Some(assignment) = history
             .iter()
             .rev()
-            .find(|entry| matches!(entry.event.as_str(), "crew_assigned" | "crew_redrawn"))
-            .and_then(|entry| entry.note.as_deref())
+            .find_map(RecordedCrewAssignment::from_entry)
         else {
             return Ok(None);
         };
-        if let Some(source) = note.strip_prefix(&format!("assigned crew `{crew}` from ")) {
-            return Ok(Some(CrewSource::parse(source)));
-        }
-        if let Some((_, source)) = note.split_once(&format!(" to `{crew}` via ")) {
-            return Ok(if source == "explicit name" {
-                Some(CrewSource::Explicit)
-            } else {
-                source
-                    .strip_prefix("pool draw (")
-                    .and_then(|source| source.strip_suffix(')'))
-                    .map(CrewSource::parse)
-            });
-        }
-        Ok(None)
+        Ok((assignment.known_after_crew() == Some(crew))
+            .then(|| assignment.known_after_source().cloned())
+            .flatten())
     }
 
     /// Redraw a pool assignment from another tier or a default fallback before
@@ -87,7 +78,7 @@ impl OrbitRuntime {
         if unchanged {
             return Ok(None);
         }
-        let before = task.crew.clone();
+        let before = CrewAssignmentState::new(task.crew.clone(), Some(source.clone()));
         let assignment = self.creation_crew_assignment(
             complexity,
             None,
@@ -121,11 +112,11 @@ impl OrbitRuntime {
         Ok(Some(TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: "system".to_string(),
-            event: "crew_redrawn".to_string(),
+            event: CREW_REDRAWN_EVENT.to_string(),
             note: Some(format!(
                 "crew redrawn from {} (`{}`) to {} (`{}`) after {reason}",
                 source,
-                before.as_deref().unwrap_or("(none)"),
+                before.crew.as_deref().unwrap_or("(none)"),
                 task.crew_source
                     .as_ref()
                     .map_or("unassigned".to_string(), ToString::to_string),
@@ -134,7 +125,10 @@ impl OrbitRuntime {
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision: Some(TaskDecision::CrewAssignment(RecordedCrewAssignment::new(
+                before,
+                CrewAssignmentState::new(task.crew.clone(), task.crew_source.clone()),
+            ))),
         }))
     }
 

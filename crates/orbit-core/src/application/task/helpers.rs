@@ -2,7 +2,8 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
 use orbit_types::task::{
-    RecordedFinalRecovery, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+    CREW_ASSIGNED_EVENT, CrewAssignmentState, RecordedCrewAssignment, RecordedFinalRecovery, Task,
+    TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
 };
 
 use crate::application::contracts::CreationCrewAssignment;
@@ -32,12 +33,16 @@ pub(super) fn authoritative_final_recovery_outcome<'a>(
 
 /// Provenance for the crew a task was assigned when it was created, or when an
 /// operator cleared the field and the pools chose again [ORB-12717]. Updates
-/// that change the stored crew append their own history entry.
-pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> TaskHistoryEntry {
+/// that change the stored crew append their own history entry. `before` is
+/// the crew and provenance the write replaces, read under its write lock.
+pub(crate) fn crew_assigned_history(
+    before: CrewAssignmentState,
+    assignment: &CreationCrewAssignment,
+) -> TaskHistoryEntry {
     TaskHistoryEntry {
         at: Utc::now(),
         by: SYSTEM_ACTOR_LABEL.to_string(),
-        event: "crew_assigned".to_string(),
+        event: CREW_ASSIGNED_EVENT.to_string(),
         note: Some(format!(
             "assigned crew `{}` from {}",
             assignment.crew, assignment.source
@@ -45,7 +50,13 @@ pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> Task
         from_status: None,
         to_status: None,
         operation_id: None,
-        decision: None,
+        decision: Some(TaskDecision::CrewAssignment(RecordedCrewAssignment::new(
+            before,
+            CrewAssignmentState::new(
+                Some(assignment.crew.clone()),
+                Some(assignment.source.clone()),
+            ),
+        ))),
     }
 }
 

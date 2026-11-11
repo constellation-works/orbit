@@ -15,6 +15,7 @@
 mod agent_request;
 mod ci_evidence;
 mod code_scanning;
+mod crew_assignment;
 mod desktop;
 mod publication;
 mod record;
@@ -28,6 +29,10 @@ pub use agent_request::{
 };
 pub use ci_evidence::{CiFailureIdentity, CiFailureIdentityError, CiFailureSource};
 pub use code_scanning::{CodeScanningAlertEvidence, CodeScanningAlertEvidenceError};
+pub use crew_assignment::{
+    CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CrewAssignmentField, CrewAssignmentState,
+    RecordedCrewAssignment,
+};
 pub use desktop::{DesktopMutationReceipt, DesktopMutationReceiptError};
 pub use publication::{
     PublicationHistoryError, PublicationProofContainer, PublicationProofValue,

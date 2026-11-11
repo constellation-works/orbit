@@ -492,6 +492,24 @@ fn an_admitted_delivery_records_its_crew_exactly_once() {
         last_crew_note(&fx, &task),
         "crew changed from `sol` to `luna` at admission (run_crew)"
     );
+    // The write-back records the change as a typed decision beside the note.
+    let recorded = fx
+        .runtime
+        .get_task_history(&task)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(orbit_types::task::RecordedCrewAssignment::from_entry)
+        .expect("a recorded crew assignment");
+    assert!(recorded.unknown.is_empty(), "{recorded:?}");
+    assert_eq!(recorded.before.crew.as_deref(), Some("sol"));
+    assert_eq!(
+        (
+            recorded.after.crew.as_deref(),
+            recorded.after.source.map(|source| source.to_string())
+        ),
+        (Some("luna"), Some("redraw:run_crew".to_string()))
+    );
     assert_eq!(crew_assigned_entries(&fx, &task), assigned_before + 1);
 
     submit(&fx, &job, json!({ "task_id": task, "crew": "luna" }));
