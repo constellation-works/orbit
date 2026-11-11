@@ -49,6 +49,105 @@ pub struct NoticePostRequest {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// Raw notice-post fields as one surface collected them, before the core
+/// parse. `kind` and `expires_at` are still strings; optional strings are
+/// uninterpreted, so the blank rule below is the only one.
+#[derive(Debug, Clone, Default)]
+pub struct NoticePostRawFields {
+    pub kind: Option<String>,
+    pub title: String,
+    pub body: Option<String>,
+    pub scope: Option<String>,
+    pub dedupe_key: Option<String>,
+    pub linked_task: Option<String>,
+    pub close_on_linked_done: Option<bool>,
+    pub evidence: Vec<NoticeEvidence>,
+    pub hosts: Vec<String>,
+    pub expires_in_hours: Option<u64>,
+    pub expires_at: Option<String>,
+    /// The dashboard form submits empty fields: a blank optional string
+    /// means absent. Tool input refuses a present blank instead.
+    pub blank_means_absent: bool,
+}
+
+fn blank_optional(
+    value: Option<String>,
+    field: &str,
+    blank_means_absent: bool,
+) -> Result<Option<String>, OrbitError> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => {
+            if blank_means_absent {
+                Ok(None)
+            } else {
+                Err(refuse(
+                    NoticeRefusalCode::InvalidField,
+                    format!("`{field}` must not be empty"),
+                ))
+            }
+        }
+        Some(value) => Ok(Some(value)),
+    }
+}
+
+impl NoticePostRequest {
+    /// Parse the raw fields every post surface collects into a request.
+    /// Unknown `kind`/`scope`, a bad `expires_at` and (when
+    /// `blank_means_absent` is false) a blank optional string refuse with
+    /// `NoticeRefused` / `invalid_field`. The mutual-exclusion of
+    /// `expires_in_hours` and `expires_at` stays in expiry resolution, so
+    /// an unchanged retry is still recognised before it is refused.
+    pub fn parse_raw(raw: NoticePostRawFields) -> Result<Self, OrbitError> {
+        let kind = raw
+            .kind
+            .as_deref()
+            .and_then(NoticeKind::parse)
+            .ok_or_else(|| {
+                refuse(
+                    NoticeRefusalCode::InvalidField,
+                    format!("`kind` must be {}", NoticeKind::NAMES),
+                )
+            })?;
+        let scope = match blank_optional(raw.scope, "scope", raw.blank_means_absent)? {
+            None => None,
+            Some(value) => Some(NoticeScope::parse(&value).ok_or_else(|| {
+                refuse(
+                    NoticeRefusalCode::InvalidField,
+                    format!("`scope` must be {}", NoticeScope::NAMES),
+                )
+            })?),
+        };
+        let expires_at = match blank_optional(raw.expires_at, "expires_at", raw.blank_means_absent)?
+        {
+            None => None,
+            Some(value) => Some(
+                DateTime::parse_from_rfc3339(&value)
+                    .map(|at| at.with_timezone(&Utc))
+                    .map_err(|_| {
+                        refuse(
+                            NoticeRefusalCode::InvalidField,
+                            "`expires_at` must be an RFC 3339 timestamp",
+                        )
+                    })?,
+            ),
+        };
+        Ok(Self {
+            kind,
+            title: raw.title,
+            body: raw.body,
+            scope,
+            dedupe_key: blank_optional(raw.dedupe_key, "dedupe_key", raw.blank_means_absent)?,
+            linked_task: blank_optional(raw.linked_task, "linked_task", raw.blank_means_absent)?,
+            close_on_linked_done: raw.close_on_linked_done,
+            evidence: raw.evidence,
+            hosts: raw.hosts,
+            expires_in_hours: raw.expires_in_hours,
+            expires_at,
+        })
+    }
+}
+
 /// What a post did, and the notice it left.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NoticePostResult {

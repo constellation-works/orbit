@@ -1126,6 +1126,59 @@ fn linked_task_this_owner_does_not_hold_is_refused() {
     );
 }
 
+/// The tool surface refuses through the same core parse as HTTP: unknown
+/// kind/scope, a bad `expires_at` and both expiries carry `invalid_field`,
+/// while a present blank optional string and a missing kind stay refused.
+fn post_parse_refusals_come_from_core() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let operator = session(McpCapability::Operator);
+    let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    for (input, message) in [
+        (
+            json!({"kind": "bogus", "title": "Bad kind"}),
+            "`kind` must be incident, maintenance or info",
+        ),
+        (
+            json!({"kind": "info", "title": "Bad scope", "scope": "bogus"}),
+            "`scope` must be workspace or global",
+        ),
+        (
+            json!({"kind": "info", "title": "Bad expiry", "expires_at": "not-a-time"}),
+            "`expires_at` must be an RFC 3339 timestamp",
+        ),
+        (
+            json!({"kind": "info", "title": "Both", "expires_at": future, "expires_in_hours": 1}),
+            "pass `expires_in_hours` or `expires_at`, not both",
+        ),
+    ] {
+        let error = call(&runtime, "orbit.notice.post", input, &operator)
+            .expect_err("the core parse must refuse");
+        assert!(error.starts_with("notice_invalid_field"), "{error}");
+        assert!(error.contains(message), "{error} does not name {message}");
+    }
+    assert!(
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"kind": "info", "title": "Blank scope", "scope": ""}),
+            &operator,
+        )
+        .is_err(),
+        "a present blank scope stays refused on the tool surface"
+    );
+    assert!(
+        call(
+            &runtime,
+            "orbit.notice.post",
+            json!({"title": "Missing kind"}),
+            &operator,
+        )
+        .is_err(),
+        "a missing kind stays refused on the tool surface"
+    );
+}
+
 fn runtime_at_roots(global: &Path, orbit: &Path) -> OrbitRuntime {
     runtime_at_roots_config(global, orbit, CONFIG)
 }
@@ -1428,6 +1481,7 @@ crate::scenario_table!(
     lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_request,
     close_preserves_corroboration_committed_after_close_read,
     linked_task_this_owner_does_not_hold_is_refused,
+    post_parse_refusals_come_from_core,
     cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick,
     attention_pages_home_notices,
     attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id,

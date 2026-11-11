@@ -1,7 +1,6 @@
 //! `orbit.notice.*`: translate canonical tool input into the notice use
 //! cases. Every decision is the application layer's.
 
-use chrono::{DateTime, Utc};
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_common::{NoticeRefusalCode, OrbitError};
@@ -12,7 +11,8 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::notice::{
-    NoticeCaller, NoticeListFilter, NoticePostRequest, NoticeSelector, NoticeStatusFilter,
+    NoticeCaller, NoticeListFilter, NoticePostRawFields, NoticePostRequest, NoticeSelector,
+    NoticeStatusFilter,
 };
 use crate::runtime::authorization::resolved_caller_capabilities;
 
@@ -86,22 +86,11 @@ fn post_request(input: &OperationInput) -> Result<NoticePostRequest, OrbitError>
         Some(value) => serde_json::from_value::<Vec<NoticeEvidence>>(value.clone())
             .map_err(|_| invalid("`evidence` is a list of {\"type\", \"value\"} objects"))?,
     };
-    let expires_at = input
-        .optional_string("expires_at")?
-        .map(|value| {
-            DateTime::parse_from_rfc3339(&value)
-                .map(|at| at.with_timezone(&Utc))
-                .map_err(|_| invalid("`expires_at` must be an RFC 3339 timestamp"))
-        })
-        .transpose()?;
-    Ok(NoticePostRequest {
-        kind: parse_kind(&input.required_string("kind")?)?,
+    NoticePostRequest::parse_raw(NoticePostRawFields {
+        kind: Some(input.required_string("kind")?),
         title: input.required_string("title")?,
         body: input.optional_raw_string("body")?,
-        scope: input
-            .optional_string("scope")?
-            .map(|scope| parse_scope(&scope))
-            .transpose()?,
+        scope: input.optional_string("scope")?,
         dedupe_key: input.optional_string("dedupe_key")?,
         linked_task: input.optional_string("linked_task")?,
         close_on_linked_done: input.optional_bool("close_on_linked_done")?,
@@ -110,7 +99,8 @@ fn post_request(input: &OperationInput) -> Result<NoticePostRequest, OrbitError>
         expires_in_hours: input
             .optional_count("expires_in_hours")?
             .map(|hours| u64::try_from(hours).unwrap_or(u64::MAX)),
-        expires_at,
+        expires_at: input.optional_string("expires_at")?,
+        blank_means_absent: false,
     })
 }
 
