@@ -60,6 +60,8 @@ mod resumed_recovery;
 mod review_requeue;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
+#[path = "source_repair/unresumable_requeue.rs"]
+mod unresumable_requeue;
 use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
@@ -112,6 +114,10 @@ use published_owner::{
     unrecorded_publication_move_is_refused,
 };
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
+use unresumable_requeue::{
+    candidate_resume_identity_refusals_name_their_predicate,
+    requeue_refuses_a_publication_candidate_resume_would_refuse,
+};
 
 fn cancelled_candidate_requires_explicit_intent_and_continues_same_branch() {
     let f = Fixture::new();
@@ -880,6 +886,8 @@ crate::scenario_table!(
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+    requeue_refuses_a_publication_candidate_resume_would_refuse,
+    candidate_resume_identity_refusals_name_their_predicate,
     system_crew_redraws_keep_the_preserved_publication_adoptable,
     crew_redraws_keep_every_other_adoption_refusal,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,

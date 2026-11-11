@@ -20,7 +20,7 @@ use super::{RunOwnerLiveness, run_owner_liveness, running_run_has_verified_owner
 use crate::OrbitRuntime;
 use crate::application::contracts::{
     AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
-    RetryKey,
+    OwnerSourceIdentityRefusal, RetryKey,
 };
 use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
 
@@ -196,6 +196,14 @@ impl TaskJobPort for OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         self.published_owner_requeue_record(task, run_id)
+    }
+
+    fn published_requeue_identity_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        self.published_owner_requeue_refusal(task, run_id)
     }
 
     fn failure_handoff_preservation(

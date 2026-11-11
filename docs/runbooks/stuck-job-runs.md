@@ -859,6 +859,18 @@ the same discard exit:
   describes the task, and a second one would make the next run refuse, so use
   discard.
 
+A final-recovery requeue preserves a run's own publication only when the run
+is this machine's exact owner-local single-task execution, the identity the
+next run's `candidate_resume` authenticates. Otherwise it blocks the task
+instead of admitting a successor that would fail before implementation: the
+diagnosis names the failed predicate, and a `final_recovery_unresumable_publication`
+history entry records it as `reason` (`source_machine`, `task_machine`,
+`claimed_input`, `task_set`, `local_pull`, `execution_claim`, `job_kind` or
+`local_identity_missing`). Discard the candidate
+(`orbit task update <task-id> --status backlog --discard-candidate`) so the
+next run implements fresh, or use explicit source repair. Source-repair
+refusals of the same identity end with the same reason code.
+
 ### An escalated run that published its own pull request
 
 A run can push and open its pull request through its own `push` and `pr_open`

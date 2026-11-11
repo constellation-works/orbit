@@ -25,6 +25,12 @@ pub const FINAL_RECOVERY_RESUMED_EVENT: &str = "final_recovery_resumed";
 /// History event a `rerun_ci` step appends; its note names the head whose
 /// failed checks were re-run so a head is re-run once.
 pub const FINAL_RECOVERY_CI_RERUN_EVENT: &str = "final_recovery_ci_rerun";
+/// History event a final-recovery requeue appends when it refuses to
+/// preserve a publication whose source the next run's candidate resume would
+/// refuse; its JSON note names the source run and the failed identity
+/// predicate (`reason`).
+pub const FINAL_RECOVERY_UNRESUMABLE_PUBLICATION_EVENT: &str =
+    "final_recovery_unresumable_publication";
 pub use request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
 };
