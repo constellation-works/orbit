@@ -239,7 +239,7 @@ fn a_purpose_pool_beats_the_complexity_pool() {
         [("purpose_claude", 1), ("purpose_codex", 1)],
     );
     assert_eq!(
-        draw.source,
+        draw.source.as_str(),
         format!("{PILOT}; native inspection, skipped: purpose_gemini")
     );
     for _ in 0..4 {
@@ -254,7 +254,7 @@ fn a_purpose_pool_beats_the_complexity_pool() {
         draws.keys().map(String::as_str).collect::<Vec<_>>(),
         [RECOVERY]
     );
-    assert_eq!(draws[RECOVERY].source, RECOVERY);
+    assert_eq!(draws[RECOVERY].source.as_str(), RECOVERY);
 
     // A task filed with a purpose's system tag draws from that purpose's pool.
     let task = fx.task(&["baseline-red-repair"], None);
@@ -303,7 +303,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
     let run = fx.run("task_pilot_pipeline");
     assert_eq!(fx.model_for(pilot_input(&run)), "fixture-low");
     assert_eq!(
-        fx.draws(&run)[PILOT].source,
+        fx.draws(&run)[PILOT].source.as_str(),
         format!("{LOW}; native inspection")
     );
 
@@ -312,7 +312,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
         fx.model_for(json!({"run_id": run, "crew_config_key": RECOVERY})),
         "fixture-medium"
     );
-    assert_eq!(fx.draws(&run)[RECOVERY].source, MEDIUM);
+    assert_eq!(fx.draws(&run)[RECOVERY].source.as_str(), MEDIUM);
 
     let task = fx.task(&["baseline-red-repair"], None);
     assert_eq!(task.crew.as_deref(), Some("medium_lane"));

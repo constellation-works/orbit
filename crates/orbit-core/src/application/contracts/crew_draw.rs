@@ -1,13 +1,13 @@
 //! What task writes and the crew pools agree on about a crew draw: the
 //! candidates a draw weighs and the assignment a task records. The
 //! provenance a task records is [`CrewSource`]; a draw's own `source`
-//! string stays display provenance for the run, not a task record.
+//! string becomes the run's [`ActivityDrawSource`], not a task record.
 
 use orbit_types::identity::{
     AutoEffortBasis, AutoEffortChoice, AutoEffortSignal, Crew, ReasoningEffort,
 };
 use orbit_types::task::{CrewSource, TaskComplexity};
-use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
+use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, ActivityDrawSource};
 
 /// The reason an inspection-requiring activity names when no crew it may
 /// draw can inspect [ORB-15792].
@@ -68,10 +68,12 @@ pub(crate) struct CrewPoolDraw {
 }
 
 impl CrewPoolDraw {
+    /// The record a run freezes for this draw; its descriptive source is
+    /// classified here, once.
     pub(crate) fn into_activity_draw(self) -> ActivityCrewDraw {
         ActivityCrewDraw {
             crew: self.crew.name,
-            source: self.source,
+            source: ActivityDrawSource::parse(self.source),
             eligible_pool: self.eligible_pool,
             auto_effort: self.auto_effort,
         }

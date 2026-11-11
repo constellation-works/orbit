@@ -79,7 +79,10 @@ impl OrbitRuntime {
                     .remove(PR_AUTO_FIX_CREWS_KEY)
                     .or_else(|| state.activity_crew_draws.remove(&legacy))
             })
-            .map_or_else(|| PR_AUTO_FIX_CREWS_KEY.to_string(), |draw| draw.source);
+            .map_or_else(
+                || PR_AUTO_FIX_CREWS_KEY.to_string(),
+                |draw| draw.source.to_string(),
+            );
 
         let claim = PrAutoFixClaim {
             pr_number: &request.pr_number,
