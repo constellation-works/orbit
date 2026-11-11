@@ -42,7 +42,11 @@ pub(crate) use auto_fix::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,
 };
-pub(in crate::executor::automation::vcs) use body::{
+// Compatibility shim: the shared task projections moved to the lower
+// conventions module (ORB-24097); this narrow re-export keeps the existing
+// `pr::` paths compiling for concurrently merging callers without
+// broadening visibility. Retiring this shim is a follow-up.
+pub(in crate::executor::automation::vcs) use super::conventions::{
     meaningful_execution_summary, render_acceptance_criteria, task_url,
 };
 pub(crate) use complete::forge_observation_hold_message;

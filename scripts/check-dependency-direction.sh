@@ -1163,6 +1163,37 @@ if dependency_matches -n 'ReviewStoreBackend|review_certificate_record|review_re
   fail=1
 fi
 
+# [ORB-24097] Shared task projections live in the lower
+# `vcs::conventions` module; PR rendering, commit admission and handoff
+# admission consume that owner. Conventions must not name the `pr` module
+# in any direct, grouped or qualified path (a standalone `pr` path segment
+# is enough; `pr_config` and `PrConfig` are not path segments), and the
+# named commit/handoff consumers must not import or call these projections
+# through `pr` (including grouped trees, the old `pr::body` path and globs).
+# Their unrelated PR operations stay legal.
+vcs_src="$repo_root/crates/orbit-engine/src/executor/automation/vcs"
+projection_names='meaningful_execution_summary|render_acceptance_criteria|task_url|is_placeholder_execution_summary'
+if [[ ! -f "$vcs_src/conventions.rs" ]]; then
+  echo "dependency scan path missing: $vcs_src/conventions.rs" >&2
+  exit 1
+fi
+if dependency_matches -n '\bpr\b' "$vcs_src/conventions.rs"; then
+  echo "orbit-engine vcs conventions must not name the pr module; shared task projections live in conventions"
+  fail=1
+fi
+for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_resolved.rs; do
+  if [[ ! -f "$vcs_src/$consumer" ]]; then
+    echo "dependency scan path missing: $vcs_src/$consumer" >&2
+    exit 1
+  fi
+  if dependency_matches -n "\bpr::([a-z_]+::)?(${projection_names})\b" "$vcs_src/$consumer" ||
+    dependency_matches -n -U "\bpr::([a-z_]+::)?\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer" ||
+    dependency_matches -n "\bpr::([a-z_]+::)?\*" "$vcs_src/$consumer"; then
+    echo "orbit-engine vcs ${consumer} must read shared task projections from conventions, not from pr"
+    fail=1
+  fi
+done
+
 if [[ "$fail" -ne 0 ]]; then
   exit 1
 fi

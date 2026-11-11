@@ -40,8 +40,8 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::claim::{carries_implementer_output, implementer_summary};
+use super::super::conventions::meaningful_execution_summary;
 use super::super::git::git_output_raw;
-use super::super::pr::meaningful_execution_summary;
 
 /// Cap on individually named files; the remainder is reported as a count.
 const MAX_LISTED_FILES: usize = 25;
