@@ -52,16 +52,22 @@ than one task holds, with a
 filter by task ID. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 
-The rail workspace dropdown is a checkbox multi-select. One tick opens that
-workspace's unchanged board; two or more ticks open **All workspaces**, narrowing
-task rows and status-pill counts to that selection. The last tick cannot be
-removed. The URL and per-host browser preference retain the selection, dropping
-workspaces no longer available.
+The rail workspace dropdown is a single-select. **All workspaces** is its first
+entry, then the selected host's owned workspaces. Choosing one opens that
+workspace's board; **All workspaces** opens the aggregate board.
+
+Under **All workspaces**, the Tasks status-chip row has a workspace multi-select
+immediately after **More**, in the same chip style. It is absent on a single
+workspace's board. Ticking a subset narrows task rows and status-pill counts;
+ticking down to one workspace opens that board. The URL and per-host browser
+preference retain a multi-workspace choice, dropping workspaces no longer
+available. Several `workspaces=` values open **All workspaces** with that filter;
+one value opens that workspace's board.
 
 With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**,
 **Locks held**, **Log**. Drain reuses the Auto-drain body, with an
 **Auto-draining** header followed by a workspace select, an owner-first host select and phase pill.
-The workspace select lists only the ticked workspaces in alphabetical order,
+The workspace select lists the selected host's owned workspaces in alphabetical order,
 defaulting to the first with a live drain on any host; the host select lists
 that workspace's owner first and selected by default, then its follower hosts,
 and changing the workspace resets the host to the owner. Followers are readable

@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -1451,13 +1451,18 @@ async function initWorkspaceSelector() {
   if (dashboardWorkspaces.length <= 1) {
     const railWorkspace = $("rail-workspace");
     if (railWorkspace) railWorkspace.replaceChildren();
+    const hadFilter = workspaceFilterIds().length > 0;
+    // setWorkspace no longer clears a leftover aggregate filter, and a host
+    // with one board has nowhere to narrow.
+    setSelectedWorkspaces([]);
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
     if (only) {
       const linkedAll = isAggregateLinked();
       setWorkspace(only.id);
-      // A link asking for "all" has nothing to aggregate here; repair the address.
-      if (linkedAll) persistScopeToUrl();
-    } else if (getWorkspace() || getSelectedWorkspaces().length) {
+      // A link asking for "all", or a multi-workspace filter, has nothing to
+      // aggregate here; repair the address.
+      if (linkedAll || hadFilter) persistScopeToUrl();
+    } else if (getWorkspace() || hadFilter) {
       // This host owns nothing (its checkouts are all replicas, or it has
       // none): a remembered or linked replica must not open its board, so
       // clear the selection and let the panels show their empty state.
@@ -1474,14 +1479,43 @@ async function initWorkspaceSelector() {
   const linked = getWorkspace();
   const servable = id => dashboardWorkspaces.some(w => w.id === id && w.status === "active");
   const linkedIsServable = (wasAggregate && !linked) || servable(linked);
-  if (!linkedIsServable) {
+  // Drop filter ids this host cannot serve. Several that collapse to one open
+  // that board; several that collapse to none stay on All workspaces.
+  const dropUnavailableWorkspaceFilter = () => {
+    if (getWorkspace()) return;
+    const current = workspaceFilterIds();
+    const kept = current.filter(servable);
+    if (kept.length === current.length) return;
+    if (kept.length <= 1) {
+      setSelectedWorkspaces([]);
+      if (kept.length === 1) setWorkspace(kept[0]);
+    } else {
+      setSelectedWorkspaces(kept);
+    }
+  };
+  if (linkedIsServable) {
+    dropUnavailableWorkspaceFilter();
+  } else {
     const remembered = getRememberedWorkspace();
     let rememberedIds = [];
-    try { if (remembered?.startsWith("[")) rememberedIds = JSON.parse(remembered).filter(servable); } catch { /* Ignore invalid storage. */ }
-    if (rememberedIds.length) {
+    try {
+      if (remembered?.startsWith("[")) {
+        const parsed = JSON.parse(remembered);
+        if (Array.isArray(parsed)) rememberedIds = parsed.filter(servable);
+      }
+    } catch { /* Ignore invalid storage. */ }
+    if (rememberedIds.length > 1) {
       setSelectedWorkspaces(rememberedIds);
+      setWorkspace(null);
       buildWorkspaceSelector();
       persistScopeToUrl();
+      return true;
+    }
+    if (rememberedIds.length === 1) {
+      setSelectedWorkspaces([]);
+      setWorkspace(rememberedIds[0]);
+      buildWorkspaceSelector();
+      if (linked) persistScopeToUrl();
       return true;
     }
     let initial = remembered === ALL_WORKSPACES_TOKEN ? null : servable(remembered) ? remembered : undefined;
@@ -1505,6 +1539,7 @@ async function initWorkspaceSelector() {
       const firstActive = dashboardWorkspaces.find(w => w.status === "active");
       initial = live?.workspace_id || (def || firstActive || dashboardWorkspaces[0]).id;
     }
+    setSelectedWorkspaces([]);
     setWorkspace(initial);
     if (linked) persistScopeToUrl();
   }
@@ -1514,59 +1549,62 @@ async function initWorkspaceSelector() {
 
 let workspacePickerUnsubscribe = null;
 
+function placeWorkspaceList(anchor, list) {
+  list.hidden = false;
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(list.offsetWidth || rect.width, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  const height = list.offsetHeight;
+  const below = rect.bottom + 4;
+  const top = below + height + 12 <= window.innerHeight ? below : Math.max(12, rect.top - height - 4);
+  list.style.left = `${left}px`;
+  list.style.top = `${top}px`;
+}
+
 function buildWorkspaceSelector() {
   workspacePickerUnsubscribe?.();
-  const active = dashboardWorkspaces.filter(ws => ws.status === "active");
-  const saved = getSelectedWorkspaces();
-  const valid = saved.filter(id => active.some(ws => ws.id === id));
-  const ids = valid.length ? valid : getWorkspace() ? [active[0]?.id].filter(Boolean) : active.map(ws => ws.id);
-  setSelectedWorkspaces(ids);
-  persistScopeToUrl();
   const select = el("button", { type: "button", class: "workspace-select", title: "Workspace", "aria-label": "Workspace", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-controls": "workspace-options" });
   select.id = "workspace-select";
   const label = el("span");
   select.append(label);
-  const list = el("div", { id: "workspace-options", class: "workspace-options", role: "listbox", "aria-label": "Workspaces", "aria-multiselectable": "true" });
+  const list = el("div", { id: "workspace-options", class: "workspace-options", role: "listbox", "aria-label": "Workspaces" });
   list.hidden = true;
   const paint = () => {
-    const selected = getSelectedWorkspaces();
-    label.textContent = selected.length === 1 ? active.find(ws => ws.id === selected[0])?.name || selected[0] : "All workspaces";
+    const current = getWorkspace() || "";
+    const named = dashboardWorkspaces.find(ws => ws.id === current);
+    label.textContent = current ? (named?.name || current) : "All workspaces";
     for (const option of list.children) {
-      const checked = selected.includes(option.dataset.workspace);
-      option.setAttribute("aria-selected", String(checked));
-      option.querySelector("input").checked = checked;
-      option.setAttribute("aria-disabled", String(!active.some(ws => ws.id === option.dataset.workspace) || (checked && selected.length === 1)));
+      const selected = option.dataset.workspace === current;
+      option.setAttribute("aria-selected", String(selected));
     }
   };
   const close = () => { list.hidden = true; select.setAttribute("aria-expanded", "false"); };
   const open = () => {
-    list.hidden = false;
-    const rect = select.getBoundingClientRect();
-    list.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - list.offsetWidth - 12))}px`;
-    list.style.top = `${rect.bottom + list.offsetHeight + 12 <= window.innerHeight ? rect.bottom + 4 : Math.max(12, rect.top - list.offsetHeight - 4)}px`;
-    select.setAttribute("aria-expanded", "true"); list.querySelector('[aria-selected="true"]')?.focus(); };
-  for (const ws of dashboardWorkspaces) {
-    const available = ws.status === "active";
-    const checkbox = el("input", { type: "checkbox", tabindex: "-1", "aria-hidden": "true" });
-    const option = el("div", { role: "option", tabindex: "-1", "aria-selected": "false", "aria-disabled": String(!available) }, [checkbox, ws.name + (available ? "" : " (unavailable)")]);
-    // The entry's text is the colour key for the workspace pills on the All
-    // workspaces task list: the same palette slot, from the same function.
-    option.dataset.wsColor = String(workspaceColor(ws.id));
+    placeWorkspaceList(select, list);
+    select.setAttribute("aria-expanded", "true");
+    list.querySelector('[aria-selected="true"]')?.focus();
+  };
+  const choose = (id) => {
+    const next = id || null;
+    const changed = next !== getWorkspace();
+    if (changed) setWorkspace(next);
+    rememberWorkspace();
+    persistScopeToUrl();
+    close();
+    select.focus();
+    if (changed) refreshDashboard();
+  };
+  const wireOption = (option, id, available) => {
     option.tabIndex = -1;
-    checkbox.tabIndex = -1;
-    option.dataset.workspace = ws.id;
-    const toggle = () => {
-      if (!available) return;
-      const selected = getSelectedWorkspaces();
-      if (selected.length === 1 && selected[0] === ws.id) return;
-      setSelectedWorkspaces(selected.includes(ws.id) ? selected.filter(id => id !== ws.id) : [...selected, ws.id]);
-      paint(); rememberWorkspace(); persistScopeToUrl(); refreshDashboard();
-    };
-    option.addEventListener("click", event => { event.preventDefault(); toggle(); option.focus(); });
-    option.addEventListener("keydown", event => {
+    option.dataset.workspace = id;
+    const commit = () => { if (available) choose(id); };
+    // pointerdown runs before focusout can close the list, and preventDefault
+    // keeps the key target so a click does not commit a second time.
+    option.addEventListener("pointerdown", (event) => { event.preventDefault(); commit(); });
+    option.addEventListener("keydown", (event) => {
       const options = [...list.children];
       let index = options.indexOf(option);
-      if (event.key === " " || event.key === "Enter") { event.preventDefault(); toggle(); }
+      if (event.key === " " || event.key === "Enter") { event.preventDefault(); commit(); }
       else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
         event.preventDefault();
         index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
@@ -1574,6 +1612,18 @@ function buildWorkspaceSelector() {
       } else if (event.key === "Escape") { event.preventDefault(); close(); select.focus(); }
     });
     list.append(option);
+  };
+  const allOption = el("div", { role: "option", "aria-selected": "false" }, ["All workspaces"]);
+  wireOption(allOption, "", true);
+  for (const ws of dashboardWorkspaces) {
+    const available = ws.status === "active";
+    const option = el("div", { role: "option", "aria-selected": "false", "aria-disabled": String(!available) }, [
+      ws.name + (available ? "" : " (unavailable)"),
+    ]);
+    // The entry's text is the colour key for the workspace pills on the All
+    // workspaces task list: the same palette slot, from the same function.
+    option.dataset.wsColor = String(workspaceColor(ws.id));
+    wireOption(option, ws.id, available);
   }
   select.addEventListener("click", () => list.hidden ? open() : close());
   select.addEventListener("keydown", event => { if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); open(); } });

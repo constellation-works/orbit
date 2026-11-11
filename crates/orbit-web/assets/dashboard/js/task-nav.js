@@ -1,6 +1,6 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
-import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, isAggregateView, copyText } from './common.js';
+import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, raiseMessageSlot, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
@@ -509,6 +509,7 @@ function renderChips(context) {
   const allOn = activeStatuses.size === statusOrder(context).length;
   const counts = statusCounts(context);
   for (const chip of container.querySelectorAll(".chip")) {
+    if (chip.dataset.role === "workspaces") continue;
     const status = chip.dataset.status;
     const isAll = chip.dataset.role === "all";
     const on = chip.dataset.role === "not-ready"
@@ -531,6 +532,7 @@ function renderChips(context) {
       count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
     }
   }
+  paintWorkspaceFilter();
 }
 
 // ORB-10874: the status filter and search query are represented in the tasks
@@ -761,9 +763,193 @@ export function buildChips(context) {
     more.setAttribute("aria-expanded", String(open));
     secondary.classList.toggle("open", open);
   });
-  container.append(primary, more, secondary);
+  const workspaceFilter = buildWorkspaceFilter(context);
+  container.append(primary, more, workspaceFilter, secondary);
   refreshChips(context);
 }
+
+// All workspaces narrows from here, immediately after More. A single board
+// hides it. An empty filter checks every active workspace and omits
+// `workspaces=`; two or more narrow the list; one remaining opens that board.
+let workspaceFilterContext = null;
+let workspaceFilterOptionsKey = "";
+
+function activeWorkspaceEntries() {
+  return workspaceCatalogEntries().filter((workspace) => workspace && workspace.status === "active" && workspace.id);
+}
+
+function filterCoversActive(ids, activeIds) {
+  if (!ids.length || ids.length < activeIds.length) return false;
+  const have = new Set(ids);
+  return activeIds.every((id) => have.has(id));
+}
+
+function placeTaskWorkspaceList(anchor, list) {
+  list.hidden = false;
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(list.offsetWidth || rect.width, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  const height = list.offsetHeight;
+  const below = rect.bottom + 4;
+  const top = below + height + 12 <= window.innerHeight ? below : Math.max(12, rect.top - height - 4);
+  list.style.left = `${left}px`;
+  list.style.top = `${top}px`;
+}
+
+function closeTaskWorkspaceFilter() {
+  const list = $("task-workspace-options");
+  const button = document.querySelector("#task-filter [data-role='workspaces']");
+  if (list) list.hidden = true;
+  if (button) button.setAttribute("aria-expanded", "false");
+}
+
+function syncTaskWorkspaceOptions(list, entries) {
+  const key = entries.map((workspace) => `${workspace.id}\t${workspace.status}\t${workspace.name || ""}`).join("\n");
+  if (key === workspaceFilterOptionsKey && list.childElementCount === entries.length) return;
+  workspaceFilterOptionsKey = key;
+  list.replaceChildren();
+  for (const workspace of entries) {
+    const available = workspace.status === "active";
+    const checkbox = el("input", { type: "checkbox", "aria-hidden": "true" });
+    checkbox.tabIndex = -1;
+    const option = el("div", {
+      role: "option",
+      "aria-selected": "false",
+      "aria-disabled": String(!available),
+    }, [checkbox, `${workspace.name || workspace.id}${available ? "" : " (unavailable)"}`]);
+    option.dataset.wsColor = String(workspaceColor(workspace.id));
+    option.dataset.workspace = workspace.id;
+    option.tabIndex = -1;
+    const commit = () => {
+      if (!available) return;
+      const switched = applyTaskWorkspaceFilter(workspace.id);
+      if (!switched && option.isConnected) option.focus();
+    };
+    // pointerdown runs before focusout can close the list, and preventDefault
+    // keeps the key target so a click does not commit a second time.
+    option.addEventListener("pointerdown", (event) => { event.preventDefault(); commit(); });
+    option.addEventListener("keydown", (event) => {
+      const options = [...list.children];
+      let index = options.indexOf(option);
+      if (event.key === " " || event.key === "Enter") { event.preventDefault(); commit(); }
+      else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        options[index].focus();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeTaskWorkspaceFilter();
+        document.querySelector("#task-filter [data-role='workspaces']")?.focus();
+      }
+    });
+    list.append(option);
+  }
+}
+
+function applyTaskWorkspaceFilter(id) {
+  const activeIds = activeWorkspaceEntries().map((workspace) => workspace.id);
+  const current = isAggregateView() ? getSelectedWorkspaces() : [];
+  const base = !current.length || filterCoversActive(current, activeIds) ? activeIds : current;
+  const next = base.includes(id) ? base.filter((item) => item !== id) : [...base, id];
+  const kept = [...new Set(next)].filter((item) => activeIds.includes(item)).sort();
+  if (kept.length <= 1) {
+    const only = kept[0];
+    if (!only) return false;
+    setSelectedWorkspaces([]);
+    setWorkspace(only);
+    rememberWorkspace();
+    persistScopeToUrl();
+    closeTaskWorkspaceFilter();
+    document.getElementById("workspace-select")?.focus();
+    refreshTasks(workspaceFilterContext);
+    return true;
+  }
+  if (kept.length === activeIds.length) setSelectedWorkspaces([]);
+  else setSelectedWorkspaces(kept);
+  rememberWorkspace();
+  persistScopeToUrl();
+  paintWorkspaceFilter();
+  refreshTasks(workspaceFilterContext);
+  return false;
+}
+
+function paintWorkspaceFilter() {
+  const wrap = document.querySelector("#task-filter .workspace-filter");
+  const button = wrap?.querySelector("[data-role='workspaces']");
+  const list = $("task-workspace-options");
+  if (!wrap || !button || !list) return;
+  const entries = workspaceCatalogEntries();
+  syncTaskWorkspaceOptions(list, entries);
+  const activeIds = entries.filter((workspace) => workspace.status === "active" && workspace.id).map((workspace) => workspace.id);
+  const show = isAggregateView() && activeIds.length > 1;
+  if (!show) {
+    wrap.hidden = true;
+    closeTaskWorkspaceFilter();
+    return;
+  }
+  wrap.hidden = false;
+  const selected = getSelectedWorkspaces();
+  const narrowing = selected.length > 0 && !filterCoversActive(selected, activeIds);
+  const checked = new Set(narrowing ? selected : activeIds);
+  const label = button.querySelector(".chip-label");
+  if (label) label.textContent = narrowing ? `${selected.length} workspace${selected.length === 1 ? "" : "s"}` : "Workspaces";
+  button.classList.toggle("active", narrowing);
+  button.setAttribute("aria-pressed", narrowing ? "true" : "false");
+  button.title = narrowing ? selected.map((workspaceId) => workspaceDisplayName(workspaceId)).join(", ") : "All workspaces";
+  for (const option of list.children) {
+    const on = checked.has(option.dataset.workspace);
+    option.setAttribute("aria-selected", String(on));
+    const input = option.querySelector("input");
+    if (input) input.checked = on;
+  }
+}
+
+function buildWorkspaceFilter(context) {
+  workspaceFilterContext = context;
+  const wrap = el("div", { class: "workspace-filter" });
+  wrap.hidden = true;
+  const button = el("button", {
+    class: "chip",
+    type: "button",
+    "aria-haspopup": "listbox",
+    "aria-expanded": "false",
+    "aria-controls": "task-workspace-options",
+    "aria-label": "Filter by workspace",
+    title: "All workspaces",
+  }, [el("span", { class: "chip-label", text: "Workspaces" })]);
+  button.dataset.role = "workspaces";
+  const list = el("div", {
+    id: "task-workspace-options",
+    class: "workspace-options",
+    role: "listbox",
+    "aria-multiselectable": "true",
+    "aria-label": "Workspaces",
+  });
+  list.hidden = true;
+  button.addEventListener("click", () => {
+    if (list.hidden) {
+      placeTaskWorkspaceList(button, list);
+      button.setAttribute("aria-expanded", "true");
+      list.querySelector('[aria-selected="true"]')?.focus();
+    } else {
+      closeTaskWorkspaceFilter();
+    }
+  });
+  button.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (list.hidden) button.click();
+    }
+  });
+  wrap.append(button, list);
+  wrap.addEventListener("focusout", (event) => {
+    if (!wrap.contains(event.relatedTarget)) closeTaskWorkspaceFilter();
+  });
+  return wrap;
+}
+
+onWorkspaceChange(() => paintWorkspaceFilter());
+onWorkspaceNamesChange(() => paintWorkspaceFilter());
 
 export function wireSearch(context) {
   const input = $("task-search");
@@ -808,6 +994,13 @@ export function renderFilterSummary(context) {
   if (pilotWarningsOnly) parts.push("pilot warnings");
   if (myWorkOnly) parts.push(`my work (${myWorkCrewNames().join(", ") || "human crews"})`);
   if (waitingOnly) parts.push("waiting on you");
+  if (isAggregateView()) {
+    const workspaceIds = getSelectedWorkspaces();
+    const activeIds = activeWorkspaceEntries().map((workspace) => workspace.id);
+    if (workspaceIds.length && !filterCoversActive(workspaceIds, activeIds)) {
+      parts.push(`workspaces: ${workspaceIds.map((id) => workspaceDisplayName(id)).join(", ")}`);
+    }
+  }
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";

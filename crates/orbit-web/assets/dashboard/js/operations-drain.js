@@ -1,4 +1,4 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, getSelectedWorkspaces, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
@@ -75,15 +75,17 @@ function chooseAggregateHost(name) {
     else window.localStorage.removeItem(AGGREGATE_HOST_STORAGE_KEY);
   } catch { /* the in-memory choice serves */ }
 }
-// The workspaces ticked in the rail's dropdown, in alphabetical order by the
-// name the rail shows them under.
+// The selected host's owned workspaces, in alphabetical order. All workspaces
+// is the whole aggregate board, so the Tasks chip filter does not narrow this
+// select. Replicas are never in the catalog.
 function aggregateWorkspaceOptions(fleet) {
   const names = new Map();
   for (const row of fleet?.items || []) {
     if (row.workspace_id && row.workspace_name && !names.has(row.workspace_id)) names.set(row.workspace_id, row.workspace_name);
   }
-  return [...new Set(getSelectedWorkspaces())]
-    .map(id => ({ id, name: names.get(id) || workspaceDisplayName(id) || id }))
+  return workspaceCatalogEntries()
+    .filter(workspace => workspace.status === "active" && workspace.id)
+    .map(workspace => ({ id: workspace.id, name: names.get(workspace.id) || workspaceDisplayName(workspace.id) || workspace.id }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 // The hosts that can show this workspace's drain: its owner first, then the
