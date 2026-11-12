@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
+/// Poll `read` until `ready` holds or the routine health freshness bound (5 s)
+/// plus margin passes, then return the last read. A job run starting or
+/// finishing no longer invalidates the memo at once: the previous body is
+/// served while one background recompute replaces it.
+fn within_routine_freshness(read: impl Fn() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let value = read();
+        if ready(&value) || std::time::Instant::now() >= deadline {
+            return value;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 fn state(fixture: &Fixture, kind: &str, name: &str) -> AutomationState {
     let revision = SourceRevision {
         commit: "a".repeat(40),
@@ -388,7 +403,8 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 )
                 .unwrap();
 
-            let fire = last_fire();
+            let fire =
+                within_routine_freshness(last_fire, |fire| fire["run_id"] == "jrun-state-fire");
             assert_eq!(fire["run_id"], "jrun-state-fire", "{fire}");
             assert_eq!(fire["state"], "succeeded", "{fire}");
             assert_eq!(
@@ -520,7 +536,9 @@ fn routine_last_fire_reports_condition_triggered_runs() {
                     Some(&ok_pipeline),
                 )
                 .unwrap();
-            let row = status();
+            let row = within_routine_freshness(status, |row| {
+                row["last_fire"]["run_id"] == "jrun-cond-ok"
+            });
             assert_eq!(row["last_fire"]["run_id"], "jrun-cond-ok", "{row}");
             assert_eq!(row["last_fire"]["state"], "succeeded", "{row}");
             assert_eq!(row["recent_fires"].as_array().unwrap().len(), 2, "{row}");
