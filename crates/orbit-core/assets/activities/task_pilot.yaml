@@ -618,6 +618,33 @@ spec:
       that does not exist at `source_revision` follows the Existence rule
       below: report it as an evidence gap unless creation is authorized, and
       never invent a filename.
+    - MCP-surface companions: when a plan adds, removes or renames a builtin
+      MCP tool, changes its advertised placement, or changes its id route,
+      locate each companion below at `source_revision` (`rg -l` on the named
+      test or table, `rg --files` for a named golden file), declare it as a
+      `file:` selector, and record each mapping and its `path:line` evidence in
+      `assessment_rationale`. A workspace without these fixtures adds none. A
+      body-only tool edit that keeps the name, placement and id route adds none
+      of them.
+      - The handwritten exact advertised-name list, asserted by the test
+        `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, is
+        a handwritten expected-value fixture. Declare its file for an advertised
+        add, remove, rename or placement change, and for an id-route change: its
+        per-tool id-route tables are asserted by
+        `every_builtin_id_route_is_declared_and_preserves_the_former_tables`.
+      - The derived golden `authorization_matrix.json`, asserted by the test
+        `authorization_matrix_matches_live_registry`, has one row per registered
+        builtin tool, advertised or not, and per governed operation. Declare it
+        when a builtin tool is added, removed or renamed. A placement or id-route
+        change alone does not change it. Regenerate it with the workspace's
+        documented golden command and review the diff; never hand-edit it.
+      - The handwritten `GOVERNED_TOOL_PLACEMENT` table, asserted against the
+        live registry in the same test module, records each governed tool
+        operation's advertised placement. Inspect it for every plan in this rule.
+        Declare its file only when the table must change: a placement change, or
+        a governed tool operation added, removed or renamed.
+      No other golden, snapshot or tool-list file is implied by this rule; a
+      companion beyond these needs its own source evidence.
     - Registration wiring: for a new or renamed action or a changed
       cross-module interface, inspect the existing sites it needs to resolve
       and run: the typed action catalog or registry, any embedding or asset
