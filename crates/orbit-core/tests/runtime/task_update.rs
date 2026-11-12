@@ -784,6 +784,48 @@ fn claim_refused_start_leaves_document_status_history_and_artifacts_unchanged() 
     assert_eq!(started.plan, "Free started plan.");
 }
 
+/// Deleting a task outside `proposed` or `rejected` carries the structured
+/// force-overridable code and the task's status, writes nothing, and `force`
+/// still deletes it.
+fn delete_outside_proposed_or_rejected_carries_the_force_overridable_code() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Delete guard".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let refused = runtime
+        .delete_task_guarded(&task.id, false)
+        .expect_err("delete must refuse");
+    let refusal = refused.force_overridable().expect("typed refusal");
+    assert_eq!(
+        refusal.kind,
+        orbit_common::ForceOverridableKind::DeleteOutsideProposedOrRejected
+    );
+    assert_eq!(refusal.task_status.as_deref(), Some("backlog"));
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::Backlog,
+        "a refused delete writes nothing"
+    );
+
+    runtime
+        .delete_task_guarded(&task.id, true)
+        .expect("force deletes");
+    assert!(
+        matches!(runtime.get_task(&task.id), Err(OrbitError::NotFound { .. })),
+        "the forced delete removed the task"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     claim_refused_start_leaves_document_status_history_and_artifacts_unchanged_scenarios,
@@ -797,5 +839,6 @@ crate::scenario_table!(
     automation_persists_returned_summary_crew_and_run_history_without_status_change,
     pr_status_updates_share_admission_and_trim_before_storage,
     muse_identity_is_accepted_and_mismatches_refused,
-    tag_changes_record_previous_and_new_tags_in_history
+    tag_changes_record_previous_and_new_tags_in_history,
+    delete_outside_proposed_or_rejected_carries_the_force_overridable_code
 );

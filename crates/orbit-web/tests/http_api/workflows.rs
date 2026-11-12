@@ -604,7 +604,7 @@ wf_test!(
     {
         use std::time::{Duration, Instant};
         let fixture = Fixture::new();
-        // Longer than the HTTP client's five-second timeout: foreground execution cannot return a receipt for this job in time.
+        // The job outlives the receipt: the replay below must still be pending or running when its receipt returns, which foreground execution of this six-second job in the request could not produce.
         fixture.sleep_job("replay_fixture", 6);
         let mut source = fixture.seed_run("jrun-replay-source", "replay_fixture", Success);
         source.input = Some(json!({

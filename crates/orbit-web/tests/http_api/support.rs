@@ -278,6 +278,63 @@ impl Fixture {
         self.server_impl_with_env(operator, false, false, &self.path("process.log"), None, env)
     }
 
+    /// A server whose process runs from a linked git worktree of the
+    /// fixture's workspace repository, inside a managed run's environment
+    /// (`ORBIT_MANAGED_RUN_CONTEXT` and `ORBIT_RUN_ID`) naming `run_id`. That
+    /// is the one process shape in which the owning-run relaxation of a task
+    /// write's context check can apply to a caller bound to the run.
+    pub(super) fn server_in_linked_worktree_of_run(&self, operator: bool, run_id: &str) -> Server {
+        let repo = self.temp.path().join("repo");
+        let worktree = self.temp.path().join("linked-worktree");
+        let git = |dir: &Path, args: &[&str]| {
+            let mut command = Command::new("git");
+            orbit_common::test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let output = command
+                .current_dir(dir)
+                .args([
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&repo, &["init", "--quiet"]);
+        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "base"]);
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        spawn_server_from(
+            self.temp.path(),
+            &worktree,
+            operator,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[
+                ("ORBIT_MANAGED_RUN_CONTEXT", std::ffi::OsStr::new("1")),
+                ("ORBIT_RUN_ID", std::ffi::OsStr::new(run_id)),
+            ],
+        )
+    }
+
     pub(super) fn counted_task_server(&self) -> Server {
         self.server_impl_with_log(
             false,
@@ -453,10 +510,35 @@ pub(super) fn spawn_server(
     task_query_log: Option<&Path>,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Server {
+    spawn_server_from(
+        root,
+        root,
+        operator,
+        resources,
+        replay_worker,
+        log_path,
+        task_query_log,
+        env,
+    )
+}
+
+/// [`spawn_server`] with the server process's working directory at `cwd`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_server_from(
+    root: &Path,
+    cwd: &Path,
+    operator: bool,
+    resources: bool,
+    replay_worker: bool,
+    log_path: &Path,
+    task_query_log: Option<&Path>,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Server {
     orbit_common::test_env::assert_child_test_exists("server_child");
     let log = tempfile::NamedTempFile::new_in(root).unwrap();
     let mut command = fixture_command(root);
     command
+        .current_dir(cwd)
         .args(["--ignored", "--exact", "server_child", "--nocapture"])
         .env(FIXTURE_ROOT, root)
         .env("ORBIT_HTTP_PORT", "0")

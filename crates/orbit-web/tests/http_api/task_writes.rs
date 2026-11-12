@@ -346,41 +346,13 @@ fn dashboard_archive_of_a_run_owned_task_offers_the_force_override() {
     );
 }
 
-/// Deleting a task outside `proposed` or `rejected` carries the structured
-/// force-overridable code, and `force` still deletes it.
-#[test]
-fn delete_outside_proposed_or_rejected_carries_the_force_overridable_code() {
-    isolated(
-        "task_writes::delete_outside_proposed_or_rejected_carries_the_force_overridable_code",
-        || {
-            let fixture = Fixture::new();
-            let id = seed(&fixture, "Delete guard", TaskStatus::Backlog);
-            let refused = fixture
-                .runtime
-                .delete_task_guarded(&id, false)
-                .expect_err("delete must refuse");
-            let refusal = refused.force_overridable().expect("typed refusal");
-            assert_eq!(
-                refusal.kind,
-                orbit_common::ForceOverridableKind::DeleteOutsideProposedOrRejected
-            );
-            assert_eq!(refusal.task_status.as_deref(), Some("backlog"));
-            assert_eq!(
-                fixture.runtime.get_task(&id).expect("task").status,
-                TaskStatus::Backlog,
-                "a refused delete writes nothing"
-            );
-            fixture
-                .runtime
-                .delete_task_guarded(&id, true)
-                .expect("force deletes");
-        },
-    );
-}
-
 /// The owning-run relaxation of the update context check needs a caller
-/// bound to the task's run. A dashboard request carries no run binding, so a
-/// task a run owns still gets the strict check, with its escape named.
+/// bound to the task's run, calling from a linked worktree of the workspace.
+/// The server here is exactly that process: it runs from a linked worktree
+/// inside the managed run's environment. A dashboard request is not that
+/// run's caller, so a task the run owns still gets the strict check, with its
+/// escape named; a handler that took its binding from the server process
+/// would relax it.
 #[test]
 fn dashboard_update_of_a_run_owned_task_keeps_the_strict_context_check() {
     isolated(
@@ -400,7 +372,7 @@ fn dashboard_update_of_a_run_owned_task_keeps_the_strict_context_check() {
                     None,
                 )
                 .expect("bind task to a run");
-            let server = fixture.server(true);
+            let server = fixture.server_in_linked_worktree_of_run(true, "jrun-dashboard-owner");
 
             let refused = server.send(
                 "PATCH",

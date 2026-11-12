@@ -1205,20 +1205,38 @@ projections_test!(
     fixture,
     Fixture::new(),
     {
+        // The friction feed starts with one row, so a poll that bypassed its
+        // memo after the second row lands would return a different payload.
+        let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+        let blob_ref = blobs.write(b"memoized stderr").unwrap();
+        let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        seed_cli_failure(&fixture, "first", ts, &blob_ref);
         let server = fixture.server(false);
-        for path in [
+        let paths = [
             "/api/audit/summary?since=24h&workspace=ws_http_fixture",
             "/api/cost?window=1h&workspace=ws_http_fixture",
             "/api/diagnostics/errors?since=24h&workspace=ws_http_fixture",
             "/api/diagnostics/friction?month=2026-04&workspace=ws_http_fixture",
-        ] {
+        ];
+        let age = |response: &reqwest::blocking::Response, path: &str| -> u64 {
+            let age = response.headers()["age"].to_str().unwrap();
+            age.parse()
+                .unwrap_or_else(|_| panic!("{path}: Age {age:?} is not whole seconds"))
+        };
+        let mut computed = Vec::new();
+        for path in paths {
             let first = server.get(path);
-            let first_age = first.headers()["age"].to_str().unwrap().to_owned();
-            let first = json_ok(first);
+            check_eq!(age(&first, path) => 0; "{path}: a miss reports Age 0");
+            computed.push(json_ok(first));
+        }
+        check_eq!(computed[3].as_array().unwrap().len() => 1; "friction poll len: {}", computed[3]);
+        seed_cli_failure(&fixture, "second", ts + Duration::seconds(1), &blob_ref);
+        // Age counts whole seconds, so a repeat after a second and a half has
+        // aged at least one; a constant 0 cannot pass.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        for (path, first) in paths.into_iter().zip(computed) {
             let repeat = server.get(path);
-            let repeat_age = repeat.headers()["age"].to_str().unwrap().to_owned();
-            check!(first_age.parse::<u64>().is_ok(); "{path}: Age {first_age:?}");
-            check!(repeat_age.parse::<u64>().is_ok(); "{path}: Age {repeat_age:?}");
+            check!(age(&repeat, path) >= 1; "{path}: a memo hit reports its payload's age");
             check_eq!(json_ok(repeat) => first; "{path}: a repeat poll inside the TTL is served from the memo");
         }
     }
