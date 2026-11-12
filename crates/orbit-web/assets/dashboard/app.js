@@ -1991,10 +1991,11 @@ function fetchAndRenderRunDetail() {
     if (!runDetailFetchCurrent("detail", token)) return;
     // Only a 404 means the run does not exist; a 500 or a dropped connection is
     // a failed read, and telling the operator the run is missing sends them
-    // hunting for a run that is fine.
+    // hunting for a run that is fine. A coded 404 names the host that holds
+    // the run and why it cannot be shown here.
     renderRunDetailEmpty(
       e.status === 404
-        ? `Run not found: ${runId}`
+        ? (e.code ? e.message : `Run not found: ${runId}`)
         : `Unable to load run ${runId}: ${e.message}. Reload the page to retry.`,
     );
     setActiveRunDetailError(`Unable to load steps: ${e.message}. Reload the page to retry.`);

@@ -1,7 +1,7 @@
 //! Single-run detail, cancel, and replay endpoints.
 
 use crate::state::{DashboardState, Ws};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
@@ -13,20 +13,43 @@ use super::super::routines::{
     OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
 };
 use super::super::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
-use super::detail::job_run_detail_to_json;
+use super::detail::{job_run_detail_to_json, recorded_run_detail_to_json};
+use super::locate::{LocatedRun, RunLookupFailure, locate_run, requested_workspace};
 
-pub(in crate::api) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+/// `GET /api/runs/:id`. The run is looked up in the requested workspace and
+/// then under every workspace id this host's store records it, so a link
+/// naming the wrong workspace, or a run recorded under a workspace since
+/// removed from the host, still opens. See [`super::locate`].
+pub(in crate::api) async fn get_run(
+    State(state): State<DashboardState>,
+    RawQuery(query): RawQuery,
+    Path(id): Path<String>,
+) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    let requested = requested_workspace(query.as_deref());
     match blocking("get run", move || {
-        let run = runtime.show_job_run_without_drain_leaf_settlement(&id)?;
-        Ok(job_run_detail_to_json(&runtime, &run))
+        Ok(
+            match locate_run(&state, requested.as_deref(), &id, |runtime, id| {
+                runtime.show_job_run_without_drain_leaf_settlement(id)
+            }) {
+                Ok(LocatedRun::Registered { runtime, run }) => {
+                    Ok(job_run_detail_to_json(&runtime, &run))
+                }
+                Ok(LocatedRun::Recorded { reader, recorded }) => {
+                    Ok(recorded_run_detail_to_json(&reader, &recorded))
+                }
+                Err(failure) => Err(failure),
+            },
+        )
     })
     .await
     {
-        Ok(value) => Json(value).into_response(),
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(RunLookupFailure::Response(response))) => *response,
+        Ok(Err(RunLookupFailure::Error(error))) => map_runtime_error(*error),
         Err(response) => *response,
     }
 }

@@ -6,6 +6,7 @@ mod events;
 mod failure;
 mod lineage;
 mod list;
+mod locate;
 mod run;
 mod tasks;
 

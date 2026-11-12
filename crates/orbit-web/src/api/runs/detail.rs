@@ -1,6 +1,8 @@
 //! Run detail JSON and supplementary audit projections.
 
-use orbit_core::application::job::{job_run_to_json_with_activity_provenance, run_display_steps};
+use orbit_core::application::job::{
+    RecordedJobRun, job_run_to_json_with_activity_provenance, run_display_steps,
+};
 use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
@@ -158,6 +160,54 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             .iter()
             .map(RunProviderProcess::to_json)
             .collect::<Vec<_>>(),
+    })
+}
+
+/// Run detail for a run this host's store records under a workspace no
+/// registered runtime serves (a removed follower workspace). Same `{run,
+/// steps}` contract as [`job_run_detail_to_json`], from the stored record
+/// and pipeline state alone: the live sections (provider processes, pull
+/// claim and drain occupancy) need the workspace's runtime and are empty.
+/// `recorded_workspace` names the workspace the records are under.
+pub(super) fn recorded_run_detail_to_json(
+    reader: &OrbitRuntime,
+    recorded: &RecordedJobRun,
+) -> Value {
+    let run = &recorded.run;
+    let run_id = run.run_id.as_str();
+    let state = recorded.state.as_ref();
+    let mut full = job_run_to_json_with_activity_provenance(run, state, &[]);
+    full["input"] = json!(run.input);
+    full["pid"] = json!(run.pid);
+    full["pid_start_time"] = json!(run.pid_start_time);
+    let titles = or_warn(
+        super::tasks::task_titles(reader, std::iter::once(run)),
+        run_id,
+        "task titles",
+    );
+    super::tasks::add_tasks(&mut full, run, &titles);
+    full["drain_last_pass"] =
+        serde_json::to_value(state.and_then(|state| state.pull_drain.drain_last_pass.as_ref()))
+            .unwrap_or(Value::Null);
+    if let Some(fields) = full.as_object_mut() {
+        fields.remove("steps");
+    }
+    let steps = run_display_steps(run, Vec::new);
+    json!({
+        "run": full,
+        "recorded_workspace": {
+            "workspace_id": recorded.workspace_id,
+            "registered": false,
+        },
+        "pull_claim": Value::Null,
+        "claimed_leaves": [],
+        "pull_occupancy": Value::Null,
+        "pull_breaker": state.and_then(|state| state.pull_drain.pull_breaker.as_ref()),
+        "refused_settlements": [],
+        "crew_window": Value::Null,
+        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state, &[])).collect::<Vec<_>>(),
+        "steps_source": steps.source.as_str(),
+        "provider_processes": [],
     })
 }
 

@@ -12,7 +12,7 @@
 // (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText, infoHint } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -323,6 +323,17 @@ export function renderRunDetailMeta() {
     cell.appendChild(value);
     grid.appendChild(cell);
   }
+  // The server found the run's records under a workspace that is no longer
+  // registered on this host (a removed follower workspace), so the workspace
+  // selector cannot name it. Say where the records are.
+  if (detail.recorded_workspace) {
+    const cell = el("div");
+    cell.appendChild(el("div", { class: "label", text: "workspace" }));
+    const value = el("div", { class: "value mono", text: detail.recorded_workspace.workspace_id });
+    value.appendChild(infoHint("Recorded under a workspace that is no longer registered on this host. The run is shown read-only from this host's store."));
+    cell.appendChild(value);
+    grid.appendChild(cell);
+  }
 
   // Actions retain this host even while their response refreshes the header.
   // Reuse the mounted node when wiring new buttons: a fresh keyed node would
@@ -345,11 +356,14 @@ export function renderRunDetailMeta() {
     lineage.addEventListener("click", () => navigateToRun(sourceId));
     actions.appendChild(lineage);
   }
-  const replay = run.run_id ? buildReplayRunButton(run, feedback) : null;
+  // A run recorded under a workspace this host no longer registers is
+  // read-only history: no runtime there could replay or cancel it.
+  const recorded = detail.recorded_workspace || null;
+  const replay = run.run_id && !recorded ? buildReplayRunButton(run, feedback) : null;
   if (replay) actions.appendChild(replay);
   // The claim rides beside the run in the detail payload; the cancel
   // confirmation reads it off the run it is handed.
-  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
+  if (!recorded && runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);

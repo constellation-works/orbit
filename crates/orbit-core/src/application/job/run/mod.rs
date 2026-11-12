@@ -39,6 +39,7 @@ mod projection;
 mod query;
 mod queued_cancel;
 mod reconcile;
+mod recorded;
 mod root_cause;
 #[cfg(feature = "test-support")]
 pub use root_cause::with_run_root_cause_write_hook;
@@ -72,6 +73,7 @@ pub use projection::{
     ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
+pub use recorded::{JobRunHolder, RecordedJobRun};
 pub use root_cause::{
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
     RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents, run_upgrade_paused,

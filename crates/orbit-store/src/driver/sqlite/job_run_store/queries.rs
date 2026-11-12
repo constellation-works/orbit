@@ -186,6 +186,28 @@ impl Store {
         get_job_run_for_workspace_conn(&conn, workspace_id, run_id)
     }
 
+    /// Every workspace id this store records `run_id` under, ascending,
+    /// whether or not that workspace is still registered on the host. A run
+    /// id is unique only within one workspace, so more than one can match.
+    /// Each distinct workspace is probed through the `(workspace_id, run_id)`
+    /// primary key rather than scanning run rows.
+    pub fn job_run_workspace_ids(&self, run_id: &str) -> Result<Vec<String>, OrbitError> {
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT w.workspace_id FROM (SELECT DISTINCT workspace_id FROM job_runs) w \
+                 WHERE EXISTS (SELECT 1 FROM job_runs r \
+                               WHERE r.workspace_id = w.workspace_id AND r.run_id = ?1) \
+                 ORDER BY w.workspace_id ASC",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(rusqlite::params![run_id], |row| row.get::<_, String>(0))
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
     pub fn list_job_runs_for_workspace(
         &self,
         workspace_id: &str,

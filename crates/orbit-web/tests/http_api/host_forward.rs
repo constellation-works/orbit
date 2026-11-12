@@ -1253,3 +1253,29 @@ fn forwarded_audit_cursor_survives_a_capped_short_page() {
         },
     );
 }
+
+/// [ORB-24160] A task's run link opens the run on the host that holds it.
+/// When that host cannot be reached, run detail fails naming the host and
+/// the reason, not "run not found".
+#[test]
+fn run_detail_on_an_unreachable_holding_host_names_the_host_and_reason() {
+    isolated(
+        "host_forward::run_detail_on_an_unreachable_holding_host_names_the_host_and_reason",
+        || {
+            let a = Fixture::new();
+            write_hosts(&a, &[("deadhost", "hm_deadhost", "dead-ssh", "HD")]);
+            let stub = StubSsh::new(json!({"dead-ssh": {"exit": 255}}));
+            let server = a.server_with_path(false, stub.bin());
+            let response = server
+                .request("GET", &format!("/api/on/deadhost/runs/jrun-held-c1{WS}"))
+                .timeout(SLOW_REQUEST)
+                .send()
+                .unwrap();
+            let dead = error_code(response, 502, "unreachable_destination");
+            assert_eq!(dead["host"], "deadhost", "{dead}");
+            let message = dead["error"].as_str().unwrap();
+            assert!(message.contains("deadhost"), "names the host: {dead}");
+            assert!(message.contains("exit 255"), "says why: {dead}");
+        },
+    );
+}
