@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.49.0 — 2026-11-10
+## 0.49.0 — 2026-11-12
 
 ### Breaking Changes
 
@@ -12,10 +12,11 @@
 ### Highlights
 
 - **Read-only crew-memory grants**: An operator can grant a task `orbit.memory.show` or `orbit.memory.history` for any space, read-only, and an auto-task definition can declare the grant so minted tasks carry it. ([ORB-23818])
-- **Multi-workspace dashboard**: The rail's multi-select workspace dropdown, a host-selectable Auto-drain card with start and stop controls and a Fleet tab let operators narrow the All workspaces board without server fan-out. ([ORB-23882])
+- **Multi-workspace dashboard**: The rail's All workspaces entry opens an aggregate board whose Tasks chip row narrows it to chosen workspaces, alongside a host-selectable Auto-drain card with start and stop controls and a Fleet tab, without server fan-out. ([ORB-23882])
 - **Grouped fleet task list**: Under All workspaces, each status section is grouped by workspace in picker order with colour-coded workspace pills, and paging walks the selected workspaces in that order. ([ORB-23884])
 - **Blind regression-label audit**: A disabled `regression-label-audit` auto-task samples recorded regression labels blind across model families, so recorded accuracy can be checked without the auditor seeing the labels. ([ORB-23842])
 - **Owner can land a held green PR**: A block decision now offers Approve and land for a green handoff PR, merging the exact reviewed head under the usual forge protections. ([ORB-23815])
+- **Long Claude requests priced by tier**: Claude runs now capture each request's final usage, so requests of 100,000 or more prompt tokens are priced at their long-context tier, and an incomplete stream leaves the cost unknown rather than understated. ([ORB-23935])
 
 ## 0.48.0 — 2026-11-09
 
