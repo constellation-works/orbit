@@ -280,11 +280,17 @@ function modelNode(row) {
   const crewNames = crews.map((crew) => crew.crew).filter(Boolean).join(", ");
   const crewTitle = crews.map((crew) => `${crew.crew || "—"} (${crew.tasks ?? 0})`).join(", ");
   const singleTier = typeof row.single_tier === "string" && row.single_tier ? row.single_tier : null;
-  return el("span", { class: "agents-rank-model" }, [
-    rankFormat.providerDot(row.model),
+  const nameLine = el("span", { class: "agents-rank-model-line" }, [
     el("span", { class: "agents-rank-model-name", text: row.model || "—", title: row.model || "" }),
     singleTier ? el("span", { class: "agents-rank-single-tier", text: `single tier: ${singleTier}`, title: `Ranked on the ${singleTier} tier only` }) : null,
+  ]);
+  const body = el("span", { class: "agents-rank-model-body" }, [
+    nameLine,
     crewNames ? el("span", { class: "agents-rank-crew", text: crewNames, title: crewTitle }) : null,
+  ]);
+  return el("span", { class: "agents-rank-model" }, [
+    rankFormat.providerDot(row.model),
+    body,
   ]);
 }
 
