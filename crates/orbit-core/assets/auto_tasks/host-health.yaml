@@ -177,7 +177,7 @@ template:
     - A doctor warning/error is a standing condition: eligible on first sight. A log signature
       is eligible only with at least 3 distinct events across at least 2 non-overlapping
       completed collection windows within 14 days, on the same host. Carry the 14-day per-window
-      counts in the cursor; never use cross-host counts or repeated imports/resumes to meet
+      counts in the cursor; never use cross-host counts or repeated resumes to meet
       the threshold. Below-threshold groups are counted, not filed. Report the threshold.
 
     ## Dedupe and routing

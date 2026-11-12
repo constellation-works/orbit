@@ -3994,6 +3994,33 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Orbit version and migrations",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "e43c3c399e3a88f93321c981f75dc623d43408eede51c5f129576b63c1174897",
+      "revision": "2e821f9da78ce0cf125cdad72e8fdcd0ab08711e",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * 1"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "path-risk-review": [
