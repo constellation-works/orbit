@@ -1221,54 +1221,59 @@ main.tasks-layout.task-page-mode > .task-detail-pane { justify-self: center; wid
   white-space: nowrap;
 }
 
-.chip.active-triage-chip {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  text-decoration: none;
+/* Live-state pills on the task row: `triaging` and `review · repairing`
+   share one size and shape (STD-07 §R30, §R20); colour carries the kind.
+   Triage keeps its non-warning accent and stays a link to the triage run. */
+.live-state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
   white-space: nowrap;
+  text-decoration: none;
 }
-.chip.active-triage-chip::before {
+.live-state-pill.active-triage-chip::before,
+.live-state-pill.delivery-attention-badge.repairing::before {
   content: "";
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: currentColor;
 }
-.chip.active-triage-chip:hover { text-decoration: underline; }
-.chip.active-triage-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.live-state-pill.active-triage-chip {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  cursor: pointer;
+}
+.live-state-pill.active-triage-chip:hover { text-decoration: underline; }
+.live-state-pill.active-triage-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-active-triage { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 
-.delivery-attention-badge {
+.live-state-pill.delivery-attention-badge {
   color: var(--warn-fg);
   background: var(--warn-wash);
-  border: 1px solid var(--warn-line);
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-size: 11px;
-  white-space: nowrap;
+  border-color: var(--warn-line);
 }
 /* A live repair is in progress, not stuck: the running accent, with a dot that
    pulses until reduced motion stops it. */
-.delivery-attention-badge.repairing {
+.live-state-pill.delivery-attention-badge.repairing {
   color: var(--state-running);
   background: color-mix(in srgb, var(--state-running) 14%, transparent);
   border-color: color-mix(in srgb, var(--state-running) 45%, transparent);
 }
-.delivery-attention-badge.repairing::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  vertical-align: 1px;
-  border-radius: 50%;
-  background: currentColor;
+.live-state-pill.delivery-attention-badge.repairing::before {
   animation: delivery-repair-pulse 1.6s ease-in-out infinite;
 }
 @keyframes delivery-repair-pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) {
-  .delivery-attention-badge.repairing::before { animation: none; }
+  .live-state-pill.delivery-attention-badge.repairing::before { animation: none; }
 }
 
 .title-tags > .scheduled-chip {

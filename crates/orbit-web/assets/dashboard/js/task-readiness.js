@@ -83,7 +83,7 @@ export function buildActiveTriageBadges(task) {
   return (Array.isArray(task.active_triage) ? task.active_triage : []).map((triage) => {
     const title = triage.crew ? `Triaging with ${triage.crew}` : "Triaging · crew assignment pending";
     const link = el("a", {
-      class: "chip active-triage-chip",
+      class: "live-state-pill active-triage-chip",
       text: "triaging",
       title,
       "aria-label": `${title}; view run`,
@@ -128,7 +128,7 @@ export function buildDeliveryAttentionBadge(task) {
   const attempt = attention.attempt != null && attention.budget != null ? ` ${attention.attempt}/${attention.budget}` : "";
   const text = repairing ? `${task.status} · repairing${attempt}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
   return [el("span", {
-    class: repairing ? "delivery-attention-badge repairing" : "delivery-attention-badge",
+    class: repairing ? "live-state-pill delivery-attention-badge repairing" : "live-state-pill delivery-attention-badge",
     role: "img",
     "aria-label": deliveryAttentionTitle(task, attention),
     title: deliveryAttentionTitle(task, attention),
