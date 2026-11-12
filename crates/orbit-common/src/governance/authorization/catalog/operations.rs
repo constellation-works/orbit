@@ -300,6 +300,14 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     approval before anything lands",
     },
     GovernedOperation {
+        id: "orbit.drain.claim.effort",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "a late effort report attributes a settled attempt; the claim journal accepts \
+                    it only from the machine the claim ran on, for its bound run, and never \
+                    overwrites an effort the claim holds",
+    },
+    GovernedOperation {
         id: "orbit.drain.receipt.lookup",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Agent, McpCapability::Operator],

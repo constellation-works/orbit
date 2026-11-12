@@ -18,6 +18,7 @@ impl GuardedModes for DrainVerb {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => None,
         }
     }
@@ -33,6 +34,7 @@ impl GuardedModes for DrainVerb {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => None,
         }
     }
@@ -44,6 +46,7 @@ impl GuardedModes for DrainVerb {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => Ok(()),
         }
     }
@@ -55,6 +58,7 @@ impl GuardedModes for DrainVerb {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => None,
         }
     }

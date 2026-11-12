@@ -1063,6 +1063,20 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.drain.claim.effort",
+    "required_any": [
+      "agent",
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.drain.claim.settle",
     "required_any": [
       "agent",

@@ -35,6 +35,7 @@ pub(super) fn dispatch(
         DrainVerb::ClaimBind => claim_bind(runtime, session, &input),
         DrainVerb::ClaimSettle => claim_settle(runtime, session, &input),
         DrainVerb::Claims => claims(runtime),
+        DrainVerb::ClaimEffort => claim_effort(runtime, session, &input),
     }
 }
 
@@ -64,6 +65,7 @@ pub(super) fn prepare_input(verb: DrainVerb, input: &mut Value) -> Result<(), Or
         | DrainVerb::ReceiptLookup
         | DrainVerb::ClaimBind
         | DrainVerb::ClaimSettle
+        | DrainVerb::ClaimEffort
         | DrainVerb::Claims => Ok(()),
     }
 }
@@ -166,6 +168,23 @@ fn claim_settle(
         settlement,
         attribution,
     )?;
+    serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// `orbit.drain.claim.effort`: a follower's late report of a settled leaf's
+/// effort [ORB-24115].
+fn claim_effort(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
+    let input = input.as_value();
+    let claim_id = orbit_tools::require_str(input, "claim_id")?;
+    let run_id = orbit_tools::require_str(input, "run_id")?;
+    let effort = reported_effort(input).ok_or_else(|| {
+        OrbitError::InvalidInput("`reasoning_effort` is required and must not be empty".into())
+    })?;
+    let result = runtime.serve_claim_effort(session, &claim_id, &run_id, effort)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 

@@ -2,7 +2,8 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 
 use super::super::{Section, TaskCommitBoundary};
-use super::codec::{CLAIM, HANDOFF_SETTLEMENT, LEAF_RUN_EVIDENCE, STATE};
+use super::codec::{CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_EFFORT, LEAF_RUN_EVIDENCE, STATE};
+use super::late_effort::attach_late_leaf_effort;
 use super::{decode, decode_state, invalid};
 use crate::contracts::*;
 
@@ -51,6 +52,13 @@ impl TaskCommitBoundary {
                     )? {
                         attach_handoff_settlement(&mut state, &attribution.payload_json)?;
                     }
+                    if let Some(report) = self.store.task_coordination_row(
+                        &self.workspace_id,
+                        LATE_LEAF_EFFORT,
+                        claim_id,
+                    )? {
+                        attach_late_leaf_effort(&mut state, &report.payload_json)?;
+                    }
                     state.leaf_run_evidence = self
                         .store
                         .task_coordination_row(&self.workspace_id, LEAF_RUN_EVIDENCE, claim_id)?
@@ -78,6 +86,12 @@ impl TaskCommitBoundary {
             .into_iter()
             .map(|row| (row.row_id, row.payload_json))
             .collect();
+        let late_effort: std::collections::BTreeMap<_, _> = self
+            .store
+            .task_coordination_rows(&self.workspace_id, LATE_LEAF_EFFORT)?
+            .into_iter()
+            .map(|row| (row.row_id, row.payload_json))
+            .collect();
         self.store
             .task_coordination_rows_with_related_payload(&self.workspace_id, CLAIM, STATE)?
             .into_iter()
@@ -86,6 +100,9 @@ impl TaskCommitBoundary {
                 let mut state = claim_state_from_payload(claim, state.as_deref())?;
                 if let Some(payload) = attribution.get(&state.claim.claim_id) {
                     attach_handoff_settlement(&mut state, payload)?;
+                }
+                if let Some(payload) = late_effort.get(&state.claim.claim_id) {
+                    attach_late_leaf_effort(&mut state, payload)?;
                 }
                 if let Some(payload) = evidence.get(&state.claim.claim_id) {
                     state.leaf_run_evidence = Some(decode(payload)?);

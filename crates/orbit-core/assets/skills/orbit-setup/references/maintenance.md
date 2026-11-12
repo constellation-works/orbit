@@ -596,6 +596,7 @@ orbit migrate --confirm     # apply
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
 orbit migrate --backfill-dispatch-effort  # apply, then record the launch effort of agent invocations that predate dispatch identities
+orbit migrate --backfill-claimed-effort  # on a pull follower: apply, then report to the owner the effort of claimed leaves it settled without one
 orbit migrate --adopt-authority ~/.orbit  # record this home as the authority protecting a workspace that recorded none (stop its clients first)
 ```
 

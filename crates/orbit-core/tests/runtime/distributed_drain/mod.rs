@@ -89,6 +89,7 @@ mod host_os_executor;
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
+mod late_effort;
 mod metadata;
 mod no_diff;
 mod ordering;
@@ -220,6 +221,10 @@ struct Wire {
     /// When set, a settlement reaches the owner naming this leaf run report
     /// in place of the one its follower sent [ORB-20906].
     leaf_run_override: Mutex<Option<Value>>,
+    /// An older owner fixture: its internal drain route predates the late
+    /// effort report and refuses it unread, as a server whose build does not
+    /// know the operation does [ORB-24115].
+    predates_late_effort: Mutex<bool>,
     /// Send handoffs to the real owner observation path.
     observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
@@ -357,6 +362,14 @@ impl DrainOwnerTransport for Wire {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
             ));
+        }
+        if name == "orbit.drain.claim.effort" && *self.predates_late_effort.lock().unwrap() {
+            let message = "distributed drain requires the internal runtime route";
+            return Err(OrbitError::RemoteTool {
+                code: "policy_denied".into(),
+                message: message.into(),
+                payload: json!({"code": "policy_denied", "message": message}),
+            });
         }
         if name == "orbit.drain.claim.settle" {
             // Operator stop/cancel may itself settle; release the hook lock
@@ -749,6 +762,7 @@ impl Pair {
             gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
             leaf_run_override: Mutex::default(),
+            predates_late_effort: Mutex::default(),
             observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),

@@ -3,7 +3,7 @@ use orbit_cmd::registry_runtime::{
     RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
 };
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
-use orbit_core::application::agents::DispatchEffortBackfill;
+use orbit_core::application::agents::{ClaimedEffortBackfill, DispatchEffortBackfill};
 use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 use orbit_core::application::job::TaskCrewBackfill;
 use orbit_core::composition::WorkspaceAuthorityAdoption;
@@ -28,7 +28,7 @@ pub struct MigrateCommand {
     #[arg(long, conflicts_with = "dry_run")]
     pub confirm: bool,
     /// Explicitly request the default non-destructive inspection mode
-    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort"])]
+    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort", "backfill_claimed_effort"])]
     pub dry_run: bool,
     /// Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
     #[arg(long)]
@@ -47,11 +47,14 @@ pub struct MigrateCommand {
     /// Apply pending migrations, then record the reasoning effort each agent invocation without a recorded dispatch identity was launched with, read from its audited launch command, so agent scorecards stop showing it as effort unknown. Invocations whose launch cannot be matched, or whose matching launches disagree, stay unknown; running it again changes nothing
     #[arg(long, conflicts_with_all = ["backfill_diff_stats", "backfill_task_crews"])]
     pub backfill_dispatch_effort: bool,
+    /// On a pull follower: apply pending migrations, then report to the owner the reasoning effort of each claimed leaf this host settled, read from this host's own records, so the owner's agent scorecards stop showing those attempts as effort unknown. Run --backfill-dispatch-effort here first when this host's invocations predate dispatch identity. The owner never overwrites an effort it holds; running it again records nothing new
+    #[arg(long, conflicts_with_all = ["backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort"])]
+    pub backfill_claimed_effort: bool,
     /// Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated
     #[arg(
         long,
         value_name = "PATH",
-        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort"]
+        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews", "backfill_dispatch_effort", "backfill_claimed_effort"]
     )]
     pub adopt_authority: Option<std::path::PathBuf>,
 }
@@ -137,6 +140,7 @@ impl MigrateCommand {
             || self.backfill_diff_stats
             || self.backfill_task_crews
             || self.backfill_dispatch_effort
+            || self.backfill_claimed_effort
     }
 }
 
@@ -150,6 +154,9 @@ impl Execute for MigrateCommand {
         }
         if self.backfill_dispatch_effort {
             return dispatch_effort_backfill_payload(&runtime.backfill_dispatch_effort()?);
+        }
+        if self.backfill_claimed_effort {
+            return claimed_effort_backfill_payload(&runtime.backfill_claimed_leaf_effort()?);
         }
         // Apply path: opening the runtime (before this command ran) already
         // applied everything pending; report the outcome.
@@ -261,8 +268,58 @@ fn dispatch_effort_backfill_payload(report: &DispatchEffortBackfill) -> CommandO
         "\nunits left unknown stay \"effort unknown\": invocations with no matching launch \
          (including launches before the 2026-09-10 audit argv or with no surviving launch \
          audit), launches no single step provably contained, attempts a follower ran whose \
-         follower reported no effort, and runs absent from this store. Effort is never \
-         inferred from crew configuration.",
+         follower reported no effort, at settlement or later through its own `orbit migrate \
+         --backfill-claimed-effort`, and runs absent from this store. Effort is never inferred \
+         from crew configuration.",
+    );
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
+}
+
+fn claimed_effort_backfill_payload(report: &ClaimedEffortBackfill) -> CommandOut {
+    let doc = json!({ "claimed_effort_backfill": report });
+    let mut text = format!(
+        "claimed leaf effort backfill in workspace {}: {} settled claims examined; {} recorded \
+         on the owner, {} already held there",
+        report.workspace, report.examined, report.recorded, report.replayed
+    );
+    for (count, why) in [
+        (
+            report.effort_unknown,
+            "left effort unknown: this host holds no implementing invocation or launch record of \
+             the leaf with a recorded effort",
+        ),
+        (
+            report.no_leaf_run,
+            "left effort unknown: this host holds no record of the claim's leaf run",
+        ),
+        (
+            report.conflicting,
+            "refused: the owner holds a different effort, which stands",
+        ),
+        (
+            report.owner_unsupported,
+            "refused unread: the owner's Orbit predates late effort reports; upgrade it and run \
+             this again",
+        ),
+        (
+            report.refused,
+            "refused by the owner (see each row's detail)",
+        ),
+        (
+            report.owner_unreachable,
+            "not sent: the owner was unreachable; run this again",
+        ),
+    ] {
+        if count > 0 {
+            text.push_str(&format!("\n  {count} {why}"));
+        }
+    }
+    text.push_str(
+        "\nattempts that stay \"effort unknown\" on the owner: leaves this follower holds no \
+         matching invocation or launch record of (run `orbit migrate --backfill-dispatch-effort` \
+         here first when its invocations predate dispatch identity), leaves whose run record \
+         this follower no longer holds, and leaves of followers that never run this backfill. \
+         Effort is never inferred from crew configuration.",
     );
     Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
 }

@@ -31,9 +31,11 @@ mod binding;
 mod handoff;
 mod identity;
 mod known_red;
+mod late_effort;
 mod model;
 mod pull;
 mod refusal;
 mod settlement;
 
+pub use late_effort::LateEffortReportResult;
 pub use model::TaskPullResponse;

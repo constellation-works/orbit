@@ -73,6 +73,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_pull"
         | "orbit_drain_claim_bind"
         | "orbit_drain_claim_settle"
+        | "orbit_drain_claim_effort"
         // Fleet notices, including reads, answer for the home workspace's
         // owner store only; a replica holding a copy would go stale.
         | "orbit_notice_post"

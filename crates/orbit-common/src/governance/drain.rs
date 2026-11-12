@@ -29,6 +29,8 @@ operation_registry! {
         ClaimSettle => CLAIM_SETTLE,
         /// `orbit.drain.claims`.
         Claims => CLAIMS,
+        /// `orbit.drain.claim.effort`.
+        ClaimEffort => CLAIM_EFFORT,
     }
 }
 
@@ -313,6 +315,38 @@ const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const CLAIM_EFFORT: OperationSpec<DrainVerb> = OperationSpec {
+    verb: DrainVerb::ClaimEffort,
+    cli_path: &[],
+    tool_name: "orbit.drain.claim.effort",
+    tool_description: "Report, after the fact, the reasoning effort a claimed leaf ran at when its settlement carried none, so the owner's agent scorecards stop counting the attempt as effort unknown. Accepted only from the machine that ran and settled the claim, for the leaf run bound to it, once the claim is settled. Attribution only: it changes no claim, task, run or settlement outcome. An effort the claim already holds is never overwritten: the same effort replays, and a different one is refused as `effort_conflict`.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        required(mcp_only(
+            "claim_id",
+            ParamType::String,
+            "The settled claim whose leaf ran on this machine.",
+        )),
+        required(mcp_only(
+            "run_id",
+            ParamType::String,
+            "The leaf run bound to that claim.",
+        )),
+        required(mcp_only(
+            "reasoning_effort",
+            ParamType::String,
+            "The effective reasoning effort of the leaf's main implementing invocation, read from this machine's own records: its name (`low`, `medium`, `high`, `xhigh` or `max`), or `provider_default` when the provider's default applied. Never sent for an unknown effort.",
+        )),
+    ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

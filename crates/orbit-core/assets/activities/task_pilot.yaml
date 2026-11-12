@@ -1154,6 +1154,7 @@ spec:
     - orbit.decision:raise
     - orbit.decision.submit
     - orbit.drain.claim.bind
+    - orbit.drain.claim.effort
     - orbit.drain.claim.settle
     - orbit.evolution.add
     - orbit.experiment.abandon

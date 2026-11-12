@@ -21,7 +21,8 @@ impl Store {
     /// Authorization rows are the canonical capability decisions. Legacy tool
     /// wrappers repeat their message without a shared invocation ID, so those
     /// wrappers are evidence only. Other denied tool rows are policy decisions,
-    /// except lock contention and owner-side claim-settlement protocol refusals.
+    /// except lock contention and owner-side claim-settlement and late-effort
+    /// protocol refusals.
     /// Raw audit status counts and listings intentionally retain every row.
     pub fn get_audit_denials_by_operation(
         &self,
@@ -43,7 +44,8 @@ impl Store {
                 command = 'tool'
                 AND COALESCE(tool_name, '') NOT IN (
                   'orbit.task.locks.reserve', 'orbit.workspace.claim.acquire',
-                  'orbit.workspace.claim.release', 'orbit.drain.claim.settle'
+                  'orbit.workspace.claim.release', 'orbit.drain.claim.settle',
+                  'orbit.drain.claim.effort'
                 )
                 AND COALESCE(error_message, '') NOT GLOB
                   'operation * requires the `*` capability (*)*'

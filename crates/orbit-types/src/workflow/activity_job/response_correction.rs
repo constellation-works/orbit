@@ -29,6 +29,7 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.decision.submit",
     "orbit.decision:raise",
     "orbit.drain.claim.bind",
+    "orbit.drain.claim.effort",
     "orbit.drain.claim.settle",
     "orbit.evolution.add",
     "orbit.experiment.abandon",

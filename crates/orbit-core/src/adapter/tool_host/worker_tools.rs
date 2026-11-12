@@ -34,6 +34,7 @@ pub(crate) fn execute(
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => false,
         },
         OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {
@@ -371,6 +372,7 @@ pub(crate) fn execute(
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => return Ok(None),
         },
         OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {

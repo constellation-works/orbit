@@ -42,7 +42,9 @@ mod tests;
 pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};
 pub use ci_failures::CiFailureQuery;
-pub use effort_backfill::DispatchEffortBackfill;
+pub use effort_backfill::{
+    ClaimedEffortBackfill, ClaimedEffortOutcome, ClaimedEffortRow, DispatchEffortBackfill,
+};
 pub(crate) use facts::review_gate_verdicts;
 pub(crate) use facts::task_execution_modes;
 pub use facts::{AgentFacts, ExecutionMode, Problem};

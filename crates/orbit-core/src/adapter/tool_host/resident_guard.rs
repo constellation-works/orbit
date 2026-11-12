@@ -136,7 +136,10 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
         },
         OrbitBuiltinAction::Drain(verb) => match verb {
             DrainVerb::Probe | DrainVerb::ReceiptLookup | DrainVerb::Claims => Read,
-            DrainVerb::Pull | DrainVerb::ClaimBind | DrainVerb::ClaimSettle => Gated(Dispatch),
+            DrainVerb::Pull
+            | DrainVerb::ClaimBind
+            | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort => Gated(Dispatch),
         },
         OrbitBuiltinAction::Decision(verb) => match verb {
             DecisionVerb::List | DecisionVerb::Show | DecisionVerb::Digest => Read,
