@@ -648,6 +648,30 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
         comments_of(&leaf.pair.owner_task(&leaf.task)).contains(&attempt_id),
         "the verdict comment is on the owner's task"
     );
+    let typed: orbit_types::workflow::ReviewCertificate =
+        serde_json::from_slice(&certificate).unwrap();
+    let history_rows = owner.get_task_history(&leaf.task).unwrap();
+    let comments = owner.get_task_comments(&leaf.task).unwrap();
+    let records = orbit_types::task::recorded_review_settlements(&history_rows, &comments);
+    assert_eq!(records.len(), 1, "typed and display records count once");
+    assert_eq!(
+        records[0].1,
+        orbit_types::task::RecordedReviewSettlement::from_certificate(
+            &typed,
+            orbit_types::task::ReviewSettlementGate::BeforePr,
+        )
+    );
+    assert!(history_rows.iter().any(|entry| matches!(
+        entry.decision,
+        Some(orbit_types::task::TaskDecision::ReviewSettlement(_))
+    )));
+    assert_eq!(
+        leaf.settle().unwrap(),
+        settled,
+        "claimed publication replays"
+    );
+    assert_eq!(owner.get_task_history(&leaf.task).unwrap(), history_rows);
+    assert_eq!(owner.get_task_comments(&leaf.task).unwrap(), comments);
     let history = leaf
         .owner_artifact(REVIEW_REPORT_HISTORY_ARTIFACT)
         .expect("the report history is on the owner's task");

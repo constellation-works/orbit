@@ -16,24 +16,6 @@ use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
-/// Leads of the review gate's settlement comment, before the attempt id.
-pub(super) const SETTLEMENT_LEADS: &[&str] = &[
-    "before-PR review settled attempt `",
-    "before-landing review settled attempt `",
-];
-/// The settlement comment's reviewer line, before the crew name.
-pub(super) const REVIEWER_LINE: &str = "- Reviewer: crew `";
-/// The settlement comment's line naming the reviewed implementation commit.
-pub(super) const IMPLEMENTATION_LINE: &str = "- Implementation: `";
-/// The settlement comment's line naming the final candidate commit.
-pub(super) const FINAL_CANDIDATE_LINE: &str = "- Final candidate: `";
-/// The settlement comment's line with the reviewer's runtime in seconds.
-pub(super) const RUNTIME_LINE: &str = "- Reviewer runtime: ";
-/// A finding's sub-line naming the paths a fixed finding changed.
-pub(super) const CHANGED_LINE: &str = "- Changed: ";
-/// A finding's sub-line naming the paths an open or disposed finding cites.
-pub(super) const CITED_LINE: &str = "- Cited: ";
-
 /// A recorded occurrence that counts against some role, or against none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Problem {
@@ -231,7 +213,7 @@ pub(in crate::application::agents) enum RejectOutcome {
     },
 }
 
-/// One settled review gate attempt, from its settlement comment.
+/// One settled review gate attempt, read at the task history boundary.
 #[derive(Debug, Clone)]
 pub(in crate::application::agents) struct Review {
     pub(in crate::application::agents) attempt_id: String,

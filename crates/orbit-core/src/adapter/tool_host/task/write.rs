@@ -642,6 +642,7 @@ fn task_update_params_from_input(
     status: Option<TaskStatus>,
 ) -> Result<TaskUpdateParams, OrbitError> {
     Ok(TaskUpdateParams {
+        review_settlement: None,
         trusted_artifact_origin: None,
         title: optional_string(input, "title")?,
         description: input

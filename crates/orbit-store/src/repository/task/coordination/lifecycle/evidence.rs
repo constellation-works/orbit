@@ -73,6 +73,15 @@ impl TaskCommitBoundary {
         actor: &str,
         effects: &ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
+        // Only a host update may publish this record; release/failure
+        // payloads are ordinary worker claims, not gate publications.
+        if evidence.review_settlement.is_some()
+            && (effects.worker_update.is_none() || evidence.comment.is_none())
+        {
+            return Err(invalid(
+                "review settlement metadata requires a host verdict comment",
+            ));
+        }
         let origin = effects.execution_origin.as_ref();
         if let Some(update) = &effects.worker_update {
             intent.evidence.plan = update.plan.clone();
@@ -141,6 +150,28 @@ impl TaskCommitBoundary {
                     operation_id: None,
                 };
                 comment.validate()?;
+                if offset == 0
+                    && evidence.comment.is_some()
+                    && let Some(settlement) = &evidence.review_settlement
+                {
+                    let entry = settlement.history_entry(comment.at, by);
+                    let next_event = crate::repository::task::v2::sequencing::next_sequence(
+                        &bundle.events,
+                        "EV-",
+                    ) + intent.events.len();
+                    intent.events.push(orbit_types::task::TaskEventRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        event_id: format!("EV-{next_event:04}"),
+                        at: entry.at,
+                        by: entry.by,
+                        event_type: entry.event,
+                        note: entry.note,
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: entry.decision,
+                    });
+                }
                 intent.evidence.comments.push(comment);
             }
         }

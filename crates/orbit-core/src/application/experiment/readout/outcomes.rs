@@ -17,7 +17,7 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::agents::{ExecutionMode, review_gate_verdicts, task_execution_modes};
+use crate::application::agents::{self, ExecutionMode, task_execution_modes};
 
 /// How long after landing a `regression_from` filing counts as an escape.
 pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
@@ -316,7 +316,7 @@ impl OrbitRuntime {
             };
             let history = histories.get(id).map(Vec::as_slice).unwrap_or_default();
             let comments = self.get_task_comments(id)?;
-            let verdicts = review_gate_verdicts(&comments);
+            let verdicts = agents::review_gate_verdicts(history, &comments);
             let first_judged = verdicts
                 .iter()
                 .find(|verdict| **verdict != ReviewVerdict::Incomplete);

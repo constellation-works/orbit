@@ -15,8 +15,8 @@ use super::super::roles::pilot_warnings::settle;
 use super::attempts::{
     assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim, runner,
 };
-use super::model::{Attempt, FiledFinding, Problem, Record, Review, RunRecord, Runner, TaskFacts};
-use super::review::{failed_fix, settlement};
+use super::model::{Attempt, FiledFinding, Problem, Record, RunRecord, Runner, TaskFacts};
+use super::review;
 use crate::application::task::{is_review_finding, latest_verification};
 
 /// The facts of one task. `classify` gives the cause a block or run exit
@@ -181,18 +181,11 @@ pub(in crate::application::agents) fn task_facts(
         });
     }
 
-    // Review gate settlements and escalations of reviewer fixes, from the
-    // comments the gate posts. A replayed settlement is counted once.
-    let mut reviews: Vec<Review> = Vec::new();
+    // Settlements come from typed history with a legacy-comment fallback.
+    // Failed-fix escalation prose is a separate boundary.
+    let mut reviews = review::review_settlement_facts(history, comments);
     for comment in comments {
-        if let Some(review) = settlement(comment) {
-            if !reviews
-                .iter()
-                .any(|seen| seen.attempt_id == review.attempt_id)
-            {
-                reviews.push(review);
-            }
-        } else if failed_fix(comment) {
+        if review::failed_fix(comment) {
             if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= comment.at) {
                 review.fix_failed = true;
             }

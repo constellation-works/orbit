@@ -6,9 +6,7 @@ mod construction;
 mod repairs;
 mod verdict;
 
-pub(super) use comment::{
-    Delivery, comment_lead, review_fixes_section, verdict_comment, write_artifact,
-};
+pub(super) use comment::{Delivery, review_fixes_section, verdict_comment, write_artifact};
 pub(super) use repairs::repair_author_label;
 pub(super) use verdict::extend_note;
 

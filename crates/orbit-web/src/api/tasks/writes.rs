@@ -235,6 +235,7 @@ pub(in crate::api) async fn update_task_action(
         plan: body.plan,
         execution_summary: body.execution_summary,
         comment: body.comment,
+        review_settlement: None,
         status: body.status,
         priority: body.priority,
         complexity,

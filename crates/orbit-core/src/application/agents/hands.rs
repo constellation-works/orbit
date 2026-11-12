@@ -6,7 +6,7 @@
 //!
 //! - **piloted**: each task-pilot receipt the apply boundary sealed, with the
 //!   frozen activity crew draw and producing invocation model;
-//! - **reviewed**: each review gate settlement comment, with the reviewer it
+//! - **reviewed**: each typed or legacy review gate settlement, with the reviewer it
 //!   names and its verdict, and the attempt's run from the lineage ledger of
 //!   the task's latest gate certificate (older lineages carry no run);
 //! - **recovered**: a final-recovery decision that completed or requeued the
@@ -18,7 +18,7 @@
 //! `planned_by`, `implemented_by` and `orchestrator` fields stay the
 //! dashboard's own.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
@@ -30,7 +30,7 @@ use orbit_types::task::{
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::{Map, Value, json};
 
-use super::facts::{FindingState, settlement};
+use super::facts::{self, FindingState};
 use super::records::is_operator_requeue;
 use super::roles::pilot_warnings;
 use crate::OrbitRuntime;
@@ -178,13 +178,7 @@ impl OrbitRuntime {
     }
 
     fn reviewed_hands(&self, row: &TaskRow) -> Vec<Hand> {
-        let mut seen = BTreeSet::new();
-        let settlements: Vec<_> = row
-            .comments
-            .iter()
-            .filter_map(settlement)
-            .filter(|review| seen.insert(review.attempt_id.clone()))
-            .collect();
+        let settlements = facts::review_settlement_facts(&row.history, &row.comments);
         if settlements.is_empty() {
             return Vec::new();
         }

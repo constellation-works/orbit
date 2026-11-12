@@ -7,6 +7,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, ReviewerInvocationRequest, RuntimeHost};
 use orbit_store::contracts::{FailureClass, classify};
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
@@ -423,6 +424,63 @@ fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
                 .as_str()
                 .is_some_and(|reason| !reason.is_empty())
         );
+        let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+        let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+        let typed = orbit_types::task::recorded_review_settlements(&history, &comments);
+        let legacy = orbit_types::task::recorded_review_settlements(&[], &comments);
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed, legacy, "old comment-only records retain their facts");
+        let old_shape = json!({"at": comments[0].at, "by": "system", "event": "updated"});
+        let old_history: orbit_types::task::TaskHistoryEntry =
+            serde_json::from_value(old_shape).unwrap();
+        assert!(
+            old_history.decision.is_none(),
+            "old history has no metadata"
+        );
+        assert_eq!(
+            orbit_types::task::recorded_review_settlements(&[old_history], &comments),
+            legacy
+        );
+        let refused = fixture
+            .runtime
+            .update_task_with_identity(
+                &fixture.task_id,
+                TaskUpdateParams {
+                    comment: Some("Forged review".into()),
+                    review_settlement: Some(typed[0].1.clone()),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .expect_err("ordinary callers cannot publish gate metadata");
+        assert!(refused.to_string().contains("system verdict comment"));
+        assert_eq!(
+            fixture.runtime.get_task_history(&fixture.task_id).unwrap(),
+            history
+        );
+        assert_eq!(
+            fixture.runtime.get_task_comments(&fixture.task_id).unwrap(),
+            comments
+        );
+        let mut display = comments.clone();
+        display[0].message = "Display text may change without changing recorded facts.".into();
+        assert_eq!(
+            orbit_types::task::recorded_review_settlements(&history, &display),
+            typed
+        );
+        let mut malformed = comments.clone();
+        malformed[0].message = format!(
+            "before-PR review settled attempt `legacy`: verdict **{verdict}**\n- Reviewer runtime: unknown\n- Implementation: ``"
+        );
+        let unknown = orbit_types::task::recorded_review_settlements(&[], &malformed);
+        assert_eq!(unknown.len(), 1);
+        assert_eq!(unknown[0].1.runtime_seconds, None);
+        assert_eq!(unknown[0].1.reviewed_commit, None);
+        assert_eq!(unknown[0].1.reviewer_model, None);
+        malformed[0].message =
+            "before-PR review settled attempt `legacy`: verdict **unknown**".into();
+        assert!(orbit_types::task::recorded_review_settlements(&[], &malformed).is_empty());
         let stats = fixture
             .runtime
             .audit_event_stats(None, Some("review.gate".into()))
@@ -506,6 +564,119 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
             .content,
     )
     .unwrap();
+    // Replay each persisted partial-publication shape through the real gate.
+    let registry =
+        TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
+    let bundle = registry
+        .canonical_task_bundle_path(&fixture.runtime.workspace_id().unwrap(), &fixture.task_id)
+        .unwrap();
+    let events_path = bundle.join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let comments_path = bundle.join(orbit_types::task::TASK_COMMENTS_FILE_NAME);
+    let without_settlement = || {
+        std::fs::read_to_string(&events_path)
+            .unwrap()
+            .lines()
+            .filter(|line| {
+                serde_json::from_str::<orbit_types::task::TaskEventRowV2>(line)
+                    .unwrap()
+                    .event_type
+                    != orbit_types::task::REVIEW_SETTLED_EVENT
+            })
+            .map(|line| format!("{line}\n"))
+            .collect::<String>()
+    };
+    std::fs::write(&events_path, without_settlement()).unwrap();
+    std::fs::write(&comments_path, "").unwrap();
+    fixture
+        .settle()
+        .expect("artifact-only publication acquires comment and decision");
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(
+        orbit_types::task::recorded_review_settlements(&history, &comments).len(),
+        1
+    );
+
+    // Conversely, an interrupted artifact write is repaired without reposting.
+    let manifest_path = bundle
+        .join("artifacts")
+        .join(orbit_types::task::TASK_ARTIFACT_MANIFEST_FILE_NAME);
+    let mut manifest: orbit_types::task::ArtifactManifestV2 =
+        serde_yaml::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest
+        .files
+        .retain(|file| file.path != REVIEW_GATE_ARTIFACT);
+    std::fs::write(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    fixture
+        .settle()
+        .expect("comment-only publication reacquires the certificate artifact");
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        fixture.runtime.get_task_comments(&fixture.task_id).unwrap(),
+        comments
+    );
+    assert_eq!(
+        fixture.runtime.get_task_history(&fixture.task_id).unwrap(),
+        history
+    );
+
+    let query = orbit_core::application::agents::AgentQuery::parse(Some("all"), Some(1)).unwrap();
+    let typed_scorecard = fixture
+        .runtime
+        .agent_role_scorecard(
+            orbit_core::application::agents::AgentRole::Reviewers,
+            &query,
+        )
+        .unwrap();
+    let typed_hands = fixture
+        .runtime
+        .task_handled_by(&fixture.runtime.get_task_row(&fixture.task_id).unwrap());
+    assert_eq!(
+        typed_hands
+            .iter()
+            .filter(|hand| hand["verb"] == "reviewed")
+            .count(),
+        1
+    );
+
+    // A pre-metadata publication remains comment-only, with no eager rewrite.
+    std::fs::write(&events_path, without_settlement()).unwrap();
+    let legacy_history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+    fixture
+        .settle()
+        .expect("an older peer's comment-only settlement replays");
+    assert_eq!(
+        fixture.runtime.get_task_history(&fixture.task_id).unwrap(),
+        legacy_history
+    );
+    assert_eq!(
+        fixture.runtime.get_task_comments(&fixture.task_id).unwrap(),
+        comments
+    );
+    let legacy_scorecard = fixture
+        .runtime
+        .agent_role_scorecard(
+            orbit_core::application::agents::AgentRole::Reviewers,
+            &query,
+        )
+        .unwrap();
+    assert_eq!(
+        typed_scorecard["rows"], legacy_scorecard["rows"],
+        "typed and legacy facts preserve reviewer scoring and runtime"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .task_handled_by(&fixture.runtime.get_task_row(&fixture.task_id).unwrap()),
+        typed_hands
+    );
     for (landed_commit, reason) in [
         (None, "mapping_unknown"),
         (

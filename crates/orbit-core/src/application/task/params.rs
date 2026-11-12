@@ -233,6 +233,8 @@ pub struct TaskUpdateParams {
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
+    /// Gate-owned metadata; never populated by public task input parsing.
+    pub review_settlement: Option<orbit_types::task::RecordedReviewSettlement>,
     pub status: Option<TaskStatus>,
     /// Replacement dispatch priority. `None` leaves the task's priority
     /// untouched; the record layer has always been able to persist it
@@ -287,6 +289,7 @@ impl TaskUpdateParams {
             plan,
             execution_summary,
             comment,
+            review_settlement,
             status,
             priority,
             complexity,
@@ -304,6 +307,7 @@ impl TaskUpdateParams {
             discard_candidate,
         } = self;
         comment.is_some()
+            && review_settlement.is_none()
             && title.is_none()
             && description.is_none()
             && acceptance_criteria.is_none()

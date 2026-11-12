@@ -1,7 +1,7 @@
 //! The one workspace scan behind every agent scorecard: each task with
 //! activity in the last 90 days (envelope, history and comments), the
 //! implementation job runs that name those tasks, the review gate's
-//! settlement comments, the finding-verification verdicts on review-filed
+//! settlements (typed history or legacy comments), the finding-verification verdicts on review-filed
 //! findings, the typed `regression_from` links, how each task-pilot
 //! assessment's warnings settled and, from the codebase scan, each pilot
 //! assessment of a done task graded against its landed diff. The
@@ -25,7 +25,7 @@ pub(in crate::application::agents) use model::{
     TaskFacts, filing_attempt,
 };
 pub(crate) use review::review_gate_verdicts;
-pub(in crate::application::agents) use review::settlement;
+pub(in crate::application::agents) use review::review_settlement_facts;
 
 pub(in crate::application::agents) use scan::scan;
 #[cfg(test)]
