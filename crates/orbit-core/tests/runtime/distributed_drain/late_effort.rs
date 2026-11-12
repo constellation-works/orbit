@@ -1,5 +1,7 @@
 //! [ORB-24115] A follower's late report of the effort of leaves it settled
 //! without one, and the owner's recording of it against the settlement.
+//! [ORB-24150] The same report carries the implementing model, and is
+//! accepted for a claim the owner holds no settlement record for.
 
 use super::*;
 use orbit_core::application::agents::ClaimedEffortOutcome;
@@ -68,6 +70,82 @@ fn record_follower_launch(pair: &Pair, leaf: &str, effort: ReasoningEffort) {
                 crew: Some("sol".into()),
                 reasoning_effort: Some(effort),
             },
+        )
+        .unwrap();
+}
+
+/// The model the follower's leaf run recorded, which its launch record and
+/// late report carry.
+fn follower_model(pair: &Pair, leaf: &str) -> Option<String> {
+    pair.follower_jobs
+        .get_job_run(leaf)
+        .unwrap()
+        .unwrap()
+        .crew_model
+}
+
+/// [`record_follower_launch`] on `model`.
+fn record_follower_launch_on(pair: &Pair, leaf: &str, effort: ReasoningEffort, model: &str) {
+    pair.follower
+        .sqlite_store()
+        .unwrap()
+        .begin_agent_execution(
+            &pair.follower.workspace_id().unwrap(),
+            leaf,
+            "implement_one",
+            "fixture",
+            Some(model),
+            &orbit_types::telemetry::AgentExecutionIdentity {
+                crew: Some("sol".into()),
+                reasoning_effort: Some(effort),
+            },
+        )
+        .unwrap();
+}
+
+/// The owner's implementer scorecard model and effort of each row.
+fn owner_models_and_efforts(pair: &Pair) -> Vec<(Value, Value)> {
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["model"].clone(), row["reasoning_effort"].clone()))
+        .collect()
+}
+
+/// Rewrite the owner's lifecycle row of `claim` as an owner that kept no
+/// settlement record wrote it (`field: None`), or with the record's `field`
+/// removed, as a follower that predates reporting it settled.
+fn forget_owner_settlement(pair: &Pair, claim: &str, field: Option<&str>) {
+    let connection =
+        rusqlite::Connection::open(pair.wire.owner.global_root().join("orbit.db")).unwrap();
+    let payload: String = connection
+        .query_row(
+            "SELECT payload_json FROM task_coordination_rows \
+             WHERE kind = 'distributed-claim-lifecycle-v1' AND row_id = ?1",
+            [claim],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut state: Value = serde_json::from_str(&payload).unwrap();
+    let removed = match field {
+        None => state.as_object_mut().unwrap().remove("settlement"),
+        Some(field) => state["settlement"].as_object_mut().unwrap().remove(field),
+    };
+    assert!(
+        removed.is_some(),
+        "the fixture's settlement held it: {state:#}"
+    );
+    connection
+        .execute(
+            "UPDATE task_coordination_rows SET payload_json = ?1 \
+             WHERE kind = 'distributed-claim-lifecycle-v1' AND row_id = ?2",
+            rusqlite::params![state.to_string(), claim],
         )
         .unwrap();
 }
@@ -143,10 +221,11 @@ fn a_followers_late_report_moves_a_settled_attempt_out_of_effort_unknown() {
     assert_eq!(report.rows[0].reasoning_effort.as_deref(), Some("high"));
     assert_eq!(owner_efforts(&pair), [json!("high")], "after backfill");
     let reports = pair.wire.calls("orbit.drain.claim.effort");
-    assert_eq!(
-        reports,
-        [json!({"claim_id": claim, "run_id": leaf, "reasoning_effort": "high"})]
-    );
+    let mut sent = json!({"claim_id": claim, "run_id": leaf, "reasoning_effort": "high"});
+    if let Some(model) = follower_model(&pair, &leaf) {
+        sent["crew_model"] = json!(model);
+    }
+    assert_eq!(reports, [sent]);
 
     let before = owner_state(&pair);
     let again = pair
@@ -178,7 +257,7 @@ fn a_late_report_from_another_machine_is_refused() {
     let error = pair
         .wire
         .owner
-        .serve_claim_effort(&wrong_session, &claim, &leaf, Some("high".into()))
+        .serve_claim_effort(&wrong_session, &claim, &leaf, Some("high".into()), None)
         .expect_err("another machine must not report this claim's effort");
     assert!(
         error.to_string().contains("not_settling_host"),
@@ -361,6 +440,113 @@ fn a_connection_failure_remains_owner_unreachable() {
     assert_eq!(owner_efforts(&pair), [json!("unknown")]);
 }
 
+/// A claim the owner settled before it kept settlement records refused
+/// every late report as `no_settlement_record`. The report is now recorded
+/// from the machine that ran the claim, and the owner's scorecard counts the
+/// attempt under the reported effort and model; another machine is still
+/// refused, and a rerun replays.
+fn a_late_report_for_a_claim_without_a_settlement_record_is_recorded() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, claim) = settled_without_effort(&pair);
+    forget_owner_settlement(&pair, &claim, None);
+    let model = follower_model(&pair, &leaf).unwrap_or_else(|| "model-fixture".into());
+    record_follower_launch_on(&pair, &leaf, ReasoningEffort::High, &model);
+
+    let wrong_session = ToolSessionContext {
+        caller_machine_id: Some("hm_other_follower".into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let before = owner_state(&pair);
+    let error = pair
+        .wire
+        .owner
+        .serve_claim_effort(
+            &wrong_session,
+            &claim,
+            &leaf,
+            Some("high".into()),
+            Some(model.clone()),
+        )
+        .expect_err("another machine must not report this claim");
+    assert!(error.to_string().contains("not_settling_host"), "{error}");
+    assert_eq!(
+        owner_state(&pair),
+        before,
+        "a refused report changes nothing"
+    );
+
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.examined, report.recorded, report.refused),
+        (1, 1, 0),
+        "{report:#?}"
+    );
+    assert_eq!(report.models_recorded, 1, "{report:#?}");
+    assert_eq!(
+        owner_models_and_efforts(&pair),
+        [(json!(model), json!("high"))],
+        "the attempt counts under the reported model and effort"
+    );
+
+    let before = owner_state(&pair);
+    let again = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (again.recorded, again.replayed, again.models_replayed),
+        (0, 1, 1),
+        "{again:#?}"
+    );
+    assert_eq!(owner_state(&pair), before, "a rerun changes nothing");
+}
+
+/// A settlement that recorded no model gets the model of the follower's
+/// implementing launch record, and a later report naming another model is
+/// refused as `model_conflict` with nothing recorded, its effort included.
+fn a_late_model_report_fills_an_absent_model_and_never_overwrites_one() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, claim) = settled_without_effort(&pair);
+    assert_eq!(
+        owner_models_and_efforts(&pair),
+        [(json!("model unknown"), json!("unknown"))],
+        "the settlement recorded neither"
+    );
+    record_follower_launch_on(&pair, &leaf, ReasoningEffort::High, "model-fixture");
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.recorded, report.models_recorded),
+        (1, 1),
+        "{report:#?}"
+    );
+    assert_eq!(
+        report.rows[0].crew_model.as_deref(),
+        Some("model-fixture"),
+        "{report:#?}"
+    );
+    assert_eq!(
+        owner_models_and_efforts(&pair),
+        [(json!("model-fixture"), json!("high"))]
+    );
+
+    let before = owner_state(&pair);
+    let error = pair
+        .wire
+        .call(
+            "",
+            "orbit.drain.claim.effort",
+            json!({
+                "claim_id": claim,
+                "run_id": leaf,
+                "reasoning_effort": "high",
+                "crew_model": "another-model",
+            }),
+        )
+        .expect_err("a disagreeing model is refused");
+    assert!(error.to_string().contains("model_conflict"), "{error}");
+    assert_eq!(owner_state(&pair), before, "the held model stands");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     late_effort_report_scenarios,
@@ -370,4 +556,6 @@ crate::scenario_table!(
     a_leaf_without_a_follower_record_stays_unknown_and_is_counted,
     an_owner_that_predates_the_report_refuses_it_without_changing_state,
     a_connection_failure_remains_owner_unreachable,
+    a_late_report_for_a_claim_without_a_settlement_record_is_recorded,
+    a_late_model_report_fills_an_absent_model_and_never_overwrites_one,
 );

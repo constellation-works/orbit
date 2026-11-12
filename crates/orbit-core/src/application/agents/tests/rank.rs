@@ -48,6 +48,8 @@ fn facts(work: &[Work<'_>]) -> AgentFacts {
                 end: Some(start + chrono::Duration::hours(1)),
                 runner: Default::default(),
                 job: true,
+                local: true,
+                implementer: true,
                 tags: Vec::new(),
             };
             attempt.runner.crew = Some(work.crews[index % work.crews.len()].into());

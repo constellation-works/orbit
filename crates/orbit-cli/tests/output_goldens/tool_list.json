@@ -835,7 +835,7 @@
   },
   {
     "name": "orbit.drain.claim.effort",
-    "description": "Report, after the fact, the reasoning effort a claimed leaf ran at when its settlement carried none, so the owner's agent scorecards stop counting the attempt as effort unknown. Accepted only from the machine that ran and settled the claim, for the leaf run bound to it, once the claim is settled. Attribution only: it changes no claim, task, run or settlement outcome. An effort the claim already holds is never overwritten: the same effort replays, and a different one is refused as `effort_conflict`.",
+    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none, so the owner's agent scorecards stop counting the attempt as effort unknown or model unknown. Accepted only from the machine that ran the claim, for the leaf run bound to it, once the claim is settled; a claim that settled before the owner kept settlement records is accepted only when the task's history names it as pulled. Attribution only: it changes no claim, task, run or settlement outcome. A value the claim already holds is never overwritten: the same value replays, and a different one is refused as `effort_conflict` or `model_conflict`, recording neither.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -858,6 +858,12 @@
         "description": "The effective reasoning effort of the leaf's main implementing invocation, read from this machine's own records: its name (`low`, `medium`, `high`, `xhigh` or `max`), or `provider_default` when the provider's default applied. Never sent for an unknown effort.",
         "param_type": "string",
         "required": true
+      },
+      {
+        "name": "crew_model",
+        "description": "The model of that same implementing invocation (else of its latest matching launch record), read from this machine's own records. Omitted when unknown; never derived from a crew name or configuration.",
+        "param_type": "string",
+        "required": false
       }
     ],
     "mcp_toolset": "local"

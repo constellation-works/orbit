@@ -275,6 +275,16 @@ impl LeafSettlement {
         if !SETTLEMENT_EVENTS.contains(&inspection.last_event.as_str()) {
             return None;
         }
+        // Its follower's late reports are all the attribution such a claim
+        // has [ORB-24150].
+        settlement.reasoning_effort = inspection
+            .late_leaf_effort
+            .take()
+            .map(|report| report.reasoning_effort);
+        settlement.crew_model = inspection
+            .late_leaf_model
+            .take()
+            .map(|report| report.crew_model);
         // A claim settled before the record existed keeps only its typed
         // release and its last event.
         if let Some(release) = inspection.release {
@@ -345,4 +355,48 @@ impl crate::OrbitRuntime {
         };
         Ok(claims.into_iter().filter_map(LeafSettlement::of).collect())
     }
+
+    /// What the agent scorecards read of the claims: every settled leaf, as
+    /// [`Self::settled_leaves`] lists it, and the late attribution of each
+    /// settled claim that holds no settlement record and that list leaves
+    /// out (its last event is no failure or release settlement), by claim.
+    /// Strictly read-only.
+    pub(crate) fn scorecard_claims(
+        &self,
+    ) -> Result<(Vec<LeafSettlement>, Vec<LateClaimAttribution>), OrbitError> {
+        let claims = self.inspect_execution_claims()?;
+        let late = claims
+            .iter()
+            .filter(|claim| {
+                claim.settlement.is_none()
+                    && !claim.claim.phase.is_unsettled()
+                    && !SETTLEMENT_EVENTS.contains(&claim.last_event.as_str())
+                    && (claim.late_leaf_effort.is_some() || claim.late_leaf_model.is_some())
+            })
+            .map(|claim| LateClaimAttribution {
+                claim_id: claim.claim.claim_id.clone(),
+                crew_model: claim
+                    .late_leaf_model
+                    .as_ref()
+                    .map(|report| report.crew_model.clone()),
+                reasoning_effort: claim
+                    .late_leaf_effort
+                    .as_ref()
+                    .map(|report| report.reasoning_effort.clone()),
+            })
+            .collect();
+        Ok((
+            claims.into_iter().filter_map(LeafSettlement::of).collect(),
+            late,
+        ))
+    }
+}
+
+/// A settled claim's model and effort as only its follower's late reports
+/// give them: the claim settled before the owner kept settlement records.
+pub(crate) struct LateClaimAttribution {
+    pub(crate) claim_id: String,
+    pub(crate) crew_model: Option<String>,
+    /// The effort's wire name, `None` inside for the provider default.
+    pub(crate) reasoning_effort: Option<Option<String>>,
 }

@@ -1047,7 +1047,7 @@ orbit migrate --json       # machine-readable inspection report
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
 orbit migrate --backfill-dispatch-effort  # apply, then record the launch effort of agent invocations that predate dispatch identities
-orbit migrate --backfill-claimed-effort  # on a pull follower: apply, then report to the owner the effort of claimed leaves it settled without one
+orbit migrate --backfill-claimed-effort  # on a pull follower: apply, then report to the owner the effort and model of claimed leaves it settled without them
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -1106,23 +1106,25 @@ store; attempts a follower ran have no invocation on the owner.
 A run whose invocation never completed has no invocation to carry an identity. The same command records one row per `cli.invocation.started` event of that run, stamped with the event's time, when the launch's causal links name its step (its parent `activity.started`, whose parent is the `step.started`; a run-level activity such as `final_recovery` by its own name) or, without them, exactly one `step.started`/`step.finished` interval contains the launch, and the event names a provider. Each launch is its own row. A dispatch-time row already covering that launch — the same run, step, provider and model, within a minute of the closest launch, including one whose effort cannot be read — is left as it is, so a record written at dispatch is not duplicated. An unreadable launch can own that row and is never given an inferred effort; a later readable launch of the same step is recorded from its own evidence. A rerun records nothing new. The report says how many launch records it wrote and how many launches it left unrecorded because neither causal links nor a single step interval proved them, because the launch named no provider, or because that launch's recorded effort and argv disagreed or its effort could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
 
 `--backfill-claimed-effort` runs on a pull follower. It applies pending migrations like
-`--confirm`, then reports to the owner the reasoning effort of each claimed leaf this host
-settled, so the owner's agent scorecards stop counting attempts settled before followers
-reported effort as `effort unknown`. It reads each leaf's effort from this host's own store by
-the rule a settlement reports: the leaf run's main implementing invocation, else its latest
-matching launch record. Run `--backfill-dispatch-effort` on the follower first when its
+`--confirm`, then reports to the owner the reasoning effort and implementing model of each
+claimed leaf this host settled, so the owner's agent scorecards stop counting attempts settled
+before followers reported them as `effort unknown` or `model unknown`. It reads each leaf's
+effort, and the model of the same record, from this host's own store by the rule a settlement
+reports: the leaf run's main implementing invocation, else its latest matching launch record. Run `--backfill-dispatch-effort` on the follower first when its
 invocations predate dispatch identities. The owner records a report only for a claim this
-machine ran, for the leaf run bound to it, and never overwrites an effort it holds: the same
-effort is already held, and a different one is refused and counted as a conflict. Nothing
+machine ran, for the leaf run bound to it, including a claim that settled before the owner
+kept settlement records, and never overwrites an effort or model it holds: the same value is
+already held, and a different one is refused and counted as a conflict. Nothing
 changes on the follower, and a rerun records nothing new. The report counts each claim by
 outcome (`recorded`, `replayed`, `conflict`, `effort_unknown`, `no_leaf_run`,
 `owner_unsupported`, `refused`, `owner_unreachable`); `--json` prints them under
-`claimed_effort_backfill` with a row per claim. An owner on a build without the report refuses
-it unread (`owner_unsupported`): upgrade the owner and run it again. Attempts stay
-`effort unknown` on the owner when this follower holds no matching invocation or launch record
-of the leaf, no longer holds its run record, the claim settled before the owner kept
-settlement records, or the follower never runs this backfill (unless an explicit `<crew>@<effort>`
-label supplies the effort on scorecards).
+`claimed_effort_backfill` with a row per claim, plus `models_recorded`, `models_replayed` and
+`models_owner_unsupported`. An owner on a build without the report refuses it unread
+(`owner_unsupported`): upgrade the owner and run it again. An owner that predates the model
+report records the effort and ignores the model (`models_owner_unsupported`); upgrade it and run
+again. Attempts stay `effort unknown` on the owner when this follower holds no matching
+invocation or launch record of the leaf, no longer holds its run record, or the follower never
+runs this backfill (unless an explicit `<crew>@<effort>` label supplies the effort on scorecards).
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace

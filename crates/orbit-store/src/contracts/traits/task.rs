@@ -184,16 +184,18 @@ pub trait TaskStoreBackend: Send + Sync {
         ))
     }
     /// [ORB-24115] Record a follower's late report of the reasoning effort a
-    /// settled claim's leaf ran at (`None` for the provider default) in its
-    /// own immutable row, refused unless `machine_id` ran the claim and bound
-    /// `run_id` to it. Never overwrites an effort the claim already holds.
-    fn record_late_leaf_effort(
+    /// settled claim's leaf ran at (`None` for the provider default) and,
+    /// when given, its implementing model [ORB-24150], each in its own
+    /// immutable row, refused unless `machine_id` ran the claim and bound
+    /// `run_id` to it. Never overwrites a value the claim already holds.
+    fn record_late_leaf_report(
         &self,
         _claim_id: &str,
         _machine_id: &str,
         _run_id: &str,
         _effort: Option<String>,
-    ) -> Result<crate::contracts::LateLeafEffortWrite, OrbitError> {
+        _model: Option<String>,
+    ) -> Result<crate::contracts::LateLeafReportWrite, OrbitError> {
         Err(OrbitError::Store(
             "a late effort report requires a claim journal".into(),
         ))

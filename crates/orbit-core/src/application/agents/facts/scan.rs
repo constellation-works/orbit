@@ -10,6 +10,9 @@ use super::super::candidates::Candidates;
 use super::super::records::block_cause;
 use super::super::roles::pilots::grade_all;
 use super::attempts::implementation_runs;
+use super::implementer::mark_implementer_less_attempts;
+use super::invocations::AgentInvocationFacts;
+use super::launches::AgentLaunchFacts;
 use super::model::{AgentFacts, RegressionLink, Runner, SCAN_DAYS};
 use super::review::judge_rejects;
 use super::task::task_facts;
@@ -46,9 +49,9 @@ pub(in crate::application::agents) fn scan(
 
     let mut runs = implementation_runs(runtime, horizon);
     let run_costs = run_costs(runtime, horizon, computed_at);
-    let leaves = runtime.settled_leaves(false).unwrap_or_else(|error| {
+    let (leaves, late_claims) = runtime.scorecard_claims().unwrap_or_else(|error| {
         tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
-        Vec::new()
+        (Vec::new(), Vec::new())
     });
     let settlements = failed_claim_settlements_of(&leaves);
     let pulled: HashMap<&str, Runner> = leaves
@@ -62,6 +65,15 @@ pub(in crate::application::agents) fn scan(
             };
             (leaf.claim_id.as_str(), runner)
         })
+        .chain(late_claims.iter().map(|late| {
+            let runner = Runner {
+                crew: None,
+                model: late.crew_model.clone(),
+                run_id: None,
+                reported_effort: late.reasoning_effort.clone(),
+            };
+            (late.claim_id.as_str(), runner)
+        }))
         .collect();
     let candidates = Candidates::open(runtime);
     let mut facts = Vec::new();
@@ -125,7 +137,6 @@ pub(in crate::application::agents) fn scan(
             tracing::warn!(%error, "agent scorecards: landed diff sizes unavailable");
             BTreeMap::new()
         });
-    let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     let workspace_id = runtime.stores().jobs().workspace_id().to_string();
     let invocations = runtime.sqlite_store()?.list_invocation_accounting_facts(
         &orbit_store::contracts::InvocationAccountingQuery {
@@ -148,9 +159,15 @@ pub(in crate::application::agents) fn scan(
             tracing::warn!(%error, "agent scorecards: launch records unreadable");
             Vec::new()
         });
+    let invocations = AgentInvocationFacts::from(invocations);
+    let launches = AgentLaunchFacts::from(launches);
+    // Before attribution, so an attempt that launched no implementer is
+    // charged no implementer problem.
+    mark_implementer_less_attempts(runtime, &mut facts, &invocations, &launches);
+    let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     Ok(AgentFacts {
-        invocations: invocations.into(),
-        launches: launches.into(),
+        invocations,
+        launches,
         computed_at,
         tasks_scanned,
         tasks: facts,

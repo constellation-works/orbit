@@ -39,6 +39,8 @@ pub(in crate::application::agents) fn task_facts(
                 start: span.start,
                 end: span.end,
                 job: matched.is_some() || opened_by_claim(history, span.start),
+                local: matched.is_some(),
+                implementer: true,
                 runner: matched
                     .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
                 tags: tags_at(history, &task.tags, span.start),

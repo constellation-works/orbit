@@ -1462,15 +1462,21 @@ the probe reports the first refusal admission would raise by running the same or
   owner that predates it warns and ignores it, and the owner never derives it from its own crew
   configuration.
   A follower reports the effort of a leaf it settled without one afterwards through
-  `orbit.drain.claim.effort` (`claim_id`, `run_id`, `reasoning_effort`), sent by
-  `orbit migrate --backfill-claimed-effort` on the follower ([ORB-24115]). The owner accepts it
-  only from the claim's executing machine (the trusted session's, as for settlement), for the
-  run bound to the claim, once the claim is settled with a settlement record, and keeps it in an
-  immutable `distributed-late-leaf-effort-v1` row keyed by claim id that lifecycle readers never
-  touch. Inspection fills the settlement record's effort from it only while the record holds
-  none. The same effort replays; a different one is refused as `effort_conflict` and the held
-  effort stands. An owner that predates the operation refuses it on its internal route before
-  any store write; it changes no claim, task, run or settlement outcome.
+  `orbit.drain.claim.effort` (`claim_id`, `run_id`, `reasoning_effort`, optional
+  `crew_model`), sent by `orbit migrate --backfill-claimed-effort` on the follower
+  ([ORB-24115]; `crew_model` [ORB-24150]). The owner accepts it only from the claim's executing
+  machine (the trusted session's, as for settlement), for the run bound to the claim, once the
+  claim is settled. A claim that settled before the owner kept settlement records is accepted
+  when the task's history also names the claim as pulled. The owner keeps the effort and the
+  model in immutable `distributed-late-leaf-effort-v1` and `distributed-late-leaf-model-v1`
+  rows keyed by claim id that lifecycle readers never touch. Inspection fills the settlement
+  record's effort and model from them only while the record holds none, and projects them for a
+  claim with no record. The same value replays; a different one is refused as
+  `effort_conflict` or `model_conflict`, the held value stands, and neither value of that report
+  is written. The answer carries `model_outcome` when the report named a model. An owner that
+  predates the operation refuses it on its internal route before any store write; one that
+  predates `crew_model` ignores the field with a warning and records the effort; it changes no
+  claim, task, run or settlement outcome.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

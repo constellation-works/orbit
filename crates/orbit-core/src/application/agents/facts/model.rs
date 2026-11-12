@@ -122,6 +122,13 @@ pub(in crate::application::agents) struct Attempt {
     /// it, or a claim's `pulled_by` opened it on another machine. An attempt
     /// an interactive session opened by moving the task has neither.
     pub(in crate::application::agents) job: bool,
+    /// Whether a local implementation run matched it, so this machine
+    /// holds the run's own records.
+    pub(in crate::application::agents) local: bool,
+    /// Whether the attempt is an implementer unit. `false` only when its
+    /// local run provably launched no implementer (see
+    /// [`super::implementer`]).
+    pub(in crate::application::agents) implementer: bool,
     /// The task's tags as of this attempt's start, replayed from its
     /// `tags_changed` history: a tag added later does not reclassify work
     /// already admitted.
@@ -133,6 +140,12 @@ impl Attempt {
     /// admitted: not implementation, so it counts on no implementer row.
     pub(in crate::application::agents) fn no_diff(&self) -> bool {
         is_no_diff_expected(&self.tags)
+    }
+
+    /// Whether this attempt counts as implementation work: an implementer
+    /// unit that was not `no-diff-expected` work when admitted.
+    pub(in crate::application::agents) fn implements(&self) -> bool {
+        self.implementer && !self.no_diff()
     }
 }
 
