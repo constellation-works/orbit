@@ -132,33 +132,26 @@ impl WaitingOwner {
             .remove(0)
     }
 
+    /// Run the public landing action against the current forge phase. It must
+    /// refuse, leaving the stopped attempt production recorded.
+    fn land_refused(&self, context: &str) {
+        let result = orbit_engine::execute_deterministic_action(
+            &self.owner.pair.wire.owner,
+            "handoff_land",
+            &json!({}),
+            &json!({"handoff_id":self.handoff, "max_wait_seconds":0}),
+            false,
+            &Default::default(),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "{context}: the public landing action refuses"
+        );
+    }
+
     fn stop(&self, gate: LandingWaitGate) -> LandingAttempt {
-        if gate == LandingWaitGate::RequiredChecksPending {
-            let result = orbit_engine::execute_deterministic_action(
-                &self.owner.pair.wire.owner,
-                "handoff_land",
-                &json!({}),
-                &json!({"handoff_id":self.handoff, "max_wait_seconds":0}),
-                false,
-                &Default::default(),
-                None,
-            );
-            assert!(
-                result.is_err(),
-                "pending checks stop the public landing action"
-            );
-        } else {
-            // The public host boundary receives this typed stop from landing's
-            // base comparison. Its actual forge reads and retry are exercised below.
-            self.owner.stop_landing(
-                &self.task,
-                orbit_engine::HandoffLandingStep::Stop { repairable: false },
-                &json!({"schema_version":1,"kind":"owner_landing_refusal",
-                    "reason":{"value":"base checks are still pending"},
-                    "waiting_gate":gate})
-                .to_string(),
-            );
-        }
+        self.land_refused(&format!("{gate:?}"));
         let attempt = self.attempt();
         assert_eq!(attempt.state, LandingAttemptState::Stopped);
         let evidence: Value = serde_json::from_str(attempt.evidence.as_deref().unwrap()).unwrap();
@@ -315,35 +308,24 @@ fn waiting_retries_are_bounded_and_candidate_stops_stay_parked() {
         "review_refused",
     ] {
         let fixture = WaitingOwner::new();
-        if reason == "candidate_failure" {
-            fixture.owner.stop_landing(
-                &fixture.task,
-                orbit_engine::HandoffLandingStep::StopForRequeue,
-                &json!({"schema_version":1,"kind":"owner_landing_refusal",
-                    "repairable":true,"requeue":true,
-                    "reason":{"value":"required check is the candidate's own failure"}})
-                .to_string(),
-            );
-        } else {
-            fixture.phase(if reason == "review_refused" {
-                "review"
-            } else {
-                "conflict"
-            });
-            let result = orbit_engine::execute_deterministic_action(
-                &fixture.owner.pair.wire.owner,
-                "handoff_land",
-                &json!({}),
-                &json!({"handoff_id":fixture.handoff, "max_wait_seconds":0}),
-                false,
-                &Default::default(),
-                None,
-            );
-            assert!(result.is_err(), "{reason}");
-        }
+        // Every leg runs the public landing action against its own forge
+        // phase, so the stop and its waiting gate are production's.
+        fixture.phase(match reason {
+            "candidate_failure" => "candidate_failed",
+            "review_refused" => "review",
+            _ => "conflict",
+        });
+        fixture.land_refused(reason);
         let stopped = fixture.attempt();
         assert_eq!(stopped.state, LandingAttemptState::Stopped);
         let evidence: Value = serde_json::from_str(stopped.evidence.as_deref().unwrap()).unwrap();
+        if reason == "candidate_failure" {
+            let text = evidence["reason"]["value"].as_str().unwrap();
+            assert!(
+                text.contains("classified `candidate`"),
+                "the production classifier names the candidate's own failure: {text}"
+            );
+        }
         assert!(
             evidence["waiting_gate"].is_null(),
             "{reason} must never grant automatic retry"
@@ -592,7 +574,7 @@ a = sys.argv[1:]
 head = c['candidate']['commit']
 base = c['base']['commit']
 check = {'__typename':'CheckRun','name':'Test','status':'COMPLETED' if p in ['green','base_green'] else 'IN_PROGRESS','conclusion':'SUCCESS','isRequired':True,'checkSuite':{'workflowRun':{'workflow':{'name':'CI'}}}}
-if p.startswith('base_'):
+if p.startswith('base_') or p == 'candidate_failed':
     check['status'] = 'COMPLETED'
     check['conclusion'] = 'FAILURE'
 pr = {'number':42,'state':'MERGED' if (f / 'merged').exists() else 'OPEN','isDraft':False,'mergedAt':'2026-11-08T00:00:00Z' if (f / 'merged').exists() else None,'mergeStateStatus':'CLEAN' if p == 'green' else 'BLOCKED','reviewDecision':'APPROVED','headRefName':c['source_branch'],'headRefOid':head,'baseRefName':c['base_branch'],'mergeCommit':{'oid':head} if (f / 'merged').exists() else None,'url':'https://github.com/owner/repository/pull/42','statusCheckRollup':[check]}
@@ -616,10 +598,26 @@ elif 'graphql' in a:
         out = {'data':{'repository':{'autoMergeAllowed':False,'mergeCommitAllowed':True,'rebaseMergeAllowed':False,'squashMergeAllowed':False,'pullRequest':{'baseRefName':c['base_branch'],'baseRef':{'branchProtectionRule':{'requiresLinearHistory':False}}}}}}
     else:
         out = {'data':{'repository':{'pullRequest':{'headRefOid':head,'commits':{'nodes':[{'commit':{'oid':head,'statusCheckRollup':{'contexts':{'pageInfo':{'hasNextPage':False},'nodes':[check]}},'checkSuites':{'pageInfo':{'hasNextPage':False},'nodes':[]}}}]}}}}}
+elif a[:2] == ['run','view']:
+    # The failing job's log. The candidate and the red base fail the same way.
+    sys.stdout.write('Test\tRun tests\t2026-11-08T00:00:00.0000000Z error: shutdown test timed out\n')
+    sys.exit(0)
+elif any('/actions/runs/10/jobs' in x for x in a):
+    out = {'total_count':1,'jobs':[{'id':100,'name':'Test','status':'completed','conclusion':'failure','steps':[{'name':'Run tests','number':1,'status':'completed','conclusion':'failure'}]}]}
 elif any('/actions/runs/1/jobs' in x for x in a):
-    out = {'total_count':1,'jobs':[{'id':2,'name':'Test','status':'completed' if p == 'base_green' else 'in_progress','conclusion':'success' if p == 'base_green' else None,'steps':[]}]}
+    red = p == 'base_pending'
+    green = p in ['base_green', 'candidate_failed']
+    out = {'total_count':1,'jobs':[{'id':2,'name':'Test','status':'completed' if green or red else 'in_progress','conclusion':'success' if green else ('failure' if red else None),'steps':[{'name':'Run tests','number':1,'status':'completed','conclusion':'failure'}] if red else []}]}
 elif any('/actions/runs' in x for x in a):
-    out = {'total_count':1,'workflow_runs':[{'id':1,'workflow_id':3,'name':'CI','head_sha':base,'head_branch':c['base_branch'],'event':'push','status':'completed' if p == 'base_green' else 'in_progress','conclusion':'success' if p == 'base_green' else None}]}
+    # The candidate's own pull-request run answers a head_sha query for the
+    # candidate; every other run listing is the base's push run.
+    params = dict(x.split('=', 1) for x in a if '=' in x and not x.startswith('repos/'))
+    if p in ['base_pending', 'candidate_failed'] and params.get('head_sha') == head and 'event' not in params:
+        out = {'total_count':1,'workflow_runs':[{'id':10,'workflow_id':3,'name':'CI','head_sha':head,'head_branch':c['source_branch'],'event':'pull_request','status':'completed','conclusion':'failure','run_attempt':1}]}
+    else:
+        red = p == 'base_pending'
+        green = p in ['base_green', 'candidate_failed']
+        out = {'total_count':1,'workflow_runs':[{'id':1,'workflow_id':3,'name':'CI','head_sha':base,'head_branch':c['base_branch'],'event':'push','status':'completed' if green or red else 'in_progress','conclusion':'success' if green else ('failure' if red else None)}]}
 else:
     raise RuntimeError(a)
 print(json.dumps(out))

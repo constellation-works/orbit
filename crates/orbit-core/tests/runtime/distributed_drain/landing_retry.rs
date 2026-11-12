@@ -833,13 +833,13 @@ crate::scenario_table!(
     a_stopped_authorized_handoff_retries_once_through_the_public_operator_tool,
     competing_operator_retries_reserve_one_attempt_and_refuse_stale_inputs,
     operator_retry_reservations_recover_before_submission_and_after_lost_attachment,
-    revoked_changed_and_repair_pending_handoffs_refuse_operator_retry
+    revoked_changed_and_repair_pending_handoffs_refuse_operator_retry,
+    an_operator_retry_and_revoke_bound_their_reason_and_key_in_core
 );
 
 /// Retry and revoke bound their reason and replay key in core, so the tool and
 /// the dashboard refuse the same input before any attempt is reserved. Padded
 /// candidate and base commits are trimmed before the candidate check.
-#[test]
 fn an_operator_retry_and_revoke_bound_their_reason_and_key_in_core() {
     let evidence = json!({
         "schema_version":1, "kind":"owner_landing_refusal",
