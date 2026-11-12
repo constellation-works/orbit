@@ -211,6 +211,7 @@ orbit plugin scaffold demo            # creates ./demo/.orbit-plugin with backen
 orbit plugin scaffold demo --dir /path/to/demo # choose an explicit output directory
 orbit plugin validate ./demo --render # manifest plus effective profile/env
 orbit plugin test ./demo              # run its goldens through the real protocol
+orbit plugin test ./demo --fixture-config ./fixture-config.json # explicit fixture keys over defaults
 orbit plugin test ./demo --case status_reports_ready
 orbit plugin test ./demo --update-goldens
 ```
@@ -224,14 +225,34 @@ stored ones at version `fixture`; a declared secret the case leaves out is unset
 host's real secrets are never read. It exits non-zero when a
 case fails, naming it. `--case <name>` runs one case without certifying the full suite;
 `--update-goldens` replaces mismatched output expectations with actual output.
-`{{workspace}}` and `{{plugin_state}}` render inside that temp workspace, and write roots
-there, `network: loopback`, and `orbit_tools` are applied as the manifest requests them, so
-they do not touch the operator's Orbit state.
+
+Configuration comes only from `spec.config.defaults`, optionally overlaid with the JSON
+object in `--fixture-config <file>` (plugin keys directly, without a `plugins` or namespace
+wrapper). The merged section is validated against the plugin schema before any backend
+starts. String values in that section substitute `{{workspace}}` and `{{plugin_root}}`;
+the backend and `{{config.<key>}}` templates receive the same section. For example,
+`{"root":"{{workspace}}/fixture-state","limit":2}` selects disposable fixture state.
+Caller global/workspace `[plugins.<ns>]` settings are always excluded, even with
+`--workspace`, `--grant` or `--accept-requested`. A fixture-config run does not record
+certification of the installed plugin's default suite.
+
+There is no conformance mode that executes using caller configuration. For deliberate
+validation of installed settings, first use `orbit plugin validate <dir> --render` to inspect
+resolved roots and the admitted environment without starting a backend; an actual installed
+tool call is a separate operation using normal grants and the normal tool audit. Do not use
+conformance as a live-data smoke test.
+
+`{{workspace}}` and `{{plugin_state}}` render inside the disposable roots, but temporary
+execution roots alone do **not** isolate data paths in configuration or the manifest.
+Absolute paths in defaults or fixture values, explicit permissions, `env_pass`, and an
+unconfined backend can still reach external state or credentials when consented. Use only
+sentinel data and model stubs in disposable directories for such checks; never dispatch a
+real credentialed model to reproduce an isolation defect.
 
 The command refuses, and prints the requested grant set, when the manifest asks for an
 unconfined backend (`backend.sandbox: none`), an `fs.write` root that resolves outside that
 temp workspace, `network: any`, or any `env_pass` variable. A write root is judged where it
-lands after rendering with the effective `[plugins.<ns>]` config and resolving relative paths
+lands after rendering with manifest defaults plus explicit fixture overrides and resolving relative paths
 against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
 directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin

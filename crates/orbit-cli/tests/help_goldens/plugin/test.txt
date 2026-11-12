@@ -16,6 +16,9 @@ Options:
       --accept-requested
           Run under the profile the manifest requests, including an unconfined backend, write roots outside the run's temp directory, `network: any`, and `env_pass`. Does not record a host grant
 
+      --fixture-config <FILE>
+          JSON file of fixture plugin keys over manifest defaults. Caller `[plugins.<ns>]` settings are always excluded, even with --grant or --accept-requested. Strings support {{workspace}} and {{plugin_root}}. Does not record certification. There is no caller-config execution mode
+
       --case <NAME>
           Run exactly one named conformance case
 

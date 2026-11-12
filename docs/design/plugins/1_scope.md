@@ -7,8 +7,8 @@ doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-11-10
-last_validated: 2026-11-10
+last_updated: 2026-11-12
+last_validated: 2026-11-12
 stage: shipped
 next: "—"
 ---
@@ -184,7 +184,8 @@ Rules:
 - Templates are limited to `{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}` and
   `{{config.<key>}}`. Filesystem templates render against the effective `[plugins.<ns>]`
   values (workspace config over global config over manifest defaults), stringifying non-string
-  scalars.
+  scalars. Conformance instead uses manifest defaults plus explicit fixture overrides (§5),
+  excluding caller settings.
 - Every path is canonicalised and must stay inside the plugin root or the granted fs profile.
   A rendered relative fs root is relative to the plugin root everywhere (validation,
   registration, conformance, call-time sandboxing), never to Orbit's working directory.
@@ -1242,12 +1243,20 @@ projection; backend calls receive their admitted environment values unchanged.
   as stored ones are, each at version `fixture`; a declared secret the case omits is unset for
   that case. A fixture for an undeclared name refuses the directory. The run never reads the
   host's secret store, and refuses every `secret_updates` entry a backend returns.
-- A temp directory stands in for the global root and workspace. Template paths,
+- Configuration is manifest defaults plus an optional `--fixture-config <file>` JSON
+  object of plugin keys, schema-validated before a backend starts. Strings substitute
+  `{{workspace}}` and `{{plugin_root}}`; the same section feeds templates and backend
+  context. Caller global/workspace `[plugins.<ns>]` values are never loaded for conformance,
+  regardless of grants or workspace selection. There is no caller-config execution mode.
+  Fixture-config runs do not certify the installed plugin's default suite.
+- A temp directory stands in for the global root and workspace. This alone does not isolate
+  absolute paths in configuration, explicit permissions or passed environment credentials.
+  Use disposable sentinel state and model stubs when exercising external paths. Template paths,
   `network: loopback` and `orbit_tools` run under the requested profile. `sandbox: none`, an
   `fs.write` root that resolves outside the temp directory, `network: any`, or any `env_pass`
   is refused (printing the requested grants) unless `--accept-requested` or a `--grant` list
   names each; that consent is for the run only. Write roots are judged as the sandbox will
-  open them — rendered with the effective `[plugins.<ns>]` values, relative roots joined to the
+  open them — rendered with manifest defaults plus explicit fixture overrides, relative roots joined to the
   plugin root, and physically resolved — so a `{{config.<key>}}` default or a `../` root naming
   a host directory needs consent like an absolute path. Consent never lifts the write-root
   admission refusals (§4.1).
@@ -1262,7 +1271,7 @@ projection; backend calls receive their admitted environment values unchanged.
 
 `orbit plugin scaffold <ns>` — in `<ns>/.orbit-plugin/`: a Python `exec` backend, one
 `read_only` tool with schemas, one `kv` panel over it, one disabled auto-task, one skill stub,
-and two passing goldens.
+and three passing goldens.
 `orbit tool scaffold` still writes the v1 sidecar pair and prints a deprecation naming its
 replacement.
 

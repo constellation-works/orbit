@@ -2355,6 +2355,210 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     );
 }
 
+/// Ambient plugin settings used to escape the temporary conformance roots.
+/// This deliberately unconfined backend makes that leak observable without
+/// relying on kernel sandbox availability or contacting a model provider.
+#[cfg(unix)]
+#[test]
+fn plugin_test_isolates_caller_settings_even_with_declared_grants() {
+    let fixture = Fixture::new();
+    let source = fixture.source("isolated");
+    let external = fixture.home.join("external-session-state");
+    std::fs::create_dir_all(&external).expect("external sentinel directory");
+    let sentinel = external.join("record");
+    std::fs::write(&sentinel, "preserve-format-6").expect("sentinel record");
+    let read_marker = external.join("read");
+    let model_marker = external.join("model-called");
+    let model = external.join("model-stub");
+    std::fs::write(
+        &model,
+        format!(
+            "#!/bin/sh\n[ \"$CONFORMANCE_MODEL_CREDENTIAL\" = synthetic-fixture-token ] || exit 9\nprintf called > '{}'\n",
+            model_marker.display()
+        ),
+    )
+    .expect("write synthetic credentialed model stub");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = write_shell_backend(
+        &source,
+        r#"#!/usr/bin/python3
+import json, os, pathlib, subprocess, sys
+config = json.load(sys.stdin)["context"]["config"]
+if config.get("root"):
+    state = pathlib.Path(config["root"])
+    if (state / "record").exists():
+        (state / "read").write_text((state / "record").read_text())
+        (state / "record").write_text("advanced-format-7")
+if config.get("model"):
+    subprocess.run([config["model"]], check=True)
+print(json.dumps({"ok": True, "output": config}))
+"#,
+    );
+    std::fs::create_dir_all(root.join("tests/conformance")).unwrap();
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: isolated
+  version: 1.0.0
+  description: Configuration isolation fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+    sandbox: none
+  permissions:
+    network: any
+    env_pass: [CONFORMANCE_MODEL_CREDENTIAL]
+    fs:
+      write: ["{{config.root}}"]
+  config:
+    schema: schemas/config.json
+    defaults: {root: "{{workspace}}/default-state", model: "", limit: 2}
+  tools:
+    - name: probe
+      description: Probe configuration isolation.
+      execution_kind: read_only
+      mcp_scope: workspace
+  tests: [tests/conformance/*.yaml]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("schemas/config.json"),
+        serde_json::to_vec(&json!({
+            "type": "object", "additionalProperties": false,
+            "properties": {
+                "root": {"type": "string"}, "model": {"type": "string"},
+                "limit": {"type": "integer"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("tests/conformance/probe.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {root: \"{{workspace}}/default-state\", model: \"\", limit: 2}\n"
+    ).unwrap();
+    let caller_config = format!(
+        "[plugins.isolated]\nroot = {}\nmodel = {}\nlimit = 99\n",
+        json!(external),
+        json!(model)
+    );
+    // Both config layers must be ignored, including when --workspace selects
+    // the registered caller workspace explicitly.
+    std::fs::write(fixture.home.join(".orbit/config.toml"), &caller_config).unwrap();
+    std::fs::write(fixture.work.join(".orbit/config.toml"), &caller_config).unwrap();
+    for installed in [false, true] {
+        if installed {
+            fixture.add(&source, &[]);
+            fixture.success([
+                "plugin",
+                "enable",
+                "isolated",
+                "--grant",
+                "fs,network,env_pass,unsandboxed",
+            ]);
+        }
+        for consent in [
+            vec!["--grant", "fs,network,env_pass,unsandboxed"],
+            vec!["--accept-requested"],
+        ] {
+            let output = fixture
+                .command(["plugin", "test"])
+                .arg(&source)
+                .args(["--workspace", "plugin-cli", "--json"])
+                .args(consent)
+                .env("CONFORMANCE_MODEL_CREDENTIAL", "synthetic-fixture-token")
+                .output()
+                .expect("run real conformance binary");
+            assert!(
+                !read_marker.exists(),
+                "caller-selected state must never be read"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&sentinel).unwrap(),
+                "preserve-format-6"
+            );
+            assert!(
+                !model_marker.exists(),
+                "caller-selected credentialed model must never run"
+            );
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report = stdout_json(&output);
+            assert_eq!(report["passed"], true);
+            assert_eq!(report["configuration_source"], "manifest_defaults");
+            assert_eq!(report["fixture_config"], Value::Null);
+            assert_eq!(report["certified"], installed);
+        }
+    }
+
+    // A fixture override is explicit, typed, schema-checked, and still does
+    // not merge the caller's live root or model selection into the section.
+    let fixture_config = fixture.home.join("fixture-config.json");
+    std::fs::write(
+        &fixture_config,
+        r#"{"limit":7,"root":"{{workspace}}/fixture-state"}"#,
+    )
+    .unwrap();
+    let golden = root.join("tests/conformance/probe.yaml");
+    let defaults_golden = std::fs::read_to_string(&golden).unwrap();
+    std::fs::write(
+        &golden,
+        defaults_golden.replace(
+            "root: \"{{workspace}}/default-state\", model: \"\", limit: 2",
+            "root: \"{{workspace}}/fixture-state\", model: \"\", limit: 7",
+        ),
+    )
+    .unwrap();
+    let report = fixture
+        .command(["plugin", "test"])
+        .arg(&source)
+        .args(["--accept-requested", "--fixture-config"])
+        .arg(&fixture_config)
+        .args(["--workspace", "plugin-cli", "--json"])
+        .success_json();
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["configuration_source"], "fixture_file");
+    assert_eq!(report["fixture_config"], json!(fixture_config));
+    assert_eq!(report["certified"], false);
+    assert!(
+        report["certification"]
+            .as_str()
+            .unwrap()
+            .contains("--fixture-config")
+    );
+
+    for (contents, diagnostic) in [
+        ("[]", "must be a JSON object"),
+        ("{", "must be a JSON object"),
+        (r#"{"limit":"invalid"}"#, "plugins.isolated.limit"),
+    ] {
+        std::fs::write(&fixture_config, contents).unwrap();
+        let refused = fixture
+            .command(["plugin", "test"])
+            .arg(&source)
+            .args(["--accept-requested", "--fixture-config"])
+            .arg(&fixture_config)
+            .assert()
+            .failure();
+        assert!(String::from_utf8_lossy(&refused.get_output().stderr).contains(diagnostic));
+    }
+    assert!(!read_marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "preserve-format-6"
+    );
+    assert!(!model_marker.exists());
+}
+
 /// A conformance fixture whose backend tries to write `marker`, outside every
 /// root the plugin declares, before it answers. Under its declared sandbox the
 /// write is refused; only a backend started with weaker containment leaves
