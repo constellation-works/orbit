@@ -73,7 +73,7 @@ retries = 0
 [[profile.ci.overrides]]
 filter = '''
   (package(orbit-core) & binary(runtime) & (
-    test(=task_delivery::source_repair::published_completion_scenarios) |
+    test(/^task_delivery::source_repair::published_completion_scenarios/) |
     test(=task_delivery::source_repair::publication::same_pr_publication_scenarios) |
     test(=task_delivery::source_repair::cancelled_source_repair_scenarios) |
     test(=task_delivery::source_repair::handoff_requeue::handoff_requeue_scenarios) |

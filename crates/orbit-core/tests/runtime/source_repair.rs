@@ -917,22 +917,50 @@ crate::scenario_table!(
     timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     equivalent_policy_drift_retries_observation,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_policy,
     relevant_policy_drift_preserves_publication,
     candidate_drift_refuses_equivalent_policy_retry,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     empty_requirements_still_bind_completion_policy,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_retry,
     repeated_observation_failure_holds_after_one_retry,
     refreshed_preparation_retry_admits_unchanged_and_refuses_drift,
-    completion_reuse_refuses_drift,
     changed_base_gets_fresh_native_validation,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_reuse,
+    completion_reuse_refuses_drift,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_authority,
     concurrent_and_lost_admission_keep_one_completion_budget,
     unknown_merge_reply_is_reconciled_without_republication,
     configured_review_requires_unchanged_host_certificate,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_refusals,
     refused_receipts_stop_before_agent_or_republication,
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_prerequisites,
     later_prerequisite_read_failure_resumes_only_completion,
     prerequisite_read_after_mutation_provenance_never_resumes,
     transient_required_check_and_merge_capability_reads_resume_completion,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_permanent_prerequisites,
     permanent_required_check_and_merge_capability_answers_do_not_resume
 );

@@ -178,6 +178,7 @@ jobs:
             /scripts/ci-download-verified.sh
             /scripts/ci-repack-nextest.py
             /scripts/ci-probe-bubblewrap.sh
+            /scripts/ci-workspace-cache.py
 
       - name: Restore ripgrep archive cache
         id: ripgrep-tool-cache
@@ -805,8 +806,8 @@ jobs:
       # Dependencies stay valid when a test fails, so save on failure too.
       # Pull requests restore only; pushes to main and agent-main save. The
       # entry holds every dependency the workspace test build links; caching
-      # workspace members as well would rebuild most of them on most PRs
-      # (docs/runbooks/compiler-cache.md#ordinary-linux-ci).
+      # workspace members is separate below: it binds source bytes before
+      # restoring their mtimes, and only protected-branch pushes publish it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: rust-cache
         with:
@@ -814,6 +815,22 @@ jobs:
           shared-key: rust-1.98.1
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
+
+      # The dependency cache prunes workspace units. Reuse those units from
+      # the newest compatible protected-branch build as well. The source
+      # manifest retains mtimes only for byte- and mode-identical inputs;
+      # Cargo still checks compiler, features, environment and changed inputs.
+      - name: Restore workspace test outputs
+        id: workspace-test-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-
+
+      - name: Verify cached workspace inputs
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py restore --workspace "$GITHUB_WORKSPACE"
 
       # Each public pinned download retries transient responses until its 60s
       # deadline is spent; there is no fixed attempt count. Attempt diagnostics
@@ -865,6 +882,7 @@ jobs:
           TIMEFORMAT='test_build_seconds=%R'
           time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
+          python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py capture --workspace "$GITHUB_WORKSPACE"
 
       # Repeated linked executables extend beyond nextest's default 2 MiB
       # compression window. Use a larger window only for transfer, split into
@@ -944,6 +962,13 @@ jobs:
           path: target/cargo-timings/
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Save workspace test outputs
+        if: ${{ github.event_name == 'push' && steps.workspace-test-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ steps.workspace-test-cache.outputs.cache-primary-key }}
 
       - name: Report disk usage
         if: always()
