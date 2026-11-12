@@ -13,7 +13,7 @@ schedule:
 template:
   title: Review a frozen delivery batch
   description: |-
-    Review the entire captured code range for correctness, concurrency, error handling and repository standards. For each documentation or skill sentence in the range that states a limit, default, config key, flag, ordering, or error behavior, open the source it describes and confirm the sentence, and for each behavior change use tracked files to locate this repository's documentation, website, and shipped-skill directories, then search them for the old claim. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
+    Review the entire captured code range for correctness, concurrency, error handling and repository standards. For each documentation or skill sentence in the range that states a limit, default, config key, flag, ordering, or error behavior, open the source it describes and confirm the sentence, and for each behavior change use tracked files to locate this repository's documentation, website, and shipped-skill directories, then search them for the old claim. Verify findings against the pinned source.
     Use only the frozen automation input appended to this task. Examine every
     captured commit, including unattributed neighbors. Findings may remain open.
     Attribute every finding to the task that introduced it: locate the commit
@@ -38,14 +38,7 @@ template:
     level when torn. Choose `unclassified` rather than guess. The scale and the
     `nature` and `escape` values are the Severity rubric and `regression_from`
     fields in the installed `orbit` skill's `references/task-fields.md`; use only
-    those values.
-    `escape` is why the delivery gates missed it. Inspect the tests and gate
-    selection at the culprit commit: use `no_test` when no test exercises the
-    broken behavior there, and `test_not_selected` when a covering test exists
-    but the culprit's gates did not run it. Use `unclassified` only when the
-    evidence does not settle the escape, and state the unresolved evidence in
-    the finding's description. Mere visibility in the diff is not evidence
-    for `review_missed` when no test exercises the broken behavior.
+    those values and its guidance for choosing the escape.
     Derive canonical selectors from every evidenced source location, removing
     the line suffix: `symbol:<path>#<name>:<kind>` for the function, method or
     type that holds it (`<name>` qualified by its type for a member, e.g.
@@ -74,18 +67,17 @@ template:
     Fill one `delivery_examinations` entry per frozen delivery. `examined_paths`
     is an array of path strings: the changed paths you read. `skipped_paths` is
     an array of `{"path": "<path>", "reason": "<why>"}` objects: the changed
-    paths you did not read. Only `skipped_paths` holds objects. Together they
-    must be exactly what
+    paths you did not read. Every other array in the evidence holds strings
+    only: copy commit SHAs, delivery keys, path strings and finding task IDs,
+    never the frozen commit/delivery objects, `{path, reason}` objects or task
+    objects. Together the two path arrays must be exactly what
     `git diff --name-only --no-renames <before.commit> <after.commit>` lists for
     that delivery. Set `verdict` to `"clean"` or `{"findings": ["<finding task ID>"]}`
     and write a `rationale` of at least 40 characters, specific to that delivery,
     saying why the verdict holds. Settlement refuses evidence whose paths do not
     match the frozen diff.
     Preserve the supplied schema_version and frozen identity. Batch/action IDs,
-    consumer, epoch and input_digest are strings. The examined_commits,
-    examined_deliveries, examined_paths and findings arrays contain strings:
-    copy commit SHAs, delivery keys and path strings, not the frozen
-    commit/delivery objects or `{path, reason}` objects.
+    consumer, epoch and input_digest are strings.
     Each checks entry is an object with string subject, method and observation.
     For example, these fields have valid shapes (replace every example with
     your actual evidence; use findings: [] when there are no findings):
@@ -98,8 +90,6 @@ template:
     ```json
     {"delivery_examinations":[{"delivery":"<frozen delivery key>","examined_paths":["<changed path you read>"],"skipped_paths":[{"path":"<changed path you did not read>","reason":"<why it was not read>"}],"verdict":"clean","rationale":"<at least 40 characters, specific to this delivery>"}]}
     ```
-    Verdict findings are task-ID strings, for example
-    `{"findings":["<finding task ID>"]}`, not task objects.
     If attachment is refused, read the named field/index and expected type in
     the error, correct that field using the assigned evidence template, and
     re-put the corrected file inside this run. Do not change the version or

@@ -85,14 +85,7 @@ template:
     level when torn. Choose `unclassified` rather than guess. The scale and the
     `nature` and `escape` values are the Severity rubric and `regression_from`
     fields in the installed `orbit` skill's `references/task-fields.md`; use only
-    those values.
-    `escape` is why the delivery gates missed it. Inspect the tests and gate
-    selection at the culprit commit: use `no_test` when no test exercises the
-    broken behavior there, and `test_not_selected` when a covering test exists
-    but the culprit's gates did not run it. Use `unclassified` only when the
-    evidence does not settle the escape, and state the unresolved evidence in
-    the finding's description. Mere visibility in the diff is not evidence
-    for `review_missed` when no test exercises the broken behavior.
+    those values and its guidance for choosing the escape.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when
