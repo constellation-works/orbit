@@ -30,6 +30,12 @@ pub struct PluginTestArgs {
     /// and `env_pass`. Does not record a host grant.
     #[arg(long = "accept-requested")]
     pub accept_requested: bool,
+    /// JSON file of fixture plugin keys over manifest defaults. Caller
+    /// `[plugins.<ns>]` settings are always excluded, even with --grant or
+    /// --accept-requested. Strings support {{workspace}} and {{plugin_root}}.
+    /// Does not record certification. There is no caller-config execution mode.
+    #[arg(long, value_name = "FILE")]
+    pub fixture_config: Option<PathBuf>,
     /// Run exactly one named conformance case
     #[arg(long = "case", value_name = "NAME")]
     pub case: Option<String>,
@@ -40,6 +46,13 @@ pub struct PluginTestArgs {
 
 impl Execute for PluginTestArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let configuration = self.fixture_config.as_ref().map_or_else(
+            || "Configuration: manifest defaults; caller plugin settings excluded.".to_string(),
+            |path| format!(
+                "Configuration: manifest defaults plus fixture {}; caller plugin settings excluded.",
+                path.display()
+            ),
+        );
         let report = runtime.test_plugin_dir(
             &self.dir,
             &PluginTestOptions {
@@ -47,6 +60,7 @@ impl Execute for PluginTestArgs {
                 grants: self.grants,
                 accept_requested: self.accept_requested,
                 case: self.case,
+                fixture_config: self.fixture_config.clone(),
                 update_goldens: self.update_goldens,
                 validation_gate: validation_gate_from_env(),
                 require_sandbox_exec: std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref()
@@ -83,7 +97,10 @@ impl Execute for PluginTestArgs {
             ]);
         }
 
-        let grant_line = format!("Requested grants: {}.", report.requested_grants);
+        let grant_line = format!(
+            "{configuration}\nRequested grants: {}.",
+            report.requested_grants
+        );
         let summary = if let Some(deferral) = &report.deferral {
             // Each notice leads its own line: the validation step and the
             // deferral handoff read them by prefix.
@@ -129,6 +146,8 @@ impl Execute for PluginTestArgs {
             "manifest_digest": report.manifest_digest,
             "orbit_version": report.orbit_version,
             "requested_grants": report.requested_grants,
+            "configuration_source": if self.fixture_config.is_some() { "fixture_file" } else { "manifest_defaults" },
+            "fixture_config": self.fixture_config,
             "passed": report.passed(),
             "deferred": report.deferral.is_some(),
             "notices": report

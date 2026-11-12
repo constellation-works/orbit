@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{
-    DeliveredPluginSecret, LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginSecretSource,
-    PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
-    physical_with_missing_tail, refuse_covering_fs_write_roots, resolve_declared_programs,
-    resolve_plugin_root, validate_loaded_plugin,
+    DeliveredPluginSecret, LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginConfigSection,
+    PluginSecretSource, PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir,
+    manifest_refusal, physical_with_missing_tail, refuse_covering_fs_write_roots,
+    resolve_declared_programs, resolve_plugin_root, validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::backend::build_plugin_backend;
-use crate::runtime::plugin::config::plugin_config_section;
+use crate::runtime::plugin::config::plugin_config_schema;
 use crate::runtime::plugin::requirements::{host_version, unmet_requirement};
 
 use super::model::{PluginTestDeferral, PluginTestOptions, PluginTestOutcome, PluginTestReport};
@@ -80,10 +80,7 @@ pub fn test_plugin_dir(
         orbit_common::fs::io::create_private_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))?;
+    let config = conformance_fixture_config(&plugin, options, &workspace_root)?;
     // A conformance run exercises the profile the *manifest* asks for, so
     // every grant it builds is the unscoped form. Operator consent above
     // decides whether the run happens, not how wide its profile is.
@@ -100,7 +97,7 @@ pub fn test_plugin_dir(
         &state_dir,
         &global_root,
         grants,
-        plugin_config_section(&plugin, &config.plugins),
+        config,
         // No operator has consented yet, so the programs resolve against this
         // process's `PATH`, exactly as `orbit plugin enable` from here would
         // record them.
@@ -175,6 +172,12 @@ pub fn test_plugin_dir(
             false,
             "not recorded: a filtered --case run does not certify the full suite".to_string(),
         )
+    } else if options.fixture_config.is_some() {
+        (
+            false,
+            "not recorded: a --fixture-config run does not certify the default configuration"
+                .to_string(),
+        )
     } else {
         record_certification(runtime, &plugin, &report)
     };
@@ -184,6 +187,51 @@ pub fn test_plugin_dir(
         gate::write_validation_summary(gate, &report)?;
     }
     Ok(report)
+}
+
+/// Only manifest defaults and an explicitly named fixture section reach the
+/// backend or its templates. Never resolve the caller's plugin configuration:
+/// temporary execution roots cannot contain paths selected by that section.
+fn conformance_fixture_config(
+    plugin: &LoadedPlugin,
+    options: &PluginTestOptions,
+    workspace_root: &Path,
+) -> Result<PluginConfigSection, OrbitError> {
+    let configured = options
+        .fixture_config
+        .as_ref()
+        .map(|path| {
+            let contents = std::fs::read(path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "read fixture configuration {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let value: Value = serde_json::from_slice(&contents).map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "fixture configuration {} must be a JSON object: {error}",
+                    path.display()
+                ))
+            })?;
+            if !value.is_object() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "fixture configuration {} must be a JSON object of plugin keys",
+                    path.display()
+                )));
+            }
+            Ok(value)
+        })
+        .transpose()?;
+    let schema = plugin_config_schema(plugin);
+    let section = golden::render_golden_value(
+        &schema.with_defaults(configured.as_ref()),
+        workspace_root,
+        &plugin.root,
+    );
+    schema
+        .validate_section(&section)
+        .map_err(OrbitError::InvalidInput)?;
+    Ok(PluginConfigSection::new(section))
 }
 
 /// The report of a run whose every selected case was deferred to a host

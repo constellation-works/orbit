@@ -82,6 +82,10 @@ pub struct PluginTestOptions {
     pub accept_requested: bool,
     /// `--case <name>`: run exactly one named golden.
     pub case: Option<String>,
+    /// Path to a JSON object of fixture configuration keys layered over manifest
+    /// defaults. Caller settings are never loaded. String values can use
+    /// `{{workspace}}` and `{{plugin_root}}` for the disposable run.
+    pub fixture_config: Option<std::path::PathBuf>,
     /// Replace mismatched output expectations with the actual output.
     pub update_goldens: bool,
     /// Set when a validation gate runs the suite and wants its summary.
