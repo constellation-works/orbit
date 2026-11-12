@@ -1,13 +1,13 @@
 ---
 id: STD-07-ui-ux
 title: UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state
-summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
+summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 1
+version: 3
 created: 2026-11-09
-updated: 2026-11-09
-last_validated: 2026-11-09
+updated: 2026-11-11
+last_validated: 2026-11-11
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
 
@@ -74,6 +74,11 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   disclosure's body, a section's prose or a lone block gets no second border or background
   inside its card.
 
+- **R33.** Secondary metadata about an item MUST go on its own line under the item's
+  primary label, aligned with that label, in a muted style. Aliases, crews, IDs and counts
+  do not run inline after the label. A badge that qualifies the label itself (such as
+  "single tier") stays beside it. An item with no metadata has no empty second line.
+
 ### Typography
 
 - **R8.** A view MUST use one type scale: elements of the same kind share size, weight and
@@ -83,6 +88,10 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
 - **R9.** A label MUST sit on the same row as its value, not on a row of its own above an
   indented value. In label/value lists, a label MUST NOT wrap one word per line, and a value
   MUST NOT draw over its label.
+- **R35.** Text inside a chart MUST use the page's type scale. Labels, ticks and axis titles
+  render at the same sizes as the equivalent text around the chart at every width. A chart
+  never scales its text with its own width (for example an SVG with a fixed `viewBox`
+  stretched to fill its panel). The plot reflows instead.
 
 ### Colour and theme
 
@@ -110,12 +119,23 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   acts on. Duplicate controls, nav entries for panels already on screen, redundant pages,
   noise badges and filler values ("no estimate", "+0/-0") are removed. Disabled features
   are hidden, not shown greyed out in nav.
+- **R32.** A hover tooltip MUST add something the screen does not already show: the full
+  text of a truncated label, a definition, or detail deliberately moved off the screen. It
+  never restates a visible label or a state that a colour, icon or position already shows
+  (for example "Implement · done" on a green step). The full text stays in the accessible
+  name either way. A tooltip's bubble fits its text up to a maximum width, with no empty
+  area beside a short text.
 
 ### Data display
 
 - **R17.** A view MUST put the answer first and collapse the detail. A table longer than
-  about seven rows collapses or offers "show all", while a short list is never paginated. A
-  page that keeps growing is split into tabs.
+  about seven rows collapses or offers "show all", while a short list is never paginated.
+  The cap is for a list that shares its region with other content. A list that is the whole
+  content of its own tab or panel shows in full. A
+  page that keeps growing is split into tabs. Small sets are not split into tabs: a handful
+  of items in two states (such as open and recently closed) stay in one list, with the
+  active group first and the rest under a heading or a collapsed disclosure. That way an
+  empty tab never hides the items that exist.
 - **R18.** Where a shape or trend matters, a view SHOULD show a chart, bar or sparkline
   instead of raw numbers or JSON. Markdown is always rendered, never shown raw.
 - **R19.** A chart MUST agree with the data it summarises. It agrees with any ranking shown
@@ -124,6 +144,14 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
 - **R29.** A summary figure MUST sit with the detail it summarises, in that panel's header
   or as its first line. It never gets a full-width panel of its own. A panel holding a single
   number and its caption is folded into its neighbour.
+- **R34.** A chart MUST label each mark with its name only. Its figures (score, cost, count)
+  go in a tooltip on hover and keyboard focus, and in the chart's accessible description.
+  Labels never overlap each other, a mark or a reference line. A label with no room gets a
+  leader line or is shown in the tooltip only.
+- **R36.** Rows that share a rank, band or group MUST be ordered by the figure the view
+  ranks on, so that the column reads in order. Another key (such as cost, then name) only
+  breaks exact ties. Ordering inside a group by a value the view does not rank on reads as
+  a mistake.
 
 ### State and feedback
 
@@ -142,6 +170,10 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   and any nav that is redundant at that width.
 - **R24.** Primary actions MUST stay reachable. A panel's action buttons stick to its bottom
   edge, and a detail panel stays in view while the list beside it scrolls.
+- **R37.** Changing how a control behaves MUST NOT change how it looks. A native control
+  (such as a `<select>`) is not replaced by a custom widget with different chrome, and its
+  options gain no new colours or decoration, unless the owner approved the new look as a
+  mock (R25).
 
 ### Process
 

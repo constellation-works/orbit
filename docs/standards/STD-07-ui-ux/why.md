@@ -70,6 +70,9 @@ A rule is here only when its correction recurred.
   is drawn in a second bordered card inside it: "no double nested containers that doesn't
   draw any meaningful distinction." Every border costs padding on both sides and adds a
   level the eye has to resolve. Orbit's `ui.nested-card` rule already flags it.
+- **R33 (metadata on its own line).** "meta-data, e.g. "sol, sol@xhigh, sol@high", can be
+  placed as a new row" (7995d040, ORB-24113): the Agents rank table ran each model's crews
+  inline after its name, so long names and crew lists competed for one line.
 
 ## Typography
 
@@ -84,6 +87,10 @@ A rule is here only when its correction recurred.
   ORB-20526 and ORB-20536. The owner asked for both to become
   validator rules: "let's add this to the ui ux rule - so that it will be caught by the new
   visual validator job".
+- **R35 (chart text on the type scale).** "the texts inside this chart are way bigger than
+  the rest of the texts around it. should be similar sizes" (7995d040, ORB-24114). The
+  frontier chart drew a fixed 760-unit `viewBox` and stretched it to the panel, so its text
+  grew with the panel.
 
 ## Colour and theme
 
@@ -122,13 +129,22 @@ A rule is here only when its correction recurred.
   (1b5897bc); "what do you think about removing this page. seems bit redundant" (ORB-21641).
   Also ORB-19252, ORB-19253, ORB-22598–22601, ORB-22627, ORB-19161, ORB-17276, ORB-20509,
   ORB-20502, ORB-22935, ORB-22755, ORB-22756 and ORB-19697.
+- **R32 (tooltips that add something).** "we don't need a hover-over help just to
+  additionally display "done" - the green color make that obvious ... We just need those for
+  those that gets truncated" and "excess space in the hover-over container" (7995d040,
+  ORB-24124). Every progress-strip step had a tooltip, and each bubble was a fixed 280px
+  wide.
 
 ## Data display
 
 - **R17 (answer first, collapse detail).** "long tables or texts, either paginate or have
   "show full"" (cdd16d4b); "these long tables should be a drop-down or something."
   (ORB-23343). The short-list half comes from "this pagination in routine is annoying. can you
-  bring back no-pagination" (ORB-23384). Also ORB-20525, ORB-22329, ORB-23480, ORB-23520
+  bring back no-pagination" (ORB-23384). The "no tabs for small sets" clause was added
+  during review of v1 (2026-11-09, session 31048ad4). The dashboard's Notices panel opened
+  on an empty "Open 0" tab, with the four recently closed notices one click away: "there will
+  be a smaller number of "Open" notices and "recently closed", so in these cases, using tabs
+  should not be preferred." The exemption for a list that owns its region was added at the same review: a task's Context files tab lists all 33 selectors, and "the rule doesn't apply to things like this. because it owns the rest of the bottom panels". Collapsing there would only add a click, because nothing else competes for the space. Also ORB-20525, ORB-22329, ORB-23480, ORB-23520
   and ORB-19610.
 - **R18 (visual over raw).** "can we get some visuals like CPU and memory for backlog
   forecasts?" (ORB-20609); "instead of raw data, we should just display chart like we have in
@@ -144,6 +160,13 @@ A rule is here only when its correction recurred.
   per-tool table it summarises: "does not belong there alone like that." A lone figure in its
   own panel costs a whole band of height, splits the answer from its evidence, and reads as a
   separate topic.
+- **R34 (chart labels by name).** "too cluttered ... details like "40.1 · $0.24 · 37 tasks"
+  can be hover-over" (7995d040, ORB-24120). Two-line captions on close points printed over
+  each other and over the `fleet = 100` line.
+- **R36 (tied groups in ranked order).** "for tied ranks, it should be ordered by the score"
+  (7995d040, ORB-24118). The rank board ordered each tie band cheapest first, so scores
+  inside a band jumped around. Cost-first was deliberate (a band means the scores can't be
+  told apart), and the owner chose score order anyway, with cost still shown on each row.
 
 ## State and feedback
 
@@ -167,6 +190,10 @@ A rule is here only when its correction recurred.
 - **R24 (reachable actions).** ""Comment" button should be sticky to the bottom, just like
   buttons in "overview"" (75ceb1a9); "when I scroll down, the setting detail panel disappears.
   it should scroll down to be visible." (ad7e58ba).
+- **R37 (behaviour change keeps the look).** "revert this drop down css back to its original
+  before the change" (7995d040, ORB-24111). ORB-23882 made the rail workspace select
+  multi-select by replacing the native control with a custom popup; ORB-24027 restored
+  single-select but kept the new chrome and coloured options, which nobody had approved.
 
 ## Process
 
