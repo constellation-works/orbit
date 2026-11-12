@@ -22,9 +22,26 @@ const MALFORMED_REFUSAL: &str =
 struct CorrectionHost {
     cli: ScriptHost,
     delivered: Mutex<u32>,
+    /// One entry per persisted invocation trace, in order: `true` when the
+    /// dispatch's input carries `contract_correction`.
+    traces: Mutex<Vec<bool>>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for CorrectionHost {
+    fn persist_invocation_trace(
+        &self,
+        _job_run_id: &str,
+        _activity_id: &str,
+        input: &Value,
+        _invocation: &orbit_engine::DispatchInvocationTrace,
+    ) -> Result<(), DispatchError> {
+        self.traces
+            .lock()
+            .unwrap()
+            .push(input.get("contract_correction").is_some());
+        Ok(())
+    }
+
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         RuntimeHost::resolve_cli_executor(&self.cli, provider)
     }
@@ -49,16 +66,40 @@ struct Run {
     side_effects: usize,
     correction_envelope: Option<Value>,
     delivered: u32,
+    /// Persisted invocation traces in order, `true` for the correction's.
+    traces: Vec<bool>,
 }
 
-fn envelope_payload(result: &Value) -> String {
-    let envelope = json!({"schemaVersion":1,"status":"success","result":result,"error":null});
+/// A successful envelope whose `result` is `result`.
+fn success_envelope(result: &Value) -> Value {
+    json!({"schemaVersion":1,"status":"success","result":result,"error":null})
+}
+
+fn envelope_payload(envelope: &Value) -> String {
     json!({"text": envelope.to_string(), "stopReason": "stop"}).to_string()
 }
 
-/// Run `implement_one` then a delivery sentinel against a provider that
-/// answers `first` to the first invocation and `corrected` to a correction.
+/// Run `implement_one` then a delivery sentinel against a provider whose
+/// successful results are `first` and `corrected`.
 fn run_implementer(label: &str, first: &Value, corrected: &Value) -> Run {
+    run_implementer_envelopes(
+        label,
+        &success_envelope(first),
+        &success_envelope(corrected),
+        0,
+    )
+}
+
+/// Run `implement_one` then a delivery sentinel against a provider that
+/// answers the full envelope `first` to the first invocation and `corrected`
+/// to a correction, which exits with `corrected_exit`. A declared `failed`
+/// envelope is protocol-valid only with a non-zero exit.
+fn run_implementer_envelopes(
+    label: &str,
+    first: &Value,
+    corrected: &Value,
+    corrected_exit: u8,
+) -> Run {
     let fixture = tempfile::tempdir().unwrap();
     let state = fixture.path().join("state");
     fs::create_dir(&state).unwrap();
@@ -71,6 +112,7 @@ fn run_implementer(label: &str, first: &Value, corrected: &Value) -> Run {
          cat > \"$state/prompt-$n\"\n\
          if grep -q 'contract_correction\":' \"$state/prompt-$n\"; then\n\
          cat <<'PAYLOAD'\n{corrected}\nPAYLOAD\n\
+         exit {corrected_exit}\n\
          else\n\
          echo filed >> \"$state/side-effects\"\n\
          cat <<'PAYLOAD'\n{first}\nPAYLOAD\n\
@@ -78,11 +120,13 @@ fn run_implementer(label: &str, first: &Value, corrected: &Value) -> Run {
         state = state.display(),
         first = envelope_payload(first),
         corrected = envelope_payload(corrected),
+        corrected_exit = corrected_exit,
     );
     let fake = fake_cli("grok", &script).unwrap();
     let host = CorrectionHost {
         cli: ScriptHost::new(fake.cli_path()),
         delivered: Mutex::new(0),
+        traces: Mutex::new(Vec::new()),
     };
     let run_id = format!("contract-correction-{label}");
     let (writer, _) = build_writer(&fixture.path().join("audit"), &run_id).unwrap();
@@ -125,6 +169,7 @@ fn run_implementer(label: &str, first: &Value, corrected: &Value) -> Run {
             serde_json::from_str(envelope.trim()).unwrap()
         });
     let delivered = *host.delivered.lock().unwrap();
+    let traces = host.traces.lock().unwrap().clone();
     Run {
         events: writer.events_snapshot().unwrap(),
         outcome,
@@ -132,6 +177,7 @@ fn run_implementer(label: &str, first: &Value, corrected: &Value) -> Run {
         side_effects,
         correction_envelope,
         delivered,
+        traces,
     }
 }
 
@@ -188,6 +234,11 @@ fn a_malformed_task_artifacts_entry_is_corrected_within_the_implement_step() {
                 "the correction path files nothing a second time"
             );
             assert_eq!(run.delivered, 1, "delivery runs once, after the correction");
+            assert_eq!(
+                run.traces,
+                [false, true],
+                "the original and the corrected invocation are each persisted once"
+            );
             assert_eq!(corrections(&run), [("task_artifacts", "requested")]);
             assert!(no_retry_or_recovery(&run), "{:?}", run.events);
             let started = run
@@ -242,6 +293,54 @@ fn a_response_still_malformed_after_the_correction_is_refused_once() {
             assert_eq!(run.invocations, 2, "the correction is asked once");
             assert_eq!(run.side_effects, 1);
             assert_eq!(run.delivered, 0, "a refused response delivers nothing");
+            assert_eq!(
+                run.traces,
+                [false, true],
+                "both invocations are persisted once"
+            );
+            assert_eq!(corrections(&run), [("task_artifacts", "requested")]);
+        },
+    );
+}
+
+#[test]
+fn a_failed_correction_keeps_the_refusal_and_its_invocation_trace() {
+    git_fixture::isolated(
+        module_path!(),
+        "a_failed_correction_keeps_the_refusal_and_its_invocation_trace",
+        || {
+            let first = json!({ "task_artifacts": ["code-org-scan.json"] });
+            // The correction completes and declares failure instead of
+            // returning a corrected envelope.
+            let failed = json!({
+                "schemaVersion": 1,
+                "status": "failed",
+                "result": {},
+                "error": {"code": "correction_failed", "message": "could not restate the envelope"},
+            });
+            let run = run_implementer_envelopes(
+                "correction-failed",
+                &success_envelope(&first),
+                &failed,
+                1,
+            );
+
+            assert!(!run.outcome.success, "{:?}", run.outcome);
+            let message = run.outcome.message.as_deref().unwrap();
+            assert!(
+                message.contains(orbit_types::workflow::CONTRACT_REFUSAL_MARKER)
+                    && message.contains("`task_artifacts[0]`")
+                    && message.contains(MALFORMED_REFUSAL),
+                "the original refusal stands: {message}"
+            );
+            assert_eq!(run.invocations, 2, "the correction is asked once");
+            assert_eq!(run.side_effects, 1, "the failed correction files nothing");
+            assert_eq!(run.delivered, 0, "a refused response delivers nothing");
+            assert_eq!(
+                run.traces,
+                [false, true],
+                "the original and the failed correction are each persisted once"
+            );
             assert_eq!(corrections(&run), [("task_artifacts", "requested")]);
         },
     );
