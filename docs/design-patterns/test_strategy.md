@@ -1497,6 +1497,13 @@ admitted session cases in `federated/probe/tests/session.rs`:
   child that accepts `call_internal_drain` and never replies is
   `OutcomeUnknown`. The admitted malformed-reply case corrupts a consumed
   internal answer; it does not cover silence after a sent admission.
+- `unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal`
+  (criterion 2, fault injection). A child returns the old owner's actual
+  JSON-RPC `-32602` reply for `orbit.drain.claim.effort`; the session preserves
+  it as `UnreachableDestination`, the transport shape consumed by the public
+  backfill regression. `DestinationProbe` cannot attach the bounded session
+  reader to this caller-supplied child, and the malformed-reply cases do not
+  cover a well-formed RPC refusal.
 
 The eight originally admitted orbit-mcp tests remain, including the private
 SSH proxy argv seam in `remote/tests/proxy.rs`.

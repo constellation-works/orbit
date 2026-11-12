@@ -2,6 +2,7 @@
 //! without one, and the owner's recording of it against the settlement.
 
 use super::*;
+use orbit_core::application::agents::ClaimedEffortOutcome;
 use orbit_types::identity::ReasoningEffort;
 
 /// A pulled attempt whose follower settled it (an operator cancel releases
@@ -9,6 +10,7 @@ use orbit_types::identity::ReasoningEffort;
 /// did, or one whose launch record was not yet written. Returns the leaf and
 /// its claim.
 fn settled_without_effort(pair: &Pair) -> (String, String) {
+    let prior_settles = pair.wire.calls("orbit.drain.claim.settle").len();
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
@@ -33,11 +35,16 @@ fn settled_without_effort(pair: &Pair) -> (String, String) {
         .cancel_job_run_with_options_and_policy(&leaf, "operator", "cli", None, false, false)
         .expect("cancel claimed leaf");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
-    assert_eq!(settles.len(), 1, "{settles:?}");
+    assert_eq!(
+        settles.len(),
+        prior_settles + 1,
+        "one new settlement: {settles:?}"
+    );
+    let settle = &settles[prior_settles];
     assert!(
-        settles[0].get("reasoning_effort").is_none(),
+        settle.get("reasoning_effort").is_none(),
         "the fixture settles without an effort: {:#}",
-        settles[0]
+        settle
     );
     assert_eq!(pair.owner_status(&task), "backlog");
     (leaf, claim)
@@ -287,17 +294,64 @@ fn a_leaf_without_a_follower_record_stays_unknown_and_is_counted() {
 /// An owner whose build predates the late report refuses it unread on its
 /// internal route; the follower counts it, and neither store changes.
 fn an_owner_that_predates_the_report_refuses_it_without_changing_state() {
-    let pair = Pair::with_crews(&[Some("sol")]);
-    let (leaf, _) = settled_without_effort(&pair);
-    record_follower_launch(&pair, &leaf, ReasoningEffort::High);
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
+    let (first_leaf, first_claim) = settled_without_effort(&pair);
+    let (second_leaf, second_claim) = settled_without_effort(&pair);
+    assert_ne!(first_claim, second_claim, "exercise two owner calls");
+    record_follower_launch(&pair, &first_leaf, ReasoningEffort::High);
+    record_follower_launch(&pair, &second_leaf, ReasoningEffort::High);
     *pair.wire.predates_late_effort.lock().unwrap() = true;
     let owner_before = owner_state(&pair);
     let follower_before = pair.follower_jobs.local_pull_admissions().unwrap();
     let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.owner_unsupported),
+        (2, 0, 2),
+        "{report:#?}"
+    );
+    assert!(
+        report.rows.iter().all(|row| {
+            row.outcome == ClaimedEffortOutcome::OwnerUnsupported
+                && row.detail.as_deref().is_some_and(|detail| {
+                    detail.contains("-32602") && detail.contains("unknown internal drain operation")
+                })
+        }),
+        "the actual legacy JSON-RPC refusal is classified as unsupported: {report:#?}"
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.drain.claim.effort").len(),
+        2,
+        "an unsupported owner is retried for each claim, not suppressed as unreachable"
+    );
+    assert_eq!(owner_state(&pair), owner_before);
+    assert_eq!(
+        pair.follower_jobs.local_pull_admissions().unwrap(),
+        follower_before
+    );
+    assert_eq!(owner_efforts(&pair), [json!("unknown")]);
+}
+
+/// A genuine connection failure remains an unreachable owner, with no state
+/// change on either host.
+fn a_connection_failure_remains_owner_unreachable() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, _) = settled_without_effort(&pair);
+    record_follower_launch(&pair, &leaf, ReasoningEffort::High);
+    *pair.wire.unreachable.lock().unwrap() = true;
+    let owner_before = owner_state(&pair);
+    let follower_before = pair.follower_jobs.local_pull_admissions().unwrap();
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.examined, report.recorded, report.owner_unreachable),
         (1, 0, 1),
         "{report:#?}"
+    );
+    assert!(
+        report.rows[0]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Connection timed out")),
+        "retain the connection failure: {report:#?}"
     );
     assert_eq!(owner_state(&pair), owner_before);
     assert_eq!(
@@ -315,4 +369,5 @@ crate::scenario_table!(
     a_late_report_disagreeing_with_a_held_effort_is_refused_and_counted,
     a_leaf_without_a_follower_record_stays_unknown_and_is_counted,
     an_owner_that_predates_the_report_refuses_it_without_changing_state,
+    a_connection_failure_remains_owner_unreachable,
 );
