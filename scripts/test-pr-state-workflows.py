@@ -1202,5 +1202,92 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                     self.assertEqual(actual, admitted)
 
 
+@unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
+class CoverageReportWorkflowTests(unittest.TestCase):
+    """Run the coverage report step with cargo failures under GitHub's bash -e."""
+
+    def setUp(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch, prefix="coverage-report-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.calls = self.root / "calls"
+        document = yaml.safe_load((ROOT / ".github/workflows/coverage.yml").read_text())
+        self.step = next(step for step in document["jobs"]["coverage"]["steps"]
+                         if step.get("name") == "Render lcov report")
+        cargo = self.bin / "cargo"
+        cargo.write_text("""#!/bin/sh
+calls=0
+if [ -f "$FIXTURE_CALLS" ]; then
+  calls=$(cat "$FIXTURE_CALLS")
+fi
+calls=$((calls + 1))
+printf '%s\\n' "$calls" > "$FIXTURE_CALLS"
+if [ "$calls" -eq 1 ]; then
+  while IFS= read -r profile; do
+    [ -n "$profile" ] || continue
+    printf 'warning: %s: invalid instrumentation profile data (file header is corrupt)\\n' "$profile" >&2
+  done <<EOF
+$FIXTURE_PROFILES
+EOF
+  exit "$FIRST_STATUS"
+fi
+exit "$RETRY_STATUS"
+""")
+        cargo.chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
+                        FIXTURE_CALLS=str(self.calls), FIXTURE_PROFILES="",
+                        FIRST_STATUS="23", RETRY_STATUS="0", TMPDIR=str(self.root))
+
+    def run_report(self, profile_count, *, retry_status=0, first_status=23):
+        if self.calls.exists():
+            self.calls.unlink()
+        profiles = []
+        for number in range(profile_count):
+            profile = self.root / f"unreadable {number}.profraw"
+            profile.write_text("truncated")
+            profiles.append(profile)
+        self.env.update(FIXTURE_PROFILES="\n".join(str(profile) for profile in profiles),
+                        FIRST_STATUS=str(first_status), RETRY_STATUS=str(retry_status))
+        result = self_test_hang.run(
+            ["bash", "-e", "-c", self.step["run"]],
+            step="Render lcov report", cwd=self.root, env=self.env,
+            text=True, capture_output=True)
+        calls = int(self.calls.read_text()) if self.calls.exists() else 0
+        return result, calls, profiles
+
+    def test_failed_render_drops_one_through_five_profiles_and_returns_retry_status(self):
+        for count in range(1, 6):
+            with self.subTest(profile_count=count):
+                retry_status = 0 if count < 5 else 29
+                result, calls, profiles = self.run_report(count, retry_status=retry_status)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, retry_status, output)
+                self.assertEqual(calls, 2, output)
+                self.assertEqual(output.count("::warning::dropping unreadable coverage profile "), count)
+                self.assertNotIn("::error::", output)
+                for profile in profiles:
+                    self.assertFalse(profile.exists(), f"retry must run after removing {profile}")
+
+    def test_failed_render_without_named_profiles_fails_with_first_status(self):
+        result, calls, _ = self.run_report(0)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 23, output)
+        self.assertEqual(calls, 1, output)
+        self.assertIn("::error::report failed with 0 unreadable profiles named (limit 5); not retrying", output)
+
+    def test_failed_render_with_more_than_five_profiles_fails_without_retry(self):
+        result, calls, profiles = self.run_report(6)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 23, output)
+        self.assertEqual(calls, 1, output)
+        self.assertIn("::error::report failed with 6 unreadable profiles named (limit 5); not retrying", output)
+        for profile in profiles:
+            self.assertTrue(profile.exists(), f"over-limit files must not be removed: {profile}")
+
+
 if __name__ == "__main__":
     unittest.main()
