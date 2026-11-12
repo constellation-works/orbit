@@ -983,9 +983,10 @@ function placePinnedInfoHint(hint) {
   const gutter = 12;
   const width = Math.min(320, window.innerWidth - gutter * 2);
   const icon = hint.getBoundingClientRect();
-  const left = Math.max(gutter, Math.min(icon.left + icon.width / 2 - width / 2, window.innerWidth - width - gutter));
-  hint.style.setProperty("--hint-tip-left", `${left}px`);
   hint.style.setProperty("--hint-tip-width", `${width}px`);
+  const bubbleWidth = bubble.getBoundingClientRect().width;
+  const left = Math.max(gutter, Math.min(icon.left + icon.width / 2 - bubbleWidth / 2, window.innerWidth - bubbleWidth - gutter));
+  hint.style.setProperty("--hint-tip-left", `${left}px`);
   const height = bubble.getBoundingClientRect().height;
   const inset = hint.classList.contains("info-hint") ? 10 : -4;
   const below = icon.bottom - inset;
@@ -1001,6 +1002,7 @@ export function pinnedInfoHint(text, { trigger = null } = {}) {
   const place = () => placePinnedInfoHint(hint);
   hint.addEventListener("mouseenter", place);
   hint.addEventListener("focus", place);
+  hint.addEventListener("pinned-hint-refresh", place);
   hint.addEventListener("click", (event) => {
     if (hint.tagName !== "A") event.preventDefault();
     event.stopPropagation();
