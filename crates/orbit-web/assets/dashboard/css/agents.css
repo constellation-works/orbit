@@ -450,6 +450,11 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-rank-score { color: var(--fg); font-size: 13px; font-weight: 600; }
 .agents-rank-model { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .agents-rank-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+/* In the rank table the dot sits beside the model name's first line, not the middle of the two-line cell. */
+.agents-rank-model-cell .agents-rank-model { align-items: flex-start; }
+.agents-rank-model-cell .agents-rank-dot { margin-top: 5px; }
+.agents-rank-model-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agents-rank-model-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; line-height: 18px; }
 .agents-rank-toggle {
   display: inline-flex;
   align-items: center;
@@ -467,8 +472,8 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-rank-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .agents-rank-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-rank-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.agents-rank-crew { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
-.agents-rank-single-tier { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 5px; }
+.agents-rank-crew { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.agents-rank-single-tier { flex: none; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 5px; }
 .agents-rank-chevron { color: var(--fg-mute); font-size: 10px; transition: transform 120ms ease; }
 .agents-rank-toggle[aria-expanded="true"] .agents-rank-chevron { transform: rotate(90deg); color: var(--fg); }
 .agents-rank-row { cursor: pointer; }
