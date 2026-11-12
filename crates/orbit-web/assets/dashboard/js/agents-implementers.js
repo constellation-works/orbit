@@ -13,11 +13,10 @@ import { el, fetchJson, getWorkspaceRevision } from './common.js';
 
 const TIER_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "X-hard", unassessed: "Unassessed" };
 // Series colours by position in the window's series list, so toggling a
-// crew never recolours another.
-const SERIES_SLOTS = 8;
+// crew never recolours another. Twenty slots cover the window's series
+// without reuse; CSS defines .agents-curve-s0..s19 to match.
+const SERIES_SLOTS = 20;
 const SVG_NS = "http://www.w3.org/2000/svg";
-// A phone draws on a narrower canvas so tick labels keep a readable size.
-const NARROW = "(max-width: 640px)";
 
 let complexity = "";
 // `null` until the reader picks: then the crews they chose.
@@ -25,17 +24,6 @@ let picked = null;
 let curves = null;
 let curvesScope = null;
 let curvesRequest = 0;
-// The latest render's redraw, so crossing the phone breakpoint redraws the
-// chart on its canvas.
-let redraw = null;
-// The phone query, or null where the host has no `matchMedia`.
-const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia(NARROW) : null;
-if (narrowQuery) narrowQuery.addEventListener("change", () => { if (redraw) redraw(); });
-
-function isNarrow() {
-  return Boolean(narrowQuery && narrowQuery.matches);
-}
-
 function curvesPath(selectedWindow, execution) {
   const tier = complexity ? `&complexity=${encodeURIComponent(complexity)}` : "";
   return `/api/agents/implementers/size-curves?window=${encodeURIComponent(selectedWindow)}${tier}&execution=${encodeURIComponent(execution || "managed")}`;
@@ -80,9 +68,19 @@ function tickStep(top) {
   return [0.01, 0.02, 0.05, 0.1, 0.2, 0.25].find((step) => top / step <= 6) || 0.25;
 }
 
+// One format for every x tick: the plain bucket-start count, never a mix
+// of plain and abbreviated labels (511 beside 2k).
 function compactLines(value) {
-  if (value >= 1000) return `${Number((value / 1000).toFixed(value >= 10000 ? 0 : 1))}k`;
   return String(value);
+}
+
+function markerRadius(bucket) {
+  const tasks = typeof bucket.tasks === "number" ? bucket.tasks : 0;
+  return 2.4 + Math.min(2.6, Math.log10(tasks + 1) * 1.3);
+}
+
+function pointLabel(crew, bucket) {
+  return `${crew}, ${rangeText(bucket)}: ${bucket.regressed} of ${bucket.tasks} tasks regressed (n=${bucket.tasks}), ${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})${bucket.sparse ? `; fewer than ${curves.sparse_outcomes} regressed tasks` : ""}`;
 }
 
 function rangeText(bucket) {
@@ -146,26 +144,57 @@ function pickerNode(rerender) {
     box.checked = chosen.has(each.crew);
     box.addEventListener("change", () => toggle(each.crew, box.checked, rerender));
     const drawn = each.buckets.some((bucket) => bucket.drawn);
-    const item = el("li", {}, [el("label", { class: `agents-curves-pick${drawn ? "" : " is-undrawn"}`, title: each.models.length ? `Models: ${each.models.join(", ")}` : "No model recorded" }, [
+    const counts = `${each.regressed} regressed of ${each.tasks} landed tasks`;
+    const label = el("label", { class: `agents-curves-pick${drawn ? "" : " is-undrawn"}`, title: `${each.models.length ? `Models: ${each.models.join(", ")}` : "No model recorded"} · ${counts}` }, [
       box,
       el("span", { class: `agents-curves-swatch agents-curve-s${slot(each.crew)}`, "aria-hidden": "true" }),
       el("span", { class: "agents-curves-crew", text: each.crew }),
-      el("span", { class: "agents-curves-n", text: `${each.regressed}/${each.tasks}` }),
-    ])]);
+      el("span", { class: "agents-curves-n", text: `${each.regressed}/${each.tasks}`, title: "Regressed / landed tasks" }),
+    ]);
+    // The checkbox carries the count's meaning: aria-label is not allowed on the
+    // generic span or the label element, so assistive tech would drop it there.
+    box.setAttribute("aria-label", `${each.crew}: ${counts}`);
+    const item = el("li", {}, [label]);
     item.dataset.crew = each.crew;
     list.append(item);
   }
-  return list;
+  return el("div", { class: "agents-curves-picker-wrap" }, [
+    el("p", { class: "agents-curves-picker-note", text: "Crew counts are regressed / landed tasks. Hover or focus a line to see its interval." }),
+    list,
+  ]);
 }
 
-// The chart: one band, line and marker set per drawn series over the
-// buckets any drawn series reaches. A gap in a series' drawn buckets breaks
-// its line and band rather than bridging missing evidence.
+// The chart: one line and marker set per drawn series over the buckets any
+// drawn series reaches. A gap breaks the line rather than bridging missing
+// evidence. Drawn 1:1 in CSS px at the wrapper's real width and redrawn
+// when that width changes (STD-07 §R35, as the frontier chart), so tick and
+// axis text stay at the dashboard type scale at every panel width. Wilson
+// bands show only for the hovered/focused series; a single-bucket series
+// shows the same interval as a capped whisker under its marker.
 function chartNode(drawnSeries) {
-  const narrow = isNarrow();
-  const WIDTH = narrow ? 360 : 640;
-  const HEIGHT = narrow ? 240 : 260;
-  const PAD = { left: 40, right: 10, top: 12, bottom: 40 };
+  const wrap = el("div", { class: "agents-curves-chart", role: "region", "aria-label": "Regression rate by lines changed" });
+  let drawnWidth = 0;
+  const draw = () => {
+    const width = Math.floor(wrap.clientWidth);
+    if (!width || width === drawnWidth) return;
+    drawnWidth = width;
+    wrap.replaceChildren(buildPlot(drawnSeries, width));
+  };
+  draw();
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(() => {
+      if (!wrap.isConnected) { observer.disconnect(); return; }
+      if (wrap.clientWidth > 0) draw();
+    });
+    observer.observe(wrap);
+  }
+  requestAnimationFrame(() => { if (wrap.isConnected && wrap.clientWidth > 0) draw(); });
+  return wrap;
+}
+
+function buildPlot(drawnSeries, WIDTH) {
+  const HEIGHT = WIDTH < 500 ? 248 : 288;
+  const PAD = { left: 44, right: 12, top: 12, bottom: 42 };
   const indexes = drawnSeries.flatMap((each) => each.buckets.filter((bucket) => bucket.drawn).map((bucket) => bucket.bucket));
   const first = Math.min(...indexes);
   const last = Math.max(...indexes);
@@ -177,14 +206,17 @@ function chartNode(drawnSeries) {
   const slotWidth = plotWidth / Math.max(1, last - first + 1);
   const x = (index) => PAD.left + (index - first + 0.5) * slotWidth;
   const y = (rate) => PAD.top + plotHeight * (1 - rate / top);
-  const plot = svg("svg", { viewBox: `0 0 ${WIDTH} ${HEIGHT}`, class: "agents-curves-plot", role: "img",
+  const plot = svg("svg", { width: WIDTH, height: HEIGHT, class: "agents-curves-plot", role: "img",
     "aria-label": `Regression rate by lines changed for ${drawnSeries.map((each) => each.crew).join(", ")}; the bucket table below lists every value` });
+  const setActive = (crew) => {
+    for (const group of plot.querySelectorAll(".agents-curves-series")) group.classList.toggle("is-active", group.dataset.crew === crew);
+  };
   for (let i = 0; i * step <= top + 1e-9; i += 1) {
     const rate = i * step;
     plot.append(svg("line", { x1: PAD.left, x2: WIDTH - PAD.right, y1: y(rate), y2: y(rate), class: "agents-curves-grid" }));
     plot.append(svg("text", { x: PAD.left - 6, y: y(rate), "text-anchor": "end", "dominant-baseline": "central", class: "agents-curves-tick" }, percent(rate)));
   }
-  const labelEvery = Math.ceil((last - first + 1) / (narrow ? 6 : 10));
+  const labelEvery = Math.ceil((last - first + 1) / (WIDTH < 640 ? 6 : 10));
   const reference = drawnSeries.flatMap((each) => each.buckets);
   for (let index = first; index <= last; index += 1) {
     if ((index - first) % labelEvery !== 0) continue;
@@ -192,6 +224,40 @@ function chartNode(drawnSeries) {
     plot.append(svg("text", { x: x(index), y: HEIGHT - PAD.bottom + 16, "text-anchor": "middle", class: "agents-curves-tick" }, compactLines(bucket.lines_from)));
   }
   plot.append(svg("text", { x: PAD.left + plotWidth / 2, y: HEIGHT - 6, "text-anchor": "middle", class: "agents-curves-axis" }, "Lines changed (bucket start, doubling)"));
+  // Coincident points (same bucket and rate) are dodged on a small ring so
+  // every marker stays individually visible and focusable.
+  const coincident = new Map();
+  for (const each of drawnSeries) for (const bucket of each.buckets.filter((entry) => entry.drawn)) {
+    const key = `${bucket.bucket}:${bucket.rate}`;
+    coincident.set(key, [...(coincident.get(key) || []), `${each.crew}:${bucket.bucket}`]);
+  }
+  const seen = new Map();
+  const dodge = (crew, bucket) => {
+    const key = `${bucket.bucket}:${bucket.rate}`;
+    const group = coincident.get(key) || [];
+    if (group.length < 2) return { dx: 0, dy: 0 };
+    const index = seen.get(key) || 0;
+    seen.set(key, index + 1);
+    const stepX = Math.min(9, Math.max(4.5, (slotWidth * 0.82) / group.length));
+    return { dx: (index - (group.length - 1) / 2) * stepX, dy: group.length > 2 ? ((index % 2) * 2 - 1) * 3 : 0 };
+  };
+  // The hover and focus tooltip: one bubble drawn over the plot, so a
+  // keyboard reader sees a point's count and interval, not only a focus ring.
+  const tip = svg("g", { class: "agents-curves-tip", visibility: "hidden", "aria-hidden": "true", "pointer-events": "none" });
+  const showTip = (lines, cx, cy) => {
+    const boxW = Math.ceil(Math.max(...lines.map((line) => line.length)) * 6.6) + 16;
+    const boxH = lines.length * 15 + 10;
+    let bx = cx + 12;
+    if (bx + boxW > WIDTH - 4) bx = cx - 12 - boxW;
+    bx = Math.max(4, bx);
+    const by = Math.min(HEIGHT - 4 - boxH, Math.max(4, cy - boxH / 2));
+    tip.replaceChildren(
+      svg("rect", { class: "agents-curves-tip-box", x: bx, y: by, width: boxW, height: boxH, rx: 4 }),
+      ...lines.map((line, i) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + i * 15 }, line)),
+    );
+    tip.setAttribute("visibility", "visible");
+  };
+  const hideTip = () => tip.setAttribute("visibility", "hidden");
   for (const each of drawnSeries) {
     const css = `agents-curve-s${slot(each.crew)}`;
     const runs = [];
@@ -207,6 +273,10 @@ function chartNode(drawnSeries) {
     if (current.length) runs.push(current);
     const group = svg("g", { class: `agents-curves-series ${css}` });
     group.dataset.crew = each.crew;
+    group.addEventListener("mouseenter", () => setActive(each.crew));
+    group.addEventListener("mouseleave", () => setActive(null));
+    group.addEventListener("focusin", () => setActive(each.crew));
+    group.addEventListener("focusout", () => { if (!group.contains(document.activeElement)) setActive(null); });
     for (const run of runs) {
       const upper = run.map((bucket) => `${x(bucket.bucket)},${y(bucket.high)}`);
       const lower = run.slice().reverse().map((bucket) => `${x(bucket.bucket)},${y(bucket.low)}`);
@@ -215,17 +285,35 @@ function chartNode(drawnSeries) {
         group.append(svg("polyline", { points: run.map((bucket) => `${x(bucket.bucket)},${y(bucket.rate)}`).join(" "), class: "agents-curves-line" }));
       } else {
         const [bucket] = run;
-        group.append(svg("line", { x1: x(bucket.bucket), x2: x(bucket.bucket), y1: y(bucket.low), y2: y(bucket.high), class: "agents-curves-whisker" }));
+        const cx = x(bucket.bucket);
+        group.append(svg("rect", { x: cx - 7, y: y(bucket.high), width: 14, height: Math.max(1, y(bucket.low) - y(bucket.high)), class: "agents-curves-band" }));
+        group.append(svg("line", { x1: cx, x2: cx, y1: y(bucket.low), y2: y(bucket.high), class: "agents-curves-whisker" }));
+        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: y(bucket.high), y2: y(bucket.high), class: "agents-curves-whisker" }));
+        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: y(bucket.low), y2: y(bucket.low), class: "agents-curves-whisker" }));
       }
     }
     for (const bucket of each.buckets.filter((entry) => entry.drawn)) {
-      const marker = svg("circle", { cx: x(bucket.bucket), cy: y(bucket.rate), r: 3.5, class: `agents-curves-marker${bucket.sparse ? " is-sparse" : ""}` });
-      marker.append(svg("title", {}, `${each.crew}, ${rangeText(bucket)}: ${bucket.regressed} of ${bucket.tasks} regressed, ${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})${bucket.sparse ? `; fewer than ${curves.sparse_outcomes} regressed tasks` : ""}`));
+      const { dx, dy } = dodge(each.crew, bucket);
+      const label = pointLabel(each.crew, bucket);
+      const cx = x(bucket.bucket) + dx;
+      const cy = y(bucket.rate) + dy;
+      const marker = svg("circle", { cx, cy, r: markerRadius(bucket), class: `agents-curves-marker${bucket.sparse ? " is-sparse" : ""}`, tabindex: 0, role: "img", "aria-label": label });
+      const lines = [
+        `${each.crew}, ${rangeText(bucket)}`,
+        `${bucket.regressed} of ${bucket.tasks} tasks regressed (n=${bucket.tasks})`,
+        `${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})`,
+        ...(bucket.sparse ? [`fewer than ${curves.sparse_outcomes} regressed tasks`] : []),
+      ];
+      marker.addEventListener("mouseenter", () => showTip(lines, cx, cy));
+      marker.addEventListener("focus", () => showTip(lines, cx, cy));
+      marker.addEventListener("mouseleave", hideTip);
+      marker.addEventListener("blur", hideTip);
       group.append(marker);
     }
     plot.append(group);
   }
-  return el("div", { class: "agents-curves-chart" }, [plot]);
+  plot.append(tip);
+  return plot;
 }
 
 function tableNode(chosen) {
@@ -261,12 +349,11 @@ function cohortText() {
   const counted = series().reduce((sum, each) => sum + each.tasks, 0);
   const { immature = 0, no_size: noSize = 0 } = curves.excluded || {};
   const tier = complexity ? `${TIER_LABELS[complexity] || complexity} · ` : "";
-  return `${tier}${plural(counted, "landed task")} · ${immature} too recent · ${noSize} no size`;
+  return `${tier}${plural(counted, "landed task")} counted · excluding ${plural(immature, "task")} too recent and ${plural(noSize, "task")} with no recorded diff size`;
 }
 
 function render({ scorecard, rerender }) {
   const selectedWindow = scorecard.requested_window;
-  redraw = rerender;
   const nodes = [
     controlsNode(selectedWindow, scorecard.execution, rerender),
   ];
@@ -300,17 +387,17 @@ function render({ scorecard, rerender }) {
 
 // What the panel's figures mean, with the sampling rules once the curves name them.
 function panelHint() {
-  const lines = ["Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. Shaded bands are Wilson 95% intervals. Shown, not scored."];
+  const lines = ["Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. The Wilson 95% interval shows for the hovered or focused series; each point's count and interval are on hover and keyboard focus. Shown, not scored."];
   if (curves && !curves.failed) {
-    lines.push(`Counts tasks with ${curves.follow_up_days} days of follow-up: too recent and no recorded diff size are left out.`);
-    lines.push(`Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Crews with ${curves.min_series_tasks} or more tasks are drawn by default; the count beside each crew is regressed/landed.`);
+    lines.push(`Counts tasks with ${curves.follow_up_days} days of follow-up: too recent and no recorded diff size are excluded from the counted total.`);
+    lines.push(`Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Marker size grows with its bucket's task count. Crews with ${curves.min_series_tasks} or more tasks are drawn by default; the count beside each crew is regressed/landed tasks.`);
   }
   return lines.join("\n");
 }
 
 // The panel node is rebuilt when the curves or the reader's choices change.
 function hash() {
-  return [complexity, picked ? [...picked].sort() : null, curves, isNarrow()];
+  return [complexity, picked ? [...picked].sort() : null, curves];
 }
 
 // Read on every scorecard fetch, so a poll refreshes the curves too.

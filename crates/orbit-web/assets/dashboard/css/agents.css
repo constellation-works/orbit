@@ -663,7 +663,7 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 /* Recorded effort populations wrap inside the existing crew identity column. */
 .agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }
 
-/* Implementers: regression rate by change size. Eight categorical series
+/* Implementers: regression rate by change size. Twenty categorical series
    colours, assigned by a series' place in the window's list so toggling one
    crew never recolours another; each set uses `currentColor`. */
 .agents-curve-s0 { color: #7aa7ff; }
@@ -674,6 +674,18 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-curve-s5 { color: #ff8f80; }
 .agents-curve-s6 { color: #a99bff; }
 .agents-curve-s7 { color: #6fcbee; }
+.agents-curve-s8 { color: #ff7f0e; }
+.agents-curve-s9 { color: #2ca02c; }
+.agents-curve-s10 { color: #d62728; }
+.agents-curve-s11 { color: #9467bd; }
+.agents-curve-s12 { color: #c49a6c; }
+.agents-curve-s13 { color: #f032e6; }
+.agents-curve-s14 { color: #bcbd22; }
+.agents-curve-s15 { color: #17becf; }
+.agents-curve-s16 { color: #aec7e8; }
+.agents-curve-s17 { color: #98df8a; }
+.agents-curve-s18 { color: #ff9896; }
+.agents-curve-s19 { color: #e5d8bd; }
 .agents-curves-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
 .agents-curves-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
 .agents-curves-cohort { margin-top: 8px; }
@@ -698,18 +710,27 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-curves-swatch { width: 12px; height: 3px; border-radius: 1px; background: currentColor; }
 .agents-curves-crew { font-family: var(--font-mono); overflow-wrap: anywhere; }
 .agents-curves-n { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.agents-curves-chart { margin-top: 10px; }
-.agents-curves-plot { display: block; width: 100%; height: auto; }
+.agents-curves-picker-note { margin: 8px 0 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.4; }
+.agents-curves-chart { margin-top: 10px; min-width: 0; overflow-x: auto; }
+.agents-curves-chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Drawn 1:1 in CSS px (width/height attributes), never scaled: chart text matches the panel text (STD-07 §R35). */
+.agents-curves-plot { display: block; max-width: none; }
 .agents-curves-grid { stroke: var(--hair); stroke-width: 1; }
-.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 10.5px; }
-.agents-curves-axis { fill: var(--fg-dim); font-size: 11px; }
-.agents-curves-band { fill: currentColor; fill-opacity: 0.14; stroke: none; }
+.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agents-curves-axis { fill: var(--fg-dim); font-size: 12px; }
+/* Bands only for the hovered/focused series, so many series stay legible. */
+/* Pointer-transparent: a hidden band must not catch the hover meant for a marker drawn beneath it. */
+.agents-curves-band { fill: currentColor; fill-opacity: 0; stroke: none; pointer-events: none; transition: fill-opacity 120ms ease; }
+.agents-curves-series.is-active .agents-curves-band { fill-opacity: 0.14; }
 .agents-curves-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
-.agents-curves-whisker { stroke: currentColor; stroke-width: 2; stroke-opacity: 0.5; }
-.agents-curves-marker { fill: currentColor; stroke: var(--bg-elev); stroke-width: 1.5; }
+.agents-curves-whisker { stroke: currentColor; stroke-width: 2; stroke-opacity: 0.65; stroke-linecap: round; }
+.agents-curves-marker { fill: currentColor; stroke: var(--bg-elev); stroke-width: 1.5; outline: none; }
 .agents-curves-marker.is-sparse { fill: var(--bg-elev); stroke: currentColor; stroke-width: 2; }
+.agents-curves-marker:focus-visible { stroke: var(--fg); stroke-width: 2.5; }
+.agents-curves-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
+.agents-curves-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
 .agents-curves-empty { margin: 10px 0 0; color: var(--fg-dim); font-size: 12.5px; }
-.agents-curves-data { margin-top: 10px; font-size: 12.5px; }
+.agents-curves-data { margin-top: 8px; font-size: 12.5px; }
 .agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }
 .agents-curves-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-curves-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12.5px; }
