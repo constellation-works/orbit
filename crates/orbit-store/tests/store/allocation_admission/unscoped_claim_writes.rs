@@ -405,10 +405,22 @@ fn landing_completion_hold_is_claim_scoped_while_handed_off() {
         )
         .expect("landing attempt dispatched");
 
-    assert_unscoped_history_refused(
-        &delivery.owner,
-        &delivery.claim.task_id,
-        ExecutionClaimPhase::HandedOff,
+    // The landing's completion hold reaches the store through
+    // `with_task_write_lock` (`apply_task_automation_update`), so probe that
+    // entry point rather than the commit boundary.
+    let refused = delivery
+        .owner
+        .task_store()
+        .with_task_write_lock(&delivery.claim.task_id, &mut || Ok(()))
+        .expect_err("a handed-off claim refuses the unscoped landing task write")
+        .to_string();
+    assert!(
+        refused.contains("active execution claim requires a claim-scoped mutation"),
+        "the handed-off landing write keeps the claim-scoped mutation fence: {refused}"
+    );
+    assert!(
+        refused.contains("its handoff awaits the owner's completion authority"),
+        "the refusal names the handed-off completion authority: {refused}"
     );
 
     let hold = orbit_types::task::TaskHistoryEntry {
