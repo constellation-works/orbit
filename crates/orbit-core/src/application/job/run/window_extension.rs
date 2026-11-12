@@ -29,7 +29,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState, PullWindowClose,
 use serde_json::{Value, json};
 
 use super::worker_limit::{
-    DrainWorkerLimitChange, DrainWorkerLimitRequest, validate_drain_worker_ceiling,
+    DrainWorkerLimitChange, DrainWorkerLimitOutcome, validate_drain_worker_ceiling,
 };
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
@@ -121,7 +121,8 @@ impl OrbitRuntime {
     ) -> Result<DrainWindowExtensionChange, OrbitError> {
         self.require_workspace_claim(EXTEND_OPERATION, request.claim_token)?;
         let request_id = audit_execution_id("window_extend");
-        let outcome = self.apply_drain_window_extension(request, &request_id);
+        let requested_at = Utc::now();
+        let outcome = self.apply_drain_window_extension(request, &request_id, requested_at);
         match &outcome {
             Ok(change) => self.record_drain_control_completion(
                 EXTEND_COMPLETION_AUDIT,
@@ -146,17 +147,16 @@ impl OrbitRuntime {
                 Some(error.to_string()),
             )?,
         }
-        let mut change = outcome?;
-        if let Some(max_active_leaf_runs) = request.max_active_leaf_runs {
-            change.worker_limit = Some(self.set_drain_worker_limit(DrainWorkerLimitRequest {
-                run_id: request.run_id,
-                max_active_leaf_runs,
-                expected_revision: None,
-                reason: request.reason,
-                actor: request.actor,
-                source: request.source,
-                claim_token: request.claim_token,
-            })?);
+        let change = outcome?;
+        if let Some(limit) = &change.worker_limit {
+            self.record_combined_drain_worker_limit_audit(
+                limit,
+                &request_id,
+                request.actor,
+                request.source,
+                request.reason,
+                requested_at,
+            )?;
         }
         Ok(change)
     }
@@ -165,6 +165,7 @@ impl OrbitRuntime {
         &self,
         request: DrainWindowExtensionRequest<'_>,
         request_id: &str,
+        requested_at: DateTime<Utc>,
     ) -> Result<DrainWindowExtensionChange, OrbitError> {
         let run_id = request.run_id;
         let run = self
@@ -195,10 +196,17 @@ impl OrbitRuntime {
         if run.state.is_terminal() {
             return Err(terminal_run_error(run_id, run.state));
         }
-        self.record_extension_request(&run, request_id, request)?;
+        // The ceiling retune shares the extension's transaction below, so
+        // resolve its submitted value before that transaction opens.
+        let submitted_ceiling = match request.max_active_leaf_runs {
+            Some(_) => Some(self.submitted_max_active_leaf_runs(&run)?),
+            None => None,
+        };
+        self.record_extension_request(&run, request_id, requested_at, request)?;
 
         let pull_drain = run.job_id == PULL_DRAIN_JOB;
         let mut decided: Option<(bool, DateTime<Utc>, DateTime<Utc>, u32)> = None;
+        let mut worker_applied: Option<(u32, u32, u32, bool)> = None;
         let update = self.stores().jobs().update_run_state(
             run_id,
             &mut |run_state: JobRunState, state: &mut PipelineState| {
@@ -241,6 +249,30 @@ impl OrbitRuntime {
                     state.effective_drain_deadline(stamped),
                     revision,
                 ));
+                // Retune in the same transaction as the deadline: a claim
+                // taken after this commits cannot refuse the ceiling while
+                // silently keeping the longer window.
+                if let (Some(requested), Some(submitted)) =
+                    (request.max_active_leaf_runs, submitted_ceiling)
+                {
+                    let previous = state.effective_max_active_leaf_runs(submitted);
+                    let unchanged = previous == requested;
+                    if !unchanged {
+                        state.set_drain_worker_limit(
+                            requested,
+                            submitted,
+                            request.actor.to_string(),
+                            request.reason.map(str::to_string),
+                            None,
+                        );
+                    }
+                    worker_applied = Some((
+                        previous,
+                        requested,
+                        state.drain_worker_limit_revision(),
+                        unchanged,
+                    ));
+                }
                 Ok(())
             },
         )?;
@@ -266,7 +298,7 @@ impl OrbitRuntime {
         })?;
         Ok(DrainWindowExtensionChange {
             run_id: run_id.to_string(),
-            job_id: run.job_id,
+            job_id: run.job_id.clone(),
             outcome: if extended {
                 DrainWindowExtensionOutcome::Extended
             } else {
@@ -275,7 +307,20 @@ impl OrbitRuntime {
             previous_deadline,
             deadline,
             revision,
-            worker_limit: None,
+            worker_limit: worker_applied.map(|(previous, requested, revision, unchanged)| {
+                DrainWorkerLimitChange {
+                    run_id: run_id.to_string(),
+                    job_id: run.job_id.clone(),
+                    outcome: if unchanged {
+                        DrainWorkerLimitOutcome::Unchanged
+                    } else {
+                        DrainWorkerLimitOutcome::Updated
+                    },
+                    previous_max_active_leaf_runs: previous,
+                    max_active_leaf_runs: requested,
+                    revision,
+                }
+            }),
         })
     }
 
@@ -323,6 +368,7 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
         request_id: &str,
+        requested_at: DateTime<Utc>,
         request: DrainWindowExtensionRequest<'_>,
     ) -> Result<(), OrbitError> {
         self.record_pipeline_audit(
@@ -340,7 +386,7 @@ impl OrbitRuntime {
                 "reason": request.reason,
                 "actor": request.actor,
                 "source": request.source,
-                "requested_at": Utc::now().to_rfc3339(),
+                "requested_at": requested_at.to_rfc3339(),
             }),
             None,
         )

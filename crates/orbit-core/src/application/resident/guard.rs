@@ -86,23 +86,6 @@ pub(crate) fn action_rows(history: &[TaskHistoryEntry], cycle: &str) -> Vec<Resi
     rows
 }
 
-/// Recursively sort object keys; array order stays significant.
-fn canonical_value(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let mut sorted = serde_json::Map::new();
-            for key in keys {
-                sorted.insert(key.clone(), canonical_value(&map[key]));
-            }
-            Value::Object(sorted)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(canonical_value).collect()),
-        other => other.clone(),
-    }
-}
-
 fn digest_of(bytes: &[u8]) -> String {
     orbit_types::identity::lower_hex(Sha256::digest(bytes))
 }
@@ -110,7 +93,11 @@ fn digest_of(bytes: &[u8]) -> String {
 /// `sha256:v2:` over the call's canonical input (object keys sorted
 /// recursively, array order preserved).
 fn input_digest(tool: &str, input: &Value) -> String {
-    let canonical = serde_json::to_vec(&json!([tool, canonical_value(input)])).unwrap_or_default();
+    let canonical = serde_json::to_vec(&json!([
+        tool,
+        orbit_common::protocol::sorted_keys_json_value(input)
+    ]))
+    .unwrap_or_default();
     format!("sha256:v2:{}", digest_of(&canonical))
 }
 

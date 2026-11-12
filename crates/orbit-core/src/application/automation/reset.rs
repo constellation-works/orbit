@@ -62,25 +62,23 @@ pub fn reset_auto_task(
     #[cfg(feature = "test-support")]
     probe_hook::after_probe();
 
+    let mut reset_input = reset::Reset {
+        consumer: &consumer,
+        epoch: &epoch,
+        trigger: &trigger,
+        host_refusal: ownership.refusal(),
+        request,
+        by: &by,
+        now,
+        baseline,
+        released_refs: vec![],
+        inspected_state: inspected_state.as_ref(),
+        action_terminal: action_liveness.terminal,
+        action_failed_without_evidence: action_liveness.failed_without_evidence,
+    };
+
     if !request.mutates() {
-        return reset::preview(
-            store.as_ref(),
-            &reset::Reset {
-                consumer: &consumer,
-                epoch: &epoch,
-                trigger: &trigger,
-                host_refusal: ownership.refusal(),
-                request,
-                by: &by,
-                now,
-                baseline,
-                released_refs: vec![],
-                inspected_state: inspected_state.as_ref(),
-                action_terminal: action_liveness.terminal,
-                action_failed_without_evidence: action_liveness.failed_without_evidence,
-            },
-        )
-        .map_err(automation_error_to_orbit);
+        return reset::preview(store.as_ref(), &reset_input).map_err(automation_error_to_orbit);
     }
 
     runtime.ensure_coordination_task_write_permitted()?;
@@ -94,24 +92,8 @@ pub fn reset_auto_task(
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
 
-    let applied = reset::apply(
-        store.as_ref(),
-        &reset::Reset {
-            consumer: &consumer,
-            epoch: &epoch,
-            trigger: &trigger,
-            host_refusal: ownership.refusal(),
-            request,
-            by: &by,
-            now,
-            baseline,
-            released_refs: retained.clone(),
-            inspected_state: inspected_state.as_ref(),
-            action_terminal: action_liveness.terminal,
-            action_failed_without_evidence: action_liveness.failed_without_evidence,
-        },
-    )
-    .map_err(automation_error_to_orbit)?;
+    reset_input.released_refs = retained.clone();
+    let applied = reset::apply(store.as_ref(), &reset_input).map_err(automation_error_to_orbit)?;
 
     let kept = source.release_refs(&retained);
     if !kept.is_empty() {

@@ -591,6 +591,7 @@ impl Delivery {
                 &expected,
                 "operator",
                 "merged by hand",
+                "operator-revoke",
                 "revoke",
             )
             .expect("revoke");
@@ -601,6 +602,7 @@ impl Delivery {
                 TaskStatus::Blocked,
                 "operator",
                 "landing stopped on a conflict; merged by hand",
+                "operator-recover",
                 "recover",
             )
             .expect("recover");
@@ -2180,6 +2182,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
             TaskStatus::Blocked,
             "operator",
             "the follower went away",
+            "operator-recover",
             "recover",
         )
         .expect("recover");

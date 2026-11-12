@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, JobRunStep, PipelineState,
-    run_id_role,
+    ActivityDrawOrigin, CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, JobRunStep,
+    PipelineState, run_id_role,
 };
 use serde_json::{Value, json};
 
@@ -37,13 +37,15 @@ fn activity_crew_draws_json(state: Option<&PipelineState>) -> Value {
             .into_iter()
             .flat_map(|state| &state.activity_crew_draws)
             .map(|(key, draw)| {
-                let rule = if draw.source.starts_with("workflow.default_crew") {
+                let origin = draw.source.origin();
+                let rule = if *origin == ActivityDrawOrigin::DefaultCrew {
                     "default_crew"
                 } else if CrewPurpose::from_purpose_key(key).is_some() {
-                    if draw.source.starts_with(key.as_str()) {
-                        "purpose_pool"
-                    } else {
-                        "purpose_unset_fallback"
+                    match origin {
+                        ActivityDrawOrigin::ConfiguredPool { key: pool } if pool == key => {
+                            "purpose_pool"
+                        }
+                        _ => "purpose_unset_fallback",
                     }
                 } else if key == FINAL_RECOVERY_CREWS_KEY {
                     "final_recovery_pool"

@@ -16,9 +16,10 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::notice::{
-    NoticeCaller, NoticeListFilter, NoticePostRequest, NoticeSelector, NoticeStatusFilter,
+    NoticeCaller, NoticeListFilter, NoticePostRawFields, NoticePostRequest, NoticeSelector,
+    NoticeStatusFilter,
 };
-use orbit_types::record::{EffectiveStatus, Notice, NoticeKind, NoticeScope};
+use orbit_types::record::{EffectiveStatus, Notice, NoticeKind};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -258,12 +259,7 @@ pub(super) async fn list_notices(
                 .iter()
                 .filter(|notice| notice.status == EffectiveStatus::Open)
                 .collect();
-            open.sort_by(|a, b| {
-                a.kind
-                    .cmp(&b.kind)
-                    .then_with(|| b.updated_at.cmp(&a.updated_at))
-                    .then_with(|| a.id.cmp(&b.id))
-            });
+            open.sort_by(|a, b| a.cmp_list_order(b));
             let mut recent: Vec<&Notice> = notices
                 .iter()
                 .filter(|notice| {
@@ -306,42 +302,25 @@ pub(super) async fn post_notice(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
-    let kind = match body.kind.as_deref().and_then(NoticeKind::parse) {
-        Some(kind) => kind,
-        None => return bad_request("kind must be incident, maintenance or info".to_string()),
-    };
-    let scope = match body.scope.as_deref() {
-        None | Some("") => None,
-        Some(value) => match NoticeScope::parse(value) {
-            Some(scope) => Some(scope),
-            None => return bad_request("scope must be workspace or global".to_string()),
-        },
-    };
-    let expires_at = match body.expires_at.as_deref().filter(|value| !value.is_empty()) {
-        Some(value) => match DateTime::parse_from_rfc3339(value) {
-            Ok(at) => Some(at.with_timezone(&Utc)),
-            Err(_) => return bad_request("expires_at must be an RFC 3339 timestamp".to_string()),
-        },
-        None => None,
-    };
-    if expires_at.is_some() && body.expires_in_hours.is_some() {
-        return bad_request("expires_at and expires_in_hours are mutually exclusive".to_string());
-    }
-    let non_empty = |value: Option<String>| value.filter(|value| !value.trim().is_empty());
-    let request = NoticePostRequest {
-        kind,
-        title: body.title.unwrap_or_default(),
-        body: body.body,
-        scope,
-        dedupe_key: non_empty(body.dedupe_key),
-        linked_task: non_empty(body.linked_task),
-        close_on_linked_done: body.close_on_linked_done,
-        evidence: Vec::new(),
-        hosts: body.hosts,
-        expires_in_hours: body.expires_in_hours,
-        expires_at,
-    };
-    match blocking("post notice", move || runtime.post_notice(&caller, request)).await {
+    match blocking("post notice", move || {
+        let request = NoticePostRequest::parse_raw(NoticePostRawFields {
+            kind: body.kind,
+            title: body.title.unwrap_or_default(),
+            body: body.body,
+            scope: body.scope,
+            dedupe_key: body.dedupe_key,
+            linked_task: body.linked_task,
+            close_on_linked_done: body.close_on_linked_done,
+            evidence: Vec::new(),
+            hosts: body.hosts,
+            expires_in_hours: body.expires_in_hours,
+            expires_at: body.expires_at,
+            blank_means_absent: true,
+        })?;
+        runtime.post_notice(&caller, request)
+    })
+    .await
+    {
         Ok(result) => Json(json!({
             "notice": notice_json(&result.notice),
             "outcome": result.outcome,

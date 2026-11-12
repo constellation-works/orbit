@@ -47,8 +47,9 @@ pub struct ActivityCrewDraw {
     pub crew: String,
     /// The configuration the pool came from (`workflow.purpose_crews.final_recovery`,
     /// `workflow.<tier>_complexity_crews`), plus a note when the draw fell
-    /// back to `workflow.default_crew` or met a provider limit.
-    pub source: String,
+    /// back to `workflow.default_crew` or met a provider limit. Stored as
+    /// that exact string; its origin is classified once when it is read.
+    pub source: ActivityDrawSource,
     /// The permitted members and weights the draw ran on, so `run show`
     /// can explain the choice.
     pub eligible_pool: Vec<ActivityCrewPoolMember>,
@@ -56,6 +57,108 @@ pub struct ActivityCrewDraw {
     /// the drawn member names its effort (or none) itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_effort: Option<crate::identity::AutoEffortChoice>,
+}
+
+/// Where an activity crew draw's pool came from, classified once from its
+/// recorded source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityDrawOrigin {
+    /// The draw fell back to `workflow.default_crew`.
+    DefaultCrew,
+    /// The draw ran on the configured pool `key` (a `workflow.*` crew pool
+    /// key such as `workflow.purpose_crews.task_pilot` or
+    /// `workflow.low_complexity_crews`).
+    ConfiguredPool { key: String },
+    /// A recorded source in no known form; kept verbatim.
+    Other,
+}
+
+/// The provenance an [`ActivityCrewDraw`] records: the exact descriptive
+/// string, notes included, and the origin classified from it.
+///
+/// Serializes as that string, byte for byte, so persisted run states keep
+/// their shape; reading one classifies it with the same decoder new draws
+/// use. A string in no known form reads as [`ActivityDrawOrigin::Other`] and
+/// writes back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityDrawSource {
+    text: String,
+    origin: ActivityDrawOrigin,
+}
+
+impl ActivityDrawSource {
+    /// Configuration key every default-crew fallback source begins with.
+    const DEFAULT_CREW_KEY: &'static str = "workflow.default_crew";
+
+    /// Classify a descriptive draw source: the one decoder for new draws and
+    /// persisted ones. The origin is the leading configuration key, the text
+    /// before any ` `, `;` or `(` note.
+    pub fn parse(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let origin = if text.starts_with(Self::DEFAULT_CREW_KEY) {
+            ActivityDrawOrigin::DefaultCrew
+        } else {
+            let key = text.split([' ', ';', '(']).next().unwrap_or_default();
+            if key.len() > "workflow.".len() && key.starts_with("workflow.") {
+                ActivityDrawOrigin::ConfiguredPool {
+                    key: key.to_string(),
+                }
+            } else {
+                ActivityDrawOrigin::Other
+            }
+        };
+        Self { text, origin }
+    }
+
+    /// This source with `note` appended as `<source>; <note>`, keeping its
+    /// origin.
+    #[must_use]
+    pub fn with_note(&self, note: &str) -> Self {
+        Self {
+            text: format!("{}; {note}", self.text),
+            origin: self.origin.clone(),
+        }
+    }
+
+    /// Where the drawn pool came from.
+    pub fn origin(&self) -> &ActivityDrawOrigin {
+        &self.origin
+    }
+
+    /// The exact recorded string, notes included.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl fmt::Display for ActivityDrawSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl From<String> for ActivityDrawSource {
+    fn from(text: String) -> Self {
+        Self::parse(text)
+    }
+}
+
+impl From<&str> for ActivityDrawSource {
+    fn from(text: &str) -> Self {
+        Self::parse(text)
+    }
+}
+
+impl Serialize for ActivityDrawSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActivityDrawSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::parse)
+    }
 }
 
 /// The task revision final recovery observed when it was admitted.

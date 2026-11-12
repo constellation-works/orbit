@@ -47,6 +47,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY,
     DASHBOARD_HANDOFF_REVOKE, GovernedOperation,
 };
+use orbit_core::application::operator_input;
 use orbit_core::application::review::{
     DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
 };
@@ -66,12 +67,9 @@ use crate::state::{DashboardState, Ws};
 /// process itself runs inside a managed run whose ambient identity is a model.
 const OPERATOR_ACTOR: &str = "human";
 
-/// Longest accepted replay identity. Long enough for a UUID or a digest,
-/// short enough that a client cannot use the mutation key as storage.
+/// Longest accepted approve replay identity. Approve has no tool surface, so
+/// its key stays checked here; recover, revoke and retry check theirs in core.
 const MAX_REQUEST_ID: usize = 128;
-/// Longest accepted operator reason, matching what the store records as a
-/// status note.
-const MAX_REASON: usize = 2000;
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -236,24 +234,30 @@ pub(super) async fn retry_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_key = match validate_request_id(&body.request_key) {
-        Ok(key) => key,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "retrying a handoff") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
+    // Normalize before building the audit arguments: a denied or refused
+    // request must never persist an unbounded reason or an invalid key.
+    // Invalid values are omitted from the audit projection; the raw values
+    // still reach core, which refuses them on the operator path.
+    let audit_reason = operator_input::reason(&body.reason, "retrying a handoff").ok();
+    let audit_key = operator_input::replay_key(&body.request_key).ok();
     let request = orbit_types::workflow::handoff::LandingRetryRequest {
         handoff_id: handoff_id.clone(),
         expected_candidate_commit: body.expected_candidate_commit,
         expected_base_commit: body.expected_base_commit,
         expected_latest_attempt: body.expected_latest_attempt,
         expected_latest_state: body.expected_latest_state,
-        reason,
-        request_key,
+        reason: audit_reason.clone().unwrap_or(body.reason),
+        request_key: audit_key.clone().unwrap_or(body.request_key),
     };
-    let arguments = json!(request);
+    let mut arguments = json!(request);
+    if let Some(object) = arguments.as_object_mut() {
+        if audit_reason.is_none() {
+            object.remove("reason");
+        }
+        if audit_key.is_none() {
+            object.remove("request_key");
+        }
+    }
     run_owner_action(
         state,
         query,
@@ -295,24 +299,25 @@ pub(super) async fn revoke_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match validate_request_id(&body.request_id) {
-        Ok(request_id) => request_id,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "revoking completion authority") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
     let expected = ExpectedCandidate {
         candidate_commit: body.expected_candidate_commit,
         base_commit: body.expected_base_commit,
     };
-    let arguments = json!({
+    let audit_reason = operator_input::reason(&body.reason, "revoking completion authority").ok();
+    let audit_key = operator_input::replay_key(&body.request_id).ok();
+    let reason = audit_reason.clone().unwrap_or(body.reason);
+    let request_id = audit_key.unwrap_or(body.request_id);
+    let mut arguments = json!({
         "handoff_id": handoff_id,
         "candidate": expected.candidate_commit,
         "base": expected.base_commit,
         "reason": reason,
     });
+    if audit_reason.is_none()
+        && let Some(object) = arguments.as_object_mut()
+    {
+        object.remove("reason");
+    }
     let audited = handoff_id.clone();
     run_owner_action(
         state,
@@ -330,7 +335,8 @@ pub(super) async fn revoke_handoff_action(
                 &expected,
                 OPERATOR_ACTOR,
                 &reason,
-                &format!("dashboard-revoke:{handoff_id}:{request_id}"),
+                "dashboard-revoke",
+                &request_id,
             )
         },
     )
@@ -355,14 +361,6 @@ pub(super) async fn recover_claim_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match validate_request_id(&body.request_id) {
-        Ok(request_id) => request_id,
-        Err(message) => return bad_request(message),
-    };
-    let reason = match validate_reason(&body.reason, "claim recovery") {
-        Ok(reason) => reason,
-        Err(message) => return bad_request(message),
-    };
     // Any task status parses here; the owner's lifecycle and completion
     // gates decide which target this claim's task may take.
     let status = match body.status.parse::<TaskStatus>() {
@@ -370,12 +368,21 @@ pub(super) async fn recover_claim_action(
         Err(message) => return bad_request(message),
     };
     let expected_phase = body.expected_phase;
-    let arguments = json!({
+    let audit_reason = operator_input::reason(&body.reason, "claim recovery").ok();
+    let audit_key = operator_input::replay_key(&body.request_id).ok();
+    let reason = audit_reason.clone().unwrap_or(body.reason);
+    let request_id = audit_key.unwrap_or(body.request_id);
+    let mut arguments = json!({
         "claim_id": claim_id,
         "expected_phase": expected_phase,
         "status": body.status,
         "reason": reason,
     });
+    if audit_reason.is_none()
+        && let Some(object) = arguments.as_object_mut()
+    {
+        object.remove("reason");
+    }
     let audited = claim_id.clone();
     run_owner_action(
         state,
@@ -394,7 +401,8 @@ pub(super) async fn recover_claim_action(
                 status,
                 OPERATOR_ACTOR,
                 &reason,
-                &format!("dashboard-recover:{claim_id}:{request_id}"),
+                "dashboard-recover",
+                &request_id,
             )
         },
     )
@@ -577,15 +585,4 @@ fn validate_request_id(raw: &str) -> Result<String, String> {
         ));
     }
     validate_id(trimmed).map(ToString::to_string)
-}
-
-fn validate_reason(raw: &str, action: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(format!("{action} requires a reason"));
-    }
-    if trimmed.len() > MAX_REASON {
-        return Err(format!("reason must be at most {MAX_REASON} characters"));
-    }
-    Ok(trimmed.to_string())
 }

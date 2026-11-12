@@ -6,7 +6,7 @@
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitOutcome};
-use orbit_core::{DrainWindowExtensionRequest, OrbitError, OrbitRuntime};
+use orbit_core::{DrainWindowExtensionRequest, DrainWorkerLimitRequest, OrbitError, OrbitRuntime};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{AuditEventFilter, JobRunStoreBackend};
 use orbit_tools::ToolContext;
@@ -14,11 +14,15 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 use tempfile::TempDir;
 
 const PULL: &str = "workspace_pull_pipeline";
 const OWNER: &str = "workspace_auto_pipeline";
 const COMPLETED_AUDIT: &str = "pipeline.run.window_extend.completed";
+const EXTEND_REQUEST_AUDIT: &str = "pipeline.run.window_extend.requested";
+const WORKERS_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
+const WORKERS_COMPLETED_AUDIT: &str = "pipeline.run.workers.completed";
 
 struct Drains {
     _root: TempDir,
@@ -105,9 +109,14 @@ impl Drains {
 
     /// Completion audits recorded against `run_id`, newest first.
     fn completions(&self, run_id: &str, status: AuditEventStatus) -> Vec<Value> {
+        self.audits(run_id, COMPLETED_AUDIT, status)
+    }
+
+    /// Audit arguments for `tool_name` recorded against `run_id`, newest first.
+    fn audits(&self, run_id: &str, tool_name: &str, status: AuditEventStatus) -> Vec<Value> {
         self.runtime
             .list_audit_events_filtered(&AuditEventFilter {
-                tool_name: Some(COMPLETED_AUDIT.to_string()),
+                tool_name: Some(tool_name.to_string()),
                 status: Some(status),
                 job_run_id: Some(run_id.to_string()),
                 limit: 10,
@@ -429,6 +438,205 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
     }
 }
 
+fn acquire_claim(runtime: &OrbitRuntime) {
+    use orbit_store::contracts::WorkspaceClaimAcquireParams;
+    let store = runtime.sqlite_store().unwrap();
+    store
+        .acquire_workspace_claim(&WorkspaceClaimAcquireParams {
+            workspace_orbit_dir: runtime.paths().orbit_dir.to_string_lossy().into_owned(),
+            workspace_id: runtime.workspace_id().ok(),
+            actor: "claim-racer".to_string(),
+            ttl_seconds: 3600,
+            machine_id: Some("claim-racer".to_string()),
+            session_id: Some("claim-racer".to_string()),
+        })
+        .unwrap();
+}
+
+/// A claim taken by another operator after the extension would have
+/// committed must not leave a combined request half-applied: the request
+/// either succeeds with both controls or refuses with neither changed.
+fn a_claim_taken_during_a_combined_extension_leaves_no_partial_change() {
+    for job in [PULL, OWNER] {
+        let drains = Drains::new();
+        let stamped = whole_seconds(Utc::now() + Duration::minutes(10));
+        let drain = drains.running(job, 3600, stamped, |_| {});
+        let racer_runtime = drains.runtime.clone();
+        let racer_drain = drain.clone();
+        let racer = std::thread::spawn(move || {
+            let deadline = Instant::now() + StdDuration::from_secs(10);
+            while Instant::now() < deadline {
+                let extended = racer_runtime
+                    .read_run_state(&racer_drain)
+                    .ok()
+                    .flatten()
+                    .and_then(|state| state.pull_drain.drain_window_extension)
+                    .is_some();
+                if extended {
+                    acquire_claim(&racer_runtime);
+                    return;
+                }
+                std::hint::spin_loop();
+            }
+        });
+        let result = drains.extend(&drain, Duration::hours(2), Some(5));
+        let _ = racer.join();
+        let state = drains.state(&drain);
+        match result {
+            Ok(change) => {
+                assert_eq!(
+                    change.outcome,
+                    DrainWindowExtensionOutcome::Extended,
+                    "{job}"
+                );
+                assert_eq!(
+                    change
+                        .worker_limit
+                        .expect("ceiling retuned")
+                        .max_active_leaf_runs,
+                    5,
+                    "{job}"
+                );
+                assert!(state.pull_drain.drain_window_extension.is_some(), "{job}");
+                assert_eq!(
+                    state
+                        .pull_drain
+                        .drain_worker_limit
+                        .expect("ceiling persisted")
+                        .max_active_leaf_runs,
+                    5,
+                    "{job}"
+                );
+            }
+            Err(error) => {
+                assert!(
+                    state.pull_drain.drain_window_extension.is_none(),
+                    "{job}: refused combined extension left the longer window behind: {error}"
+                );
+                assert!(
+                    state.pull_drain.drain_worker_limit.is_none(),
+                    "{job}: refused combined extension left the ceiling behind: {error}"
+                );
+            }
+        }
+    }
+}
+
+fn combined_extension_resize_audit_links_to_the_extension_request() {
+    let drains = Drains::new();
+    for job in [PULL, OWNER] {
+        let drain = drains.running(job, 3600, Utc::now() + Duration::minutes(10), |_| {});
+        let change = drains.extend(&drain, Duration::hours(4), Some(5)).unwrap();
+        assert_eq!(
+            change.worker_limit.unwrap().outcome,
+            DrainWorkerLimitOutcome::Updated
+        );
+
+        let extend_requests =
+            drains.audits(&drain, EXTEND_REQUEST_AUDIT, AuditEventStatus::Success);
+        assert_eq!(extend_requests.len(), 1, "{job}: {extend_requests:?}");
+        let initiating_id = extend_requests[0]["request_id"].as_str().unwrap();
+        assert_eq!(extend_requests[0]["actor"], "operator", "{job}");
+        assert_eq!(extend_requests[0]["source"], "fixture", "{job}");
+        assert_eq!(extend_requests[0]["reason"], "overnight backlog", "{job}");
+
+        let worker_requests =
+            drains.audits(&drain, WORKERS_REQUEST_AUDIT, AuditEventStatus::Success);
+        assert_eq!(worker_requests.len(), 1, "{job}: {worker_requests:?}");
+        assert_eq!(worker_requests[0]["request_id"], initiating_id, "{job}");
+        assert_eq!(
+            worker_requests[0]["requested_at"], extend_requests[0]["requested_at"],
+            "{job}: the resize request carries its extension's request time"
+        );
+        assert_eq!(
+            worker_requests[0]["requested_max_active_leaf_runs"], 5,
+            "{job}"
+        );
+        assert_eq!(worker_requests[0]["actor"], "operator", "{job}");
+        assert_eq!(worker_requests[0]["source"], "fixture", "{job}");
+        assert_eq!(worker_requests[0]["reason"], "overnight backlog", "{job}");
+
+        let worker_completed =
+            drains.audits(&drain, WORKERS_COMPLETED_AUDIT, AuditEventStatus::Success);
+        assert_eq!(worker_completed.len(), 1, "{job}: {worker_completed:?}");
+        assert_eq!(
+            worker_completed[0]["request_id"], initiating_id,
+            "{job}: resize completion must join to its initiating extension request"
+        );
+        assert_eq!(worker_completed[0]["outcome"], "updated", "{job}");
+        assert_eq!(worker_completed[0]["max_active_leaf_runs"], 5, "{job}");
+        assert_eq!(
+            worker_completed[0]["previous_max_active_leaf_runs"], 2,
+            "{job}"
+        );
+        assert_eq!(worker_completed[0]["actor"], "operator", "{job}");
+        assert_eq!(worker_completed[0]["source"], "fixture", "{job}");
+        assert_eq!(worker_completed[0]["reason"], "overnight backlog", "{job}");
+
+        // A combined request whose ceiling is unchanged still emits linked evidence.
+        let again = drains
+            .extend(&drain, Duration::minutes(1), Some(5))
+            .unwrap();
+        assert_eq!(
+            again.worker_limit.unwrap().outcome,
+            DrainWorkerLimitOutcome::Unchanged
+        );
+        let extend_requests =
+            drains.audits(&drain, EXTEND_REQUEST_AUDIT, AuditEventStatus::Success);
+        assert_eq!(extend_requests.len(), 2, "{job}");
+        let second_id = extend_requests[0]["request_id"].as_str().unwrap();
+        assert_ne!(second_id, initiating_id, "{job}");
+        let worker_requests =
+            drains.audits(&drain, WORKERS_REQUEST_AUDIT, AuditEventStatus::Success);
+        assert_eq!(worker_requests.len(), 2, "{job}: {worker_requests:?}");
+        assert_eq!(worker_requests[0]["request_id"], second_id, "{job}");
+        assert_eq!(
+            worker_requests[0]["requested_at"], extend_requests[0]["requested_at"],
+            "{job}"
+        );
+        let worker_completed =
+            drains.audits(&drain, WORKERS_COMPLETED_AUDIT, AuditEventStatus::Success);
+        assert_eq!(worker_completed.len(), 2, "{job}: {worker_completed:?}");
+        assert_eq!(worker_completed[0]["request_id"], second_id, "{job}");
+        assert_eq!(worker_completed[0]["outcome"], "unchanged", "{job}");
+        assert_eq!(worker_completed[0]["actor"], "operator", "{job}");
+        assert_eq!(worker_completed[0]["source"], "fixture", "{job}");
+        assert_eq!(worker_completed[0]["reason"], "overnight backlog", "{job}");
+    }
+
+    // Standalone resize pairing remains intact.
+    let standalone = drains.running(PULL, 3600, Utc::now() + Duration::minutes(10), |_| {});
+    drains
+        .runtime
+        .set_drain_worker_limit(DrainWorkerLimitRequest {
+            run_id: &standalone,
+            max_active_leaf_runs: 4,
+            expected_revision: None,
+            reason: Some("standalone retune"),
+            actor: "operator",
+            source: "fixture",
+            claim_token: None,
+        })
+        .unwrap();
+    let requests = drains.audits(
+        &standalone,
+        WORKERS_REQUEST_AUDIT,
+        AuditEventStatus::Success,
+    );
+    let completed = drains.audits(
+        &standalone,
+        WORKERS_COMPLETED_AUDIT,
+        AuditEventStatus::Success,
+    );
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(completed.len(), 1, "{completed:?}");
+    assert_eq!(requests[0]["request_id"], completed[0]["request_id"]);
+    assert_eq!(requests[0]["actor"], "operator");
+    assert_eq!(requests[0]["source"], "fixture");
+    assert_eq!(requests[0]["reason"], "standalone retune");
+    assert_eq!(completed[0]["outcome"], "updated");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it_scenarios,
@@ -436,5 +644,7 @@ crate::scenario_table!(
     a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses,
     concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency,
     stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed,
-    invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged
+    invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged,
+    a_claim_taken_during_a_combined_extension_leaves_no_partial_change,
+    combined_extension_resize_audit_links_to_the_extension_request
 );

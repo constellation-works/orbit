@@ -164,6 +164,20 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 #task-filter .chip-more[aria-expanded="true"]::after { margin-top: 3px; transform: rotate(-135deg); }
 #task-filter .chip-more:hover { color: var(--fg); background: var(--bg-hover); }
 #task-filter .chip-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Workspace narrowing sits immediately after More and stays put when More
+   opens the quieter chips. It is a disclosure, with the same caret. */
+#task-filter .workspace-filter { display: inline-flex; flex: 0 0 auto; position: relative; }
+#task-filter .workspace-filter[hidden] { display: none; }
+#task-filter .workspace-filter > .chip::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin: -3px 0 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+#task-filter .workspace-filter > .chip[aria-expanded="true"]::after { margin-top: 3px; transform: rotate(-135deg); }
 #task-filter .chip-group-quiet:not(.open) .chip:not(.active) { display: none; }
 #task-filter .chip-quiet { border-style: dashed; }
 #task-filter .chip-quiet.active { border-style: solid; }

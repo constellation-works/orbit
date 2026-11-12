@@ -1,6 +1,5 @@
 //! Recovery attempt reservations and immutable certificates.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::Utc;
@@ -461,36 +460,7 @@ fn bound_field(checkpoint: &Value, field: &str) -> Result<String, OrbitError> {
 /// `rewritten` — changes the digest.
 // Shared with the legacy-certificate security fixture to seed the persisted format.
 pub(super) fn payload_digest(checkpoint: &Value) -> String {
-    blake3::hash(canonical_json(checkpoint).as_bytes())
+    blake3::hash(orbit_common::protocol::sorted_keys_json_string(checkpoint).as_bytes())
         .to_hex()
         .to_string()
-}
-
-/// Render `value` with object keys in a stable order. `serde_json` map ordering
-/// depends on a feature flag and on how a value was built, and this digest has
-/// to survive a round trip through the run store either way.
-fn canonical_json(value: &Value) -> String {
-    match value {
-        Value::Object(fields) => {
-            let sorted = fields
-                .iter()
-                .map(|(key, value)| (key.as_str(), canonical_json(value)))
-                .collect::<BTreeMap<_, _>>();
-            let rendered = sorted
-                .into_iter()
-                .map(|(key, value)| format!("{}:{value}", Value::String(key.to_string())))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{{{rendered}}}")
-        }
-        Value::Array(items) => {
-            let rendered = items
-                .iter()
-                .map(canonical_json)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("[{rendered}]")
-        }
-        other => other.to_string(),
-    }
 }

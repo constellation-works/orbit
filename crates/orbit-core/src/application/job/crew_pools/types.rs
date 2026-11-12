@@ -16,8 +16,8 @@ pub(super) const POLICY_PIPELINES: [&str; 5] = [
     "workspace_auto_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
-    "task_local_pipeline",
-    "task_pr_pipeline",
+    orbit_types::workflow::TASK_LOCAL_PIPELINE_JOB,
+    orbit_types::workflow::TASK_PR_PIPELINE_JOB,
 ];
 pub(super) const SELECTION_KEY: &str = "crew_selection";
 pub(super) const COMPLEXITIES: [TaskComplexity; 4] = [

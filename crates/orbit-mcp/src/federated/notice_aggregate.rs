@@ -10,10 +10,13 @@
 //! fan-out the notice federation spec calls for until the attention
 //! federation's shared aggregation lands; fold the two then.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::governance::notice::{NOTICE_LIST_DEFAULT_LIMIT, notice_list_limit_in_call};
+use orbit_types::record::{NoticeKind, NoticeListOrderKey};
 use orbit_types::tool::{ToolSessionContext, mcp_advertised_tool_name};
 use serde_json::{Value, json};
 
@@ -60,7 +63,7 @@ impl FederatedMcpHost {
         input: Value,
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        let limit = notice_list_limit(&input)?;
+        let limit = notice_list_limit_in_call(&input)?.unwrap_or(NOTICE_LIST_DEFAULT_LIMIT);
         let descriptors = self.probe_all_destinations(false);
         let owners = self.owner_reads(&descriptors);
 
@@ -150,16 +153,7 @@ impl FederatedMcpHost {
             }
         }
 
-        notices.sort_by(|left, right| {
-            kind_rank(left)
-                .cmp(&kind_rank(right))
-                .then_with(|| updated_at(right).cmp(&updated_at(left)))
-                .then_with(|| {
-                    left.get("id")
-                        .and_then(Value::as_str)
-                        .cmp(&right.get("id").and_then(Value::as_str))
-                })
-        });
+        sort_in_notice_list_order(&mut notices);
         notices.truncate(limit);
         degraded.sort();
         degraded.dedup();
@@ -242,32 +236,36 @@ impl OwnerRead {
     }
 }
 
-/// The post-merge limit: the caller's `limit`, else the list default.
-fn notice_list_limit(input: &Value) -> Result<usize, OrbitError> {
-    match input.get("limit") {
-        None | Some(Value::Null) => Ok(50),
-        Some(value) => value
-            .as_u64()
-            .and_then(|limit| usize::try_from(limit).ok())
-            .filter(|limit| (1..=200).contains(limit))
-            .ok_or_else(|| OrbitError::InvalidInput("`limit` must be between 1 and 200".into())),
-    }
+/// Order merged notices in the shared notice list order. Every owner
+/// answers from a typed notice, so the key reads; a notice whose key does
+/// not (a kind this build does not know) follows the rest, by id.
+fn sort_in_notice_list_order(notices: &mut [Value]) {
+    notices.sort_by(|left, right| {
+        match (notice_list_order_key(left), notice_list_order_key(right)) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => notice_id(left).cmp(&notice_id(right)),
+        }
+    });
 }
 
-/// Listing order of a notice kind: incident, maintenance, info.
-fn kind_rank(notice: &Value) -> u8 {
-    match notice.get("kind").and_then(Value::as_str) {
-        Some("incident") => 0,
-        Some("maintenance") => 1,
-        Some("info") => 2,
-        _ => 3,
-    }
+fn notice_id(notice: &Value) -> Option<&str> {
+    notice.get("id").and_then(Value::as_str)
 }
 
-fn updated_at(notice: &Value) -> Option<DateTime<Utc>> {
-    notice
-        .get("updated_at")
-        .and_then(Value::as_str)
-        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-        .map(|at| at.with_timezone(&Utc))
+/// Read a wire notice's list-order key.
+fn notice_list_order_key(notice: &Value) -> Option<NoticeListOrderKey<'_>> {
+    Some(NoticeListOrderKey {
+        kind: notice
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(NoticeKind::parse),
+        updated_at: notice
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|at| at.with_timezone(&Utc)),
+        id: notice_id(notice)?,
+    })
 }

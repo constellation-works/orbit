@@ -268,19 +268,6 @@ impl KitInspection {
         self.playwright_version.as_deref() == Some(PLAYWRIGHT_VERSION)
     }
 
-    /// The installed pixel helper is the version this release pins, and the
-    /// recorded smoke test ran against it. Pixel checks require this on
-    /// top of [`Self::is_verified`]: a kit verified before the helper was
-    /// pinned keeps serving ordinary browser checks until `install` adds it.
-    pub fn pixel_helper_verified(&self) -> bool {
-        self.pixel_helper_version.as_deref() == Some(PIXEL_HELPER_VERSION)
-            && self
-                .verification
-                .as_ref()
-                .and_then(|record| record.pixel_helper_version.as_deref())
-                == Some(PIXEL_HELPER_VERSION)
-    }
-
     /// Module, browser and `env.sh` are in place, and the recorded smoke test
     /// ran against this exact package version and browser revision.
     pub fn is_verified(&self) -> bool {

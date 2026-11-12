@@ -339,6 +339,149 @@ fn a_request_outside_the_run_is_refused_before_the_backend_runs() {
     );
 }
 
+/// A registry naming this run's workspace `orbit` (`ws_run_own`) and another
+/// one, and a runtime bound to the first whose task-partition id differs from
+/// its logical id, as for any checkout bound before `workspace init` supplied
+/// an id. Returns the runtime and that partition id.
+fn bound_runtime(fixture: &Fixture) -> (OrbitRuntime, String) {
+    use orbit_registry::workspace_registry;
+    use orbit_types::workspace::{Workspace, WorkspaceStatus};
+
+    let now = chrono::Utc::now();
+    let workspace = |id: &str, name: &str| Workspace {
+        id: id.to_string(),
+        name: name.to_string(),
+        owner_machine_id: None,
+        git_remote: None,
+        ship_mode: None,
+        base_branch: "main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: now,
+        updated_at: now,
+    };
+    let registry_path = workspace_registry::registry_path_for(&fixture.global_root);
+    let mut registry = workspace_registry::load_registry_from(&registry_path).expect("registry");
+    workspace_registry::register_workspace(&mut registry, workspace("ws_run_own", "orbit"))
+        .expect("register own workspace");
+    workspace_registry::register_workspace(&mut registry, workspace("ws_run_other", "elsewhere"))
+        .expect("register other workspace");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save registry");
+    let partition = fixture.runtime().workspace_id().expect("partition id");
+    assert_ne!(partition, "ws_run_own");
+    let runtime = OrbitRuntime::from_roots_with_binding(
+        &fixture.global_root,
+        &fixture.workspace_root,
+        crate::WorkspaceRuntimeBinding {
+            logical_workspace_id: "ws_run_own".to_string(),
+            task_partition_id: partition.clone(),
+            owner_machine_id: None,
+            checkout_role: None,
+            repo_root: fixture.worktree.clone(),
+            ship_mode: crate::ShipMode::Pr,
+            base_branch: Some("main".to_string()),
+        },
+    )
+    .expect("bound runtime");
+    (runtime, partition)
+}
+
+/// F2026-11-238: the run records its logical id while the nested `orbit`
+/// forwards the store identity it resolved the caller's selector to, so the
+/// broker must treat every spelling of the run's own workspace alike and still
+/// refuse anything else.
+#[test]
+fn the_broker_admits_every_spelling_of_the_runs_own_workspace_and_nothing_else() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &the_broker_admits_every_spelling_of_the_runs_own_workspace_and_nothing_else,
+    )) {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.plugin("demo", ECHO_BACKEND, None);
+    let (runtime, partition) = bound_runtime(&fixture);
+    let outside = fixture.global_root.clone();
+    let serve_bound = |run: PluginBrokerRun| {
+        let dispatch = Arc::new(RunDispatch::new(runtime.clone(), run));
+        let broker =
+            PluginBroker::start(&fixture.global_root, RUN_ID, dispatch).expect("start broker");
+        broker.bind_anchor(PeerAnchor::Ancestor(
+            process_start_key(std::process::id()).expect("own start key"),
+        ));
+        Serving {
+            broker,
+            runtime: runtime.clone(),
+        }
+    };
+    let mut own = fixture.run(&["demo.hello"]);
+    own.workspace = Some("ws_run_own".to_string());
+    let serving = serve_bound(own);
+
+    for spelling in ["ws_run_own", "orbit", partition.as_str()] {
+        let mut accepted = request("demo.hello", json!({}), &fixture.worktree);
+        accepted["workspace"] = json!(spelling);
+        let response = serving.call(accepted);
+        assert_eq!(response["ok"], true, "{spelling}: {response}");
+    }
+
+    let refused = |serving: &Serving, case: &str, mut request: Value| {
+        let response = serving.call(request.take());
+        assert_eq!(
+            response["error"]["code"], "plugin_broker_refused",
+            "{case}: {response}"
+        );
+        response
+    };
+    let with = |tool: &str, cwd: &Path, workspace: Option<&str>, dry_run: bool| {
+        let mut request = request(tool, json!({}), cwd);
+        request["workspace"] = json!(workspace);
+        request["dry_run"] = json!(dry_run);
+        request
+    };
+    for (case, workspace) in [
+        ("a different registered workspace by name", "elsewhere"),
+        ("a different registered workspace by id", "ws_run_other"),
+        ("an unregistered selector", "ws_never_registered"),
+        ("a malformed selector", "../orbit"),
+        ("a selector differing only in case", "ORBIT"),
+    ] {
+        let response = refused(
+            &serving,
+            case,
+            with("demo.hello", &fixture.worktree, Some(workspace), false),
+        );
+        assert!(
+            response.to_string().contains("this run's workspace"),
+            "{case}: {response}"
+        );
+    }
+    refused(
+        &serving,
+        "a cwd outside the worktree",
+        with("demo.hello", &outside, Some("orbit"), false),
+    );
+    refused(
+        &serving,
+        "a dry run",
+        with("demo.hello", &fixture.worktree, Some("orbit"), true),
+    );
+    refused(
+        &serving,
+        "a tool outside the allowlist",
+        with("demo.other", &fixture.worktree, Some("orbit"), false),
+    );
+
+    let mut unrecorded = fixture.run(&["demo.hello"]);
+    unrecorded.workspace = None;
+    let unrecorded = serve_bound(unrecorded);
+    for spelling in ["orbit", "ws_run_own", partition.as_str()] {
+        refused(
+            &unrecorded,
+            "an explicit selector for a run with no recorded workspace",
+            with("demo.hello", &fixture.worktree, Some(spelling), false),
+        );
+    }
+}
+
 #[test]
 fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
     if crate::application::run_isolated_test(std::any::type_name_of_val(

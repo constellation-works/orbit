@@ -1387,6 +1387,7 @@ fn sandbox_fixture() {
                 TaskStatus::Backlog,
                 "operator",
                 "The claim outlived its reservation.",
+                "operator-recover",
                 "claimed-review-revocation",
             )
             .expect("the owner revokes the claim");

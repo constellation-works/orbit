@@ -26,9 +26,10 @@ import sys
 from datetime import datetime
 
 CHECK = "Check / Clippy / Test"
-# Jobs the Check job awaits (.github/workflows/ci.yml); CI guardrails runs beside the tests.
+# Jobs the Check job awaits (.github/workflows/ci.yml), including both guardrails jobs.
 AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3", "Test extra partition",
-           "Test partition 2", "Test partition 6", "Test partition 7", "Test partition 8", "CI guardrails")
+           "Test partition 2", *(f"Test partition {k}" for k in range(6, 13)),
+           "CI guardrails", "CI QA guardrails")
 
 
 def parse_time(value):

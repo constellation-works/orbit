@@ -182,7 +182,7 @@ fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews(
     let run = fx.run("task_pilot_pipeline");
     let first = fx.model_for(json!({"job_run_id": run, "crew_config_key": LOW}));
     let draw = fx.draws(&run)[LOW].clone();
-    assert_eq!(draw.source, LOW);
+    assert_eq!(draw.source.as_str(), LOW);
     assert_eq!(
         draw.eligible_pool
             .iter()
@@ -229,7 +229,7 @@ fn an_activity_pool_draw_is_frozen_per_run_and_skips_disabled_and_limited_crews(
     let draw = fx.draws(&limited)[LOW].clone();
     assert_eq!(draw.crew, "low_codex");
     assert!(
-        draw.source.starts_with(LOW) && draw.source.contains("provider limit"),
+        draw.source.as_str().starts_with(LOW) && draw.source.as_str().contains("provider limit"),
         "{}",
         draw.source
     );
@@ -245,7 +245,8 @@ fn an_empty_pool_falls_back_to_the_default_crew_and_the_run_says_so() {
     let draw = fx.draws(&run)[MEDIUM].clone();
     assert_eq!(draw.crew, "fallback");
     assert!(
-        draw.source.contains("workflow.default_crew") && draw.source.contains(MEDIUM),
+        draw.source.as_str().contains("workflow.default_crew")
+            && draw.source.as_str().contains(MEDIUM),
         "the recorded draw names the fallback and the empty pool: {}",
         draw.source
     );
@@ -344,7 +345,7 @@ fn an_inspecting_activity_draws_only_inspection_capable_crews() {
             "and their weights"
         );
         assert_eq!(
-            draw.source,
+            draw.source.as_str(),
             format!("{LOW}; native inspection, skipped: gemini_flash")
         );
         // The draw stays frozen for the run.
@@ -361,7 +362,7 @@ fn an_inspecting_activity_draws_only_inspection_capable_crews() {
     let run = fx.run("task_pr_pipeline");
     fx.model_for(json!({"run_id": run, "crew_config_key": LOW}));
     let draw = fx.draws(&run)[LOW].clone();
-    assert_eq!(draw.source, LOW);
+    assert_eq!(draw.source.as_str(), LOW);
     assert_eq!(pool_names(&draw), ["gemini_flash", "haiku", "luna"]);
 }
 
@@ -377,7 +378,7 @@ fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
     let draw = fx.draws(&run)[MEDIUM].clone();
     assert_eq!(pool_names(&draw), ["hard_codex"]);
     assert_eq!(
-        draw.source,
+        draw.source.as_str(),
         format!(
             "{HARD} (no crew in {MEDIUM} can inspect); native inspection, skipped: medium_grok, \
              hard_gemini"
@@ -394,8 +395,8 @@ fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
     assert_eq!(fx.model_for(pilot_input(&run, MEDIUM)), "fixture-fallback");
     let draw = fx.draws(&run)[MEDIUM].clone();
     assert!(
-        draw.source.starts_with("workflow.default_crew")
-            && draw.source.contains("native inspection"),
+        draw.source.as_str().starts_with("workflow.default_crew")
+            && draw.source.as_str().contains("native inspection"),
         "{}",
         draw.source
     );
@@ -447,7 +448,7 @@ fn activity_draws_record_pressure_without_changing_filters_or_frozen_choices() {
             &json!(draw.eligible_pool),
             &[("low_claude", 1, 8.0), ("low_codex", 3, 3.0)],
         );
-        assert!(draw.source.ends_with("; usage pressure"));
+        assert!(draw.source.as_str().ends_with("; usage pressure"));
         fx.model_for(input);
         assert_eq!(fx.draws(&run), draws, "the full draw is frozen");
     }

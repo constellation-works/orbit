@@ -701,6 +701,12 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
 /// no task row; accepting and replaying the handoff records the decision once.
 #[test]
 fn claimed_baseline_known_red_is_recorded_only_on_the_owner() {
+    if !isolated(
+        module_path!(),
+        "claimed_baseline_known_red_is_recorded_only_on_the_owner",
+    ) {
+        return;
+    }
     use orbit_types::task::TaskDecision;
     use orbit_types::workflow::{
         KNOWN_RED_VALIDATION_EVENT, ReviewBaselineClaim, ReviewCertificate,
@@ -1171,6 +1177,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The operator took the claim back.",
+                "operator-recover",
                 "recover",
             )
             .expect("the operator revokes the claim");
@@ -1186,6 +1193,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The claim outlived its reservation.",
+                "operator-recover",
                 "recover",
             )
             .expect("the operator recovers the expired claim");
@@ -1343,6 +1351,7 @@ fn a_recovered_claim_replays_the_same_recovery_request() {
             status,
             "operator",
             reason,
+            "operator-recover",
             request_id,
         )
     };

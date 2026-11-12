@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 pub struct LexicalStore {
     conn: Arc<Mutex<Connection>>,
     fts_queries: Arc<AtomicU64>,
+    read_only: bool,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchIndexStats {
@@ -23,16 +24,22 @@ fn err(error: rusqlite::Error) -> OrbitError {
 }
 impl LexicalStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
-        let conn = orbit_common::storage::sqlite::open_private(path)?.connection;
+        let opened = orbit_common::storage::sqlite::open_private(path)?;
+        let mut read_only = opened.read_only;
+        let conn = opened.connection;
         if let Err(error) = migration::ensure_schema(&conn) {
             if !error.is_readonly_or_access_failure() || !migration::schema_present(&conn)? {
                 return Err(error);
             }
+            // The schema is already built, so reads proceed; a storage layer
+            // that refused the migration write will refuse index writes too.
+            read_only = true;
             tracing::warn!(%error, "search index migration requires writable storage");
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only,
         })
     }
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
@@ -41,6 +48,7 @@ impl LexicalStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only: true,
         })
     }
     pub fn open_in_memory() -> Result<Self, OrbitError> {
@@ -49,7 +57,15 @@ impl LexicalStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only: false,
         })
+    }
+    /// Whether this connection can never write: it was opened read-only, or
+    /// its storage refused writes at open (a read-only mount or sandbox).
+    /// Callers that index best-effort on every task write check this instead
+    /// of attempting a write that is known to fail. [ORB-24077]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
     pub(super) fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)

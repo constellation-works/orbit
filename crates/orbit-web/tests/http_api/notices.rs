@@ -208,6 +208,80 @@ fn assert_notice_ids(payload: &Value, key: &str, ids: &[&str]) {
 }
 
 #[test]
+fn post_notice_refusals_carry_the_core_invalid_field_code() {
+    isolated(
+        "notices::post_notice_refusals_carry_the_core_invalid_field_code",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let future = (Utc::now() + Duration::hours(2)).to_rfc3339();
+            let cases: Vec<(Value, &str)> = vec![
+                (
+                    json!({"title": "no kind"}),
+                    "`kind` must be incident, maintenance or info",
+                ),
+                (
+                    json!({"kind": "bogus", "title": "bad kind"}),
+                    "`kind` must be incident, maintenance or info",
+                ),
+                (
+                    json!({"kind": "info", "title": "bad scope", "scope": "bogus"}),
+                    "`scope` must be workspace or global",
+                ),
+                (
+                    json!({"kind": "info", "title": "bad expiry", "expires_at": "not-a-time"}),
+                    "`expires_at` must be an RFC 3339 timestamp",
+                ),
+                (
+                    json!({"kind": "info", "title": "both expiries", "expires_at": future, "expires_in_hours": 1}),
+                    "pass `expires_in_hours` or `expires_at`, not both",
+                ),
+                (
+                    json!({"kind": "info"}),
+                    "`title` must be non-empty single-line text",
+                ),
+            ];
+            for (body, message) in cases {
+                let response = server.send("POST", "/api/notices", body);
+                assert_eq!(response.status().as_u16(), 400);
+                let payload: Value = response.json().unwrap();
+                assert_eq!(payload["code"], "notice_invalid_field", "{payload}");
+                assert_eq!(payload["error"], message, "{payload}");
+            }
+            // The HTTP body remains typed; numeric strings are accepted only
+            // by the tool input parser, not by this API.
+            let response = server.send(
+                "POST",
+                "/api/notices",
+                json!({"kind": "info", "title": "String expiry", "expires_in_hours": "1"}),
+            );
+            assert_eq!(response.status().as_u16(), 422);
+
+            // Blank form fields mean absent, not a refusal.
+            let payload = json_ok(server.send(
+                "POST",
+                "/api/notices",
+                json!({
+                    "kind": "info",
+                    "title": "blank form fields",
+                    "scope": "",
+                    "dedupe_key": "",
+                    "linked_task": "",
+                    "expires_at": "",
+                    "evidence": [{"type": "run", "value": "ignored"}],
+                }),
+            ));
+            assert_eq!(payload["outcome"], "created");
+            assert!(payload["notice"].is_object());
+            assert!(payload["notice"].get("ended_label").is_some());
+            assert!(payload["notice"].get("ended_at").is_some());
+            assert_eq!(payload["notice"]["scope"], "workspace");
+            assert_eq!(payload["notice"]["evidence"], json!([]));
+        },
+    );
+}
+
+#[test]
 fn aggregate_notices_resolve_cold_registered_workspaces() {
     isolated(
         "notices::aggregate_notices_resolve_cold_registered_workspaces",
@@ -289,4 +363,55 @@ fn aggregate_notices_report_broken_config_and_recover_without_warming() {
             assert_eq!(payload["degraded"], json!([]));
         },
     );
+}
+
+/// The dashboard's open list uses the shared notice list order: kind
+/// (incident, maintenance, info), then newest update (ORB-24017).
+#[test]
+fn open_notices_follow_the_shared_list_order() {
+    isolated("notices::open_notices_follow_the_shared_list_order", || {
+        let fixture = Fixture::new();
+        let info = post(
+            &fixture.runtime,
+            NoticeKind::Info,
+            "first info",
+            "order-info",
+        );
+        let older = post(
+            &fixture.runtime,
+            NoticeKind::Incident,
+            "older incident",
+            "order-older",
+        );
+        let maintenance = post(
+            &fixture.runtime,
+            NoticeKind::Maintenance,
+            "planned swap",
+            "order-maintenance",
+        );
+        let newer = post(
+            &fixture.runtime,
+            NoticeKind::Incident,
+            "newer incident",
+            "order-newer",
+        );
+        let server = fixture.server(false);
+        let payload = json_ok(server.get("/api/notices"));
+        let ids: Vec<&str> = payload["open"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| notice["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                newer.as_str(),
+                older.as_str(),
+                maintenance.as_str(),
+                info.as_str()
+            ],
+            "{payload}"
+        );
+    });
 }

@@ -100,7 +100,7 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
             // candidate. In particular the admitting drain is still live.
             // CI recovery here belongs to the owner-local PR delivery job;
             // live/kept execution claims are fenced separately above.
-            job_id: Some("task_pr_pipeline".into()),
+            job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.into()),
             task_id: Some(task.id.clone()),
             limit: Some(RUN_WINDOW),
             include_steps: false,

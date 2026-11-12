@@ -137,7 +137,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
             .executed_on
             .as_ref()
             .is_none_or(|o| o.machine_id != binding.machine_id)
-        || run.job_id != "task_pr_pipeline"
+        || run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
         || run
             .input
             .as_ref()
@@ -268,7 +268,7 @@ pub(in crate::executor::automation::vcs) fn publication_lease<H: RuntimeHost + ?
     let state = host.read_run_state(id)?.ok_or_else(refused)?;
     let published = state.pipeline.get("push").ok_or_else(refused)?;
     if state.run_id != id
-        || state.job_id != "task_pr_pipeline"
+        || state.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
         || published["phase"] != "push"
         || published["branch"] != binding.branch
         || published["local_sha"] != lease

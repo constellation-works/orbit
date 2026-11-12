@@ -55,6 +55,12 @@ template:
     paths where possible; for a test file that must be created, set
     `allow_missing_context: true` and identify that intended path. Never file a
     finding without context selectors.
+    `acceptance_criteria` must not name an operator-reserved governed operation
+    (for example `orbit.experiment.abandon`, `orbit.experiment.conclude` or
+    `orbit.task.requeue`): the implementing lane cannot call it, and the pilot
+    holds the task for an operator decision. Route such a validation to an
+    operator handoff instead: the criterion names the state to verify, not the
+    tool the implementing lane would have to call.
     Search for duplicates with `orbit.search` (`"kind":"task"`) before filing.
     A claimed run reaches the owner's search and task list through its run's
     coordinator, scoped to the claimed workspace. Record the duplicate-check

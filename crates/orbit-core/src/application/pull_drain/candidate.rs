@@ -16,13 +16,10 @@
 
 use orbit_engine::review_gate::{INTERRUPTED_REVIEW_KEY, interrupted_review_ref, review_in_flight};
 use orbit_store::contracts::{ClaimCandidateRef, ClaimFailure, InterruptedReview};
-use orbit_types::workflow::{CandidateCarry, CandidateCarryOutput, JobRun, PipelineState};
+use orbit_types::workflow::{self, CandidateCarry, CandidateCarryOutput, JobRun, PipelineState};
 
 /// The claimed PR leaf's base synchronization step.
 pub(super) const SYNC_BASE_STEP: &str = "sync_base";
-
-/// The claimed owner-local leaf definition.
-const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
 
 /// The claimed PR leaf's steps in order, from the commit on: a step a leaf's
 /// pipeline state holds no output for did not complete. `review`,
@@ -59,7 +56,7 @@ pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Opti
     if !done("commit") {
         return None;
     }
-    let steps: &[&'static str] = if run.job_id == CLAIMED_LOCAL_PIPELINE {
+    let steps: &[&'static str] = if run.job_id == workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB {
         &CLAIMED_LOCAL_DELIVERY_STEPS
     } else {
         &CLAIMED_PR_DELIVERY_STEPS
@@ -128,7 +125,7 @@ pub(super) fn preserved_candidate_with_carry(
         landing_stop: None,
     };
     let committed = text(step("commit"), "commit_sha");
-    if run.job_id == CLAIMED_LOCAL_PIPELINE {
+    if run.job_id == workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB {
         (candidate.branch, candidate.head_sha) = (text(step("worktree"), "head_ref")?, committed?);
         return Some(candidate);
     }

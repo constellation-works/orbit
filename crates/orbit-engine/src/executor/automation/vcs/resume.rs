@@ -215,7 +215,7 @@ fn resumed_preparation_refresh(
     job: &JobV2,
     resume: &PipelineState,
 ) -> Result<Option<ResumePreparationRefresh>, DispatchError> {
-    if resume.job_id != "task_pr_pipeline" {
+    if resume.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB {
         return Ok(None);
     }
     let Some(checkpoint) = resume.failure_activity_checkpoint.as_ref() else {

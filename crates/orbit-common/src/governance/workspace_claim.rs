@@ -7,7 +7,8 @@ use orbit_types::tool::McpIdRouteDeclaration;
 
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    RETIRED_AGENT_FIELD, Redaction, ToolOnlyRegistration, UnknownFields, operation_registry,
+    RETIRED_AGENT_FIELD, Redaction, ToolOnlyRegistration, UnknownFields, mcp_only,
+    operation_registry,
 };
 
 operation_registry! {
@@ -60,16 +61,14 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
             )),
             cli: None,
         },
-        param(
+        mcp_only(
             "machine_id",
             ParamType::String,
-            false,
             "Optional machine identity, recorded for diagnostics only; the claim is keyed on the returned token.",
         ),
-        param(
+        mcp_only(
             "session_id",
             ParamType::String,
-            false,
             "Optional session identity, recorded for diagnostics only; never load-bearing, so a reconnecting client does not orphan the workspace.",
         ),
     ]],
@@ -89,16 +88,14 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
-        param(
+        mcp_only(
             "claim_token",
             ParamType::String,
-            false,
             "The holder's claim token. Required unless `force` is set.",
         ),
-        param(
+        mcp_only(
             "force",
             ParamType::Boolean,
-            false,
             "Release the claim without its token, for a holder that has gone away. Audited with who forced it and whom they displaced.",
         ),
     ]],
@@ -125,23 +122,3 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
-
-/// A structural tool parameter, with no CLI binding or input rewriting.
-const fn param(
-    name: &'static str,
-    param_type: ParamType,
-    required: bool,
-    description: &'static str,
-) -> ParamSpec {
-    ParamSpec {
-        name,
-        aliases: &[],
-        param_type,
-        required,
-        preserve_empty: false,
-        default: None,
-        redact: Redaction::None,
-        mcp_description: Some(Description::Static(description)),
-        cli: None,
-    }
-}

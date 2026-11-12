@@ -75,7 +75,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
 use orbit_types::workflow::{
-    COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
+    self, COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
     PipelineState, PrAutoFixBlocker, current_completion_hold,
 };
 use serde_json::{Value, json};
@@ -90,9 +90,6 @@ use super::held::{
 use super::ledger::{OutOfRunStart, ledger_admits};
 use crate::OrbitRuntime;
 use crate::runtime::run_input::carried_task_ids;
-
-/// The delivery leaf that opens and watches a pull request.
-pub(super) const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
 
 /// Delivery leaves read for one candidate task, newest first, to find the
 /// newest one that carries only that task. A leaf that carries several tasks
@@ -228,7 +225,7 @@ impl OrbitRuntime {
                 .stores()
                 .jobs()
                 .job_run_task_ids(&JobRunQuery {
-                    job_id: Some(DELIVERY_LEAF_JOB.to_string()),
+                    job_id: Some(workflow::TASK_PR_PIPELINE_JOB.to_string()),
                     states: vec![
                         JobRunState::Failed,
                         JobRunState::Timeout,
@@ -364,7 +361,7 @@ impl OrbitRuntime {
             .stores()
             .jobs()
             .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(DELIVERY_LEAF_JOB.to_string()),
+                job_id: Some(workflow::TASK_PR_PIPELINE_JOB.to_string()),
                 task_id: Some(task_id.to_string()),
                 order_by: JobRunOrder::Recency,
                 limit: Some(TASK_LEAF_SCAN),
@@ -960,7 +957,7 @@ impl OrbitRuntime {
         Ok(self
             .stores()
             .jobs()
-            .list_pending_or_running_job_runs(DELIVERY_LEAF_JOB)?
+            .list_pending_or_running_job_runs(workflow::TASK_PR_PIPELINE_JOB)?
             .into_iter()
             .filter_map(|run| {
                 let input = run.input.as_ref()?;

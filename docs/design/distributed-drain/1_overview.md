@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-10
 last_validated: 2026-11-05
 status: Draft
 stage: building
@@ -13,7 +13,7 @@ summary: Run the workspace drain on more than one host against one owner store �
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-store/src/repository/task/coordination/admission/**", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, state-compatibility, task-migration, automation-triggers]
-related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992, ORB-13908]
+related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-12500, ORB-12516, ORB-12528, ORB-12616, ORB-12617, ORB-13625, ORB-13639, ORB-13642, ORB-13649, ORB-13663, ORB-13664, ORB-13992, ORB-13908, ORB-24042]
 ---
 
 # Distributed Drain — Overview
@@ -125,7 +125,7 @@ this reconciliation, after the pinned source checkout.
 | Transactional ready selection on the owner | [crates/orbit-store/src/repository/task/coordination/admission/admit.rs](../../../crates/orbit-store/src/repository/task/coordination/admission/admit.rs) (`admit_locked`); [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | [ORB-12528] | done |
 | Request receipt + claim + reservation + status in one transaction | `TaskCommitBoundary::admit_task` in [crates/orbit-store/src/repository/task/coordination/admission/admit.rs](../../../crates/orbit-store/src/repository/task/coordination/admission/admit.rs) | [ORB-12528] | done |
 | Pull-mode drain loop (`orbit run auto --pull`), owner pull/bind/settle tools, routed follower peer | [workspace_pull_pipeline.yaml](../../../crates/orbit-core/assets/jobs/workspace_pull_pipeline.yaml) | [ORB-13625] | done |
-| Claimed leaf dispatch, binding, and terminal settlement | [task_claimed_pr_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml), [task_claimed_local_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_claimed_local_pipeline.yaml) | [ORB-12616], [ORB-13642], [ORB-13663] | done |
+| Claimed leaf dispatch, binding, and terminal settlement | [task_claimed_pr_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml), [task_claimed_local_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_claimed_local_pipeline.yaml); claimed-leaf ids `TASK_CLAIMED_PR_PIPELINE_JOB`, `TASK_CLAIMED_LOCAL_PIPELINE_JOB` and `CLAIMED_DELIVERY_LEAF_JOBS` owned by [crates/orbit-types/src/workflow/job.rs](../../../crates/orbit-types/src/workflow/job.rs) | [ORB-12616], [ORB-13642], [ORB-13663], [ORB-24042] | done |
 | Replica task reads and coordination writes route to the owner | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs), [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | [ORB-13625], [ORB-13649] | done |
 | Manual claim inspection and recovery | `orbit.drain.claims` listing; dashboard `claim.recover`; CLI `orbit task recover-claim`; [2_design.md §3.1](./2_design.md#31-attempt-ownership-and-recovery) | [ORB-12495], [ORB-12516], [ORB-19071] | done |
 | Durable handoff and authorized landing consumer | [crates/orbit-core/src/application/landing/mod.rs](../../../crates/orbit-core/src/application/landing/mod.rs), [task_landing_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_landing_pipeline.yaml); [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | [ORB-12497], [ORB-12499] | done |
@@ -163,6 +163,7 @@ this reconciliation, after the pinned source checkout.
 - [ORB-12516] — added owner dashboard claim state and actions.
 - [ORB-12528] — landed the task/reservation commit boundary.
 - [ORB-12616] — made the owner-local claimed leaf executable.
+- [ORB-24042] — gave the delivery-leaf job ids, claimed ones included, one owner in `orbit-types`.
 - [ORB-12617] — unified capacity accounting and added fault-injection acceptance fixtures.
 - [ORB-13625] — registered `orbit.task.pull`, claim bind and settle, and the routed follower peer.
 - [ORB-13639] — the follower closes its local settlement when the owner has already ended the claim (revoked or recovered), instead of aborting the drain pass on `stale_claim`.

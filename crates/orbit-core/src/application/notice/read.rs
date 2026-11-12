@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{Duration, Utc};
+use orbit_common::governance::notice::NOTICE_LIST_MAX_LIMIT;
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_store::contracts::{NoticeRow, NoticeStoreBackend as _};
 use orbit_types::record::{EffectiveStatus, Notice, NoticeKind};
@@ -113,14 +114,9 @@ impl OrbitRuntime {
             self.fill_linked_status(&mut notice);
             notices.push(notice);
         }
-        notices.sort_by(|left, right| {
-            left.kind
-                .cmp(&right.kind)
-                .then_with(|| right.updated_at.cmp(&left.updated_at))
-                .then_with(|| left.id.cmp(&right.id))
-        });
+        notices.sort_by(Notice::cmp_list_order);
         if let Some(limit) = filter.limit {
-            notices.truncate(limit.clamp(1, 200));
+            notices.truncate(limit.clamp(1, NOTICE_LIST_MAX_LIMIT));
         }
         Ok(NoticeListing {
             notices,

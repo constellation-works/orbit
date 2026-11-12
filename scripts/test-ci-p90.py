@@ -42,19 +42,22 @@ class CiP90ReplayTests(unittest.TestCase):
     def test_guardrails_finishing_last_is_the_awaited_job_and_its_duration_is_counted(self):
         # The Check job awaits CI guardrails beside the test jobs (ci.yml), so
         # when guardrails completes last it gates the run and must be named.
-        summary = self.replay([{"databaseId": 1, "headSha": "abcdef1234567", "jobs": [
-            job("Check / Clippy / Test", ended=500),
-            job("Test build", ended=250),
-            job("Test shard 1/3", ended=240),
-            job("Test shard 2/3", ended=260),
-            job("Test shard 3/3", ended=255),
-            job("Test extra partition", ended=270),
-            job("CI guardrails", ended=495),
-        ]}])
+        for last in ("CI guardrails", "CI QA guardrails",
+                     *(f"Test partition {k}" for k in range(9, 13))):
+            with self.subTest(last=last):
+                summary = self.replay([{"databaseId": 1, "headSha": "abcdef1234567", "jobs": [
+                    job("Check / Clippy / Test", ended=500),
+                    job("Test build", ended=250),
+                    job("Test shard 1/3", ended=240),
+                    job("Test shard 2/3", ended=260),
+                    job("Test shard 3/3", ended=255),
+                    job("Test extra partition", ended=270),
+                    job(last, ended=495),
+                ]}])
+                self.assertEqual(summary["check_seconds"], 500)
+                self.assertEqual(summary["last_awaited_job"], last)
+                self.assertEqual(summary["job_seconds"][last], 495)
 
-        self.assertEqual(summary["check_seconds"], 500)
-        self.assertEqual(summary["last_awaited_job"], "CI guardrails")
-        self.assertEqual(summary["job_seconds"]["CI guardrails"], 495)
 
 
 if __name__ == "__main__":

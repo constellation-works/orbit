@@ -480,8 +480,10 @@ is refused while the claim is active.
 
 Revocation and recovery are supported operator commands with matching operator
 tools. Both require trusted operator authority, are unavailable to managed runs,
-take a required reason, and replay when the same `--request` key is resubmitted
-with the same input:
+take a required reason of at most 2000 bytes, and replay when the same `--request`
+key is resubmitted with the same input. The `--request` key is 1 to 128 bytes of
+ASCII letters, digits, `-` or `_` after trimming; the owner refuses any other key
+before it records anything:
 
 ```bash
 orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>

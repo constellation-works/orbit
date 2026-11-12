@@ -6,7 +6,7 @@ use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
 use super::super::records::{landed, run_spans};
-use super::model::{ExecutionMode, IMPLEMENTATION_JOBS, RunRecord, Runner};
+use super::model::{ExecutionMode, RunRecord, Runner};
 use crate::OrbitRuntime;
 
 /// The status event a claim's pull writes when it opens an attempt on
@@ -20,7 +20,9 @@ pub(super) fn implementation_runs(
     horizon: DateTime<Utc>,
 ) -> BTreeMap<String, Vec<RunRecord>> {
     let mut by_task: BTreeMap<String, Vec<RunRecord>> = BTreeMap::new();
-    for job in IMPLEMENTATION_JOBS {
+    // The jobs whose runs implement a task: the PR and local delivery
+    // leaves, owned or claimed.
+    for job in orbit_types::workflow::DELIVERY_LEAF_JOBS {
         let runs = runtime
             .stores()
             .jobs()

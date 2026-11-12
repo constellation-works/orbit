@@ -176,6 +176,35 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+In the left rail, the **Workspace** picker is single-select. It lists the workspaces
+for the selected host, marks unavailable ones *(unavailable)* and leaves them
+unchosen, and offers **All workspaces** as its first option. Its button shows the
+chosen workspace's name, or **All workspaces** when none is chosen. Choose a
+workspace to open its board, or choose **All workspaces** for the aggregate view.
+
+In the Tasks list, the **Workspaces** chip sits beside **More** and appears only
+under **All workspaces** when the host has more than one active workspace. It is
+multi-select: check or uncheck workspaces, and the Tasks board then contains only
+the checked workspaces' tasks. Each task's workspace badge shows which workspace
+it belongs to. The chip reads **Workspaces** when every active workspace is
+checked, and **N workspaces** while the selection narrows the board; its tooltip
+lists the chosen names. Narrowing the checks to one workspace opens that
+workspace's board.
+
+Under **All workspaces**, the Tasks dock adds a **Fleet** tab between its **Drain**
+and **Locks held** tabs. Open it to see the **Fleet drains** pane, which
+lists drain rows across the registered hosts and their workspaces. The tab is
+present only while **All workspaces** is selected in the rail picker; choosing a
+single workspace removes it.
+
+The Tasks dock's **Drain** pane holds the **Auto-drain** card and, beside it, the
+quick-start card headed **Start a window**. When the target is a replica checkout,
+the heading and the toggle read **Start pulling on** followed by the host name. On
+narrow layouts (1000px wide or less), a live window folds the quick-start card
+behind **Start another window**, which expands the form. Under **All workspaces**,
+pick the target in the Auto-drain panel's **Drain workspace** and **Drain host**
+selects before starting a window.
+
 A visible dashboard with a workspace selected opens a change stream for that
 workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,
 the connected stream sends change notices to the panels that subscribe to them,

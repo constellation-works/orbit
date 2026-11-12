@@ -198,9 +198,9 @@ guaranteed to start.
 Common reasons a backlog task waits:
 
 - **Unsatisfied dependencies.**
-- **An active file lock.** Two tasks whose selectors overlap cannot run at
-  once. `orbit task locks contention` shows which files the backlog collides
-  on, which is what really limits your parallelism.
+- **An active file lock.** Two tasks whose selectors overlap on a locked path
+  cannot run at once. `orbit task locks contention` shows which files the
+  backlog collides on, which is what really limits your parallelism.
 - **`surface_reserved`**: a critical or high-priority task ahead of it in the
   queue is waiting on file locks, and this task overlaps the files it needs.
   It waits so the higher-priority task gets each lock as it frees, instead of
@@ -482,6 +482,12 @@ review, or dependency problem first; do not rerun blindly.
    `orbit task show "$TASK_ID"` prints the exact command on its `Next:` line. A
    show routed to another host prints the same line, and the dashboard task
    detail carries the same `next_step`.
+
+   When a blocked task's failure-handoff pull request is green, and a required
+   pre-landing review has settled for that exact candidate, its block decision
+   offers **Approve and land** (`orbit decision answer <request-id> land`).
+   That merges the reviewed head and completes the task. Agents, drains, and
+   automatic rules cannot choose it.
 
 A cancelled task leaf is already back in `backlog` by default, with its
 candidate resumable on the next delivery. If you cancelled with `--block`,

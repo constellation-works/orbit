@@ -9,7 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
 related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
-last_updated: 2026-11-07
+last_updated: 2026-11-11
 ---
 
 # Spec: Host routing
@@ -53,7 +53,7 @@ table is read from the host file and never from a probe.
 `workspace`. Today these are `orbit.task.show`, `orbit.task.update`, `orbit.task.reject`,
 `orbit.task.delete`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
 `orbit.task.recover` action `review_reset`, `orbit.task.recover` action `reconcile_review`, `orbit.task.recover` action `repilot` and
-`orbit.task.recover` action `requeue`.
+`orbit.task.recover` action `requeue` ([ORB-23280]). `orbit.task.recover` actions `recover_claim`, `retry_handoff` and `revoke_handoff` are not id-routed.
 
 Each builtin declares its route at its definition site, in `OperationSpec::id_route` or
 `Tool::declared_id_route` for hand-written tools. The registry's MCP definition build rejects
@@ -181,5 +181,6 @@ implementation in [ORB-14449].
 - [ORB-14447] fixed replica GC lookup of locally owned task IDs.
 - [ORB-14448] implemented the host file and orbit host operations.
 - [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-23280] consolidated MCP tool families behind an action field, including the id-routed task tools.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
