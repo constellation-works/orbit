@@ -5,7 +5,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use super::codec::{CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_EFFORT, LATE_LEAF_MODEL};
+use super::codec::{CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_CREW, LATE_LEAF_EFFORT, LATE_LEAF_MODEL};
 use super::{decode, invalid, row};
 use crate::contracts::*;
 
@@ -18,16 +18,17 @@ impl TaskCommitBoundary {
     /// implementing agent at and on, as `machine_id` reports it after the
     /// fact.
     ///
-    /// Each is kept in its own immutable row and changes no claim, task, run
-    /// or settlement record: inspection fills the settlement's effort and
-    /// model from them only while the settlement holds none. The report is
-    /// refused unless the claim is settled, ran on `machine_id` and was bound
-    /// to `run_id` there. A claim the owner settled before it kept
-    /// settlement records is accepted only when the task's history also
-    /// names the claim as pulled; its reports are the only attribution it
-    /// has. A value the claim already holds (on its settlement or from an
-    /// earlier report) replays; a different one keeps the held value and
-    /// reports the conflict, and a conflict on either writes neither.
+    /// Effort and model are each kept in their own immutable row; crew is kept
+    /// with effort or in a companion row when enriching a prior crewless
+    /// report. Nothing changes the claim, task, run or settlement record:
+    /// inspection fills absent settlement attribution from these rows. The
+    /// report is refused unless the claim is settled, ran on `machine_id` and
+    /// was bound to `run_id` there. A claim the owner settled before it kept
+    /// settlement records is accepted only when the task's history also names
+    /// the claim as pulled; its reports are the only attribution it has. A
+    /// value the claim already holds (on its settlement or from an earlier
+    /// report) replays; a different one keeps the held value and reports the
+    /// conflict, and a conflict on either writes neither.
     pub fn record_late_leaf_report(
         &self,
         claim_id: &str,
@@ -86,9 +87,10 @@ impl TaskCommitBoundary {
                 machine_id: machine_id.to_string(),
                 run_id: run_id.to_string(),
                 reasoning_effort: effort,
-                crew,
+                crew: crew.clone(),
                 recorded_at: recorded_at.clone(),
             };
+            let existing_effort = self.late_row::<LateLeafEffort>(LATE_LEAF_EFFORT, claim_id)?;
             let held_effort = settlement
                 .as_ref()
                 .and_then(|settlement| settlement.reasoning_effort.clone());
@@ -97,16 +99,35 @@ impl TaskCommitBoundary {
                     LateLeafEffortWrite::Replayed
                 }
                 Some(held) => LateLeafEffortWrite::Conflict { held },
-                None => match self.late_row::<LateLeafEffort>(LATE_LEAF_EFFORT, claim_id)? {
+                None => match existing_effort.as_ref() {
                     Some(existing) if existing.same_fact(&effort_report) => {
                         LateLeafEffortWrite::Replayed
                     }
                     Some(existing) => LateLeafEffortWrite::Conflict {
-                        held: existing.reasoning_effort,
+                        held: existing.reasoning_effort.clone(),
                     },
                     None => LateLeafEffortWrite::Recorded,
                 },
             };
+            let existing_crew = self.late_row::<LateLeafCrew>(LATE_LEAF_CREW, claim_id)?;
+            let settlement_crew = settlement
+                .as_ref()
+                .and_then(|settlement| settlement.crew.as_ref());
+            let crew_enrichment = crew.as_ref().and_then(|crew| {
+                (existing_crew.is_none()
+                    && settlement_crew.is_none()
+                    && existing_effort
+                        .as_ref()
+                        .is_none_or(|existing| existing.crew.is_none())
+                    && effort_write != LateLeafEffortWrite::Recorded)
+                    .then(|| LateLeafCrew {
+                        machine_id: machine_id.to_string(),
+                        run_id: run_id.to_string(),
+                        reasoning_effort: effort_report.reasoning_effort.clone(),
+                        crew: crew.clone(),
+                        recorded_at: recorded_at.clone(),
+                    })
+            });
             let model_report = model.map(|crew_model| LateLeafModel {
                 machine_id: machine_id.to_string(),
                 run_id: run_id.to_string(),
@@ -150,6 +171,13 @@ impl TaskCommitBoundary {
                     self.store.insert_task_coordination_row(
                         &self.workspace_id,
                         &row(LATE_LEAF_MODEL, claim_id, report)?,
+                        None,
+                    )?;
+                }
+                if let Some(report) = &crew_enrichment {
+                    self.store.insert_task_coordination_row(
+                        &self.workspace_id,
+                        &row(LATE_LEAF_CREW, claim_id, report)?,
                         None,
                     )?;
                 }
@@ -206,6 +234,42 @@ pub(super) fn attach_late_leaf_effort(
         settlement.reasoning_effort = Some(report.reasoning_effort.clone());
     }
     state.late_leaf_effort = Some(report);
+    Ok(())
+}
+
+/// Project the crew a newer follower added to a late effort already held by
+/// the settlement or an earlier crewless report.
+pub(super) fn attach_late_leaf_crew(
+    state: &mut ClaimInspection,
+    payload: &str,
+) -> Result<(), OrbitError> {
+    let report: LateLeafCrew = decode(payload)?;
+    if let Some(effort) = state.late_leaf_effort.as_mut() {
+        if effort.machine_id != report.machine_id
+            || effort.run_id != report.run_id
+            || effort.reasoning_effort != report.reasoning_effort
+            || effort
+                .crew
+                .as_ref()
+                .is_some_and(|crew| crew != &report.crew)
+        {
+            return Err(invalid("inconsistent late crew attribution"));
+        }
+        effort.crew = Some(report.crew.clone());
+    } else {
+        state.late_leaf_effort = Some(LateLeafEffort {
+            machine_id: report.machine_id.clone(),
+            run_id: report.run_id.clone(),
+            reasoning_effort: report.reasoning_effort.clone(),
+            crew: Some(report.crew.clone()),
+            recorded_at: report.recorded_at.clone(),
+        });
+    }
+    if let Some(settlement) = state.settlement.as_mut()
+        && settlement.crew.is_none()
+    {
+        settlement.crew = Some(report.crew);
+    }
     Ok(())
 }
 

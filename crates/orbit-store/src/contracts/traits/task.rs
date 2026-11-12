@@ -188,7 +188,8 @@ pub trait TaskStoreBackend: Send + Sync {
     /// when given, its implementing model [ORB-24150], each in its own
     /// immutable row, refused unless `machine_id` ran the claim and bound
     /// `run_id` to it. Never overwrites a value the claim already holds. The
-    /// report's `crew` [ORB-24206] is kept with its effort row.
+    /// report's `crew` [ORB-24206] is kept with its effort row, or in a
+    /// companion row when enriching an earlier crewless report.
     fn record_late_leaf_report(
         &self,
         _claim_id: &str,

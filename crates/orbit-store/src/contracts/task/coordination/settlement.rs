@@ -672,6 +672,23 @@ impl LateLeafEffort {
     }
 }
 
+/// A crew added to an already-recorded late effort report. Kept in its own
+/// immutable row so a newer follower can enrich a crewless report without
+/// rewriting the effort row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafCrew {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    /// The effort report this crew enriches.
+    pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used.
+    pub crew: String,
+    pub recorded_at: String,
+}
+
 /// A follower's late report of the model a leaf it already settled ran its
 /// implementing agent on [ORB-24150], read from the follower's own records
 /// by the rule that reads the effort (the leaf's main implementing

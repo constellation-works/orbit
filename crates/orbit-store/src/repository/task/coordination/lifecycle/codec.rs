@@ -18,6 +18,9 @@ pub(super) const LEAF_RUN_EVIDENCE: &str = "distributed-leaf-run-evidence-v1";
 /// lifecycle readers never touch, like the handoff and leaf-evidence
 /// sidecars; inspection fills the settlement's absent effort from it.
 pub(super) const LATE_LEAF_EFFORT: &str = "distributed-late-leaf-effort-v1";
+/// [ORB-24206] A later follower's crew for an already-held late effort,
+/// one immutable row per claim keyed by claim id.
+pub(super) const LATE_LEAF_CREW: &str = "distributed-late-leaf-crew-v1";
 /// [ORB-24150] A follower's late report of a settled leaf's implementing
 /// model, one immutable row per claim keyed by claim id, beside the late
 /// effort row. Older readers never touch this family.

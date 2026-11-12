@@ -3,9 +3,10 @@ use orbit_common::OrbitError;
 
 use super::super::{Section, TaskCommitBoundary};
 use super::codec::{
-    CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_EFFORT, LATE_LEAF_MODEL, LEAF_RUN_EVIDENCE, STATE,
+    CLAIM, HANDOFF_SETTLEMENT, LATE_LEAF_CREW, LATE_LEAF_EFFORT, LATE_LEAF_MODEL,
+    LEAF_RUN_EVIDENCE, STATE,
 };
-use super::late_effort::{attach_late_leaf_effort, attach_late_leaf_model};
+use super::late_effort::{attach_late_leaf_crew, attach_late_leaf_effort, attach_late_leaf_model};
 use super::{decode, decode_state, invalid};
 use crate::contracts::*;
 
@@ -63,6 +64,13 @@ impl TaskCommitBoundary {
                     }
                     if let Some(report) = self.store.task_coordination_row(
                         &self.workspace_id,
+                        LATE_LEAF_CREW,
+                        claim_id,
+                    )? {
+                        attach_late_leaf_crew(&mut state, &report.payload_json)?;
+                    }
+                    if let Some(report) = self.store.task_coordination_row(
+                        &self.workspace_id,
                         LATE_LEAF_MODEL,
                         claim_id,
                     )? {
@@ -101,6 +109,12 @@ impl TaskCommitBoundary {
             .into_iter()
             .map(|row| (row.row_id, row.payload_json))
             .collect();
+        let late_crew: std::collections::BTreeMap<_, _> = self
+            .store
+            .task_coordination_rows(&self.workspace_id, LATE_LEAF_CREW)?
+            .into_iter()
+            .map(|row| (row.row_id, row.payload_json))
+            .collect();
         let late_model: std::collections::BTreeMap<_, _> = self
             .store
             .task_coordination_rows(&self.workspace_id, LATE_LEAF_MODEL)?
@@ -118,6 +132,9 @@ impl TaskCommitBoundary {
                 }
                 if let Some(payload) = late_effort.get(&state.claim.claim_id) {
                     attach_late_leaf_effort(&mut state, payload)?;
+                }
+                if let Some(payload) = late_crew.get(&state.claim.claim_id) {
+                    attach_late_leaf_crew(&mut state, payload)?;
                 }
                 if let Some(payload) = late_model.get(&state.claim.claim_id) {
                     attach_late_leaf_model(&mut state, payload)?;

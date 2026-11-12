@@ -1473,15 +1473,18 @@ the probe reports the first refusal admission would raise by running the same or
   claim is settled. A claim that settled before the owner kept settlement records is accepted
   when the task's history also names the claim as pulled. The owner keeps the effort and the
   model in immutable `distributed-late-leaf-effort-v1` and `distributed-late-leaf-model-v1`
-  rows keyed by claim id that lifecycle readers never touch. Inspection fills the settlement
-  record's effort and model from them only while the record holds none, and projects them for a
-  claim with no record. The same value replays; a different one is refused as
-  `effort_conflict` or `model_conflict`, the held value stands, and neither value of that report
-  is written. The answer carries `model_outcome` when the report named a model. An owner that
+  rows keyed by claim id that lifecycle readers never touch. If the settlement or an earlier
+  crewless effort row already holds the effort, a newer report keeps its crew in a companion
+  immutable `distributed-late-leaf-crew-v1` row, so a rerun can enrich old attribution without
+  rewriting either row. Inspection fills the settlement's absent effort and crew from these rows,
+  and projects them for a claim with no settlement record. A held effort or model value replays; a
+  newly reported crew may still be recorded in the companion row. A different effort or model is
+  refused as `effort_conflict` or `model_conflict`, the held values stand, and that report writes
+  neither values nor crew. The answer carries `model_outcome` when the report named a model. An owner that
   predates the operation refuses it on its internal route before any store write; one that
   predates `crew_model` ignores the field with a warning and records the effort; it changes no
-  claim, task, run or settlement outcome. The `crew` rides with the effort row, so a claim that already holds an effort (on its
-  settlement or from an earlier report) takes no crew from a later report.
+  claim, task, run or settlement outcome. A settlement's existing crew remains authoritative;
+  otherwise the later report can supply crew even when its effort was already held.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

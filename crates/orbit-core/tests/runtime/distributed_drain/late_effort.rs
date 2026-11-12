@@ -577,6 +577,46 @@ fn a_late_model_report_fills_an_absent_model_and_never_overwrites_one() {
     assert_eq!(owner_state(&pair), before, "the held model stands");
 }
 
+/// Replaying a pre-crew late report with the same effort and model records the
+/// newer follower's crew, so upgrading a follower can repair old attribution.
+fn a_replayed_crewless_report_can_be_enriched_with_its_crew() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, claim) = settled_without_effort(&pair);
+    forget_owner_settlement(&pair, &claim, None);
+    record_follower_launch_on(&pair, &leaf, ReasoningEffort::High, "model-luna");
+
+    pair.wire
+        .call(
+            "",
+            "orbit.drain.claim.effort",
+            json!({
+                "claim_id": claim,
+                "run_id": leaf,
+                "reasoning_effort": "high",
+                "crew_model": "model-luna",
+            }),
+        )
+        .expect("the older crewless report is accepted");
+    assert_eq!(
+        owner_crew_models_and_efforts(&pair),
+        [(json!("sol"), json!("model-luna"), json!("high"))],
+        "before the upgraded follower reports its crew"
+    );
+
+    set_follower_run_crew(&pair, &leaf, "luna");
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.replayed, report.models_replayed),
+        (1, 1),
+        "{report:#?}"
+    );
+    assert_eq!(
+        owner_crew_models_and_efforts(&pair),
+        [(json!("luna"), json!("model-luna"), json!("high"))],
+        "the same effort and model replay while the crew attribution is enriched"
+    );
+}
+
 /// Give the follower's leaf run `leaf` the crew it actually ran as, as its
 /// run record holds it.
 fn set_follower_run_crew(pair: &Pair, leaf: &str, crew: &str) {
@@ -675,5 +715,6 @@ crate::scenario_table!(
     a_connection_failure_remains_owner_unreachable,
     a_late_report_for_a_claim_without_a_settlement_record_is_recorded,
     a_late_model_report_fills_an_absent_model_and_never_overwrites_one,
+    a_replayed_crewless_report_can_be_enriched_with_its_crew,
     a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew,
 );
