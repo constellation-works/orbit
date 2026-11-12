@@ -86,6 +86,16 @@ fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
         .collect()
 }
 
+/// The invocation trace of a finished provider process, or `None` when neither
+/// the verdict nor a response-envelope frame yields one.
+///
+/// The verdict's own outcomes, including synthesized timeouts and failures,
+/// keep their trace. A framed envelope the verdict rejects, because its status
+/// disagrees with the exit code or its content is invalid, still belongs to an
+/// invocation that spent tokens, so its telemetry is kept. That fallback is
+/// gated on the frame alone, the content-blind check the completion gate also
+/// uses, so the rejection itself is unchanged. The answer projection never reads
+/// this trace.
 pub(super) fn parse_cli_invocation_trace_from(
     parsed: &ParsedStdout<'_>,
     stderr: &[u8],
@@ -93,16 +103,14 @@ pub(super) fn parse_cli_invocation_trace_from(
     duration_ms: u64,
     success: bool,
 ) -> Option<InvocationTrace> {
-    parsed
-        .parse_and_validate(&cli_exec_result(
-            parsed,
-            stderr,
-            exit_code,
-            duration_ms,
-            success,
-        ))
-        .map(|(_, _, trace)| trace)
-        .ok()
+    let exec_result = cli_exec_result(parsed, stderr, exit_code, duration_ms, success);
+    match parsed.parse_and_validate(&exec_result) {
+        Ok((_, _, trace)) => Some(trace),
+        Err(_) => parsed
+            .response_envelope_protocol_check()
+            .is_ok()
+            .then(|| parsed.cli_invocation_trace(duration_ms)),
+    }
 }
 
 /// Parse the provider's stdout as an Orbit response envelope and return the
