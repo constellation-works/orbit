@@ -13,15 +13,15 @@ links: [ORB-13964, ORB-13984, ORB-20339, ORB-20443]
 
 ## Mechanism
 
-The recovery activity's sandbox profile expands a deny glob to a path that is absent in that worktree, and the Linux profile cannot enforce a missing path, so the run is refused before it starts.
+The recovery activity's deny glob can match a dangling symlink. Before the repair, expansion followed its target and refused the run when canonicalization returned `NotFound`. A genuinely absent non-link match or any other path-resolution error still fails closed.
 
 ## Resolution
 
-Do not retry the recovery run. Do not requeue; take the task by hand. Triage recorded it as an Orbit defect and tied ORB-20339 to F2026-10-712 and ORB-20352 item 1.
+ORB-20443 fixed the recorded dangling-link case for managed Bubblewrap invocations: expansion retains the lexical entry without mounting or granting its unresolved target, and the post-run guard still checks new matches. Direct invocations still refuse a dangling match because they have no post-run guard. For a genuinely absent non-link match or another path-resolution error, inspect and correct the policy path before retrying; do not requeue blindly. Triage tied ORB-20339 to F2026-10-712 and ORB-20352 item 1.
 
 ## Fix task
 
-No open fix task found. ORB-20443 (dangling deny-glob links) is landed and by search related, not verified to cover this signature.
+ORB-20443 was already landed at the ORB-22246 scan. Its execution summary names the same ORB-20339 run and error and confirms the dangling-link fix. It does not resolve a genuinely absent non-link match or another path-resolution error. An open-task search for this symptom returned no matching task.
 
 ## Occurrences
 
