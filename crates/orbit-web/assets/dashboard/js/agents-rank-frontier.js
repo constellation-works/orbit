@@ -299,8 +299,10 @@ function placeLabels(items, area) {
     for (const flip of [false, true]) {
       const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
       const x1 = x0 + item.w;
-      // Past the plot edge costs more than any vertical slide could.
+      // Past the plot edge costs more than any vertical slide could: a
+      // clipped side loses to any unclipped side with a slot in range.
       const clip = Math.max(0, area.left - x0) + Math.max(0, x1 - area.right);
+      const edgeCost = clip > 0 ? 10000 + clip * 10 : 0;
       for (let offset = 0; offset <= 240; offset += 3) {
         let found = null;
         for (const sign of offset === 0 ? [1] : [1, -1]) {
@@ -308,17 +310,25 @@ function placeLabels(items, area) {
           if (ly < area.top || ly > area.bottom) continue;
           const box = { x0, x1, y0: ly - half - 1, y1: ly + half + 1 };
           if (others.some((other) => overlaps(box, other))) continue;
-          found = { flip, ly, box, cost: offset + clip * 10 };
+          found = { flip, ly, box, cost: offset + edgeCost };
           break;
         }
         if (found) { if (!best || found.cost < best.cost) best = found; break; }
       }
     }
     if (!best) {
-      // No free slot: keep the point's own height on the roomier side.
-      const flip = item.x > (area.left + area.right) / 2;
-      const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
-      best = { flip, ly: Math.min(area.bottom, Math.max(area.top, item.y)), box: { x0, x1: x0 + item.w, y0: item.y - half, y1: item.y + half } };
+      // No free slot: keep the point's own height on the side that clips
+      // least (the roomier side on ties; the sort is stable), recording
+      // the drawn box at the clamped height.
+      const ly = Math.min(area.bottom, Math.max(area.top, item.y));
+      const roomyFlip = item.x > (area.left + area.right) / 2;
+      const sides = [roomyFlip, !roomyFlip].map((flip) => {
+        const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
+        return { flip, x0, clip: Math.max(0, area.left - x0) + Math.max(0, x0 + item.w - area.right) };
+      });
+      sides.sort((a, b) => a.clip - b.clip);
+      const pick = sides[0];
+      best = { flip: pick.flip, ly, box: { x0: pick.x0, x1: pick.x0 + item.w, y0: ly - half, y1: ly + half } };
     }
     obstacles.push(best.box);
     placed.push({ ...item, flip: best.flip, ly: best.ly });
