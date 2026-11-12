@@ -685,6 +685,8 @@ fn calibrated_season_stores_window_and_reference_size_and_drives_the_board() {
 #[test]
 fn rank_keeps_partly_measured_model_out_of_top_band() {
     let facts = facts(&[
+        // This older cohort has no escapes; each newer model has a 10% escape
+        // rate, so whole-window expectations favor the unreviewed early row.
         Work {
             model: Some("early"),
             crews: &["early"],
@@ -692,7 +694,7 @@ fn rank_keeps_partly_measured_model_out_of_top_band() {
             verdict: accept,
             regressed: 0,
             cost: 1.0,
-            days_ago: 20,
+            days_ago: 28,
             reviewed: false,
         },
         Work {
@@ -730,6 +732,15 @@ fn rank_keeps_partly_measured_model_out_of_top_band() {
     assert_eq!(payload["qualified"], true);
 
     let early = row(&payload, "early");
+    assert_eq!(
+        f(&early["measures"]["escaped_regressions"]["actual"]),
+        0.0,
+        "the older cohort has no recorded escapes"
+    );
+    assert!(
+        f(&row(&payload, "full")["measures"]["escaped_regressions"]["actual"]) > 0.0,
+        "the newer cohort has recorded escapes"
+    );
     assert_eq!(early["eligible"], true, "early is ranked, only not on top");
     assert_ne!(early["rank"], 1, "a partly measured model holds band 1");
     assert!(
