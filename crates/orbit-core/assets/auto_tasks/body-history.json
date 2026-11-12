@@ -1746,6 +1746,31 @@
     },
     {
       "comments": [],
+      "digest": "0a82dbecd7d6779b7aba46f75bf402f50a20e8645f9797f6995fdfa1b464dd0a",
+      "revision": "0770cf5f7f69fc151dab2f5489996016aeda9dd7",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
       "digest": "11caf2fe522c249b744ae22283244b727dec01ffbd08876ef1bbae5c6613e775",
       "revision": "c942dadb2d1807c32b1f69473adb2883acb630b1",
       "settings": {
@@ -3788,6 +3813,33 @@
         "## Bounded completion, report and cursor",
         "## Dedupe and routing",
         "## Inputs and service configuration",
+        "## Orbit version and migrations",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "1a4f9c17e1b1f164715b8b0a5906f18c424511788970a8e1f5707aa8e0fdc5fe",
+      "revision": "090e034f3f56a17132da40bc67b7942e9555e05a",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": true,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * 1"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
         "## Resolve contract for every filing",
         "## Safe evidence",
         "## Windows, signatures and recurrence"
@@ -3899,33 +3951,6 @@
         "## Safe evidence",
         "## Windows, signatures and recurrence"
       ],
-      "digest": "493eb93e9a9325feffa7c3b0cafbea57e04d4201d2173e8546c2218ea056ebbf",
-      "revision": "c184e4ade874c3c5936d9d750b81feff61efeed1",
-      "settings": {
-        "complexity": "low",
-        "dedupe": "skip_if_open",
-        "enabled": true,
-        "priority": "medium",
-        "schedule": {
-          "cron": "10 7 * * 1"
-        },
-        "tags": [
-          "host-health",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## Authority and hosts",
-        "## Bounded completion, report and cursor",
-        "## Dedupe and routing",
-        "## Inputs and service configuration",
-        "## Orbit version and migrations",
-        "## Resolve contract for every filing",
-        "## Safe evidence",
-        "## Windows, signatures and recurrence"
-      ],
       "digest": "615024e036c4c264acbf81dd744ff3076b9c6259b989c5956181ed623064888d",
       "revision": "e18e0f91144a1bdd7f91fd6d66041f2f9742313a",
       "settings": {
@@ -3988,33 +4013,6 @@
         "priority": "medium",
         "schedule": {
           "cron": "10 7 * * *"
-        },
-        "tags": [
-          "host-health",
-          "no-diff-expected"
-        ]
-      }
-    },
-    {
-      "comments": [
-        "## Authority and hosts",
-        "## Bounded completion, report and cursor",
-        "## Dedupe and routing",
-        "## Inputs and service configuration",
-        "## Orbit version and migrations",
-        "## Resolve contract for every filing",
-        "## Safe evidence",
-        "## Windows, signatures and recurrence"
-      ],
-      "digest": "e43c3c399e3a88f93321c981f75dc623d43408eede51c5f129576b63c1174897",
-      "revision": "2e821f9da78ce0cf125cdad72e8fdcd0ab08711e",
-      "settings": {
-        "complexity": "low",
-        "dedupe": "skip_if_open",
-        "enabled": true,
-        "priority": "medium",
-        "schedule": {
-          "cron": "10 7 * * 1"
         },
         "tags": [
           "host-health",
@@ -4393,6 +4391,32 @@
       ],
       "digest": "01e862fb627a788057b3c0a35eb2639a53a7164b2a2b32c4a089f5ab17eeef1f",
       "revision": "49c72a851efd9826473127460032c60b6805dd06",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "03c8085aa9533a20a6343a0066072111930e78e8f138ce73f59453b83297c35b",
+      "revision": "090e034f3f56a17132da40bc67b7942e9555e05a",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

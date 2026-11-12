@@ -57,7 +57,7 @@ template:
     finding without context selectors.
     `acceptance_criteria` must not name an operator-reserved governed operation
     (for example `orbit.experiment.abandon`, `orbit.experiment.conclude` or
-    `orbit.task.requeue`): the implementing lane cannot call it, and the pilot
+    `orbit.task.recover` action `requeue`): the implementing lane cannot call it, and the pilot
     holds the task for an operator decision. Route such a validation to an
     operator handoff instead: the criterion names the state to verify, not the
     tool the implementing lane would have to call.
