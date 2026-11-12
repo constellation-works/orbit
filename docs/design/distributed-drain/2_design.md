@@ -1463,8 +1463,12 @@ the probe reports the first refusal admission would raise by running the same or
   configuration.
   A follower reports the effort of a leaf it settled without one afterwards through
   `orbit.drain.claim.effort` (`claim_id`, `run_id`, `reasoning_effort`, optional
-  `crew_model`), sent by `orbit migrate --backfill-claimed-effort` on the follower
-  ([ORB-24115]; `crew_model` [ORB-24150]). The owner accepts it only from the claim's executing
+  `crew_model`, optional `crew`), sent by `orbit migrate --backfill-claimed-effort` on the
+  follower ([ORB-24115]; `crew_model` [ORB-24150]; `crew` [ORB-24206]). The `crew` is the crew
+  the leaf run used, read from the follower's run record. It is kept with the effort row, so an
+  attempt settled without a settlement record is keyed to that crew and its model together, not to
+  the crew history held at the attempt's start; an owner that predates `crew` ignores the field and
+  keys such an attempt as before. The owner accepts it only from the claim's executing
   machine (the trusted session's, as for settlement), for the run bound to the claim, once the
   claim is settled. A claim that settled before the owner kept settlement records is accepted
   when the task's history also names the claim as pulled. The owner keeps the effort and the
@@ -1476,7 +1480,8 @@ the probe reports the first refusal admission would raise by running the same or
   is written. The answer carries `model_outcome` when the report named a model. An owner that
   predates the operation refuses it on its internal route before any store write; one that
   predates `crew_model` ignores the field with a warning and records the effort; it changes no
-  claim, task, run or settlement outcome.
+  claim, task, run or settlement outcome. The `crew` rides with the effort row, so a claim that already holds an effort (on its
+  settlement or from an earlier report) takes no crew from a later report.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

@@ -67,7 +67,7 @@ pub(in crate::application::agents) fn scan(
         })
         .chain(late_claims.iter().map(|late| {
             let runner = Runner {
-                crew: None,
+                crew: late.crew.clone(),
                 model: late.crew_model.clone(),
                 run_id: None,
                 reported_effort: late.reasoning_effort.clone(),

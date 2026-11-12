@@ -32,24 +32,39 @@ pub struct LateEffortReportResult {
     pub model_outcome: Option<&'static str>,
 }
 
-/// The longest model name a late report may carry.
+/// The longest model or crew name a late report may carry.
 const MODEL_NAME_LIMIT: usize = 200;
 
 impl OrbitRuntime {
     /// Record `effort` (`None` for the provider default) as the effort the
     /// settled claim `claim_id`'s leaf `run_id` ran at and, when given,
-    /// `model` as its implementing model, reported by the session's machine.
-    /// Refused unless that machine ran the claim and bound `run_id` to it,
-    /// and refused as `effort_conflict` or `model_conflict` when the claim
-    /// already holds a different value, which stands; a refusal records
-    /// neither. Attribution only: no claim, task, run or settlement outcome
-    /// changes.
+    /// `model` as its implementing model. A report without a crew, as a
+    /// follower that predates the crew field sends, is recorded as before.
     pub fn serve_claim_effort(
         &self,
         session: &ToolSessionContext,
         claim_id: &str,
         run_id: &str,
         effort: Option<String>,
+        model: Option<String>,
+    ) -> Result<LateEffortReportResult, OrbitError> {
+        self.serve_claim_effort_with_crew(session, claim_id, run_id, effort, None, model)
+    }
+
+    /// [`Self::serve_claim_effort`] with the `crew` the leaf run used
+    /// [ORB-24206], reported with the same effort and model by the session's
+    /// machine. Refused unless that machine ran the claim and bound `run_id` to
+    /// it, and refused as `effort_conflict` or `model_conflict` when the claim
+    /// already holds a different value, which stands; a refusal records
+    /// neither. Attribution only: no claim, task, run or settlement outcome
+    /// changes.
+    pub fn serve_claim_effort_with_crew(
+        &self,
+        session: &ToolSessionContext,
+        claim_id: &str,
+        run_id: &str,
+        effort: Option<String>,
+        crew: Option<String>,
         model: Option<String>,
     ) -> Result<LateEffortReportResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.drain.claim.effort")?;
@@ -65,6 +80,11 @@ impl OrbitRuntime {
                  xhigh, max or provider_default"
             )));
         }
+        // Attribution only: an overlong or empty crew is dropped, never a
+        // refusal, so the report stays accepted as it was before the field.
+        let crew = crew
+            .map(|crew| crew.trim().to_string())
+            .filter(|crew| !crew.is_empty() && crew.len() <= MODEL_NAME_LIMIT);
         let model = model
             .map(|model| model.trim().to_string())
             .filter(|model| !model.is_empty());
@@ -82,6 +102,7 @@ impl OrbitRuntime {
             &machine,
             run_id.trim(),
             effort.clone(),
+            crew,
             model.clone(),
         )?;
         let outcome = match write.effort {

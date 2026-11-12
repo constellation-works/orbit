@@ -184,11 +184,13 @@ fn claim_effort(
     let effort = reported_effort(input).ok_or_else(|| {
         OrbitError::InvalidInput("`reasoning_effort` is required and must not be empty".into())
     })?;
+    let crew = optional_string(input, "crew");
     let model = input
         .get("crew_model")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let result = runtime.serve_claim_effort(session, &claim_id, &run_id, effort, model)?;
+    let result =
+        runtime.serve_claim_effort_with_crew(session, &claim_id, &run_id, effort, crew, model)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 

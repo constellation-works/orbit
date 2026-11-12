@@ -34,6 +34,7 @@ impl TaskCommitBoundary {
         machine_id: &str,
         run_id: &str,
         effort: Option<String>,
+        crew: Option<String>,
         model: Option<String>,
     ) -> Result<LateLeafReportWrite, OrbitError> {
         self.with_admission(|| {
@@ -85,6 +86,7 @@ impl TaskCommitBoundary {
                 machine_id: machine_id.to_string(),
                 run_id: run_id.to_string(),
                 reasoning_effort: effort,
+                crew,
                 recorded_at: recorded_at.clone(),
             };
             let held_effort = settlement

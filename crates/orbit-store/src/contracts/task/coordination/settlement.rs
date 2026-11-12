@@ -653,6 +653,12 @@ pub struct LateLeafEffort {
     /// The effort's wire name, or `null` for the provider default. Always
     /// present: a report of an unknown effort is never sent.
     pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used, as the report carried it [ORB-24206]. Absent
+    /// when the follower predates the field or did not know the crew. The
+    /// attempt is keyed to this crew and the model read with it, not to the
+    /// task's crew at the attempt's start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
     pub recorded_at: String,
 }
 

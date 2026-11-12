@@ -351,6 +351,11 @@ const CLAIM_EFFORT: OperationSpec<DrainVerb> = OperationSpec {
             ParamType::String,
             "The model of that same implementing invocation (else of its latest matching launch record), read from this machine's own records. Omitted when unknown; never derived from a crew name or configuration.",
         ),
+        mcp_only(
+            "crew",
+            ParamType::String,
+            "The crew the leaf run actually used, read from this machine's own run record. Sent with the same report as `crew_model`, so the owner keys the attempt to this crew and model together when the task was re-crewed between claims. Omitted when unknown; an owner that predates it ignores the field.",
+        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
