@@ -85,18 +85,28 @@ reports its refusal in the editor now on screen, with the draft kept.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace
-registry, global and workspace config, routine and target definitions, and the
-task registry database plus its WAL, and reads a change token over the routine
-fire, cursor, pause, job-run and automation-consumer rows of the shared audit database; sampled changes invalidate
-the next read, including definition toggles, pauses and recorded runs. Fire and
-job-run in-place updates are sampled only over the newest 256 rows: an older row
-rewritten in place leaves the token unchanged, so it does not immediately
-invalidate the cached payload. The changed row becomes visible on the next
-successful recomputation, which may replace the payload through refresh-ahead
-before the five-second freshness bound expires; expiry remains the fallback
-that forces a recomputation. The
-audit database's own file stamp is not part of the key: unrelated audit rows
-share that file and would otherwise force a full recompute on every poll. A still-fresh hit
+registry, global and workspace config, and routine and target definitions, and
+reads a change token over the routine fire, cursor, pause and automation-consumer
+rows of the shared audit database; sampled changes invalidate the next read at
+once, including definition toggles, pauses and recorded fires. Fire in-place
+updates are sampled only over the newest 256 rows: an older row rewritten in
+place leaves the token unchanged, so it does not immediately invalidate the
+cached payload. The changed row becomes visible on the next successful
+recomputation, which may replace the payload through refresh-ahead before the
+five-second freshness bound expires; expiry remains the fallback that forces a
+recomputation. The audit database's own file stamp is not part of the key:
+unrelated audit rows share that file and would otherwise force a full recompute
+on every poll.
+
+Job runs (the fire record of state-, delivery- and condition-triggered routines,
+sampled over the newest 256 rows) and the task registry database plus its WAL
+are a churn stamp, not part of the key: a live drain moves them with every run
+it starts or finishes, so keying on them made most polls wait out a 0.8-1.9 s
+recompute (p95 1788 ms on the live dashboard). A fresh payload computed under a
+different churn stamp is served as it stands while one background recompute
+replaces it, so a run's state reaches `last_fire` within the five-second
+freshness bound (the next poll after the recompute lands) and the `Age` header
+shows how old the served payload is. A still-fresh hit
 three seconds old or more starts one background recompute while the entry is
 still served, so steady polling whose refresh completes in time meets a replacement
 before the five-second bound instead of waiting out the compute; a request past the

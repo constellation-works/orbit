@@ -1,4 +1,4 @@
-//! Cheap change token over the tables a routine status read draws on.
+//! Cheap change tokens over the tables a routine status read draws on.
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
@@ -15,18 +15,29 @@ use crate::Store;
 const FINGERPRINT_ROW_WINDOW: i64 = 256;
 
 impl Store {
-    /// A token that changes when a routine fire, cursor or pause row, a
-    /// job run (the fire record of state-, delivery- and condition-triggered
-    /// routines) or an automation consumer is added or removed, or when a
-    /// sampled row advances. Fire and job-run in-place updates are sampled
-    /// only over the newest `FINGERPRINT_ROW_WINDOW` (256) rows named above,
-    /// so an older row rewritten in place leaves the token unchanged and does
-    /// not immediately invalidate cached values. The change becomes visible on
-    /// the next successful recomputation, including refresh-ahead when the
-    /// caller uses it; the caller's freshness bound remains the fallback.
-    /// Unlike the database file's size or modification time it ignores the
-    /// rest of the audit store, so unrelated audit traffic leaves it unchanged.
-    pub fn routine_state_fingerprint(&self) -> Result<String, OrbitError> {
+    /// Change tokens over the tables a routine status read draws on, as
+    /// `(routines, job_runs)`.
+    ///
+    /// `routines` changes when a routine fire, cursor or pause row or an
+    /// automation consumer is added or removed, or when a sampled fire row
+    /// advances. Those writes are rare and are what an operator acts on, so a
+    /// caller invalidates on them at once. Fire in-place updates are sampled
+    /// only over the newest `FINGERPRINT_ROW_WINDOW` (256) rows, so an older row
+    /// rewritten in place leaves the token unchanged and does not immediately
+    /// invalidate cached values; the caller's freshness bound remains the
+    /// fallback.
+    ///
+    /// `job_runs` changes when a job run (the fire record of state-, delivery-
+    /// and condition-triggered routines) is added or removed, or when a sampled
+    /// run advances, with the same newest-256 sampling. Every run starting or
+    /// finishing anywhere on the host moves it, so a caller should tolerate
+    /// serving the previous status for its freshness bound rather than wait
+    /// out a recompute on each change.
+    ///
+    /// Unlike the database file's size or modification time both ignore the
+    /// rest of the audit store, so unrelated audit traffic leaves them
+    /// unchanged.
+    pub fn routine_state_fingerprint(&self) -> Result<(String, String), OrbitError> {
         let conn = self.read()?;
         conn.query_row(
             "SELECT
@@ -35,16 +46,16 @@ impl Store {
                     (SELECT updated_at FROM routine_fires ORDER BY id DESC LIMIT ?1)),
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM routine_cursors),
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(paused_at), '') FROM routine_pauses),
+                (SELECT COUNT(*) || '/' || COALESCE(SUM(generation), 0) FROM automation_consumers),
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(rowid), 0) FROM job_runs),
                 (SELECT COALESCE(group_concat(state || COALESCE(finished_at, '')), '') FROM
-                    (SELECT state, finished_at FROM job_runs ORDER BY rowid DESC LIMIT ?1)),
-                (SELECT COUNT(*) || '/' || COALESCE(SUM(generation), 0) FROM automation_consumers)",
+                    (SELECT state, finished_at FROM job_runs ORDER BY rowid DESC LIMIT ?1))",
             [FINGERPRINT_ROW_WINDOW],
             |row| {
-                (0..7)
-                    .map(|column| row.get::<_, String>(column))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(|parts| parts.join("|"))
+                let column = |index: usize| row.get::<_, String>(index);
+                let routines = (0..5).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
+                let job_runs = (5..7).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
+                Ok((routines, job_runs))
             },
         )
         .map_err(sqlite_store_error)

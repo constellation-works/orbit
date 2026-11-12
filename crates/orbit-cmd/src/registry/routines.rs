@@ -161,11 +161,12 @@ pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, Orbit
     routine_statuses_with_workspace_filter(global_root, None)
 }
 
-/// Files and definition directories whose changes invalidate host routine status.
-/// The task registry database and its WAL are included, since committed task
-/// changes need not touch the main database until a checkpoint. The shared
-/// audit database is not: it takes writes from every audit event on the host,
-/// so [`routine_status_store_fingerprint`] reads just the routine tables.
+/// Files and definition directories whose changes invalidate host routine
+/// status at once: definitions, configuration and the workspace registry,
+/// which change only when an operator edits them. The churning stores are not
+/// here: the task registry database is in [`routine_status_task_store_paths`]
+/// and the shared audit database, which takes writes from every audit event on
+/// the host, is read through [`routine_status_store_fingerprint`].
 pub fn routine_status_input_paths(
     global_root: &Path,
 ) -> Result<Vec<std::path::PathBuf>, OrbitError> {
@@ -195,24 +196,45 @@ pub fn routine_status_input_paths(
         paths.push(persistence.job_dir);
         paths.push(persistence.activity_dir);
     }
-    let database = orbit_store::maintenance::task_registry::task_registry_path(global_root);
-    paths.push(database.with_file_name(format!(
-        "{}-wal",
-        database.file_name().unwrap_or_default().to_string_lossy()
-    )));
-    paths.push(database);
     paths.push(global_root.join("clock.toml"));
     paths.sort();
     paths.dedup();
     Ok(paths)
 }
 
-/// Change token over the rows (routine fires, cursors and pauses, job runs and
-/// automation consumers) that host routine status reads from the global store, `None`
-/// before that database exists. Best effort like the file stamps: a database
-/// that cannot be read yields `None`, and the caller's freshness bound still
-/// limits how long a change can hide.
-pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<String> {
+/// The task registry database and its WAL, whose stamps move with committed
+/// task changes (a commit need not touch the main database until a
+/// checkpoint). Routine status reads task state, but a live drain writes it
+/// constantly, so a caller treats these stamps as a measure of how stale a
+/// served status is rather than as an immediate invalidation.
+pub fn routine_status_task_store_paths(global_root: &Path) -> [std::path::PathBuf; 2] {
+    let database = orbit_store::maintenance::task_registry::task_registry_path(global_root);
+    let wal = database.with_file_name(format!(
+        "{}-wal",
+        database.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    [wal, database]
+}
+
+/// Change tokens over the shared audit database's routine rows, split by how
+/// a caller should react to them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RoutineStoreFingerprint {
+    /// Routine fires, cursors, pauses and automation consumers: rare writes an
+    /// operator acts on, so a caller invalidates on them at once.
+    pub routines: String,
+    /// Job runs, the fire record of state-, delivery- and condition-triggered
+    /// routines. A live drain moves this with every run it starts or finishes,
+    /// so a caller may serve the previous status for its freshness bound.
+    pub job_runs: String,
+}
+
+/// Change tokens over the rows (routine fires, cursors and pauses, job runs and
+/// automation consumers) that host routine status reads from the global store,
+/// `None` before that database exists. Best effort like the file stamps: a
+/// database that cannot be read yields `None`, and the caller's freshness bound
+/// still limits how long a change can hide.
+pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<RoutineStoreFingerprint> {
     let database =
         orbit_config::PersistenceConfig::default_for_roots(global_root, global_root).audit_db;
     if !database.exists() {
@@ -221,6 +243,7 @@ pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<String> {
     orbit_store::Store::open_read_only(&database)
         .and_then(|store| store.routine_state_fingerprint())
         .ok()
+        .map(|(routines, job_runs)| RoutineStoreFingerprint { routines, job_runs })
 }
 
 /// Read host routine status from one registered workspace.

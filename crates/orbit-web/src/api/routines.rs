@@ -10,7 +10,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Local, Utc};
 use orbit_cmd::registry_routines::{
-    routine_status_input_paths, routine_status_store_fingerprint, routine_statuses,
+    RoutineStoreFingerprint, routine_status_input_paths, routine_status_store_fingerprint,
+    routine_status_task_store_paths, routine_statuses,
 };
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
@@ -33,7 +34,10 @@ use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
 
 /// Freshness bound of a served routine health body. Sampled fires, pauses and
-/// definition or config edits change the memo key and recompute at once; this
+/// definition or config edits change the memo key and recompute at once. Job
+/// runs and the task store move with every run a live drain starts or
+/// finishes, so they only mark the body for one background recompute
+/// ([`RoutineChurn`]) and it is served for up to this bound meanwhile. The
 /// bound also covers what the key cannot see (the clock, due times, automation
 /// state) and in-place updates outside the newest-256 sampled fire/job-run rows.
 const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
@@ -48,11 +52,23 @@ const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RoutineMemoKey {
     inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
-    /// Routine, job-run and automation rows in the shared audit database. Not
-    /// the database's file stamp, which every unrelated audit write moves.
+    /// Routine fire, cursor, pause and automation rows in the shared audit
+    /// database. Not the database's file stamp, which every unrelated audit
+    /// write moves.
     routine_store: Option<String>,
     include_inactive_plugins: bool,
     operator: bool,
+}
+
+/// Inputs routine health reads that a live drain rewrites constantly: job runs
+/// and the task registry files. Keying on them recomputed synchronously, about
+/// 1-2 s each, whenever any run anywhere started or finished; a change instead
+/// serves the previous body, at most [`ROUTINE_HEALTH_TTL`] old, while one
+/// background recompute replaces it.
+#[derive(Hash)]
+struct RoutineChurn {
+    job_runs: Option<String>,
+    task_store: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
 }
 
 /// Record `path`'s modification time and length, recursing into directories.
@@ -130,22 +146,39 @@ pub(super) async fn list_routine_health(
     let include_inactive_plugins = query.include_inactive_plugins;
     let operator_session = state.operator_session();
     let stamp_state = state.clone();
-    let key = match blocking("routine health inputs", move || {
+    let (key, churn) = match blocking("routine health inputs", move || {
         let mut inputs = Vec::new();
         for path in routine_status_input_paths(stamp_state.global_root())? {
             stamp(&path, &mut inputs);
         }
         inputs.sort();
-        Ok(RoutineMemoKey {
-            inputs,
-            routine_store: routine_status_store_fingerprint(stamp_state.global_root()),
-            include_inactive_plugins,
-            operator: operator_session,
-        })
+        let mut task_store = Vec::new();
+        for path in routine_status_task_store_paths(stamp_state.global_root()) {
+            stamp(&path, &mut task_store);
+        }
+        let (routine_store, job_runs) =
+            match routine_status_store_fingerprint(stamp_state.global_root()) {
+                Some(RoutineStoreFingerprint { routines, job_runs }) => {
+                    (Some(routines), Some(job_runs))
+                }
+                None => (None, None),
+            };
+        Ok((
+            RoutineMemoKey {
+                inputs,
+                routine_store,
+                include_inactive_plugins,
+                operator: operator_session,
+            },
+            RoutineChurn {
+                job_runs,
+                task_store,
+            },
+        ))
     })
     .await
     {
-        Ok(key) => key,
+        Ok(stamped) => stamped,
         Err(response) => return *response,
     };
     let compute_state = state.clone();
@@ -153,6 +186,7 @@ pub(super) async fn list_routine_health(
         .routines_memo()
         .get_or_compute_for_host_ahead(
             key,
+            &churn,
             ROUTINE_HEALTH_TTL,
             ROUTINE_HEALTH_REFRESH_AFTER,
             move || {
