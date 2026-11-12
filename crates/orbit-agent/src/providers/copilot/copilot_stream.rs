@@ -82,9 +82,9 @@ pub(crate) fn project_copilot_response(stdout: &[u8]) -> Vec<u8> {
             continue;
         }
 
-        // Tool-only messages are intermediate turns, not answers. Every
-        // other assistant message is terminal answer evidence, including an
-        // empty or malformed content field: a later invalid answer must not
+        // Messages that request tools are intermediate turns, not answers.
+        // Every other assistant message is terminal answer evidence, including
+        // an empty or malformed content field: a later invalid answer must not
         // let an earlier envelope remain authoritative.
         if has_tool_requests(&value) {
             continue;
