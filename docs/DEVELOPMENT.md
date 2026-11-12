@@ -926,10 +926,16 @@ ORBIT_BIN="$CHECKOUT/target/debug/orbit"   # cargo build -p orbit-cli --bin orbi
 QA_BASE="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")"
 QA_HOME="$QA_BASE/home"
 QA_REPO="$(mktemp -d /tmp/orbit-qa-repo.XXXXXX)"
+QA_CWD="$(mktemp -d /tmp/orbit-qa-cwd.XXXXXX)"
 mkdir -p "$QA_HOME"
 qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" "$@"; }
 
-# Initialize first, with an explicit scratch root; no Git repository is required.
+# Mint the scratch root's machine identity first: `workspace init` does not create one,
+# and `host list` and the dashboard's /api/hosts refuse until `orbit init` has run.
+# Run it from QA_CWD, outside QA_REPO, so QA_REPO stays free of Orbit state.
+(cd "$QA_CWD" && qa init --non-interactive --machine-name manual-qa --task-prefix MQA)
+
+# Initialize the workspace; no Git repository is required.
 cd "$QA_REPO"
 qa workspace init --name manual-qa
 
@@ -938,6 +944,7 @@ qa config show --scope global --format json | jq -r '.global_root'
 qa config show --format json | jq -r '.global_root, .shared_root, .local_root'
 qa workspace show --format json | jq -r '.checkout.repo_root, .checkout.orbit_dir'
 qa workspace list --format json
+qa host list --format json
 
 # Dashboard QA: serve only the scratch registry, from the scratch repository.
 # Run it in the foreground and stop it with Ctrl-C; it must exit before cleanup.
@@ -945,12 +952,12 @@ qa web serve --port 0 --no-open
 
 # Cleanup, once the server has exited.
 cd "$CHECKOUT"
-rm -rf -- "${QA_BASE:?}" "${QA_REPO:?}"
+rm -rf -- "${QA_BASE:?}" "${QA_REPO:?}" "${QA_CWD:?}"
 ```
 
-With this explicit-root recipe, `global_root`, `shared_root` and `local_root` must all print `$QA_REPO/.orbit`; the real `~/.orbit` must never appear. If any check fails or prints another path, stop before running another command. The workspace must report `$QA_REPO` as its checkout. The scratch registry's workspace list must contain only `manual-qa`, with its checkout under `$QA_REPO`; no live workspace identity may appear. Do not add `--confirm` until those checks match. Preview a destructive command first, then confirm it with the same `qa …` wrapper. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
+With this explicit-root recipe, `global_root`, `shared_root` and `local_root` must all print `$QA_REPO/.orbit`; the real `~/.orbit` must never appear. `host list` must succeed rather than report a missing `[machine]` identity. If any check fails or prints another path, stop before running another command. The workspace must report `$QA_REPO` as its checkout. The scratch registry's workspace list must contain only `manual-qa`, with its checkout under `$QA_REPO`; no live workspace identity may appear. Do not add `--confirm` until those checks match. Preview a destructive command first, then confirm it with the same `qa …` wrapper. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
 
-Do not run any other Orbit command in `QA_REPO` before `workspace init`. The first command there writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside every checkout; the recipe uses `/tmp` explicitly so an inherited `TMPDIR` inside the checkout cannot redirect it. `QA_BASE` stays under `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. Every candidate command uses the cleared environment and explicit root in `qa`, with `QA_REPO` as its working directory. Delete `QA_BASE` and `QA_REPO` when the QA is finished, after the server has exited.
+`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside every checkout; the recipe uses `/tmp` explicitly so an inherited `TMPDIR` inside the checkout cannot redirect it. `QA_BASE` stays under `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. Every candidate command uses the cleared environment and explicit root in `qa`. Delete `QA_BASE`, `QA_REPO` and `QA_CWD` when the QA is finished, after the server has exited.
 
 ## Testing & Coverage
 
