@@ -225,6 +225,9 @@ struct Wire {
     /// effort report and refuses it unread, as a server whose build does not
     /// know the operation does [ORB-24115].
     predates_late_effort: Mutex<bool>,
+    /// When set, the owner answers a late effort report with this structured
+    /// JSON-RPC refusal (code, message) instead of handling it.
+    late_effort_rpc_refusal: Mutex<Option<(i64, String)>>,
     /// Send handoffs to the real owner observation path.
     observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
@@ -364,11 +367,22 @@ impl DrainOwnerTransport for Wire {
             ));
         }
         if name == "orbit.drain.claim.effort" && *self.predates_late_effort.lock().unwrap() {
-            // `DestinationSession` wraps the legacy server's actual JSON-RPC
-            // invalid-params reply in `UnreachableDestination`.
-            return Err(OrbitError::UnreachableDestination(format!(
-                "{OWNER}: 'orbit/internal/drain/call' failed: {{\"code\":-32602,\"message\":\"unknown internal drain operation\"}}"
-            )));
+            // `DestinationSession` preserves the legacy server's actual
+            // JSON-RPC invalid-params reply as structured data.
+            return Err(OrbitError::json_rpc_refusal(
+                OWNER,
+                "orbit/internal/drain/call",
+                &json!({"code": -32602, "message": "unknown internal drain operation"}),
+            ));
+        }
+        if name == "orbit.drain.claim.effort"
+            && let Some((code, message)) = self.late_effort_rpc_refusal.lock().unwrap().clone()
+        {
+            return Err(OrbitError::json_rpc_refusal(
+                OWNER,
+                "orbit/internal/drain/call",
+                &json!({"code": code, "message": message}),
+            ));
         }
         if name == "orbit.drain.claim.settle" {
             // Operator stop/cancel may itself settle; release the hook lock
@@ -762,6 +776,7 @@ impl Pair {
             refuse_settle: Mutex::default(),
             leaf_run_override: Mutex::default(),
             predates_late_effort: Mutex::default(),
+            late_effort_rpc_refusal: Mutex::default(),
             observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
