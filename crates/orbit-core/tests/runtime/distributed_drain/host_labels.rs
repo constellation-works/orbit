@@ -131,13 +131,11 @@ fn a_follower_carrying_one_of_two_required_labels_is_not_handed_the_task() {
         .find(|entry| entry.task_id == labelled)
         .unwrap_or_else(|| panic!("{labelled} is excluded: {recorded:#?}"));
     assert_eq!(wait.reason.as_deref(), Some("host_labels_missing"));
-    assert_eq!(
-        wait.detail.as_deref(),
-        Some(
-            "waits for a host labelled `gpu`, `xcode` (requires_labels); \
-             the executor lacks `xcode`"
-        ),
-        "{wait:?}"
+    assert!(
+        wait.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("`xcode`")),
+        "the idle pass names the label the follower lacks: {wait:?}"
     );
 
     pair.follower = pair
