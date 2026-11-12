@@ -448,9 +448,11 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-rank-band:first-of-type .agents-rank-row.is-band-start > td { border-top: 0; }
 .agents-rank-label { font-family: var(--font-mono); font-size: 13px; font-weight: 500; color: var(--fg); }
 .agents-rank-score { color: var(--fg); font-size: 13px; font-weight: 600; }
-.agents-rank-model-cell { white-space: normal; }
-.agents-rank-model { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.agents-rank-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+.agents-rank-model { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agents-rank-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+/* In the rank table the dot sits beside the model name's first line, not the middle of the two-line cell. */
+.agents-rank-model-cell .agents-rank-model { align-items: flex-start; }
+.agents-rank-model-cell .agents-rank-dot { margin-top: 5px; }
 .agents-rank-model-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .agents-rank-model-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; line-height: 18px; }
 .agents-rank-toggle {
