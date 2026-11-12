@@ -2355,6 +2355,77 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     );
 }
 
+/// Manifest defaults containing template syntax reach both conformance and
+/// installed calls unchanged, matching the installed configuration contract.
+#[cfg(unix)]
+#[test]
+fn plugin_test_keeps_manifest_template_config_literal_like_installed_calls() {
+    let fixture = Fixture::new();
+    let source = fixture.source("templatecfg");
+    let root = write_shell_backend(
+        &source,
+        r#"#!/usr/bin/python3
+import json, sys
+config = json.load(sys.stdin)["context"]["config"]
+print(json.dumps({"ok": True, "output": {
+    "default_is_literal": config.get("root") == "{{workspace}}/default-state"
+}}))
+"#,
+    );
+    std::fs::create_dir_all(root.join("tests/conformance")).unwrap();
+    std::fs::create_dir_all(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: templatecfg
+  version: 1.0.0
+  description: Preserve manifest default strings for conformance.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  config:
+    schema: schemas/config.json
+    defaults: {root: "{{workspace}}/default-state"}
+  tools:
+    - name: probe
+      description: Report whether the default template remains literal.
+      execution_kind: read_only
+      mcp_scope: workspace
+  tests: [tests/conformance/*.yaml]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("schemas/config.json"),
+        r#"{"type":"object","properties":{"root":{"type":"string"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tests/conformance/probe.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {default_is_literal: true}\n",
+    )
+    .unwrap();
+
+    let conformance = fixture
+        .command(["plugin", "test"])
+        .arg(&source)
+        .args(["--json"])
+        .success_json();
+    assert_eq!(conformance["passed"], true, "{conformance}");
+    assert_eq!(conformance["configuration_source"], "manifest_defaults");
+
+    fixture.add(&source, &[]);
+    fixture.success(["plugin", "enable", "templatecfg"]);
+    let installed = fixture
+        .operator_command(["tool", "run", "templatecfg.probe", "--input", "{}"])
+        .success_output();
+    let installed = stdout_json(&installed);
+    assert_eq!(installed["default_is_literal"], true, "{installed}");
+}
+
 /// Ambient plugin settings used to escape the temporary conformance roots.
 /// This deliberately unconfined backend makes that leak observable without
 /// relying on kernel sandbox availability or contacting a model provider.
@@ -2392,9 +2463,17 @@ if config.get("root"):
         (state / "record").write_text("advanced-format-7")
 if config.get("model"):
     subprocess.run([config["model"]], check=True)
-print(json.dumps({"ok": True, "output": config}))
+output = {
+    "root_template_is_unexpanded": "{{workspace}}" in config.get("root", ""),
+    "model": config.get("model"),
+    "limit": config.get("limit"),
+}
+print(json.dumps({"ok": True, "output": output}))
 "#,
     );
+    // `{{config.root}}` expands once, so this literal default token remains a
+    // path component when the declared write root is resolved.
+    std::fs::create_dir_all(root.join("{{workspace}}/default-state")).unwrap();
     std::fs::create_dir_all(root.join("tests/conformance")).unwrap();
     std::fs::write(
         root.join("plugin.yaml"),
@@ -2440,7 +2519,7 @@ spec:
     )
     .unwrap();
     std::fs::write(root.join("tests/conformance/probe.yaml"),
-        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {root: \"{{workspace}}/default-state\", model: \"\", limit: 2}\n"
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {root_template_is_unexpanded: true, model: \"\", limit: 2}\n"
     ).unwrap();
     let caller_config = format!(
         "[plugins.isolated]\nroot = {}\nmodel = {}\nlimit = 99\n",
@@ -2513,8 +2592,8 @@ spec:
     std::fs::write(
         &golden,
         defaults_golden.replace(
-            "root: \"{{workspace}}/default-state\", model: \"\", limit: 2",
-            "root: \"{{workspace}}/fixture-state\", model: \"\", limit: 7",
+            "root_template_is_unexpanded: true, model: \"\", limit: 2",
+            "root_template_is_unexpanded: false, model: \"\", limit: 7",
         ),
     )
     .unwrap();

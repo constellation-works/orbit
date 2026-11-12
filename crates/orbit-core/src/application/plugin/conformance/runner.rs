@@ -190,8 +190,10 @@ pub fn test_plugin_dir(
 }
 
 /// Only manifest defaults and an explicitly named fixture section reach the
-/// backend or its templates. Never resolve the caller's plugin configuration:
-/// temporary execution roots cannot contain paths selected by that section.
+/// backend or its templates. Render fixture values for the hermetic roots, but
+/// keep manifest defaults unchanged to match installed calls. Never resolve
+/// the caller's plugin configuration: temporary execution roots cannot contain
+/// paths selected by that section.
 fn conformance_fixture_config(
     plugin: &LoadedPlugin,
     options: &PluginTestOptions,
@@ -222,12 +224,10 @@ fn conformance_fixture_config(
             Ok(value)
         })
         .transpose()?;
+    let configured = configured
+        .map(|section| golden::render_golden_value(&section, workspace_root, &plugin.root));
     let schema = plugin_config_schema(plugin);
-    let section = golden::render_golden_value(
-        &schema.with_defaults(configured.as_ref()),
-        workspace_root,
-        &plugin.root,
-    );
+    let section = schema.with_defaults(configured.as_ref());
     schema
         .validate_section(&section)
         .map_err(OrbitError::InvalidInput)?;

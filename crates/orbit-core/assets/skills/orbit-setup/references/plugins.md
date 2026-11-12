@@ -229,9 +229,12 @@ case fails, naming it. `--case <name>` runs one case without certifying the full
 Configuration comes only from `spec.config.defaults`, optionally overlaid with the JSON
 object in `--fixture-config <file>` (plugin keys directly, without a `plugins` or namespace
 wrapper). The merged section is validated against the plugin schema before any backend
-starts. String values in that section substitute `{{workspace}}` and `{{plugin_root}}`;
-the backend and `{{config.<key>}}` templates receive the same section. For example,
-`{"root":"{{workspace}}/fixture-state","limit":2}` selects disposable fixture state.
+starts. String values supplied by `--fixture-config` substitute `{{workspace}}` and
+`{{plugin_root}}` before they are overlaid; manifest defaults pass through unchanged, as
+they do for installed calls. The backend and `{{config.<key>}}` templates receive that
+same merged section. For example, `{"root":"{{workspace}}/fixture-state","limit":2}`
+in a fixture file selects disposable fixture state. Template markers inside a manifest
+default remain literal and are not expanded recursively.
 Caller global/workspace `[plugins.<ns>]` settings are always excluded, even with
 `--workspace`, `--grant` or `--accept-requested`. A fixture-config run does not record
 certification of the installed plugin's default suite.
