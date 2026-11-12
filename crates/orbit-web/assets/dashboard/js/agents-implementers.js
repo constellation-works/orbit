@@ -318,6 +318,39 @@ function buildPlot(drawnSeries, WIDTH) {
     tip.setAttribute("visibility", "visible");
   };
   const hideTip = () => tip.setAttribute("visibility", "hidden");
+  // Hover and keyboard focus are independent owners of the tooltip and the
+  // active (Wilson band) series. Track both points and show one consistently:
+  // the most recent interaction wins, ending one source restores the point
+  // the other source still owns, and ending both clears. Clearing solely
+  // because the pointer left another series would hide a focused point's
+  // count and interval (STD-07 §R34).
+  let hoveredPoint = null;
+  let focusedPoint = null;
+  let visiblePoint = null;
+  let hoveredCrew = null;
+  const showVisiblePoint = (point) => {
+    visiblePoint = point;
+    setActive(point.crew);
+    showTip(point.lines, point.cx, point.cy);
+  };
+  const restoreAfterPointEnd = (endedPoint, remainingPoint) => {
+    if (visiblePoint !== endedPoint) return;
+    if (remainingPoint) {
+      showVisiblePoint(remainingPoint);
+      return;
+    }
+    visiblePoint = null;
+    hideTip();
+    setActive(hoveredCrew);
+  };
+  const endHoveredPoint = (point) => {
+    if (hoveredPoint === point) hoveredPoint = null;
+    restoreAfterPointEnd(point, focusedPoint);
+  };
+  const endFocusedPoint = (point) => {
+    if (focusedPoint === point) focusedPoint = null;
+    restoreAfterPointEnd(point, hoveredPoint);
+  };
   for (const each of drawnSeries) {
     const css = `agents-curve-s${slot(each.crew)}`;
     const runs = [];
@@ -333,10 +366,26 @@ function buildPlot(drawnSeries, WIDTH) {
     if (current.length) runs.push(current);
     const group = svg("g", { class: `agents-curves-series ${css}` });
     group.dataset.crew = each.crew;
-    group.addEventListener("mouseenter", () => setActive(each.crew));
-    group.addEventListener("mouseleave", () => setActive(null));
-    group.addEventListener("focusin", () => setActive(each.crew));
-    group.addEventListener("focusout", () => { if (!group.contains(document.activeElement)) setActive(null); });
+    group.addEventListener("mouseenter", () => {
+      hoveredCrew = each.crew;
+      if (!visiblePoint) setActive(each.crew);
+    });
+    group.addEventListener("mouseleave", () => {
+      if (hoveredCrew === each.crew) hoveredCrew = null;
+      if (hoveredPoint && hoveredPoint.crew === each.crew) endHoveredPoint(hoveredPoint);
+      if (visiblePoint) setActive(visiblePoint.crew);
+      else if (focusedPoint) showVisiblePoint(focusedPoint);
+      else setActive(hoveredCrew);
+    });
+    group.addEventListener("focusin", () => {
+      if (!visiblePoint) setActive(each.crew);
+    });
+    group.addEventListener("focusout", () => {
+      if (group.contains(document.activeElement)) return;
+      if (focusedPoint && focusedPoint.crew === each.crew) endFocusedPoint(focusedPoint);
+      if (visiblePoint) setActive(visiblePoint.crew);
+      else setActive(hoveredCrew);
+    });
     for (const run of runs) {
       const upper = run.map((bucket) => `${x(bucket.bucket)},${y(bucket.high)}`);
       const lower = run.slice().reverse().map((bucket) => `${x(bucket.bucket)},${y(bucket.low)}`);
@@ -364,10 +413,18 @@ function buildPlot(drawnSeries, WIDTH) {
         `${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})`,
         ...(bucket.sparse ? [`fewer than ${curves.sparse_outcomes} regressed tasks`] : []),
       ];
-      marker.addEventListener("mouseenter", () => showTip(lines, cx, cy));
-      marker.addEventListener("focus", () => showTip(lines, cx, cy));
-      marker.addEventListener("mouseleave", hideTip);
-      marker.addEventListener("blur", hideTip);
+      const point = { crew: each.crew, lines, cx, cy };
+      marker.addEventListener("mouseenter", () => {
+        hoveredPoint = point;
+        hoveredCrew = each.crew;
+        showVisiblePoint(point);
+      });
+      marker.addEventListener("focus", () => {
+        focusedPoint = point;
+        showVisiblePoint(point);
+      });
+      marker.addEventListener("mouseleave", () => endHoveredPoint(point));
+      marker.addEventListener("blur", () => endFocusedPoint(point));
       group.append(marker);
     }
     plot.append(group);
