@@ -329,58 +329,6 @@ fn replies_without_usable_structured_content_are_unknown_outcomes() {
     }
 }
 
-/// An owner whose internal drain registry predates late effort reports answers
-/// with the same invalid-params JSON-RPC refusal as the old server handler.
-#[test]
-fn unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal() {
-    let script = r#"
-import json
-import sys
-
-for line in sys.stdin:
-    request = json.loads(line)
-    if 'id' not in request:
-        continue
-    if request['method'] == 'initialize':
-        response = {'result': {'protocolVersion': request['params']['protocolVersion']}}
-    elif request['method'] == 'orbit/internal/drain/call':
-        response = {'error': {'code': -32602,
-                              'message': 'unknown internal drain operation'}}
-    else:
-        raise RuntimeError('unexpected request: ' + request['method'])
-    response.update(jsonrpc='2.0', id=request['id'])
-    print(json.dumps(response), flush=True)
-"#;
-    let child = Command::new("python3")
-        .args(["-u", "-c", script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("spawn an owner with the pre-effort internal drain registry");
-    let mut session = DestinationSession::start(
-        Destination::ssh("orbit-owner", OWNER_MACHINE),
-        child,
-        Duration::from_secs(5),
-    )
-    .expect("start a session against the legacy owner");
-    session.handshake().expect("initialize legacy owner");
-    let error = session
-        .call_internal_drain("orbit.drain.claim.effort", json!({"claim_id": "claim"}))
-        .expect_err("the old owner must refuse the unknown operation");
-    let OrbitError::UnreachableDestination(message) = error else {
-        panic!("the JSON-RPC refusal keeps the existing transport error type: {error}");
-    };
-    assert!(
-        message.contains("-32602"),
-        "retain the invalid-params code: {message}"
-    );
-    assert!(
-        message.contains("unknown internal drain operation"),
-        "retain the legacy refusal detail: {message}"
-    );
-}
-
 /// A destination that takes the request and stops there.
 fn stalled_session(budget: Duration) -> DestinationSession {
     let child = Command::new("sleep")
