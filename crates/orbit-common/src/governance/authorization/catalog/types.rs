@@ -284,6 +284,22 @@ pub const DASHBOARD_EXPERIMENT_START: GovernedOperation = GovernedOperation {
     rationale: "starting an experiment begins randomizing tasks into its treatments, and a live one changes how their runs dispatch, so only an operator may do it",
 };
 
+/// Pause a running experiment from the dashboard.
+pub const DASHBOARD_EXPERIMENT_PAUSE: GovernedOperation = GovernedOperation {
+    id: "experiment.pause",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "pausing an experiment stops it enrolling tasks, so only an operator may do it",
+};
+
+/// Resume a paused experiment from the dashboard.
+pub const DASHBOARD_EXPERIMENT_RESUME: GovernedOperation = GovernedOperation {
+    id: "experiment.resume",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "resuming an experiment restarts randomizing tasks into its treatments, so only an operator may do it",
+};
+
 /// Conclude an experiment from the dashboard, recording the decision and
 /// filing a promotion task when an arm is chosen.
 pub const DASHBOARD_EXPERIMENT_CONCLUDE: GovernedOperation = GovernedOperation {
