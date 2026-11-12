@@ -407,6 +407,32 @@ exist follows the creation-intent rules below; without that authorization,
 name it as an evidence gap rather than declaring its missing selector, and
 never invent a filename.
 
+A builtin MCP tool surface change has companions that authors usually do not
+declare. When a plan adds, removes or renames a builtin MCP tool, changes its
+advertised placement, or changes its id route, locate these companions at the
+revision being scoped (`rg -l` on the named test or table, `rg --files` for a
+named golden file) and declare each as a `file:` selector in a workspace that
+keeps them. Three kinds apply:
+
+- The handwritten exact advertised-name list, asserted by the test
+  `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
+  with an advertised add, remove, rename or placement change. Its id-route
+  tables, asserted by `every_builtin_id_route_is_declared_and_preserves_the_former_tables`,
+  change with an id-route change. Declare that fixture for either.
+- The derived golden `authorization_matrix.json`, asserted by the test
+  `authorization_matrix_matches_live_registry`, has one row per registered
+  builtin, advertised or not, and per governed operation. Declare it when a
+  builtin tool is added, removed or renamed; placement and id-route changes alone
+  do not change it. Regenerate it with the workspace's documented golden command
+  and review the diff; never hand-edit it.
+- The handwritten `GOVERNED_TOOL_PLACEMENT` table, asserted against the live
+  registry in the same test module, must be inspected for each such plan. Declare
+  its file only when the table must change: a placement change, or a governed
+  tool operation added, removed or renamed.
+
+A body-only tool edit that keeps the name, placement and id route declares none
+of these.
+
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
 it requires and declare the exact existing sites that source evidence shows
