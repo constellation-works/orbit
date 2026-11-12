@@ -346,7 +346,7 @@ current user owns, with one hard link and no group or other write bits. Spell it
 on macOS, `/private/tmp/...` rather than the `/tmp` alias. Symbolic links,
 missing files, directories, and paths that pass through a symbolic link or an unsafe
 directory are refused. Orbit never creates such a file or widens its grant: creating,
-replacing or renaming a file needs a `fs.write` directory grant. A scoped `fs=<root>` grant
+replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
 covers a `write_files` entry only when it names that file or one of its ancestor
 directories. Adding an entry, or changing where a config value resolves, needs consent
 again. Linux binds the existing inode, and on macOS an ordinary file name becomes a literal
