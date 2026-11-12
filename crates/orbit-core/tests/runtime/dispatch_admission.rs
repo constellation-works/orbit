@@ -1323,13 +1323,30 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             comments[1].by, "system",
             "ORB-13916: gate is not a human intervention"
         );
-        // Gate settlement does not create synthetic history stubs. Existing
+        // Gate settlement records a typed decision with its comment. Existing
         // human creation history must survive without new human entries; a
         // repair outside the selectors records the semantic scope update and
         // the widening provenance, both attributed to the system.
         let history = runtime.get_task_history(&task.id).unwrap();
         assert_eq!(history[..history_before.len()], history_before[..]);
         let added = &history[history_before.len()..];
+        let (settled, added) = added.split_last().expect("typed settlement row");
+        let Some(TaskDecision::ReviewSettlement(recorded)) = &settled.decision else {
+            panic!("expected typed settlement, got {settled:?}");
+        };
+        assert_eq!(
+            recorded,
+            &orbit_types::task::RecordedReviewSettlement::from_certificate(
+                &certificate,
+                orbit_types::task::ReviewSettlementGate::BeforePr,
+            )
+        );
+        assert_eq!(settled.at, comments[1].at);
+        assert_eq!(settled.by, "system");
+        assert_eq!(
+            orbit_types::task::recorded_review_settlements(&history, &comments).len(),
+            1
+        );
         if repaired {
             let [updated, widened] = added else {
                 panic!("expected a scope update and its widening entry, got {added:?}");

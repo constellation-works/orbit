@@ -139,6 +139,11 @@ impl OrbitRuntime {
                 && !agent_context_declared(),
         )?;
         let comment_only = params.is_comment_only();
+        if params.review_settlement.is_some() && (!system_writer || params.comment.is_none()) {
+            return Err(OrbitError::PolicyDenied(
+                "review settlement metadata requires a system verdict comment".to_string(),
+            ));
+        }
         // Gate records are certificates and authority, not agent claims.
         // Only the trusted system entry point may write them; an actor label
         // or artifact/tool field cannot opt into that authority. Normalize
@@ -403,6 +408,14 @@ impl OrbitRuntime {
             None
         };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(settlement) = &params.review_settlement {
+            let comment = append_comments.first().ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "review settlement metadata requires a non-empty verdict comment".to_string(),
+                )
+            })?;
+            append_history.push(settlement.history_entry(comment.at, &comment.by));
+        }
         if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
             append_history.push(edit);
         }

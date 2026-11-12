@@ -242,6 +242,10 @@ impl ClaimInvocation {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimEvidence {
+    /// Host-only review publication, paired with `comment` in one task mutation.
+    /// Older peers omit this and remain readable through legacy comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_settlement: Option<orbit_types::task::RecordedReviewSettlement>,
     pub summary: Option<String>,
     pub comment: Option<String>,
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,

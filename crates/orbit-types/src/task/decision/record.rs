@@ -23,6 +23,8 @@ pub const PILOT_ADMISSION_DECIDED_EVENT: &str = "pilot_admission_decided";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskDecision {
+    /// Review outcome published atomically with its display comment.
+    ReviewSettlement(super::RecordedReviewSettlement),
     /// Idempotency receipt for a desktop mutation or its completed PR closure pass.
     DesktopMutation(DesktopMutationReceipt),
     /// What final recovery decided for one run, and what its applier did.
