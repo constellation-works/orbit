@@ -135,6 +135,34 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
       }
     });
 
+    test(`two distinct same-selector pills in one group are both measured and both reported at ${width}`, { skip: !ENABLED }, async () => {
+      // Three short and two tall pills share selector, top and width within
+      // their kind; each tall pill must count and fail on its own.
+      const markup = `<div style="display:flex;align-items:center;gap:8px">${
+        '<span class="pill">triaging</span>'.repeat(3)}${'<span class="pill tall">triaging</span>'.repeat(2)}</div>`;
+      const { page, result } = await measure(width, markup);
+      try {
+        assert.equal(result.status, "fail", JSON.stringify(result.measurements));
+        assert.equal(result.measurements.matched, 5, "every distinct pill is counted");
+        const hits = result.measurements.failures.filter((item) => item.property === "height");
+        assert.equal(hits.length, 2, `each tall pill reports its own height failure: ${JSON.stringify(hits)}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test(`an element in both a row group and a list group is reported once at ${width}`, { skip: !ENABLED }, async () => {
+      const { page, result } = await measure(width, list("pill", "pill tall"));
+      try {
+        assert.equal(result.status, "fail", JSON.stringify(result.measurements));
+        assert.equal(result.measurements.matched, 6, "three rows of two pills");
+        const hits = result.measurements.failures.filter((item) => item.property === "height");
+        assert.equal(hits.length, 3, `three tall pills, each reported once: ${JSON.stringify(hits)}`);
+      } finally {
+        await page.close();
+      }
+    });
+
     test(`filter chips alone are skipped, not measured, at ${width}`, { skip: !ENABLED }, async () => {
       const { page, result } = await measure(
         width,
@@ -173,6 +201,18 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
     try {
       assert.equal(result.status, "fail", JSON.stringify(result.measurements));
       assert.ok(result.measurements.failures.some((item) => item.property === "height"));
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("shipped CSS: two active triages on one task row are two pills, not one", { skip: !ENABLED }, async () => {
+    // buildActiveTriageBadges emits one triaging link per active triage; both
+    // share selector, top and width, so they must still count separately.
+    const markup = `<ul class="rows"><li class="row" style="display:flex;gap:8px"><span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><a class="live-state-pill active-triage-chip" href="#r2">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span></li></ul>`;
+    const { page, result } = await measure(1440, markup, { css: CSS, style: "" });
+    try {
+      assert.equal(result.measurements.matched, 3, `expected three pills measured: ${JSON.stringify(result.measurements)}`);
     } finally {
       await page.close();
     }
