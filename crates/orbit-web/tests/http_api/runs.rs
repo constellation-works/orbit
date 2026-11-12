@@ -1902,6 +1902,16 @@ fn a_run_recorded_under_an_unregistered_workspace_opens_with_steps_and_events() 
                     events["events"][2]["event_id"], "leaf-2",
                     "{workspace}: {events}"
                 );
+                let forward = json_ok(server.get(&format!(
+                    "/api/runs/{}/events?workspace={workspace}",
+                    run.run_id
+                )));
+                assert_eq!(
+                    forward.as_array().map(Vec::len),
+                    Some(3),
+                    "{workspace}: {forward}"
+                );
+                assert_eq!(forward[2]["event_id"], "leaf-2", "{workspace}: {forward}");
                 let logs = json_ok(server.get(&format!(
                     "/api/runs/{}/logs?workspace={workspace}",
                     run.run_id

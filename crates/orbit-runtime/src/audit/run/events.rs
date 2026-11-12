@@ -178,7 +178,7 @@ impl RuntimeKernel {
             );
         }
         let rows = self.list_v2_audit_events(V2AuditEventFilter {
-            workspace_id: String::new(),
+            workspace_id: workspace_id.to_string(),
             run_id: Some(run_id.to_string()),
             source: Some(RUN_EVENTS_SOURCE.to_string()),
             limit: Some(limit),
