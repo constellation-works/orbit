@@ -308,9 +308,10 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
                     with self.subTest(job=name, event=event):
                         self.assertEqual(evaluate(condition, event), event == "push")
-        self.assertEqual(sorted(set(writers)), ["ci", "docs", "guardrails", "msrv", "test-1", "test-2",
+        self.assertEqual(set(writers), {"ci", "docs", "guardrails", "msrv", "test-1", "test-2",
                                                 "test-3", "test-build", "test-extra", "test-partition-2",
-                                                "test-partition-6", "test-partition-7", "test-partition-8"])
+                                                "test-partition-6", "test-partition-7", "test-partition-8",
+                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 
@@ -342,9 +343,11 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                     if step.get("name", "").startswith("Prepare and probe Bubblewrap"))
         # The step hardcodes the trusted path; point the test copy at the
         # fixture binary so the initial probe outcome is host-independent.
-        script = step["run"].replace("/usr/bin/bwrap", str(fake_bwrap))
+        helper = (ROOT / "scripts/ci-probe-bubblewrap.sh").read_text()
+        self.write(".orbit/tmp/workflow-ci/scripts/ci-probe-bubblewrap.sh",
+                   helper.replace("/usr/bin/bwrap", str(fake_bwrap)))
         return self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", script],
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
             step="bubblewrap-probe", cwd=self.root, env=self.env,
             text=True, capture_output=True)
 
@@ -890,18 +893,19 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the test runners must select every count partition "
                          "of NEXTEST_PARTITIONS")
-        # The literal shard names are the agent-main ruleset's; the five
-        # additional partition jobs run the shard steps under names outside it.
+        # The literal shard names are the agent-main ruleset's; the additional
+        # partition jobs run the shard steps under names outside it.
         self.assertEqual(sorted(partitions.values()),
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
                                 + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
                                    jobs["test-partition-6"]["name"], jobs["test-partition-7"]["name"],
-                                   jobs["test-partition-8"]["name"]]))
+                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 13)]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        required = {*partitions.values(), jobs["test-build"]["name"], jobs["guardrails"]["name"]}
+        required = {*partitions.values(), jobs["test-build"]["name"],
+                    *[job["name"] for name, job in jobs.items() if name.startswith("guardrails")]}
         self.assertEqual(sorted(awaited), sorted(required),
                          "the Check job's elapsed time must cover the test build, every shard and the guardrails")
 
@@ -920,7 +924,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
                              ("test-partition-2", "Run nextest shard"),
                              ("test-partition-6", "Run nextest shard"),
                              ("test-partition-7", "Run nextest shard"),
-                             ("test-partition-8", "Run nextest shard")):
+                             ("test-partition-8", "Run nextest shard"),
+                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 13)]):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -1157,9 +1162,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
-                self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2",
+                self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
                                             "test-3", "test-extra", "test-partition-2",
-                                            "test-partition-6", "test-partition-7", "test-partition-8"})
+                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -1182,9 +1187,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
-            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8"},
+            "full": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "": {"scope", "msrv", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

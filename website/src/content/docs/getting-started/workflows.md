@@ -5,8 +5,8 @@ sidebar:
   order: 4
 ---
 
-Every delivery runs the same gated pipeline: an isolated worktree, a lock on
-the task's files, a sandboxed agent, then a pull request. You can start it from
+Every delivery runs the same gated pipeline: an isolated worktree, locks on
+the task's locked context paths, a sandboxed agent, then a pull request. You can start it from
 three places, and they are interchangeable:
 
 - **Your agent.** Ask in plain words. The `orbit-orchestrate` skill handles
@@ -68,8 +68,8 @@ Switch the workspace to `local`, or tag a single task
 ## Drain the backlog
 
 A drain keeps several tasks in flight for a set time and starts the next ready
-task as each one finishes. Tasks that touch the same files wait their turn on
-file locks.
+task as each one finishes. Tasks that overlap on locked paths wait their turn
+on file locks.
 
 | From | Do |
 |---|---|

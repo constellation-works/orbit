@@ -147,8 +147,36 @@ jobs:
           cargo llvm-cov nextest --workspace --locked --no-report \
             --no-fail-fast --lib --bins --tests
 
+      # [ORB-24096] When a `.profraw` is left truncated (for example, a test
+      # process killed while LLVM writes its profile at exit), `llvm-profdata
+      # merge` refuses the whole merge ("file header is corrupt", "no profile
+      # can be merged") even though every test passed (runs of 2026-10-06 and
+      # 2026-11-11). A truncated profile holds no usable counters for the
+      # merge, so drop the files the merge names and render again, with a
+      # `::warning::` per file. A merge error that names no profile, or more
+      # than five of them, still fails the step: a systematic truncation
+      # (ORB-14387) must stay red.
       - name: Render lcov report
-        run: cargo llvm-cov report --lcov --output-path lcov.info
+        run: |
+          set -uo pipefail
+          max_dropped=5
+          log="$(mktemp)"
+          cargo llvm-cov report --lcov --output-path lcov.info 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          [ "$status" -eq 0 ] && exit 0
+          bad="$(sed -E 's/\x1b\[[0-9;]*m//g' "$log" \
+            | sed -nE 's/^warning: (.+\.profraw): invalid instrumentation profile data.*/\1/p' \
+            | sort -u)"
+          count="$(printf '%s' "$bad" | grep -c . || true)"
+          if [ "$count" -eq 0 ] || [ "$count" -gt "$max_dropped" ]; then
+            echo "::error::report failed with ${count} unreadable profiles named (limit ${max_dropped}); not retrying"
+            exit "$status"
+          fi
+          while IFS= read -r profile; do
+            echo "::warning::dropping unreadable coverage profile ${profile}"
+            rm -f -- "$profile"
+          done <<< "$bad"
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Print coverage summary
         run: cargo llvm-cov report --summary-only

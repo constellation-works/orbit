@@ -732,6 +732,71 @@ sample containing old workflow revisions cannot establish the candidate's
 p90. Report exact run/head identities, executed/skipped/cancelled/missing
 counts, failures, queue gaps and the nearest-rank p90 against **400 s**.
 
+### Awaited partition and QA contention reduction (2026-11-10)
+
+ORB-23890 revalidates the historical profile before edits at source head
+`ed219d0bda9100437b5f448fe559dfe0eea3b9a4`; the first profile was recorded
+at `45beaebdcfa666b0c1a297601c47372fe9afa390`. The ORB-23889 audit's
+22 executed PR Checks had nearest-rank
+p90 **580 s**, with 18 over 400 s. Five additional run views retain complete
+job durations, the failed run and self-test selection evidence:
+
+| Run | Check s | Test build s | CI guardrails s | Self-tests | Last partition s |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 42757620515 | 696 | 380 | 469 | executed | 690 (partition 2) |
+| 42761390547 | 416 (failed) | 277 | 132 | skipped | 454 (partition 7) |
+| 42761647024 | 580 | 401 | 136 | skipped | 594 (shard 2/3) |
+| 42776520260 | 544 | 335 | 115 | skipped | 537 (shard 2/3) |
+| 42777960025 | 493 | 331 | 111 | skipped | 487 (shard 2/3) |
+
+Each duration is `completed_at - started_at`, including setup and post
+steps; the parallel durations are never summed. The failed Check returned
+before every partition finished; its last partition is retained rather than
+filtered out. Run creation-to-Check-start waits in the table's run order are
+20, 24, 43, 25 and 18 s, reported separately and never subtracted. The
+individual awaited jobs' queue waits remain unknown because the views omit
+their enqueue timestamps. The pre-edit profile and raw run views are task
+artifacts under `ci-profile/` and `ci-profile-v2/`.
+
+In run 42757620515 the folded build took 300 s, archive creation 9 s and
+transfer repacking 12.619 s. Partition 2 then ran 501 tests in 143.662 s at
+94.8% CPU busy: 859.847 summed testcase seconds, with a 58.806 s longest
+case. This is a CPU-bound partition tail, so the workflow now uses twelve
+count partitions instead of eight, all from the same build and archive.
+The build still proves exact-once coverage against all twelve partitions;
+Check awaits each literal partition job. This does not change compilation,
+which remains a substantial floor, or the complete-job measurement.
+
+That run's guard pool took 394 s, with the QA fixture taking 385.808 s beside
+the dependency-direction suite's 321.316 s. The QA inventory and selected
+self-test now run as `CI QA guardrails` on their own runner, with the same
+changed-input selection as the core guardrails. Every repository guard and
+fixture still runs once across the two routes; local guard modes retain both.
+The dependency suite's concurrent runner and its failure reporting are intact.
+
+The shared Bubblewrap preparation step executes
+`scripts/ci-probe-bubblewrap.sh` from the workflow revision. Its existing
+probes, deadlines, diagnostics and failure behavior stay intact. Extracting
+that repeated shell body keeps the workflow small even when YAML aliases are
+expanded by prerequisite readers; the two public landing regressions exercise
+that representation without raising the source bound.
+
+The allocation cost is five additional standard Ubuntu runners on every full
+or affected run: four partitions plus one QA runner. The four partitions each
+download the existing four-part archive (about 2.43 GB extra transfer for the
+606.8 MB sample). The QA runner performs no workspace build and downloads no
+archive. Runner setup, queue pressure, transfer variance and the unchanged
+compilation floor can limit or erase the gain. No larger-runner provisioning
+or price is assumed.
+
+Candidate hosted timings are **unavailable before publication**. ORB-23922
+must resolve this delivery's exact published PR/head and compare its complete
+Check, Test build, both guardrails jobs and last partition durations against
+these artifacts, including failures and queue gaps. The post-landing latest
+20-run nearest-rank p90 check remains operator verification on ORB-23888.
+Neither the scheduling change nor local checks establish a measured hosted
+speedup or compliance with the **400 s** budget.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
