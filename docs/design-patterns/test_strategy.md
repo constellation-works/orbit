@@ -67,7 +67,7 @@ The nextest phase (in hosted CI, each shard job) runs on a 4-vCPU runner with ev
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh`, the hosted nextest shards and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
 The CI profile also gives priority 100 to the measured long tests, initially
-six: `task_delivery::source_repair::published_completion_scenarios`,
+six: the `task_delivery::source_repair::published_completion_scenarios*` family (its eight carriers, matched by prefix),
 `pr_landing::validation_repairs_and_logs`,
 `pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes`,
 `public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments`,
@@ -823,8 +823,8 @@ The guardrail fixture runner executes every case once with at most four
 workers, each with its own root, environment and result. Its five rendezvous,
 relative-timing and lane-ordering controls run serially before those workers.
 Named-case invocations retain unittest's serial runner. Errors, failures,
-skips, unexpected successes and an empty/lost case set remain visible and
-determine the exit status.
+unexpected successes and an empty or lost case set determine the exit status;
+skips remain visible and, as under unittest, do not fail the run.
 
 Task artifacts `ci-budget-timings/before.json`, `after.json` and `report.md`
 record one discarded warmup and three sequential repetitions per phase, the

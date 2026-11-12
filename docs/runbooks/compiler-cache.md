@@ -58,7 +58,10 @@ workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
 runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
 workflow and source-manifest helper. Each protected-branch push saves a new
 SHA-keyed entry; PRs restore the newest compatible entry and never save one.
-The helper comes from the workflow revision's trusted helper checkout.
+The helper runs from the workflow-revision checkout at the run's `github.sha`.
+On a pull request that is the merge commit, so the PR's own copy runs in its
+own job, as its other CI code does. Only a protected-branch push writes the
+cache, and the helper it runs is that branch's.
 
 Before compilation, `ci-workspace-cache.py restore` hashes current regular
 tracked and non-ignored untracked files. Only equal bytes, size and file mode
