@@ -63,8 +63,10 @@ impl ChildCancellationPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildCancellation {
     pub policy: ChildCancellationPolicy,
-    /// `cancelled`, `skipped`, or `failed` — the observed result, which may
-    /// differ from the policy when the child had already terminalized.
+    /// `detached` (the `detach` policy left the child running), or
+    /// `cancelled`, `skipped` or `failed` under `cascade` — the observed
+    /// result, which may differ from the policy's intent when the child had
+    /// already terminalized.
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

@@ -1055,6 +1055,87 @@ fn image_input_regular_and_canary_only_stage_and_reach_provider()
     Ok(())
 }
 
+/// [ORB-24053] A malformed `image_input` request is refused before staging or
+/// provider launch instead of being shortened: a string `images`, a list with
+/// a non-string entry, a non-object request and an unknown field each used to
+/// drop the requested image and run canary-only.
+#[cfg(unix)]
+#[test]
+fn image_input_malformed_request_is_refused_before_launch() -> Result<(), Box<dyn std::error::Error>>
+{
+    let cases = [
+        (
+            "string-images",
+            serde_json::json!({ "images": "diagram.png" }),
+        ),
+        (
+            "non-string-entry",
+            serde_json::json!({ "images": ["diagram.png", 42] }),
+        ),
+        ("non-object", serde_json::json!(true)),
+        (
+            "unknown-field",
+            serde_json::json!({ "images": ["diagram.png"], "image": "extra.png" }),
+        ),
+    ];
+    for (name, request) in cases {
+        let fixture = TempDir::new()?;
+        let marker = fixture.path().join("spawned-marker");
+        let tmp_audit = tempfile::tempdir()?;
+        let run_id = format!("cli-image-malformed-{name}");
+        let (writer, store) = build_writer(tmp_audit.path(), &run_id)?;
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ntouch '{}'\ncat > /dev/null\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                marker.display()
+            ),
+        )?;
+        let spec = cli_agent_loop_spec(None);
+        let host = ScriptHost::new(fake.cli_path()).with_image_input(image_test_declaration());
+        let dispatched = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "cli_image_malformed",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({
+                "prompt": "hello",
+                "crew": "test-crew",
+                "image_input": request,
+            }),
+            audit: writer,
+            run_id: &run_id,
+            host: Some(&host),
+        });
+        let display = match dispatched {
+            Ok(outcome) => {
+                return Err(format!(
+                    "{name}: a malformed image_input must be refused, got outcome {:?}",
+                    outcome.message
+                )
+                .into());
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            display.contains("image_input_unavailable")
+                && display.contains("invalid `image_input`"),
+            "{name}: the refusal must say the request is invalid, got: {display}"
+        );
+        assert!(
+            !marker.exists(),
+            "{name}: the provider must not spawn for a malformed image_input"
+        );
+        let events = events_snapshot(&store, &run_id)?;
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.envelope.event_type == "cli.invocation.started"),
+            "{name}: no invocation may start for a malformed image_input"
+        );
+    }
+    Ok(())
+}
+
 /// A probe run that returns the staged code is seen, a probe run that returns
 /// a different code is not seen and still succeeds, and a delivery that
 /// returns a different code fails. One crew's miss does not fail the probe.

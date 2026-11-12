@@ -402,7 +402,9 @@ impl ConventionTemplate {
     }
 
     /// The task id `branch` names under this template and `prefix`: the
-    /// first candidate `accept` admits, shortest first.
+    /// first candidate `accept` admits, shortest first. A repeated task
+    /// placeholder must carry that same id at every occurrence, so a captured
+    /// owner always satisfies [`Self::branch_names_task`].
     pub fn branch_task_id(
         &self,
         branch: &str,
@@ -422,7 +424,8 @@ fn is_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
-/// Match the complete rendered shape, returning the task id matched. Fixed
+/// Match the complete rendered shape, returning the task id matched. Every
+/// occurrence of a repeated task placeholder must carry the same id. Fixed
 /// literals and the hash length establish the task boundary even when the
 /// template puts digits or the hash immediately after the task id. An external
 /// ref may contain `/`; later segments still bound where it ends.
@@ -459,12 +462,20 @@ fn match_owner(
                     .all(|c| c.is_ascii_hexdigit())
                     .then(|| go(rest, &text[BRANCH_HASH_LEN..], prefix, task, captured))?
             }
-            Segment::Placeholder(Placeholder::TaskId) => match task {
-                TaskMatch::Exact(id) => {
+            // A repeated task placeholder renders the same id every time, so
+            // a later occurrence must repeat the id the first one bound.
+            // Capture would otherwise keep the last candidate, naming a task
+            // the exact matcher refuses.
+            Segment::Placeholder(Placeholder::TaskId) => match (task, captured) {
+                (_, Some(bound)) => {
+                    let tail = text.strip_prefix(bound)?;
+                    go(rest, tail, prefix, task, Some(bound))
+                }
+                (TaskMatch::Exact(id), None) => {
                     let tail = text.strip_prefix(id)?;
                     go(rest, tail, prefix, task, Some(id))
                 }
-                TaskMatch::Capture(accept) => {
+                (TaskMatch::Capture(accept), None) => {
                     let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
                     (1..=run).find_map(|end| {
                         let (candidate, tail) = text.split_at(end);
