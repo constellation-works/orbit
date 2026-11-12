@@ -1,7 +1,7 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-11-03
+last_updated: 2026-11-11
 last_validated: 2026-10-13
 status: Accepted
 feature: routines
@@ -206,7 +206,7 @@ Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml`. Na
 
 ### Consequences
 - Clock status reports configured and effective cadence, and native-manager failures include recovery commands.
-- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state.
+- On Linux, enabled state and successful manager command exits are insufficient for health: installation and controls report success only when systemd exposes an active timer with a finite next trigger. An elapsed or unscheduled timer reports `orbit clock enable`, which rewrites a stale installed unit (for example a pre-fix `OnStartupSec` timer) when it differs from the embedded template, daemon-reloads, restarts the timer even when already enabled, and verifies the repaired state. Current contract: a timer whose tick is in flight (no next elapse yet, service `activating` or `active` with no health issue) also counts as schedulable; see [OS sweep clock controls](./2_design.md#os-sweep-clock-controls).
 - Linux uses monotonic timer-activation and service-activation triggers. `OnActiveSec` establishes the first deadline after every install, reinstall, cadence change, and re-enable; `OnUnitActiveSec` establishes recurrence after each sweep service activation. `AccuracySec=5s` bounds coalescing after either deadline. Missed timer ticks are not replayed, leaving catch-up versus skip behavior to each routine's persisted cursor and `missed_run` policy.
 - Cost: the host-local setting intentionally does not travel with a workspace, so operators configure each host separately.
 

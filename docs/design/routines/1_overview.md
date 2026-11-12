@@ -1,9 +1,9 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-11
 last_validated: 2026-11-03
-status: Implemented
+status: Accepted
 stage: shipped
 next: "—"
 feature: routines
