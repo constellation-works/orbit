@@ -1424,6 +1424,32 @@ fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
         error.to_string().contains("non-subtree denyModify"),
         "{error}"
     );
+
+    // A hard link gives the exact sqlite grant another name at the denied
+    // path. Path matching alone cannot establish that the writable inode is
+    // separate from a protected `.env` file, so this must fail closed too.
+    let database = state.join("semantic.db");
+    std::fs::remove_file(&database).expect("remove standalone semantic database");
+    std::fs::hard_link(&env_file, &database).expect("link semantic grant to denied .env");
+    let mut hard_link_modify = vec![database.display().to_string()];
+    for name in ["semantic.db-wal", "semantic.db-shm"] {
+        hard_link_modify.push(state.join(name).display().to_string());
+    }
+    for deny in ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"] {
+        hard_link_modify.push(format!("!{}/{deny}", workspace.display()));
+    }
+    let error = compile_linux_bwrap_argv(
+        &profile(hard_link_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("a hard-linked exact grant must not write through a denied .env path");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
 }
 
 /// [ORB-11257] A read-only direct invocation can compile default dotenv glob

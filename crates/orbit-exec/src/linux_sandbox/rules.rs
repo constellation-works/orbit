@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub(super) fn positive_mount_roots(
     profile: &ResolvedFsProfile,
@@ -82,9 +84,20 @@ pub(super) fn overlaps_writable_root(rule: &str, roots: &[PathBuf]) -> bool {
         // name that exact file. The bind-fd sqlite grants
         // (`semantic.db` and its `-wal`/`-shm` sidecars) therefore do not
         // trip a `**/.env` deny, while an exact grant of a `.env` file
-        // itself still does. Directory and subtree roots can create any
-        // name beneath them and keep the prefix-overlap refusal.
+        // itself still does. A file with another hard link may also name a
+        // denied path, so it cannot be proven separate by matching this path
+        // alone and must fail closed. Directory and subtree roots can create
+        // any name beneath them and keep the prefix-overlap refusal.
         if root.is_file() {
+            #[cfg(unix)]
+            {
+                let Ok(metadata) = root.metadata() else {
+                    return true;
+                };
+                if metadata.nlink() != 1 {
+                    return true;
+                }
+            }
             return match compile_rule_regex(rule) {
                 Ok(regex) => regex.is_match(&render_glob_path(root)),
                 Err(_) => true,
