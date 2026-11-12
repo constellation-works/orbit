@@ -197,14 +197,44 @@ fn plant_secret_outside_artifact_root(runtime: &OrbitRuntime) -> std::path::Path
     secret_path
 }
 
-fn assert_artifact_request_denied(response: Response, label: &str) {
-    let status = response.status();
+/// A GET sent byte for byte: an HTTP client normalizes `..` segments out of a
+/// URL before sending, so the router would never see a raw traversal.
+fn raw_get(server: &Server, target: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let authority = server
+        .origin
+        .strip_prefix("http://")
+        .expect("plain-http fixture origin");
+    let mut stream = std::net::TcpStream::connect(authority).expect("connect to server");
+    // HTTP/1.0 keeps the response un-chunked and closes after it.
+    write!(
+        stream,
+        "GET {target} HTTP/1.0\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+    )
+    .expect("send raw request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read raw response");
+    let (head, body) = response.split_once("\r\n\r\n").expect("response head");
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .expect("status code");
+    (status, body.to_string())
+}
+
+/// The artifact-path validator's refusal: a 400 whose `error` names `reason`,
+/// and no byte of the out-of-root secret.
+fn assert_artifact_path_refused(status: u16, body: &str, reason: &str, label: &str) {
+    assert_eq!(status, 400, "{label}: the validator refuses with a 400");
+    let body_json: Value = serde_json::from_str(body).expect("error body is JSON");
+    let error = body_json["error"].as_str().expect("error message");
     assert!(
-        status.is_client_error(),
-        "{label}: expected 4xx, got {status}"
+        error.contains(reason),
+        "{label}: expected the validator's `{reason}` refusal, got {error}"
     );
-    let bytes = response.bytes().expect("read response body");
-    let body = String::from_utf8_lossy(&bytes);
     assert!(
         !body.contains(SECRET_CONTENT),
         "{label}: response leaked out-of-root file content"
@@ -212,8 +242,9 @@ fn assert_artifact_request_denied(response: Response, label: &str) {
 }
 
 /// ORB-10008: adversarial path shapes against the artifact validator. Every
-/// case must be a clean 4xx and must never serve bytes from outside the task's
-/// artifact root.
+/// case must be the validator's own 400, naming why, and must never serve
+/// bytes from outside the task's artifact root. A request that only reached
+/// the router's or the store's 404 would not count.
 #[test]
 fn get_task_artifact_rejects_adversarial_paths() {
     isolated(
@@ -225,55 +256,63 @@ fn get_task_artifact_rejects_adversarial_paths() {
             let task = seed_task_with_artifact(&runtime);
             plant_secret_outside_artifact_root(&runtime);
 
-            let cases: &[(&str, String)] = &[
-                (
-                    "raw dot-dot traversal",
-                    format!(
-                        "/tasks/{}/artifacts/../../../../secret-fixture.txt",
-                        task.id
-                    ),
-                ),
+            let workspace = "workspace=ws_http_fixture";
+            let cases: &[(&str, String, &str)] = &[
                 (
                     "encoded dot-dot traversal",
                     format!(
-                        "/tasks/{}/artifacts/subdir/%2e%2e%2f%2e%2e%2fsecret-fixture.txt",
+                        "/api/tasks/{}/artifacts/subdir/%2e%2e%2f%2e%2e%2fsecret-fixture.txt?{workspace}",
                         task.id
                     ),
+                    "must not contain '..'",
                 ),
                 (
                     "encoded absolute path",
-                    format!("/tasks/{}/artifacts/%2Fetc%2Fpasswd", task.id),
+                    format!(
+                        "/api/tasks/{}/artifacts/%2Fetc%2Fpasswd?{workspace}",
+                        task.id
+                    ),
+                    "must be relative",
                 ),
                 (
                     "backslash separators",
                     format!(
-                        "/tasks/{}/artifacts/subdir%5C..%5C..%5Csecret-fixture.txt",
+                        "/api/tasks/{}/artifacts/subdir%5C..%5C..%5Csecret-fixture.txt?{workspace}",
                         task.id
                     ),
+                    "must use slash separators",
                 ),
                 (
                     "leading current-dir component",
-                    format!("/tasks/{}/artifacts/.%2Fsubdir%2Ffile.json", task.id),
+                    format!(
+                        "/api/tasks/{}/artifacts/.%2Fsubdir%2Ffile.json?{workspace}",
+                        task.id
+                    ),
+                    "must not contain '.' components",
+                ),
+                (
+                    "double-slash absolute",
+                    format!("/api/tasks/{}/artifacts//etc/passwd?{workspace}", task.id),
+                    "must be relative",
                 ),
             ];
-            for (label, uri) in cases {
-                let response = request(&server, uri);
-                assert_artifact_request_denied(response, label);
+            for (label, uri, reason) in cases {
+                let response = server.get(uri);
+                let status = response.status().as_u16();
+                let body = response.text().expect("read response body");
+                assert_artifact_path_refused(status, &body, reason, label);
             }
 
-            // A double-slash absolute spelling may 400 (validator) or 404 (router);
-            // either way it must not leak file contents.
-            let response = request(
+            // Sent unnormalized, as a client that does not collapse dot
+            // segments would; the HTTP client cannot send this one.
+            let (status, body) = raw_get(
                 &server,
-                &format!("/tasks/{}/artifacts//etc/passwd", task.id),
+                &format!(
+                    "/api/tasks/{}/artifacts/../../../../secret-fixture.txt?{workspace}",
+                    task.id
+                ),
             );
-            let status = response.status();
-            assert!(
-                status.is_client_error(),
-                "double-slash absolute: expected 4xx, got {status}"
-            );
-            let bytes = response.bytes().expect("read response body");
-            assert!(!String::from_utf8_lossy(&bytes).contains("root:"));
+            assert_artifact_path_refused(status, &body, "must not contain '..'", "raw dot-dot");
         },
     );
 }

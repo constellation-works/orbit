@@ -926,33 +926,44 @@ fn diagnostics_errors_report_the_stderr_blob_cap_as_the_coverage_start() {
     );
 }
 
-/// Source input discovers the cap, just as the route-wide guard discovers paths.
-/// All assertions exercise real stream ownership; changing the cap is not policy drift.
+/// The 503 body names the cap (`max N`), so the test opens streams until the
+/// first refusal and reads the cap from it. All assertions exercise real
+/// stream ownership; changing the cap is not policy drift.
 #[test]
 fn log_stream_gate_caps_concurrent_acquisitions() {
     isolated("log::log_stream_gate_caps_concurrent_acquisitions", || {
         let fixture = Fixture::new();
         let server = fixture.server(false);
-        let source = include_str!("../../src/api/log.rs");
-        let cap: usize = source
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("const LOG_STREAM_MAX_CONCURRENT: usize = ")
-                    .and_then(|value| value.trim_end_matches(';').parse().ok())
-            })
-            .expect("stream concurrency safety fixture must discover the configured cap");
         let open = || server.get("/api/log/stream?from=0");
-        let mut streams = (0..cap)
-            .map(|_| {
-                let response = open();
-                assert_eq!(response.status(), 200, "a permit must admit a stream");
-                response
-            })
-            .collect::<Vec<_>>();
+        let mut streams = Vec::new();
+        let cap: usize = loop {
+            assert!(
+                streams.len() < 256,
+                "the stream gate admitted 256 streams without refusing one"
+            );
+            let response = open();
+            if response.status() == 200 {
+                streams.push(response);
+                continue;
+            }
+            assert_eq!(
+                response.status(),
+                503,
+                "an acquisition beyond the cap must be refused"
+            );
+            let body: Value = response.json().expect("refusal body");
+            let message = body["error"].as_str().expect("refusal message");
+            break message
+                .split_once("(max ")
+                .and_then(|(_, rest)| rest.split_once(')'))
+                .and_then(|(cap, _)| cap.parse().ok())
+                .unwrap_or_else(|| panic!("the refusal names the cap: {message}"));
+        };
+        assert!(cap > 0, "the cap admits at least one stream");
         assert_eq!(
-            open().status(),
-            503,
-            "an acquisition beyond the cap must be refused"
+            streams.len(),
+            cap,
+            "the gate admitted exactly the cap its refusal names"
         );
         drop(streams.pop());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
