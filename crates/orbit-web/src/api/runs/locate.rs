@@ -1,5 +1,5 @@
 //! Find the workspace that holds a run on this host, for the run-detail and
-//! run-events reads.
+//! run-events reads, and for cancel and replay (see [`holding_runtime`]).
 //!
 //! A run link names a workspace, but the run's records may sit under a
 //! different workspace id in this host's store: the link carried the
@@ -18,6 +18,7 @@ use orbit_core::application::job::{JobRunHolder, RecordedJobRun};
 use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
 use serde_json::json;
 
+use crate::api::map_runtime_error;
 use crate::state::{DashboardState, Pinned};
 
 /// Where a run was found.
@@ -46,6 +47,14 @@ pub(super) enum RunLookupFailure {
 impl RunLookupFailure {
     fn response(response: Response) -> Self {
         Self::Response(Box::new(response))
+    }
+
+    /// The HTTP response for this failure.
+    pub(super) fn into_response(self) -> Response {
+        match self {
+            Self::Response(response) => *response,
+            Self::Error(error) => map_runtime_error(*error),
+        }
     }
 }
 
@@ -133,6 +142,38 @@ pub(super) fn locate_run(
         }),
         // Pruned between the two reads.
         None => Err(OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()).into()),
+    }
+}
+
+/// The registered runtime that holds `run_id`, for a write (cancel, replay).
+///
+/// A write acts on a live runtime, so a run recorded only under an
+/// unregistered workspace is refused with a 409 naming that workspace rather
+/// than located read-only.
+pub(super) fn holding_runtime(
+    state: &DashboardState,
+    requested: Option<&str>,
+    run_id: &str,
+) -> Result<Arc<OrbitRuntime>, RunLookupFailure> {
+    match locate_run(state, requested, run_id, |runtime, id| {
+        runtime.show_job_run_without_drain_leaf_settlement(id)
+    })? {
+        LocatedRun::Registered { runtime, .. } => Ok(runtime),
+        LocatedRun::Recorded { recorded, .. } => Err(RunLookupFailure::response(
+            (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "run {run_id} is recorded under workspace {}, which is not registered \
+                         on this host, so it cannot be changed here",
+                        recorded.workspace_id
+                    ),
+                    "run_id": run_id,
+                    "code": "run_workspace_unregistered",
+                })),
+            )
+                .into_response(),
+        )),
     }
 }
 

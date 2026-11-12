@@ -1990,3 +1990,79 @@ fn a_run_held_on_another_host_is_refused_naming_that_host() {
         },
     );
 }
+
+/// [ORB-24178] A run held only under another registered workspace is
+/// cancelled and replayed in that holding workspace. The dashboard's selected
+/// workspace names neither the run nor its holder, so both writes must find
+/// the holder rather than answer "run not found".
+#[test]
+fn cancel_and_replay_act_on_the_registered_workspace_holding_the_run() {
+    isolated(
+        "runs::cancel_and_replay_act_on_the_registered_workspace_holding_the_run",
+        || {
+            let fixture = Fixture::new();
+            let second = add_workspace(&fixture, "ws_second", "second");
+            fixture.job("replay_fixture");
+            let seed = |run_id: &str, state: JobRunState| {
+                let now = Utc::now();
+                let run = JobRun {
+                    build: None,
+                    run_id: run_id.into(),
+                    job_id: "replay_fixture".into(),
+                    attempt: 1,
+                    state,
+                    scheduled_at: now,
+                    created_at: now,
+                    started_at: Some(now),
+                    finished_at: state.is_terminal().then_some(now),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: None,
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                    executed_on: None,
+                };
+                second
+                    .sqlite_store()
+                    .unwrap()
+                    .upsert_job_run_for_workspace(&second.workspace_id().unwrap(), &run, None)
+                    .unwrap();
+            };
+            seed("jrun-held-running", JobRunState::Running);
+            seed("jrun-held-source", JobRunState::Success);
+            let server = fixture.replay_server();
+            let selected = "ws_http_fixture";
+
+            json_ok(server.send(
+                "POST",
+                &format!("/api/runs/jrun-held-running/cancel?workspace={selected}"),
+                json!({}),
+            ));
+            assert_eq!(
+                second.show_job_run("jrun-held-running").unwrap().state,
+                JobRunState::Cancelled,
+                "cancel must act on the holding workspace's run"
+            );
+
+            let replay = json_ok(server.send(
+                "POST",
+                &format!("/api/runs/jrun-held-source/replay?workspace={selected}"),
+                json!({}),
+            ));
+            let replay_id = replay["run_id"].as_str().unwrap();
+            assert_ne!(replay_id, "jrun-held-source", "{replay}");
+            assert!(
+                second.show_job_run(replay_id).is_ok(),
+                "replay must be submitted to the holding workspace: {replay}"
+            );
+            assert!(
+                fixture.runtime.show_job_run(replay_id).is_err(),
+                "the selected workspace must not receive the replay: {replay}"
+            );
+        },
+    );
+}
