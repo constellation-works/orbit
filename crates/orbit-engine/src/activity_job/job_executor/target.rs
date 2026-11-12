@@ -6,6 +6,10 @@ use super::*;
 /// steering round's.
 const ENGINE_CONTEXT_KEYS: [&str; 2] = ["final_recovery_resume", STEERING_ROUND_KEY];
 
+/// Input key of the one correction dispatch of an implementer whose response
+/// failed only the output contract.
+const CONTRACT_CORRECTION_KEY: &str = "contract_correction";
+
 pub(super) fn run_target(
     step: &JobV2Step,
     t: &TargetStep,
@@ -91,6 +95,26 @@ pub(super) fn run_target(
             dispatched = corrected;
             dispatched_input = corrected_input;
         }
+    }
+    // [ORB-24143] An implementer whose only defect is the shape of an output
+    // field is asked once, in the same attempt, for a corrected envelope
+    // instead of failing into step recovery, final recovery and a fresh
+    // implementation.
+    if !dispatched.reviewer
+        && matches!(dispatched_spec, ActivityV2Spec::AgentLoop(_))
+        && is_implementer_step(step, t)
+        && let Some((corrected, corrected_input)) = correct_implementer_contract(
+            step,
+            t,
+            ctx,
+            dispatched_spec,
+            &dispatched_input,
+            &dispatched.outcome,
+        )
+    {
+        persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatched.outcome);
+        dispatched.outcome = corrected;
+        dispatched_input = corrected_input;
     }
     let Dispatched {
         outcome: mut dispatch,
@@ -317,7 +341,9 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
 /// The engine does not enforce `output_schema_json`, and the claim handoff
 /// would otherwise be the first to reject the field, after the candidate is
 /// committed, pushed and opened. Failing here keeps those side effects from
-/// running; the step's retry and recovery are the repair attempt.
+/// running. An agent-loop implementer got one correction turn before this
+/// point ([`correct_implementer_contract`]); the step's retry and recovery
+/// handle a response still malformed after it.
 fn reject_malformed_implementer_output(
     step: &JobV2Step,
     target: &TargetStep,
@@ -328,36 +354,134 @@ fn reject_malformed_implementer_output(
     if !success || !is_implementer_step(step, target) {
         return (success, message);
     }
+    match implementer_contract_refusal(output) {
+        Some((_, refusal)) => (false, Some(refusal)),
+        None => (success, message),
+    }
+}
+
+/// The output field an implementer's response breaks the declared shape of,
+/// with the refusal text the step fails with.
+fn implementer_contract_refusal(output: &Value) -> Option<(&'static str, String)> {
+    let marker = orbit_types::workflow::CONTRACT_REFUSAL_MARKER;
     if let Some(defect) = orbit_types::workflow::unfiled_findings_shape_error(output) {
-        return (
-            false,
-            Some(format!(
-                "{}: {defect}. Return `unfiled_findings` \
-                 as `[{{\"title\": ..., \"description\": ...}}]`.",
-                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
-            )),
-        );
+        return Some((
+            "unfiled_findings",
+            format!(
+                "{marker}: {defect}. Return `unfiled_findings` \
+                 as `[{{\"title\": ..., \"description\": ...}}]`."
+            ),
+        ));
     }
     if let Err(defect) = orbit_types::workflow::implementer_regression_from(output) {
-        return (
-            false,
-            Some(format!(
-                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]` \
-                 when a culprit relation is filed.",
-                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
-            )),
-        );
+        return Some((
+            "regression_from",
+            format!(
+                "{marker}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]` \
+                 when a culprit relation is filed."
+            ),
+        ));
     }
-    if let Some((field, defect)) = claimed_artifact_array_shape_error(output) {
-        return (
-            false,
-            Some(format!(
-                "{}: {defect}. Return `{field}` as `[{{\"path\": ..., \"source_path\": ...}}]`.",
-                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
-            )),
-        );
+    claimed_artifact_array_shape_error(output).map(|(field, defect)| {
+        (
+            field,
+            format!(
+                "{marker}: {defect}. Return `{field}` as `[{{\"path\": ..., \"source_path\": ...}}]`."
+            ),
+        )
+    })
+}
+
+/// Longest refusal text an audit event carries.
+const CONTRACT_CORRECTION_AUDIT_BYTES: usize = 1_024;
+/// Longest refused value the correction input quotes back.
+const CONTRACT_CORRECTION_VALUE_BYTES: usize = 4_096;
+
+/// Ask an agent-loop implementer once to correct a successful response that
+/// fails only the output contract [ORB-24143]. The same activity is dispatched
+/// again with `contract_correction` (the refused field, the refusal and the
+/// refused value); the activity's instruction tells it that its side effects
+/// are done and only the envelope is wanted, and the engine repeats nothing.
+///
+/// Returns the corrected dispatch and its input, or `None` when no correction
+/// applies or it did not produce a successful response, so the original
+/// response meets the ordinary refusal. The corrected response's fields
+/// overlay the original's, so an envelope that restates only the corrected
+/// field keeps the rest. A blocker, a failure and a timeout are never corrected.
+fn correct_implementer_contract(
+    step: &JobV2Step,
+    t: &TargetStep,
+    ctx: &ExecCtx<'_>,
+    spec: &ActivityV2Spec,
+    input: &Value,
+    first: &super::super::dispatcher::DispatchOutcome,
+) -> Option<(super::super::dispatcher::DispatchOutcome, Value)> {
+    if !first.success
+        || input.get(CONTRACT_CORRECTION_KEY).is_some()
+        || orbit_types::workflow::agent_blocker_from_output(&first.output).is_some()
+    {
+        return None;
     }
-    (success, message)
+    let (field, refusal) = implementer_contract_refusal(&first.output)?;
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepContractCorrection {
+            step_id: step.id.clone(),
+            field: field.to_string(),
+            refusal: bounded_recovery_text(
+                "refusal",
+                &ctx.run_id,
+                &refusal,
+                CONTRACT_CORRECTION_AUDIT_BYTES,
+            ),
+            outcome: "requested".to_string(),
+        },
+    );
+    let refused_value = first.output.get(field).cloned().unwrap_or(Value::Null);
+    let refused_text = refused_value.to_string();
+    let refused_value = if refused_text.len() > CONTRACT_CORRECTION_VALUE_BYTES {
+        Value::String(bounded_recovery_text(
+            field,
+            &ctx.run_id,
+            &refused_text,
+            CONTRACT_CORRECTION_VALUE_BYTES,
+        ))
+    } else {
+        refused_value
+    };
+    let mut corrected_input = input.clone();
+    corrected_input.as_object_mut()?.insert(
+        CONTRACT_CORRECTION_KEY.to_string(),
+        serde_json::json!({
+            "field": field,
+            "refusal": refusal,
+            "refused_value": refused_value,
+        }),
+    );
+    let corrected = match dispatch_once(step, t, ctx, spec, &corrected_input) {
+        Ok(Some(corrected)) if corrected.outcome.success => corrected.outcome,
+        Ok(_) => return None,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                step_id = %step.id,
+                error = %error,
+                "the contract correction dispatch failed; the original response is refused"
+            );
+            return None;
+        }
+    };
+    let mut corrected = corrected;
+    let mut merged = first.output.clone();
+    if let (Some(merged), Some(overlay)) = (merged.as_object_mut(), corrected.output.as_object()) {
+        for (key, value) in overlay {
+            merged.insert(key.clone(), value.clone());
+        }
+        corrected.output = Value::Object(merged.clone());
+    }
+    Some((corrected, corrected_input))
 }
 
 /// Return the first malformed claimed artifact array or reserved path,

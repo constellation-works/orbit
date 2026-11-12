@@ -53,6 +53,18 @@ spec:
               type: string
           previous_error:
             type: [string, "null"]
+      # Engine-owned context for the one correction dispatch of a response that
+      # failed only the output contract: the work is done, only the response
+      # envelope is asked again.
+      contract_correction:
+        type: object
+        required: [field, refusal]
+        properties:
+          field:
+            type: string
+          refusal:
+            type: string
+          refused_value: {}
       # Engine-owned context for the phase resumed by final recovery.
       final_recovery_resume:
         type: object
@@ -253,9 +265,10 @@ spec:
     minimum runtime applies: a valid no-op, already-landed or invalid-finding
     handoff under Handoff is a complete outcome, not unfinished work.
 
-    If the input carries `final_recovery_resume`, `resume_candidate`,
-    `implementation_continuation` or `claimed`, read the matching section
-    after the Procedure before step 1.
+    If the input carries `contract_correction`, `final_recovery_resume`,
+    `resume_candidate`, `implementation_continuation` or `claimed`, read the
+    matching section after the Procedure before step 1; with
+    `contract_correction`, do nothing else.
 
     Tools
 
@@ -508,6 +521,20 @@ spec:
       section. The pipeline rejects the task and lands
       nothing. Claimed mode cannot reject the owner's task: return
       `result.blocker` `{kind: "finding_invalid", evidence}` instead.
+
+    Contract correction
+
+    When `input.contract_correction` is present, an earlier invocation of this
+    same task already did the work and returned a response the engine refused
+    for its shape alone: `field` names the response field, `refusal` says what
+    is wrong and `refused_value` is what was returned. The worktree, task
+    updates, filed tasks and attached artifacts all stand. Do not implement,
+    validate, edit, file, comment or attach anything again, and skip the
+    Procedure. Return one response envelope whose `result` restates the
+    previous response with `field` corrected to its documented shape, such as
+    `task_artifacts` as `[{"path": "<artifact name>", "source_path":
+    ".orbit/tmp/<file>"}]`, or `null` when none was meant. You are asked once;
+    a response still malformed fails the step.
 
     Final-recovery resume
 

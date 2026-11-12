@@ -66,6 +66,12 @@ Older runs and other recovery activities carry no `decision`. The retried
 step's own result is the `step.post_recovery_attempt` audit event and the
 `orbit.job.step_post_recovery_attempt` log line.
 
+An implementer response refused only for its shape (such as a bare file name in
+`task_artifacts`) is corrected once inside the implement step: the
+`step.contract_correction` audit event (`orbit.job.step_contract_correction` log
+line) names the field, and no recovery event follows when the correction works. A
+response still malformed after it fails with the original refusal.
+
 Keep `error_code` and `error_message` from the run itself as the original
 workflow failure. A recovery attempt is secondary evidence: `succeeded` does
 not rewrite that original failure, and a failed `authorization`, `decision`,
