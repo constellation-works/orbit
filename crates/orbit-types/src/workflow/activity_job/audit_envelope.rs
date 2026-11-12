@@ -127,6 +127,18 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
     },
+    /// An implementer's otherwise successful response failed only the output
+    /// contract, and the step asked its agent once, in the same attempt, for
+    /// a corrected envelope instead of failing into recovery [ORB-24143].
+    StepContractCorrection {
+        step_id: String,
+        /// The refused output field, such as `task_artifacts`.
+        field: String,
+        /// The contract refusal that went back to the agent; bounded.
+        refusal: String,
+        /// `requested` when the correction was dispatched.
+        outcome: String,
+    },
     /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
     /// a failed top-level step.
     FinalRecoveryAttempted {
@@ -504,6 +516,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
             V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
+            V2AuditEventKind::StepContractCorrection { .. } => "step.contract_correction",
             V2AuditEventKind::FinalRecoveryAttempted { .. } => "job.final_recovery_attempted",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
@@ -568,6 +581,7 @@ pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
     ("step_retry", "step.retry"),
     ("step_recovery_attempted", "step.recovery_attempted"),
     ("step_post_recovery_attempt", "step.post_recovery_attempt"),
+    ("step_contract_correction", "step.contract_correction"),
     ("final_recovery_attempted", "job.final_recovery_attempted"),
     ("step_denied", V2_EVENT_TYPE_STEP_DENIED),
     ("step_join", "step.join"),

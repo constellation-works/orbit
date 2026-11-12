@@ -1797,6 +1797,19 @@ branch moves and stale evidence still reach the immutable setup-checkpoint
 refusal; no provider history is adopted or rewritten. The existing final-recovery
 repair-commit receipt and generic-resume/source-repair rules remain separate.
 
+An implementer response that fails only its output contract is corrected inside the
+implement step before any of that (ORB-24143). When an agent-loop `agent_implement` step succeeds
+but a response field has the wrong shape (a bare file name in `task_artifacts` or
+`no_diff_artifacts`, malformed `unfiled_findings` or `regression_from`) and carries no
+blocker, the engine dispatches the same activity once more with `input.contract_correction`
+(`field`, the refusal text and the bounded `refused_value`) and audits
+`step.contract_correction` with the field. The activity's instruction tells that invocation the
+work, filed tasks and attachments stand and asks only for the corrected envelope, so nothing is
+implemented or filed twice and no step recovery, final recovery or second `implement_one` run
+starts. The correction's fields overlay the original response. A correction dispatch that
+fails, or a response still malformed after it, falls back to the ordinary refusal and failure
+path, so the correction is asked once.
+
 A typed stop keeps its type when the retry after step recovery reaches it, as
 it does when the first attempt does (ORB-21581). A settled review awaiting
 external evidence holds the run, and a cancelled child cancels it; neither
