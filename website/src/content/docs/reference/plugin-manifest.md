@@ -258,7 +258,9 @@ create or widen the file grant. Install trees, protected Orbit state and
 workspace metadata remain protected. A scoped `fs=<root>` grant must cover the
 file itself or an ancestor directory. Adding a file or changing its configured
 destination requires consent again. Linux binds the existing inode and macOS
-uses a literal file rule; neither grants sibling files. Existing platform
+uses a rule rooted at that file, which matches only it; neither grants sibling
+files. A path with `*` or `?` in any component is refused, since macOS would read
+those characters as a pattern matching sibling entries. Existing platform
 scratch permissions still apply. Omit `write_files` when unused. File creation
 or replacement by rename needs an appropriate `fs.write` directory grant.
 

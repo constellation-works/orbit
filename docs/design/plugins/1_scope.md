@@ -590,8 +590,12 @@ then repeats admission before spawning. Protected install, Orbit state and works
 metadata boundaries apply to exact files too. A scoped grant covers a requested file
 only when it names that file or an ancestor directory; a descendant never grants a
 directory beneath the file. File replacement/creation and atomic rename require a
-separate directory capability. macOS emits a literal file rule and Linux binds the
-existing inode; neither turns the request into a parent-directory grant. Existing
+separate directory capability. macOS emits a `subpath` rule rooted at the file itself,
+which matches only that file because a regular file has no descendants; Linux binds the
+existing inode. Neither turns the request into a parent-directory grant. Any path
+component (the file or an ancestor) containing `*` or `?` is refused at admission: the
+macOS compiler reads those characters as glob patterns, so `grant?` would also allow
+`grantX`. Existing
 platform scratch permissions remain unchanged. Adding a file or changing its resolved
 config destination requires re-consent; old manifests omit this field and retain their
 previous permissions and digest representation.
@@ -859,12 +863,12 @@ reliability view.
 |---|---|---|---|
 | (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the shared Landlock host table; the default credential paths (`~/.config/gh`, `~/.ssh`, …) and the unreadable trees below get no grant, carved out of the host grants as well as the granted roots | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
-| `permissions.fs.write_files` | `fs` | Each admitted existing regular file, never its parent | `(allow file-write* (literal …))` |
+| `permissions.fs.write_files` | `fs` | Each admitted existing regular file, never its parent | `(allow file-write* (subpath …))` rooted at the file, which matches only that file; a name with `*` or `?` in any component is refused at admission |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only. The plugin write boundary handles standalone truncate and requires Landlock ABI 3 even if no write path is granted; older kernels refuse the spawn | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
 | `network: loopback` | `network` | TCP left open (Landlock has no address filter) | `(deny network*)` then loopback re-allows |
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; the unreadable trees stay denied as in the first row |
+| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files as file-rooted `(subpath …)` rules; the unreadable trees stay denied as in the first row |
 | `permissions.env_pass` | `env_pass` | Named vars copied into the allowlisted child env via `allowlisted_child_env`; `ORBIT_*` names are refused by `validate_structure`, so `ORBIT_OPERATOR` or `ORBIT_WORKSPACE_CLAIM_TOKEN` never reach a child | same |
 | `requires.programs` | — (resolved at enable) | Each program's recorded path as a read-and-execute file, whatever the caller's `PATH`; also bounded per caller (below) and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | The same path as a read `subpath` (the compiler already allows `process*`) |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset | No `sandbox-exec` wrapper |

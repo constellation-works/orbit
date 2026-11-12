@@ -32,6 +32,18 @@ pub(super) fn validate(path: &Path) -> Result<(), OrbitError> {
         if names.is_empty() {
             return Err(refusal("does not name a file"));
         }
+        // The macOS compiler emits the granted path as a glob unless it has no
+        // `*` or `?`, so `grant?` would also allow the sibling `grantX`. Refuse
+        // such a component, in the file or any ancestor, before anything is
+        // opened: the compiled policy then can only name this one file. [ORB-24211]
+        if names.iter().any(|component| {
+            matches!(component, Component::Normal(name)
+                if name.as_bytes().iter().any(|byte| matches!(byte, b'*' | b'?')))
+        }) {
+            return Err(refusal(
+                "has a path component containing `*` or `?`, which the macOS sandbox reads as a pattern matching sibling entries",
+            ));
+        }
         // SAFETY: geteuid reads the process identity and has no preconditions.
         let uid = unsafe { libc::geteuid() };
         let mut file = std::fs::OpenOptions::new()
