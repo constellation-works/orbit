@@ -93,11 +93,12 @@ pub(super) fn runner(
 /// machine is: the crew and model of the claim the `pulled_by` note names,
 /// from `pulled` by claim, and the pulling run that note names. That record is
 /// the settlement or, for a claim settled without one, the follower's late
-/// report [ORB-24206]; its crew and model are always taken together. When it
-/// names no crew (a follower that predates the crew field), the crew falls
-/// back to the one task history had assigned by the attempt's start (else the
-/// task's crew when history records no assignment) and the model stays as the
-/// record gave it. Without a record the model stays unknown. The record's
+/// report [ORB-24206]. When that record names a crew, the attempt is keyed to
+/// that crew with the record's model. When it names no crew (a follower that
+/// predates the crew field), the crew falls back to the one task history had
+/// assigned by the attempt's start (else the task's crew when history records
+/// no assignment), and the record's model still counts as the record gave it.
+/// Without a record the model stays unknown. The record's
 /// reported reasoning effort rides along for the effort lookup's fallback; it
 /// is never derived from this owner's crew configuration.
 pub(super) fn assigned_runner(
