@@ -1363,6 +1363,95 @@ fn direct_invocation_policy_table() {
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
 }
 
+/// [ORB-24174] Exact-file sqlite grants under the workspace (the resident
+/// cycle's `semantic.db` bind-fd grants) cannot create a `.env`, so a direct
+/// invocation under the shipped `**/.env` denies compiles; a directory grant
+/// under the same prefix, or an exact grant of a `.env` file itself, still
+/// refuses.
+#[test]
+fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
+    let (_temp, workspace) = fresh_workspace();
+    let state = workspace.join(".orbit/state");
+    std::fs::create_dir_all(&state).expect("create state dir");
+    let mut modify: Vec<String> = Vec::new();
+    for name in ["semantic.db", "semantic.db-wal", "semantic.db-shm"] {
+        let file = state.join(name);
+        std::fs::write(&file, "db").expect("create semantic grant file");
+        modify.push(file.display().to_string());
+    }
+    for deny in ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"] {
+        modify.push(format!("!{}/{deny}", workspace.display()));
+    }
+    compile_linux_bwrap_argv(
+        &profile(modify.clone()),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect("exact-file semantic.db grants must not trip the non-subtree .env deny");
+
+    // A directory/subtree grant under the workspace can create a `.env`.
+    let mut dir_modify = modify.clone();
+    dir_modify.push(format!("{}/**", state.display()));
+    let error = compile_linux_bwrap_argv(
+        &profile(dir_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("directory grant under the deny prefix must still refuse");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+
+    // An exact grant of a `.env` file itself can modify a denied path.
+    let env_file = workspace.join(".env");
+    std::fs::write(&env_file, "secret").expect("create .env file");
+    let mut env_modify = modify;
+    env_modify.push(env_file.display().to_string());
+    let error = compile_linux_bwrap_argv(
+        &profile(env_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("exact .env grant must still refuse");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+
+    // A hard link gives the exact sqlite grant another name at the denied
+    // path. Path matching alone cannot establish that the writable inode is
+    // separate from a protected `.env` file, so this must fail closed too.
+    let database = state.join("semantic.db");
+    std::fs::remove_file(&database).expect("remove standalone semantic database");
+    std::fs::hard_link(&env_file, &database).expect("link semantic grant to denied .env");
+    let mut hard_link_modify = vec![database.display().to_string()];
+    for name in ["semantic.db-wal", "semantic.db-shm"] {
+        hard_link_modify.push(state.join(name).display().to_string());
+    }
+    for deny in ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"] {
+        hard_link_modify.push(format!("!{}/{deny}", workspace.display()));
+    }
+    let error = compile_linux_bwrap_argv(
+        &profile(hard_link_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("a hard-linked exact grant must not write through a denied .env path");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+}
+
 /// [ORB-11257] A read-only direct invocation can compile default dotenv glob
 /// denials. Live Bubblewrap must leave an existing match intact and refuse a
 /// newly created matching path; a write-capable sibling still fails closed.

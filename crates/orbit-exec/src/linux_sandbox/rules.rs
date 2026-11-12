@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub(super) fn positive_mount_roots(
     profile: &ResolvedFsProfile,
@@ -72,9 +74,37 @@ pub(super) fn is_exact_or_subtree(rule: &str) -> bool {
 
 pub(super) fn overlaps_writable_root(rule: &str, roots: &[PathBuf]) -> bool {
     let prefix = static_prefix(rule);
-    roots
-        .iter()
-        .any(|root| root.starts_with(&prefix) || prefix.starts_with(root))
+    roots.iter().any(|root| {
+        if !(root.starts_with(&prefix) || prefix.starts_with(root)) {
+            return false;
+        }
+        // An existing regular file is bound as a single file: it can be
+        // written itself, but it cannot be used to create or rename a
+        // sibling, so it overlaps the deny only when the deny glob can
+        // name that exact file. The bind-fd sqlite grants
+        // (`semantic.db` and its `-wal`/`-shm` sidecars) therefore do not
+        // trip a `**/.env` deny, while an exact grant of a `.env` file
+        // itself still does. A file with another hard link may also name a
+        // denied path, so it cannot be proven separate by matching this path
+        // alone and must fail closed. Directory and subtree roots can create
+        // any name beneath them and keep the prefix-overlap refusal.
+        if root.is_file() {
+            #[cfg(unix)]
+            {
+                let Ok(metadata) = root.metadata() else {
+                    return true;
+                };
+                if metadata.nlink() != 1 {
+                    return true;
+                }
+            }
+            return match compile_rule_regex(rule) {
+                Ok(regex) => regex.is_match(&render_glob_path(root)),
+                Err(_) => true,
+            };
+        }
+        true
+    })
 }
 
 /// Deny rules that have nothing to `--ro-bind` at spawn: non-subtree globs,
