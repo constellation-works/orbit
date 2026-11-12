@@ -103,7 +103,7 @@ const SHOW: OperationSpec<MemoryVerb> = OperationSpec {
     verb: MemoryVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.memory.show",
-    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space's current revision. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a run: a crew memory dreaming task's run or a run in a memory experiment arm reads only its own model's space (the default key) or `global`, and the run of a task whose `granted_tools` an operator set to include this tool reads any space, any revision and the summary.",
+    tool_description: "Show a crew memory space: the files of its newest revision (or of `revision`), their digest and size, the evidence the write cited, its writer and reason. Without key, summarise every space: `global`, each key with a revision, and each configured or proposing key with none yet. A key with no revision shows an empty space. Read only; works whether or not crew_memory.enabled is set. An agent may call it only from a run: a crew memory dreaming task's run or a run in a memory experiment arm reads only its own model's space (the default key) or `global`, and the run of a task whose `granted_tools` an operator set to include this tool reads any space, any revision and the summary.",
     cli_about: "Show a memory space, or summarise every space",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
