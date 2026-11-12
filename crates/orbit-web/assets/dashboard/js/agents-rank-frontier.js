@@ -161,9 +161,14 @@ function plotWrap(chart, label) {
 }
 
 const NAME_FONT = "500 12.5px";
-const CAPTION_FONT = "11.5px";
-const LABEL_HEIGHT = 30;
+const TIP_FONT = "12px";
+const TIP_BOLD_FONT = "500 12px";
+const LABEL_HEIGHT = 16;
 const MARK_PAD = 12;
+// Farthest a name may slide from its point (joined by a leader line) before it
+// is left to the tooltip.
+const MAX_SLIDE = 42;
+const TIP_LINE = 16;
 
 let measureContext = null;
 // Rendered width of `text` in the dashboard font; an estimate without canvas.
@@ -208,8 +213,8 @@ function scatterPlot(chart, width, host) {
     width,
     height,
     viewBox: `0 0 ${width} ${height}`,
-    role: "img",
-    "aria-label": `${rankFormat.tierLabel(chart.tier)} tier score against cost per task. Frontier: ${sortedFront.map((point) => point.model).join(", ") || "none"}.`,
+    role: "group",
+    "aria-label": `${rankFormat.tierLabel(chart.tier)} tier score against cost per task. Frontier: ${sortedFront.map((point) => point.model).join(", ") || "none"}. ${chart.plot.map(pointSummary).join("; ")}.`,
   });
   const fixed = [];
   for (let v = y0; v <= y1 + 1e-9; v += step) {
@@ -238,7 +243,22 @@ function scatterPlot(chart, width, host) {
       svgEl("line", { class: "agents-rank-fleet", x1: left, y1: yOf(100), x2: width - right, y2: yOf(100) }),
       svgText("fleet = 100", { class: "agents-rank-tick", x: width - right - 6, y: yOf(100) - 6, "text-anchor": "end" }),
     );
-    fixed.push({ x0: width - right - 6 - fleetW, x1: width - right - 6, y0: yOf(100) - 19, y1: yOf(100) - 3 });
+    fixed.push(
+      { x0: width - right - 6 - fleetW, x1: width - right - 6, y0: yOf(100) - 19, y1: yOf(100) - 3 },
+      { x0: left, x1: width - right, y0: yOf(100) - 2, y1: yOf(100) + 2 },
+    );
+  }
+  for (let i = 1; i < sortedFront.length; i++) {
+    // The frontier line is a reference line too: names keep off it.
+    const [a, b] = [sortedFront[i - 1], sortedFront[i]];
+    const dx = xOf(b.cost_per_task) - xOf(a.cost_per_task);
+    const dy = yOf(b.score) - yOf(a.score);
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4));
+    for (let k = 0; k <= steps; k++) {
+      const px = xOf(a.cost_per_task) + (dx * k) / steps;
+      const py = yOf(a.score) + (dy * k) / steps;
+      fixed.push({ x0: px - 2, x1: px + 2, y0: py - 2, y1: py + 2 });
+    }
   }
   if (sortedFront.length >= 2) {
     svg.append(svgEl("polyline", {
@@ -247,51 +267,100 @@ function scatterPlot(chart, width, host) {
     }));
   }
   const items = chart.plot.map((point) => {
-    const caption = `${rankFormat.num(point.score, 1)} · ${dollars(point.cost_per_task, true)} · ${point.tasks || 0} tasks${point.underpriced ? ` · ${rankFormat.num((point.cost_coverage || 0) * 100, 0)}% priced` : ""}`;
     const name = point.model || "—";
-    return {
-      point,
-      caption,
-      name,
-      x: xOf(point.cost_per_task),
-      y: yOf(point.score),
-      w: Math.max(textWidth(name, NAME_FONT, family), textWidth(caption, CAPTION_FONT, family)),
-    };
+    return { point, name, x: xOf(point.cost_per_task), y: yOf(point.score), w: textWidth(name, NAME_FONT, family) };
   });
-  const labels = placeLabels(items, { left: left + 4, right: width - 4, top: top + 15, bottom: height - bottom - 15, fixed });
-  for (const { point, name, caption, x, y, ly, flip } of labels) {
+  const labels = placeLabels(items, { left: left + 4, right: width - 4, top: top + 8, bottom: height - bottom - 8, fixed });
+  const tip = tooltipNode(width, height, family);
+  for (const { point, name, x, y, ly, flip } of labels) {
     const group = svgEl("g", {
       class: `agents-rank-point${point.frontier ? " is-frontier" : ""}${point.underpriced ? " is-underpriced" : ""}`,
       "data-model": point.model || "",
       "data-frontier": point.frontier ? "true" : "false",
+      tabindex: 0,
+      role: "img",
+      "aria-label": pointSummary(point),
     });
-    const title = svgEl("title", {});
-    title.textContent = `${point.model}: tier score ${rankFormat.num(point.score, 1)}, ${dollars(point.cost_per_task, true)} per task, ${rankFormat.plural(point.tasks || 0, "task")}, ${rankFormat.num((point.cost_coverage || 0) * 100, 0)}% priced${point.frontier ? ", frontier" : ""}`;
-    group.append(title, svgEl("circle", { class: "agents-rank-mark", cx: x.toFixed(1), cy: y.toFixed(1), r: point.frontier ? 7 : 5.5 }));
     const tx = flip ? x - MARK_PAD : x + MARK_PAD;
-    const anchor = flip ? "end" : "start";
-    if (Math.abs(ly - y) > 4) group.append(svgEl("line", { class: "agents-rank-leader", x1: x, y1: y, x2: tx - (flip ? -4 : 4), y2: ly - 4 }));
-    group.append(
-      svgText(name, { class: "agents-rank-point-name", x: tx, y: ly - 3, "text-anchor": anchor }),
-      svgText(caption, { class: "agents-rank-point-caption", x: tx, y: ly + 11, "text-anchor": anchor }),
-    );
+    if (ly != null && Math.abs(ly - y) > 4) group.append(svgEl("line", { class: "agents-rank-leader", x1: x, y1: y, x2: tx + (flip ? 4 : -4), y2: ly }));
+    group.append(svgEl("circle", { class: "agents-rank-mark", cx: x.toFixed(1), cy: y.toFixed(1), r: point.frontier ? 7 : 5.5 }));
+    if (ly != null) group.append(svgText(name, { class: "agents-rank-point-name", x: tx, y: ly + 4, "text-anchor": flip ? "end" : "start" }));
+    // The name is in the tooltip only when it is not on the chart (R32).
+    const lines = [
+      ...(ly == null ? [{ text: name, bold: true }] : []),
+      { text: `Tier score ${rankFormat.num(point.score, 1)}` },
+      { text: `${dollars(point.cost_per_task, true)} per task` },
+      { text: rankFormat.plural(point.tasks || 0, "task") },
+      ...(partialCoverage(point) ? [{ text: `${rankFormat.num(point.cost_coverage * 100, 0)}% of tasks priced` }] : []),
+    ];
+    const open = () => tip.show(lines, x, y);
+    group.addEventListener("mouseenter", open);
+    group.addEventListener("mouseleave", tip.hide);
+    group.addEventListener("focus", open);
+    group.addEventListener("blur", tip.hide);
+    group.addEventListener("keydown", (event) => { if (event.key === "Escape") tip.hide(); });
     svg.append(group);
   }
+  svg.append(tip.node);
   return svg;
+}
+
+// Cost coverage below 100%, once rounded as it is shown.
+function partialCoverage(point) {
+  return typeof point.cost_coverage === "number" && Math.round(point.cost_coverage * 100) < 100;
+}
+
+// One point's figures, for the chart's accessible description.
+function pointSummary(point) {
+  const parts = [
+    `tier score ${rankFormat.num(point.score, 1)}`,
+    `${dollars(point.cost_per_task, true)} per task`,
+    rankFormat.plural(point.tasks || 0, "task"),
+  ];
+  if (partialCoverage(point)) parts.push(`${rankFormat.num(point.cost_coverage * 100, 0)}% of tasks priced`);
+  if (point.frontier) parts.push("on the frontier");
+  return `${point.model || "—"}: ${parts.join(", ")}`;
+}
+
+// The hover and focus tooltip: an SVG bubble drawn last, so it sits over the
+// labels and is clamped inside the plot. `show` puts it beside a point.
+function tooltipNode(width, height, family) {
+  const node = svgEl("g", { class: "agents-rank-tip", "aria-hidden": "true", visibility: "hidden", "pointer-events": "none" });
+  const hide = () => node.setAttribute("visibility", "hidden");
+  const show = (lines, x, y) => {
+    const textW = Math.max(...lines.map((line) => textWidth(line.text, line.bold ? TIP_BOLD_FONT : TIP_FONT, family)));
+    const boxW = Math.ceil(textW) + 20;
+    const boxH = lines.length * TIP_LINE + 12;
+    let bx = x + 14;
+    if (bx + boxW > width - 4) bx = x - 14 - boxW;
+    bx = Math.max(4, bx);
+    const by = Math.min(height - 4 - boxH, Math.max(4, y - boxH / 2));
+    node.replaceChildren(
+      svgEl("rect", { class: "agents-rank-tip-box", x: bx, y: by, width: boxW, height: boxH, rx: 4 }),
+      ...lines.map((line, i) => svgText(line.text, {
+        class: line.bold ? "agents-rank-tip-text is-name" : "agents-rank-tip-text",
+        x: bx + 10,
+        y: by + 6 + i * TIP_LINE + 12,
+      })),
+    );
+    node.setAttribute("visibility", "visible");
+  };
+  return { node, show, hide };
 }
 
 const overlaps = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 
-// Each label sits beside its point, on whichever side holds its whole text
-// inside the plot, and slides vertically to the nearest slot free of the other
-// labels, every mark and the fixed hints. `area` bounds the label centres.
+// Each name sits beside its point, on whichever side holds the whole name
+// inside the plot, and slides vertically (a leader line joins it to the point)
+// to the nearest slot free of the other names, every mark and the fixed hints.
+// A name with no such slot within MAX_SLIDE gets `ly: null` and is left to the
+// tooltip. Frontier points choose first. `area` bounds the label centres.
 function placeLabels(items, area) {
   const half = LABEL_HEIGHT / 2;
-  const marks = items.map((item) => ({ x0: item.x - 9, x1: item.x + 9, y0: item.y - 9, y1: item.y + 9 }));
+  const marks = items.map((item) => ({ x0: item.x - 11, x1: item.x + 11, y0: item.y - 11, y1: item.y + 11 }));
   const obstacles = [...area.fixed];
-  const placed = [];
-  // Top to bottom, so each label slides away from those already placed.
-  const order = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+  const placed = new Map();
+  const order = [...items].sort((a, b) => Number(Boolean(b.point.frontier)) - Number(Boolean(a.point.frontier)) || a.y - b.y || a.x - b.x);
   for (const item of order) {
     const index = items.indexOf(item);
     const others = [...obstacles, ...marks.filter((_, i) => i !== index)];
@@ -299,41 +368,24 @@ function placeLabels(items, area) {
     for (const flip of [false, true]) {
       const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
       const x1 = x0 + item.w;
-      // Past the plot edge costs more than any vertical slide could: a
-      // clipped side loses to any unclipped side with a slot in range.
-      const clip = Math.max(0, area.left - x0) + Math.max(0, x1 - area.right);
-      const edgeCost = clip > 0 ? 10000 + clip * 10 : 0;
-      for (let offset = 0; offset <= 240; offset += 3) {
+      if (x0 < area.left || x1 > area.right) continue;
+      for (let offset = 0; offset <= MAX_SLIDE; offset += 2) {
         let found = null;
         for (const sign of offset === 0 ? [1] : [1, -1]) {
           const ly = item.y + sign * offset;
           if (ly < area.top || ly > area.bottom) continue;
           const box = { x0, x1, y0: ly - half - 1, y1: ly + half + 1 };
           if (others.some((other) => overlaps(box, other))) continue;
-          found = { flip, ly, box, cost: offset + edgeCost };
+          found = { flip, ly, box, cost: offset };
           break;
         }
         if (found) { if (!best || found.cost < best.cost) best = found; break; }
       }
     }
-    if (!best) {
-      // No free slot: keep the point's own height on the side that clips
-      // least (the roomier side on ties; the sort is stable), recording
-      // the drawn box at the clamped height.
-      const ly = Math.min(area.bottom, Math.max(area.top, item.y));
-      const roomyFlip = item.x > (area.left + area.right) / 2;
-      const sides = [roomyFlip, !roomyFlip].map((flip) => {
-        const x0 = flip ? item.x - MARK_PAD - item.w : item.x + MARK_PAD;
-        return { flip, x0, clip: Math.max(0, area.left - x0) + Math.max(0, x0 + item.w - area.right) };
-      });
-      sides.sort((a, b) => a.clip - b.clip);
-      const pick = sides[0];
-      best = { flip: pick.flip, ly, box: { x0: pick.x0, x1: pick.x0 + item.w, y0: ly - half, y1: ly + half } };
-    }
-    obstacles.push(best.box);
-    placed.push({ ...item, flip: best.flip, ly: best.ly });
+    if (best) obstacles.push(best.box);
+    placed.set(item, { ...item, flip: best ? best.flip : false, ly: best ? best.ly : null });
   }
-  return placed;
+  return items.map((item) => placed.get(item));
 }
 
 function tierTable(chart) {
