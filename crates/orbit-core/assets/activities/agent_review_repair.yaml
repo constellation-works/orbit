@@ -109,6 +109,8 @@ spec:
        ancestor of HEAD; on any mismatch attach an `incomplete` report and stop.
        If `required_validation_commands` is absent, attach an `incomplete` report
        saying a fresh delivery run is needed; never infer the list.
+       A present empty list (`[]`) is valid and is not absent: never attach
+       `incomplete` for it.
     2. List artifacts once:
        `orbit tool run orbit.task.show --input '{"id":"<task-id>","field":"artifacts","model":"<agent-family>"}'`.
        Each entry's `path` is the available set (an array; MCP may wrap it in
@@ -176,7 +178,11 @@ spec:
     7. Validate the final worktree (see Validation records). Each
        `required_validation_commands` entry not in `host_validation`, and the
        validation the workspace guide requires, needs a passing `required`
-       record; at least one `required` record must pass. Choose further checks
+       record; at least one `required` record must pass. When the list is
+       present but empty, there are no entries to cover; this step is satisfied
+       by the workspace guide's required checks together with the further checks
+       chosen from the changed behavior below, which supply the required passing
+       record. Choose further checks
        from the changed behavior. Do not add `cargo test --workspace`, `make ci`
        or another full-workspace suite as a blanket gate, or invent a substitute
        suite for a required command. Pin any comparison base to `base.commit`
