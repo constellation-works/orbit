@@ -239,15 +239,20 @@ jobs:
         self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
-    def assert_self_tests(self, ran):
+    def assert_self_tests(self, ran, mode="--guards"):
         # Discover the fixture's executable tests; assertions are about what
         # the runner executed, not a pinned source-list or count.
         expected = {path.name for path in self.scripts.glob("test-*")
                     if path.name != "test-qa-full-sweep.py"}
         actual = {path.name for path in self.guard_calls.iterdir()} & expected
-        self.assertEqual(actual, expected if ran else set())
-        self.assertTrue((self.guard_calls / "test-qa-full-sweep.py").exists(),
-                        "the live surface inventory must run on crates changes")
+        self.assertEqual(actual, expected if ran and mode != "--guards-qa" else set())
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").exists(),
+                         mode != "--guards-core",
+                         "the live inventory runs locally or in the dedicated QA job")
+        if mode != "--guards-core":
+            self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(),
+                             ["--check"] if ran else ["--check", "--static"],
+                             "input selection must govern the QA fixture as well as other self-tests")
 
     def prepare_python_prerequisite(self):
         self.prepare_ci()
@@ -371,19 +376,24 @@ exec {shlex.quote(sys.executable)} "$@"
         the others."""
         self.prepare_ci()
         self.init_ci_git()
-        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "changed"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_self_tests(False)
-        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check", "--static"])
-        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "all"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_self_tests(True)
+        modes = ("--guards", "--guards-core", "--guards-qa")
+        for mode in modes:
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "changed"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(False, mode)
+            if mode != "--guards-core":
+                self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check", "--static"])
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "all"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(True, mode)
         target = self.root / "scripts/new-guard.sh"
         target.write_text("# changed self-test input\n")
-        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "changed"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_self_tests(True)
-        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
+        for mode in modes:
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "changed"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(True, mode)
+            if mode != "--guards-core":
+                self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
 
     def test_listener_sudo_recipe_selects_self_tests_and_ordinary_docs_do_not(self):
         """A recipe-only edit runs the executable fixture. Ordinary Markdown does not."""
@@ -420,31 +430,37 @@ exec {shlex.quote(sys.executable)} "$@"
         ordinary = self.root / "docs/guide.md"
         ordinary.parent.mkdir(parents=True, exist_ok=True)
         ordinary.write_text("# guide\n")
-        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
             with self.subTest(path="docs/guide.md", flag=flag):
                 result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_self_tests(False)
+                self.assert_self_tests(False, flag)
         ordinary.unlink()
         # The reported reproduction touches only docs/standards/check.sh.
         check = self.root / "docs/standards/check.sh"
         original = check.read_text()
         check.write_text(original + "# changed input\n")
-        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
             with self.subTest(path="docs/standards/check.sh", flag=flag):
                 result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_self_tests(True)
+                self.assert_self_tests(True, flag)
         check.write_text(original)
         for path in ("docs/standards/STD-99-test/STD-99.md", "AGENTS.md", "CLAUDE.md"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# changed input\n")
-            for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
                 with self.subTest(path=path, flag=flag):
                     result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assert_self_tests(True)
+                    self.assert_self_tests(True, flag)
             target.unlink()
 
     def test_unresolvable_base_runs_every_self_test(self):
@@ -1235,6 +1251,24 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             if row["argv"][:1] in (["check"], ["doc"]) or "--doc" in row["argv"]:
                 self.assertTrue((row["idle"] and not formatting["idle"]) or row["nice"] > formatting["nice"],
                                 (row, formatting))
+
+        # The two hosted routes must execute the same guard set exactly once.
+        # Each runner performs its own Python preflight; it is not guard work.
+        all_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        result = self.run_guard("ci-guardrails.sh", "--guards-core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        core_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        result = self.run_guard("ci-guardrails.sh", "--guards-qa")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        qa_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        self.assertEqual(core_guards | qa_guards, all_guards)
+        self.assertFalse(core_guards & qa_guards, "hosted routes must not duplicate a guard")
+        self.assertEqual(qa_guards, {"test-qa-full-sweep.py"})
+        self.assertIn("qa-guards wall_seconds=", result.stderr)
+        self.write_executable(self.scripts / "test-qa-full-sweep.py", "#!/bin/sh\nexit 23\n")
+        result = self.run_guard("ci-guardrails.sh", "--guards-qa")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertRegex(result.stderr, r"qa-guards wall_seconds=\d+ exit=23")
 
     def test_an_affected_scope_builds_and_archives_only_its_build_set(self):
         """A pull request's `affected:` scope narrows the folded build and the

@@ -27,7 +27,10 @@ done
 # --guards runs the repository guards and self-tests (the guard pool and the
 # exclusive lane) in the CI guardrails job, beside the test build; with
 # CI_SELF_TESTS=changed (pull requests) it selects self-tests by their inputs,
-# as --fast does. --test-archive PATH
+# as --fast does. Hosted CI splits that work with --guards-core (everything
+# except the QA sweep) and --guards-qa (the QA inventory and selected fixture
+# self-test). Both jobs are awaited by Check; local --guards keeps both.
+# --test-archive PATH
 # runs only the workspace test build and archives its test binaries for the
 # parallel nextest shards. --test-partitions PATH proves the shards' count
 # partitions of that archive cover every test. --test-doctests runs doctests
@@ -36,11 +39,13 @@ fast=false
 static=false
 checks=false
 guards=false
+separate_qa=false
+qa_only=false
 archive=""
 partitions=false
 test_doctests=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --guards-core | --guards-qa | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -49,6 +54,8 @@ case "${1:-}" in
   --static) fast=true; static=true ;;
   --checks) checks=true ;;
   --guards) guards=true ;;
+  --guards-core) guards=true; separate_qa=true ;;
+  --guards-qa) guards=true; qa_only=true ;;
   --test-doctests) test_doctests=true ;;
   --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
@@ -63,7 +70,7 @@ esac
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if [[ -z "$archive" && "$test_doctests" == false && "$checks" == false ]] && ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" && "$test_doctests" == false && "$checks" == false && "$qa_only" == false ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -175,7 +182,7 @@ fi
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
-# and the five additional partition jobs run every partition; the test-build
+# and the additional partition jobs run every partition; the test-build
 # job runs the proof and doctests after the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
@@ -290,8 +297,24 @@ fi
 
 # Selection must precede Cargo and repository guards: these mandatory fixtures
 # import yaml even though the standalone local workflow linter can warn/skip.
-if [[ "$run_self_tests" == true || "$static" == true ]]; then
+if [[ "$run_self_tests" == true || "$static" == true || "$qa_only" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
+fi
+
+# The same input selection governs both hosted jobs. The QA fixture gets its
+# own runner instead of competing with the dependency-direction suite and the
+# repository scans. Inventory validation always runs, including on crate-only
+# PRs; only its existing fixture self-test is conditional.
+if [[ "$qa_only" == true ]]; then
+  qa_arguments=(--check)
+  if [[ "$run_self_tests" == false ]]; then
+    qa_arguments+=(--static)
+    echo "ci-guardrails: QA fixture self-test SKIPPED (self-test inputs unchanged)"
+  else
+    echo "ci-guardrails: running QA inventory and fixture self-test"
+  fi
+  run_phase qa-guards "$repo_root/scripts/test-qa-full-sweep.py" "${qa_arguments[@]}"
+  exit 0
 fi
 
 # --fast runs formatting and script guardrails, never the Rust test suite.
@@ -625,10 +648,12 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
   # Its inventory check always runs; its fixture self-test (the non-static
   # --check) only when self-test inputs changed.
-  if [[ "$static" == true || "$run_self_tests" == false ]]; then
-    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
-  else
-    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  if [[ "$separate_qa" == false ]]; then
+    if [[ "$static" == true || "$run_self_tests" == false ]]; then
+      run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
+    else
+      run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+    fi
   fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"

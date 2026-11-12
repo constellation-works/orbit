@@ -525,9 +525,9 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
   from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
-  The `Test extra partition` and `Test partition 2`, `6`, `7` and `8` jobs
-  run the same steps on five more test runners, selecting partitions 5, 2, 6,
-  7 and 8 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
+  The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
+  run the same steps on nine more test runners, selecting partitions 5, 2 and
+  6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
   They prepare during compilation and start after the final upload.
   Partition 2 no longer waits for the build runner's coverage proof,
   doctests and tool setup. None of them is a `Test shard k/N` job, so
@@ -569,13 +569,17 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   those jobs together select `count:1/N` through `count:N/N` once each, each
   shard waits for the upload step ahead of the partition guard and names every
   uploaded part, and the Check
-  job's wait names the build, every shard, every additional partition job and `CI guardrails`. After a change to this layout, re-measure the budget over
+  job's wait names the build, every shard, every additional partition job, `CI guardrails` and `CI QA guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 400 s, with skipped and cancelled runs
   reported as gaps).
-- `CI guardrails` runs `ci-guardrails.sh --guards` on its own runner, beside
-  `Test build`: every repository guard and, with the bundled auto-task body
-  history, the self-tests. On a pull request (`CI_SELF_TESTS=changed`) it runs
+- `CI guardrails` runs `ci-guardrails.sh --guards-core` on its own runner, beside
+  `Test build`: the repository guards and, with the bundled auto-task body
+  history, the self-tests, except the QA sweep. `CI QA guardrails` runs
+  `ci-guardrails.sh --guards-qa` on another standard runner: its inventory
+  check and selected fixture self-test. Check awaits both jobs. Local
+  `--guards`, `--fast` and `--static` keep the QA check in their guard pool.
+  On a pull request (`CI_SELF_TESTS=changed`) each hosted route runs
   the `scripts/test-*` self-tests only when their inputs changed against the
   PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
   `.cargo/`, the root manifests, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
@@ -583,9 +587,11 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   always runs its inventory check and runs its fixture self-test under the
   same rule. That process fixture accepts an identity-bound pidfd signal only
   on Linux. On macOS and other hosts it records an unsupported identity-signal
-  result and does not send a numeric kill. A push runs every self-test. It builds no workspace target, so
+  result and does not send a numeric kill. A push runs every self-test. The core job builds no workspace target, so
   it carries the compiler-cache namespace regression's sccache and Bubblewrap
-  setup.
+  setup. Its shared Bubblewrap step calls
+  `scripts/ci-probe-bubblewrap.sh` from the workflow revision, keeping repeated
+  setup out of expanded workflow source without changing its probes or bounds.
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
   production Clippy, documentation, an Apple-target type-check and the
   supply-chain gate, with no
@@ -598,7 +604,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is ARM, and no gate pairs that `cfg` with one `target_arch`, so this single
   target covers those items. It then
   waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
-  `6`, `7` and `8` and `CI guardrails`, and fails as soon as one of them
+  `6`–`12`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   400-second budget measures, and its
@@ -671,8 +677,10 @@ supply-chain checks and repository guards. `--test-archive` mode records only
 mode `workspace-test-archive-extract` followed by `workspace-test-partitions`,
 and `--test-doctests` mode only `doctests`. An extraction failure stops before
 the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records `fmt`, `clippy-production`,
-`documentation`, `apple-target-check` and `supply-chain`, and `--guards` mode (the CI guardrails job)
-`guard-pool`, `exclusive-self-tests` and `repository-guards`: the hosted Check job leaves doctests to
+`documentation`, `apple-target-check` and `supply-chain`, and `--guards`/`--guards-core` modes
+`guard-pool`, `exclusive-self-tests` and `repository-guards`. The dedicated
+`--guards-qa` mode records `qa-guards` and explicitly reports whether its
+fixture self-test ran or was skipped by input selection: the hosted Check job leaves doctests to
 the Test build job. That job runs them through `with-test-build-lint.sh`
 directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
 record. `--test-doctests` runs the same command through the guard and records
