@@ -488,9 +488,8 @@ service units, launch agent plists or environment values.
   a lagging source commit exists, whether running processes would block an
   upgrade, pending workspace migrations, and doctor's retired-config findings.
   The pass only records these. It does not install, apply a migration, or
-  change config. On the owner, a follower whose report shows a different
-  version or source commit is filed as drift. A missing or stale follower
-  report stays a coverage gap.
+  change config. It runs on the owner. A follower's version is not read, so
+  that host is missing coverage and is not filed as drift.
 
 A log signature qualifies only after three distinct events across two completed
 collection windows on the same host within 14 days. A single error does not
@@ -533,32 +532,20 @@ orbit task list --tag auto-task:host-health
 orbit task list --tag needs-operator
 ```
 
-### Collect from a follower
+### Follower coverage
 
-By default a pass covers only its owner. To also watch a follower, a checkout
-that pulls work from the owner (see [Run Orbit across hosts](../multi-host/)),
-add a collector on the owner. Do not add it on the replica.
+A pass covers only its owner. Preparation records `required_machine` for that
+owner and refuses an entry that names any other machine. Writing a follower's
+machine ID into the instructions does not pin the task there, and a checkout
+that pulls work from the owner (see [Run Orbit across hosts](../multi-host/))
+is not offered this pass.
 
-1. On the follower, run `orbit config get machine.id` and note the ID.
-2. On the owner, write a definition file in `.orbit/auto_tasks/`.
-   `orbit auto-task add` cannot set a collector's role or machine, so start from
-   the template that `orbit auto-task show host-health --json` prints, and set:
-   - a unique name, such as `host-health-collector-build`;
-   - the tags `host-health-collector` and `no-diff-expected`, so the owner can
-     recognize it;
-   - in its instructions, the follower's machine ID and the `collector-only`
-     role, so the collector is pinned to that machine;
-   - a weekly cron earlier than the owner's pass, such as `40 6 * * 1`.
-   The [scheduling YAML reference](../../reference/scheduling-yaml/) describes
-   the file's fields. The follower must already pull work from the owner.
+Automatically pinned follower collectors are unavailable. Do not add a
+collector definition on the owner or on the replica. Every host other than
+the owner is missing coverage. The pass reports that gap. It does not treat
+the gap as a healthy host, as zero findings, or as version drift.
 
-A collector files nothing. It returns its two artifacts with its own task, and
-the owner imports each host and window once. A follower whose latest report is
-older than 8 days, or that has no report, shows as a coverage gap, not as a
-healthy host. Collector definitions are yours to maintain: when a later release
-changes the collection contract, copy the change into your collector yourself.
-
-To check the setup:
+To check the owner pass:
 
 ```bash
 orbit auto-task show host-health

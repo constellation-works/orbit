@@ -13,25 +13,26 @@ template:
 
     ## Authority and hosts
 
-    - The shipped pass is the owner aggregator. Preparation must record required_machine
-      naming the workspace owner before admission. Confirm machine identity and checkout role
-      with `orbit config get machine.id` and `orbit workspace show --json`. A collector's
-      instruction instead names its target machine ID and collector-only role; preparation
-      must record required_machine for that target. An OS tag is not a machine pin.
-      On the wrong machine, record wrong_host and stop without filing or advancing a cursor.
-    - For each follower the operator wants monitored, configure a weekly collector variant in
-      the owner's auto-task directory, tagged host-health-collector and no-diff-expected,
-      with this collection/report contract, collector-only role, target machine ID and an
-      earlier schedule. The owner scheduler mints it and a pull follower executes the pinned
-      task. Collectors never file tasks/frictions or comment on other tasks. They attach the
-      two artifacts to their own task; claimed workers return them in task_artifacts for the
-      owner to store. Never try to run a local doctor against a remote workspace selector.
-    - The owner lists completed host-health-collector tasks, reads their artifact metadata
-      before artifact.get, and imports each (task ID, host, window) once. Check the artifact's
-      machine ID against job_run_machine and the configured target. Use the newest completed
-      report per host; merge older unconsumed windows in order when available. A report older
-      than 8 days, an unreachable host or a missing report is missing coverage, never healthy
-      or zero findings. Report the gap and retain that host's cursor. Followers never file.
+    - The shipped pass is the owner aggregator and covers the owner host only.
+      Confirm machine identity and checkout role with `orbit config get machine.id`
+      and `orbit workspace show --json`. Preparation must record required_machine
+      naming the workspace owner before admission. On the wrong machine, record
+      wrong_host and stop without filing or advancing a cursor.
+    - required_machine accepts only this owner. Preparation refuses an entry that
+      names any other machine. An OS tag, a machine ID written only in these
+      instructions, and a collector-only role do not pin execution to that machine.
+      Do not ask preparation to set required_machine to a follower, and do not
+      put that requirement in utility_warnings as a route: a warning routes nothing.
+    - Automatically pinned follower collectors are unavailable. Do not add a
+      collector definition, and do not expect the owner scheduler to mint a task
+      that a pull follower then executes. Naming a follower in the instructions
+      is not a route. Doctor is host-local: never run it against a remote
+      workspace selector.
+    - Every host other than the owner is missing coverage. Report that gap in
+      the summary and in the owner's host entry. Do not treat it as healthy, as
+      zero findings, or as drift. Do not list host-health-collector tasks, import
+      their artifacts, or file from a follower report this pass cannot obtain.
+      Followers never file through this pass.
     - Collection is read-only: no doctor repair flags, service restarts, config writes,
       credential reads, installs, dispatch, or status changes. No `orbit migrate --confirm`,
       no `orbit migrate --adopt-authority`, and no acting on `orbit update --preflight`.
@@ -77,7 +78,7 @@ template:
 
     ## Orbit version and migrations
 
-    Run this on the execution host, owner or collector, before filing. It stays read-only:
+    Run this on the owner, the only host this pass executes on, before filing. It stays read-only:
     no `orbit update` except `--check` and `--preflight`, no install, no
     `orbit migrate --confirm`, no `orbit migrate --adopt-authority`, no
     `orbit doctor --fix-retired-config-keys`, and no fetch, pull or checkout.
@@ -145,17 +146,14 @@ template:
       lagging source commit are standing conditions, eligible on first sight,
       like a doctor warning. They share the filing cap. File doctor errors
       first, then pending migrations and authority gaps, then available
-      updates, source lag and cross-host drift, then doctor warnings, then
-      eligible logs. A `retired-config-keys` row is recorded here and filed
+      updates and source lag, then doctor warnings, then eligible logs.
+      A `retired-config-keys` row is recorded here and filed
       only as that doctor check, not as a second task.
 
-    Cross-host drift is owner only. Collector reports carry the same `version`
-    object. Compare each imported host's `orbit_version`, recorded
-    `source_commit` and executable SHA-256 with the owner's. A follower whose
-    version, source commit or digest differs is a drift finding: hosts that
-    run the fleet deploy the same build together. A missing report, an
-    unreachable host or a report older than 8 days is missing coverage, as
-    elsewhere, not a drift finding and not healthy.
+    Cross-host drift is not established by this pass. Automatically pinned
+    follower collectors are unavailable, so no follower version, source commit
+    or executable digest is imported. Each host other than the owner is missing
+    coverage, not a drift finding and not healthy.
 
     ## Windows, signatures and recurrence
 
@@ -173,7 +171,7 @@ template:
       UUIDs, SHAs, timestamps, home-directory paths and ports with typed placeholders; strip
       volatile counts. Keep distinct error codes/checks/actions separate. Store machine ID
       separately, so the same code defect can group across hosts without losing attribution.
-      An update, source-lag or drift signature keeps its target version or commit
+      An update or source-lag signature keeps its target version or commit
       literal, so a resolved older target is not the same finding. Every other SHA
       still becomes a placeholder.
     - A doctor warning/error is a standing condition: eligible on first sight. A log signature
@@ -232,13 +230,9 @@ template:
       remediation the dry-run or the refusal printed (`orbit migrate --confirm`,
       or `orbit migrate --adopt-authority <path>` when that is the printed
       remedy). This pass does not run them.
-    - Cross-host drift is a human chore. Its signature is
-      `drift:<follower machine id>:<owner version or source commit>`, so a newer
-      owner build does not reuse a resolved older target. Resolve steps name the
-      follower host and the command for that follower's recorded
-      `install_channel`, aiming at the owner's version and source commit. A
-      follower report that omits `install_channel` states that gap instead of
-      guessing a command.
+    - Do not file a cross-host drift chore. Follower version, source commit and
+      install channel are not available through preparation, so a missing
+      follower is missing coverage. Do not guess a follower's channel or version.
     - A defect in `orbit update` or `orbit migrate` (JSON that contradicts the
       text, or a refusal that prints no remediation) is a bug task with the
       verified mechanism, as for any other code defect. A network failure, a
@@ -288,18 +282,19 @@ template:
     text. Read the stored text back (including when redactions_applied is true) and copy only
     that redacted excerpt into reports. Artifact upload itself is not a redaction API.
     For report-only excerpts use a comment on this pass and read it back. If that round trip
-    is unavailable (including a claimed collector), omit excerpts with a reason; report only
+    is unavailable, omit excerpts with a reason; report only
     allowlisted check/error identifiers, counts and dispositions, with sensitive free text
     omitted. Never persist raw logs in artifacts, scratch evidence, summaries or commands.
 
     ## Bounded completion, report and cursor
 
-    - File at most 5 new tasks per owner pass, prioritizing doctor errors, then pending
-      migrations and authority gaps, then available updates, source lag and cross-host
-      drift, then doctor warnings, then eligible recurring logs by count, with signature
+    - File at most 5 new tasks per pass, prioritizing doctor errors, then pending
+      migrations and authority gaps, then available updates and source lag, then
+      doctor warnings, then eligible recurring logs by count, with signature
       as tie-breaker. Cover every group
       with filed, commented, covered, rejected, counted, unconfirmed or deferred disposition.
-      Collectors have a zero filing cap. A cap is successful partial completion, never a blocker.
+      There is no collector pass and no collector filing cap. A cap is successful
+      partial completion, never a blocker.
     - Freeze the pending eligible groups with their sanitized evidence and stable ordering.
       Store them in the cursor with resume_after and the original window bounds. Carry all
       unfiled groups forward, not only their keys. A resume rechecks dedupe before filing and
@@ -308,10 +303,10 @@ template:
       Once pending groups and unread sources are drained, clear resume_after/partial and the
       next pass can start a fresh window. New arrivals wait for that next window.
     - Write under .orbit/tmp/ ($ORBIT_SCRATCH_DIR), then attach both files with
-      orbit.task.artifact action put on this pass (claimed collectors return task_artifacts):
+      orbit.task.artifact action put on this pass:
 
       host-health-report.json:
-      {"schema_version":1,"role":"owner|collector","machine_id":"...","scan_start":"RFC3339",
+      {"schema_version":1,"role":"owner","machine_id":"...","scan_start":"RFC3339",
        "window_start":"RFC3339","window_end":"RFC3339","partial":false,"filing_cap":5,
        "log_threshold":{"events":3,"windows":2,"days":14},"groups":[],
        "version":{"orbit_version":"...","executable":{"path":"...","sha256":"...","source_commit":null},
@@ -323,9 +318,10 @@ template:
        "services":[],"gaps":[],"version":{},"counts":{"doctor":0,"log":0,"eligible":0,"filed":0}}]}
       Each group carries its signature, per-host/per-window counts, source positions,
       first/last seen, route, disposition, covering record ID, sanitized evidence and any
-      omitted-excerpt reason. Imported evidence includes collector task/artifact and window.
-      `version` is the execution host. Each imported host entry copies that collector's
-      `version`. `migrations` has one object per workspace from `orbit workspace list --all`.
+      omitted-excerpt reason. There is no imported collector evidence.
+      `version` is the owner host. `hosts` lists the owner only; its `gaps` name
+      follower collection as unavailable. `migrations` has one object per workspace
+      from `orbit workspace list --all` on the owner.
       On a nonzero dry-run, `pending_layout` and `pending_schema` are the stderr version
       lines and `up_to_date` is false. `authority` is null when no refusal was printed.
       `retired_config` copies the `retired-config-keys` doctor rows that name that
@@ -333,12 +329,13 @@ template:
       entry only.
 
       host-health-cursor.json:
-      {"schema_version":1,"role":"owner|collector","machine_id":"...","window_start":"RFC3339",
+      {"schema_version":1,"role":"owner","machine_id":"...","window_start":"RFC3339",
        "window_end":"RFC3339","partial":false,"resume_after":null,"pending_groups":[],
        "hosts":[],"consumed_collector_windows":[],"rejected_mappings":[]}
       Each host entry carries per-source journal/file positions and 14-day per-window signature
-      counts. Preserve unavailable hosts' prior positions, imported-window identities and
-      rejected mappings. Keep artifacts under the 1 MiB limit: omit excerpts first, paginate
+      counts for the owner. Leave `consumed_collector_windows` empty: follower
+      collection is unavailable, so there is no window to import. Preserve the
+      owner's prior positions and rejected mappings. Keep artifacts under the 1 MiB limit: omit excerpts first, paginate
       pending evidence into named companion artifacts if needed and reference/attach them all.
     - Summary: per-host coverage/counts, grouped dispositions, filed/commented records,
       missing coverage, partial/resume point and both artifact paths. Empty passes still attach
@@ -346,10 +343,10 @@ template:
   acceptance_criteria:
     - host-health-report.json and host-health-cursor.json are attached, with per-host doctor/log coverage, grouped counts, routes, dispositions and any partial resume point, including when no finding is eligible.
     - The report version object records orbit --version, the executable path and SHA-256, the source commit when a local-candidate manifest matches, orbit update --check, source-commit lag when a checkout and a recorded commit exist, and orbit update --preflight. Nothing was installed or applied.
-    - The migrations array has one entry per workspace with orbit migrate --dry-run, any authority refusal those commands printed, and doctor's retired-config-keys findings. The owner files a human-crew drift finding when an imported follower version, source commit or executable digest differs, and treats a missing or stale report as missing coverage.
+    - The migrations array has one entry per workspace with orbit migrate --dry-run, any authority refusal those commands printed, and doctor's retired-config-keys findings. Follower hosts are missing coverage: automatically pinned collectors are unavailable, so the pass does not file a drift finding and does not treat that gap as healthy or as zero findings.
     - Every new finding task has a Resolve section with host/shell-specific commands or an attached resolve.sh (or concrete numbered operator steps), a verification command, the correct human/setup or agent route, and a spawned_from relation; covering tasks and rejected matches are recorded without duplicate filings.
-    - Update, source-lag, migration, authority and drift findings are human-crew chores whose signatures include the target version or commit and whose Resolve steps name the install-type command or the printed migrate remediation and say to stop Orbit processes before a migration. A defect in update or migrate, with a verified mechanism, is a bug task.
-    - The report records first-sight doctor, migration, authority, update and drift eligibility, the 3-event/2-window log threshold, open/recent-closed task and friction dedupe, bounded redacted evidence and at most 5 owner filings (zero collector filings); capped passes preserve pending evidence in the cursor.
+    - Update, source-lag, migration and authority findings are human-crew chores whose signatures include the target version or commit and whose Resolve steps name the install-type command or the printed migrate remediation and say to stop Orbit processes before a migration. A defect in update or migrate, with a verified mechanism, is a bug task. No drift chore is filed.
+    - The report records first-sight doctor, migration, authority and update eligibility, the 3-event/2-window log threshold, open/recent-closed task and friction dedupe, bounded redacted evidence, missing follower coverage, and at most 5 filings; capped passes preserve pending evidence in the cursor.
   task_type: chore
   tags:
     - host-health

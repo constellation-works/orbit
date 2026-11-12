@@ -383,9 +383,13 @@ template:
     the decision was executed on the owning machine from that machine's
     area-task statuses and per-area `qa-progress.json` artifacts, and
     preparation recorded `required_machine` for this owner-evidence contract
-    before admission. A follower claim is not evidence: claimed
-    `orbit.task.show` and `orbit.task.artifact` action `get` of another task are
-    refused, and supported tool names do not authorize them.
+    before admission. A follower claim is not evidence for this decision.
+    A claimed worker may read ordinary task records and non-review artifacts,
+    including another task's `qa-progress.json`, for any task in the claimed
+    workspace. That permission does not satisfy this roll-up: the decision
+    still requires the owner-local reads named above. Another task's `review-*`
+    artifacts stay refused. Supported tool names do not authorize the
+    owner-local evidence or those review artifacts.
 
     ## Finish
 
