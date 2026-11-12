@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -179,7 +179,6 @@ let frictionPage = 0;
 let frictionListScope = null;
 
 // Health strip state
-let lastSummary = null;
 let jobsInFlightSequence = 0;
 let runningRunsSequence = 0;
 
@@ -472,23 +471,6 @@ function runDetailContext() {
     renderRunGantt,
     renderRunEvents,
   };
-}
-
-function renderBodyBlock(body, fallbackClass) {
-  if (!body || !body.trim()) return null;
-  const rendered = renderMarkdown(body);
-  const view = el(rendered !== null ? "div" : "pre", {
-    class: rendered !== null ? "markdown-body" : fallbackClass,
-  });
-  if (rendered !== null) {
-    view.innerHTML = rendered;
-  } else {
-    view.textContent = body;
-  }
-  return el("div", { class: "field-block" }, [
-    el("h4", { class: "section-title", text: "Body" }),
-    view,
-  ]);
 }
 
 // The last locks read and the workspace it belongs to.
@@ -1598,15 +1580,6 @@ onWorkspaceChange(() => {
   if (select) select.value = getWorkspace() || "";
 });
 
-// ORB-10874/ORB-10872: workspace + window live in the query string so a
-// reload or copied link restores the same dashboard scope. `persistScopeToUrl`
-// is the single writer; this wrapper stays for the existing call sites.
-function persistWorkspaceToUrl(id) {
-  setWorkspace(id);
-  rememberWorkspace();
-  persistScopeToUrl();
-}
-
 // Whether this refresh makes the Tasks page's slow reads: always off the Tasks
 // page, and on it when the page was just entered,
 // after a host or workspace change, or once the slow cadence has elapsed.
@@ -2068,7 +2041,6 @@ function summaryReadWindow() {
 function fetchAndRenderSummary(read = null) {
   const since = summaryReadWindow();
   return requestPanel("audit-summary-body", since, () => read || fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
-    lastSummary = data;
     renderAuditSummary(data, auditContext());
   });
 }
