@@ -719,13 +719,16 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .agents-curves-axis { fill: var(--fg-dim); font-size: 12px; }
 /* Bands only for the hovered/focused series, so many series stay legible. */
-.agents-curves-band { fill: currentColor; fill-opacity: 0; stroke: none; transition: fill-opacity 120ms ease; }
+/* Pointer-transparent: a hidden band must not catch the hover meant for a marker drawn beneath it. */
+.agents-curves-band { fill: currentColor; fill-opacity: 0; stroke: none; pointer-events: none; transition: fill-opacity 120ms ease; }
 .agents-curves-series.is-active .agents-curves-band { fill-opacity: 0.14; }
 .agents-curves-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
 .agents-curves-whisker { stroke: currentColor; stroke-width: 2; stroke-opacity: 0.65; stroke-linecap: round; }
 .agents-curves-marker { fill: currentColor; stroke: var(--bg-elev); stroke-width: 1.5; outline: none; }
 .agents-curves-marker.is-sparse { fill: var(--bg-elev); stroke: currentColor; stroke-width: 2; }
 .agents-curves-marker:focus-visible { stroke: var(--fg); stroke-width: 2.5; }
+.agents-curves-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
+.agents-curves-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
 .agents-curves-empty { margin: 10px 0 0; color: var(--fg-dim); font-size: 12.5px; }
 .agents-curves-data { margin-top: 8px; font-size: 12.5px; }
 .agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }

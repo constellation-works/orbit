@@ -17,7 +17,6 @@ const TIER_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "X-hard
 // without reuse; CSS defines .agents-curve-s0..s19 to match.
 const SERIES_SLOTS = 20;
 const SVG_NS = "http://www.w3.org/2000/svg";
-const NARROW = "(max-width: 640px)";
 
 let complexity = "";
 // `null` until the reader picks: then the crews they chose.
@@ -25,17 +24,6 @@ let picked = null;
 let curves = null;
 let curvesScope = null;
 let curvesRequest = 0;
-// The latest render's redraw, so crossing the phone breakpoint redraws the
-// chart on its canvas.
-let redraw = null;
-// The phone query, or null where the host has no `matchMedia`.
-const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia(NARROW) : null;
-if (narrowQuery) narrowQuery.addEventListener("change", () => { if (redraw) redraw(); });
-
-function isNarrow() {
-  return Boolean(narrowQuery && narrowQuery.matches);
-}
-
 function curvesPath(selectedWindow, execution) {
   const tier = complexity ? `&complexity=${encodeURIComponent(complexity)}` : "";
   return `/api/agents/implementers/size-curves?window=${encodeURIComponent(selectedWindow)}${tier}&execution=${encodeURIComponent(execution || "managed")}`;
@@ -161,9 +149,11 @@ function pickerNode(rerender) {
       box,
       el("span", { class: `agents-curves-swatch agents-curve-s${slot(each.crew)}`, "aria-hidden": "true" }),
       el("span", { class: "agents-curves-crew", text: each.crew }),
-      el("span", { class: "agents-curves-n", text: `${each.regressed}/${each.tasks}`, title: "Regressed / landed tasks", "aria-label": counts }),
+      el("span", { class: "agents-curves-n", text: `${each.regressed}/${each.tasks}`, title: "Regressed / landed tasks" }),
     ]);
-    label.setAttribute("aria-label", `${each.crew}: ${counts}`);
+    // The checkbox carries the count's meaning: aria-label is not allowed on the
+    // generic span or the label element, so assistive tech would drop it there.
+    box.setAttribute("aria-label", `${each.crew}: ${counts}`);
     const item = el("li", {}, [label]);
     item.dataset.crew = each.crew;
     list.append(item);
@@ -251,6 +241,23 @@ function buildPlot(drawnSeries, WIDTH) {
     const stepX = Math.min(9, Math.max(4.5, (slotWidth * 0.82) / group.length));
     return { dx: (index - (group.length - 1) / 2) * stepX, dy: group.length > 2 ? ((index % 2) * 2 - 1) * 3 : 0 };
   };
+  // The hover and focus tooltip: one bubble drawn over the plot, so a
+  // keyboard reader sees a point's count and interval, not only a focus ring.
+  const tip = svg("g", { class: "agents-curves-tip", visibility: "hidden", "aria-hidden": "true", "pointer-events": "none" });
+  const showTip = (lines, cx, cy) => {
+    const boxW = Math.ceil(Math.max(...lines.map((line) => line.length)) * 6.6) + 16;
+    const boxH = lines.length * 15 + 10;
+    let bx = cx + 12;
+    if (bx + boxW > WIDTH - 4) bx = cx - 12 - boxW;
+    bx = Math.max(4, bx);
+    const by = Math.min(HEIGHT - 4 - boxH, Math.max(4, cy - boxH / 2));
+    tip.replaceChildren(
+      svg("rect", { class: "agents-curves-tip-box", x: bx, y: by, width: boxW, height: boxH, rx: 4 }),
+      ...lines.map((line, i) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + i * 15 }, line)),
+    );
+    tip.setAttribute("visibility", "visible");
+  };
+  const hideTip = () => tip.setAttribute("visibility", "hidden");
   for (const each of drawnSeries) {
     const css = `agents-curve-s${slot(each.crew)}`;
     const runs = [];
@@ -288,12 +295,24 @@ function buildPlot(drawnSeries, WIDTH) {
     for (const bucket of each.buckets.filter((entry) => entry.drawn)) {
       const { dx, dy } = dodge(each.crew, bucket);
       const label = pointLabel(each.crew, bucket);
-      const marker = svg("circle", { cx: x(bucket.bucket) + dx, cy: y(bucket.rate) + dy, r: markerRadius(bucket), class: `agents-curves-marker${bucket.sparse ? " is-sparse" : ""}`, tabindex: 0, role: "img", "aria-label": label });
-      marker.append(svg("title", {}, label));
+      const cx = x(bucket.bucket) + dx;
+      const cy = y(bucket.rate) + dy;
+      const marker = svg("circle", { cx, cy, r: markerRadius(bucket), class: `agents-curves-marker${bucket.sparse ? " is-sparse" : ""}`, tabindex: 0, role: "img", "aria-label": label });
+      const lines = [
+        `${each.crew}, ${rangeText(bucket)}`,
+        `${bucket.regressed} of ${bucket.tasks} tasks regressed (n=${bucket.tasks})`,
+        `${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})`,
+        ...(bucket.sparse ? [`fewer than ${curves.sparse_outcomes} regressed tasks`] : []),
+      ];
+      marker.addEventListener("mouseenter", () => showTip(lines, cx, cy));
+      marker.addEventListener("focus", () => showTip(lines, cx, cy));
+      marker.addEventListener("mouseleave", hideTip);
+      marker.addEventListener("blur", hideTip);
       group.append(marker);
     }
     plot.append(group);
   }
+  plot.append(tip);
   return plot;
 }
 
@@ -335,7 +354,6 @@ function cohortText() {
 
 function render({ scorecard, rerender }) {
   const selectedWindow = scorecard.requested_window;
-  redraw = rerender;
   const nodes = [
     controlsNode(selectedWindow, scorecard.execution, rerender),
   ];
@@ -379,7 +397,7 @@ function panelHint() {
 
 // The panel node is rebuilt when the curves or the reader's choices change.
 function hash() {
-  return [complexity, picked ? [...picked].sort() : null, curves, isNarrow()];
+  return [complexity, picked ? [...picked].sort() : null, curves];
 }
 
 // Read on every scorecard fetch, so a poll refreshes the curves too.
