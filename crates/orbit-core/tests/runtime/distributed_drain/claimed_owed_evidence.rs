@@ -52,12 +52,12 @@ pub(super) fn hosted_codeql_rule(paths: &str) -> String {
 pub(super) fn hosted_owed() -> ReviewEvidenceRequirement {
     ReviewEvidenceRequirement {
         hosted_check: Some(HOSTED_CHECK.into()),
-        ..owed()
+        ..owed_codeql_requirement()
     }
 }
 
 /// The requirement the rule owes.
-pub(super) fn owed() -> ReviewEvidenceRequirement {
+pub(super) fn owed_codeql_requirement() -> ReviewEvidenceRequirement {
     ReviewEvidenceRequirement {
         kind: ReviewEvidenceKind::CodeQl,
         name: "Rust CodeQL (Linux)".into(),
@@ -77,7 +77,11 @@ fn leaf_on(os: HostOs, paths: &str) -> (ReviewedLeaf, Value) {
     (leaf, admitted)
 }
 
-pub(super) fn record(id: &str, command: &str, outcome: ValidationOutcome) -> ReviewValidation {
+pub(super) fn review_validation_record(
+    id: &str,
+    command: &str,
+    outcome: ValidationOutcome,
+) -> ReviewValidation {
     ReviewValidation {
         id: Some(id.into()),
         command: command.into(),
@@ -95,7 +99,7 @@ pub(super) fn record(id: &str, command: &str, outcome: ValidationOutcome) -> Rev
 }
 
 /// A report naming no external evidence: everything else checked.
-pub(super) fn report(
+pub(super) fn claimed_review_report(
     admitted: &Value,
     verdict: ReviewVerdict,
     findings: Vec<ReviewFinding>,
@@ -116,10 +120,10 @@ pub(super) fn report(
 }
 
 pub(super) fn ci_fast() -> ReviewValidation {
-    record("V1", "make ci-fast", ValidationOutcome::Passed)
+    review_validation_record("V1", "make ci-fast", ValidationOutcome::Passed)
 }
 
-pub(super) fn artifact<T: serde::de::DeserializeOwned>(
+pub(super) fn leaf_owner_artifact<T: serde::de::DeserializeOwned>(
     leaf: &ReviewedLeaf,
     path: &str,
 ) -> Option<T> {
@@ -135,13 +139,16 @@ fn a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it() {
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
     assert_eq!(
         admitted["owed_evidence"],
-        json!([owed()]),
+        json!([owed_codeql_requirement()]),
         "admission names the owed check: {admitted}"
     );
-    let manifest: ReviewManifest = artifact(&leaf, REVIEW_MANIFEST_ARTIFACT).unwrap();
-    assert_eq!(manifest.owed_external_evidence, vec![owed()]);
+    let manifest: ReviewManifest = leaf_owner_artifact(&leaf, REVIEW_MANIFEST_ARTIFACT).unwrap();
+    assert_eq!(
+        manifest.owed_external_evidence,
+        vec![owed_codeql_requirement()]
+    );
 
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -153,12 +160,12 @@ fn a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it() {
         .expect_err("a held review opens no pull request");
     assert!(!refused.contains("review_gate_blocked"), "{refused}");
 
-    let hold: ReviewEvidenceHold =
-        artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).expect("the gate holds for the owed check");
-    assert_eq!(hold.requirements, vec![owed()]);
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the gate holds for the owed check");
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement()]);
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
-    assert_eq!(certificate.owed_evidence, vec![owed()]);
+    assert_eq!(certificate.owed_evidence, vec![owed_codeql_requirement()]);
     let owed_record = certificate
         .validation
         .iter()
@@ -173,11 +180,14 @@ fn a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it() {
 /// holds for the owner's run instead.
 fn a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping() {
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_review_report(
         &admitted,
         ReviewVerdict::Accept,
         Vec::new(),
-        vec![ci_fast(), record("V2", CODEQL, ValidationOutcome::Passed)],
+        vec![
+            ci_fast(),
+            review_validation_record("V2", CODEQL, ValidationOutcome::Passed),
+        ],
         None,
     ));
     let refused = leaf
@@ -185,10 +195,10 @@ fn a_mac_reviewers_unverified_codeql_pass_holds_instead_of_shipping() {
         .expect_err("an unverified pass opens no pull request");
     assert!(!refused.contains("review_gate_blocked"), "{refused}");
 
-    let hold: ReviewEvidenceHold =
-        artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).expect("the gate holds for the owed check");
-    assert_eq!(hold.requirements, vec![owed()]);
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the gate holds for the owed check");
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement()]);
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
     assert!(
         certificate
@@ -210,7 +220,7 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
     ] {
         let (leaf, admitted) = leaf_on(os, paths);
         assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
-        leaf.put_report(&report(
+        leaf.put_report(&claimed_review_report(
             &admitted,
             ReviewVerdict::Accept,
             Vec::new(),
@@ -221,10 +231,12 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
             .settle()
             .unwrap_or_else(|error| panic!("{os:?} {paths}: {error}"));
         assert_eq!(settled["verdict"], "accept", "{settled}");
-        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let certificate: ReviewCertificate =
+            leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
         assert!(certificate.owed_evidence.is_empty());
         assert!(
-            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .is_none(),
             "no hold"
         );
     }
@@ -234,7 +246,7 @@ fn a_linux_leaf_or_an_unmatched_rule_owes_no_evidence() {
 /// it into a hold.
 fn an_open_finding_on_a_mac_leaf_still_blocks() {
     let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         vec![ReviewFinding {
@@ -251,7 +263,7 @@ fn an_open_finding_on_a_mac_leaf_still_blocks() {
     let refused = leaf.settle().expect_err("an open finding blocks");
     assert!(refused.contains("review_gate_blocked"), "{refused}");
     assert!(
-        artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+        leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
         "no hold for an open finding"
     );
 }
@@ -264,7 +276,7 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
     let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
     assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
     let named = vec![
-        owed(),
+        owed_codeql_requirement(),
         ReviewEvidenceRequirement {
             kind: ReviewEvidenceKind::HostSandboxTest,
             name: "Sandbox probe (Linux)".into(),
@@ -285,9 +297,13 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
     let mut validation = vec![ci_fast()];
     for (index, required) in named.iter().enumerate() {
         let id = format!("V{}", index + 2);
-        validation.push(record(&id, &required.command, ValidationOutcome::NotRun));
+        validation.push(review_validation_record(
+            &id,
+            &required.command,
+            ValidationOutcome::NotRun,
+        ));
     }
-    let mut reviewer_report = report(
+    let mut reviewer_report = claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -301,13 +317,13 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
         .expect_err("a held review opens no pull request");
     assert!(!refused.contains("review_gate_blocked"), "{refused}");
 
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("the gate holds for the named evidence");
     assert_eq!(hold.requirements.len(), named.len(), "{hold:?}");
     for required in &named {
         assert!(hold.requirements.contains(required), "{hold:?}");
     }
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
 }
 
@@ -330,28 +346,28 @@ fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_chec
         os: None,
         hosted_check: None,
     };
-    let mut reviewer_report = report(
+    let mut reviewer_report = claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
         vec![
             ci_fast(),
-            record("V2", CODEQL, ValidationOutcome::NotRun),
-            record("V3", CI, ValidationOutcome::NotRun),
+            review_validation_record("V2", CODEQL, ValidationOutcome::NotRun),
+            review_validation_record("V3", CI, ValidationOutcome::NotRun),
         ],
         Some("Linux and hosted checks need owner-side evidence"),
     );
-    reviewer_report.external_evidence = vec![owed(), hosted.clone()];
+    reviewer_report.external_evidence = vec![owed_codeql_requirement(), hosted.clone()];
     leaf.put_report(&reviewer_report);
     let refused = leaf.settle().expect_err("missing evidence cannot land");
     assert!(
         refused.contains("review_awaiting_evidence"),
         "an evidence-only claimed before-landing review must hold: {refused}"
     );
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("named evidence remains an owner-side follow-up");
-    assert_eq!(hold.requirements, vec![owed(), hosted]);
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement(), hosted]);
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert!(
         certificate.owner_owed_evidence.is_empty(),
         "no hosted run stands in for an undeclared check: {:?}",
@@ -399,7 +415,7 @@ fn a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters() {
             hosted_check: None,
         })
         .collect::<Vec<_>>();
-    let mut broad = record(
+    let mut broad = review_validation_record(
         "V2",
         "cargo test -p orbit-engine --test engine",
         ValidationOutcome::Passed,
@@ -413,7 +429,7 @@ fn a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters() {
             )
         })
         .collect();
-    let mut reviewer_report = report(
+    let mut reviewer_report = claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -430,10 +446,10 @@ fn a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters() {
         "a Mac review's Linux sandbox gaps must hold instead of blocking: {refused}"
     );
     assert!(!refused.contains("review_gate_blocked"), "{refused}");
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+    let hold: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("the owner receives a hold for the Linux tests");
     assert_eq!(hold.requirements, named);
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
     assert_eq!(certificate.owed_evidence, named);
     for required in &named {
@@ -477,13 +493,13 @@ fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
         leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
         leaf.gate_input["before_landing"] = json!(true);
         let admitted = leaf.admit_review();
-        let mut reviewer_report = report(
+        let mut reviewer_report = claimed_review_report(
             &admitted,
             ReviewVerdict::Incomplete,
             Vec::new(),
             vec![
                 ci_fast(),
-                record("V2", &named.command, ValidationOutcome::Failed),
+                review_validation_record("V2", &named.command, ValidationOutcome::Failed),
             ],
             Some("the Linux-only check failed on the candidate"),
         );
@@ -492,7 +508,8 @@ fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
         let refused = leaf.settle().expect_err("a failed check cannot land");
         assert!(refused.contains("review_gate_blocked"), "{refused}");
         assert!(
-            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .is_none(),
             "no hold for a failed check"
         );
     }
@@ -543,7 +560,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
     );
 
     let admitted = leaf.admit_review();
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -551,8 +568,9 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         Some("Rust CodeQL cannot run on macOS"),
     ));
     leaf.settle().expect_err("held");
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
-    assert_eq!(hold.requirements, vec![owed()]);
+    let hold: ReviewEvidenceHold =
+        leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement()]);
     let published = format!("refs/heads/orbit-evidence/orbit/{}", leaf.task);
     assert_eq!(hold.published_ref.as_deref(), Some(published.as_str()));
     leaf.leaf_holds(&hold);
@@ -611,7 +629,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
     assert_eq!(settled["verdict"], "accept", "{settled}");
     let head = git(&resumed.worktree, &["rev-parse", "HEAD"]);
     assert_eq!(settled["reviewed_head_sha"], head.trim(), "pr_open's head");
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(
         certificate.resumed_hold_attempt.as_deref(),
         Some(hold.attempt_id.as_str()),
@@ -900,7 +918,7 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
         admitted["decision"], "admitted",
         "a fresh before-landing attempt still admits a reviewer: {admitted}"
     );
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -912,8 +930,9 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
         refused.contains("review_awaiting_evidence"),
         "missing owed evidence must hold: {refused}"
     );
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
-    assert_eq!(hold.requirements, vec![owed()]);
+    let hold: ReviewEvidenceHold =
+        leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+    assert_eq!(hold.requirements, vec![owed_codeql_requirement()]);
     leaf.leaf_holds(&hold);
     leaf.pair.pass(&leaf.drain);
     assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
@@ -933,7 +952,7 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
             .all(|entry| entry.event != "review_evidence_received"),
         "mismatched evidence must not record receipt"
     );
-    let still_held: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+    let still_held: ReviewEvidenceHold = leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
         .expect("the hold stays until the owed command arrives");
     assert_eq!(still_held.attempt_id, hold.attempt_id);
 
@@ -985,7 +1004,7 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
         .expect("matching evidence settles the held review without a reviewer");
     assert_eq!(settled["gate"], "passed", "{settled}");
     assert_eq!(settled["verdict"], "accept", "{settled}");
-    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    let certificate: ReviewCertificate = leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
     assert_eq!(
         certificate.resumed_hold_attempt.as_deref(),
         Some(hold.attempt_id.as_str()),
@@ -1003,20 +1022,25 @@ fn a_failed_check_matching_a_workspace_rule_still_blocks() {
     // Exact owed CodeQL command, on a Mac leaf whose rule owes it on Linux.
     {
         let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
-        leaf.put_report(&report(
+        leaf.put_report(&claimed_review_report(
             &admitted,
             ReviewVerdict::Incomplete,
             Vec::new(),
-            vec![ci_fast(), record("V2", CODEQL, ValidationOutcome::Failed)],
+            vec![
+                ci_fast(),
+                review_validation_record("V2", CODEQL, ValidationOutcome::Failed),
+            ],
             Some("the owed CodeQL check failed on the candidate"),
         ));
         let refused = leaf.settle().expect_err("a failed owed check cannot land");
         assert!(refused.contains("review_gate_blocked"), "{refused}");
         assert!(
-            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .is_none(),
             "no hold for a failed owed check"
         );
-        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let certificate: ReviewCertificate =
+            leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
         let failed = certificate
             .validation
             .iter()
@@ -1032,11 +1056,14 @@ fn a_failed_check_matching_a_workspace_rule_still_blocks() {
         let variant = "scripts/codeql-rust-local.sh --ram 8192 \
                        codeql/rust-queries:codeql-suites/rust-security-and-quality.qls";
         let (leaf, admitted) = leaf_on(HostOs::Macos, "**/*.rs");
-        leaf.put_report(&report(
+        leaf.put_report(&claimed_review_report(
             &admitted,
             ReviewVerdict::Incomplete,
             Vec::new(),
-            vec![ci_fast(), record("V2", variant, ValidationOutcome::Failed)],
+            vec![
+                ci_fast(),
+                review_validation_record("V2", variant, ValidationOutcome::Failed),
+            ],
             Some("the CodeQL check failed on the candidate"),
         ));
         let refused = leaf
@@ -1044,10 +1071,12 @@ fn a_failed_check_matching_a_workspace_rule_still_blocks() {
             .expect_err("a failed CodeQL check cannot land");
         assert!(refused.contains("review_gate_blocked"), "{refused}");
         assert!(
-            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .is_none(),
             "no hold for a failed same-program CodeQL check"
         );
-        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let certificate: ReviewCertificate =
+            leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
         let failed = certificate
             .validation
             .iter()
@@ -1068,11 +1097,14 @@ fn a_failed_check_matching_a_workspace_rule_still_blocks() {
         let mut leaf = ReviewedLeaf::admit_with_configs(&rule, "");
         leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Linux));
         let admitted = leaf.admit_review();
-        leaf.put_report(&report(
+        leaf.put_report(&claimed_review_report(
             &admitted,
             ReviewVerdict::Incomplete,
             Vec::new(),
-            vec![ci_fast(), record("V2", SANDBOX, ValidationOutcome::Failed)],
+            vec![
+                ci_fast(),
+                review_validation_record("V2", SANDBOX, ValidationOutcome::Failed),
+            ],
             Some("the configured sandbox check failed on the candidate"),
         ));
         let refused = leaf
@@ -1080,10 +1112,12 @@ fn a_failed_check_matching_a_workspace_rule_still_blocks() {
             .expect_err("a failed sandbox check cannot land");
         assert!(refused.contains("review_gate_blocked"), "{refused}");
         assert!(
-            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            leaf_owner_artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .is_none(),
             "no hold for a failed configured sandbox check"
         );
-        let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+        let certificate: ReviewCertificate =
+            leaf_owner_artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
         let failed = certificate
             .validation
             .iter()

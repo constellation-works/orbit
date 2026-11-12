@@ -1090,7 +1090,15 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
             },
         )
         .expect_err("an agent cannot reconcile its own delivery");
-    assert!(!denied.to_string().is_empty(), "recovered: {denied}");
+    assert!(
+        matches!(denied, OrbitError::CapabilityDenied(_)),
+        "recovered: the refusal is a capability denial, not another failure: {denied:?}"
+    );
+    assert_contains(
+        &denied.to_string(),
+        "requires the `operator` capability",
+        "recovered",
+    );
     assert!(
         !delivery
             .snapshot(McpCapability::Agent)
@@ -1289,7 +1297,21 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     };
     // The merged head itself remediates nothing.
     let head = dispose(&delivery.head).expect_err("the head is not a remediation");
-    assert!(!head.to_string().is_empty(), "baseline");
+    assert!(
+        matches!(head, OrbitError::InvalidInput(_)),
+        "baseline: the refusal is a rejected input, not another failure: {head:?}"
+    );
+    for needle in [
+        "is already part of the merged head",
+        "cannot explain a failure of that head",
+    ] {
+        assert_contains(&head.to_string(), needle, "baseline");
+    }
+    assert_eq!(
+        delivery.status(&reconciliation)["outcome"],
+        "awaiting_disposition",
+        "baseline: the refused head-as-remediation leaves the disposition open"
+    );
 
     let unrelated = delivery.land("unrelated.txt", "unrelated\n", "Unrelated landing change");
     let failed_remediation = dispose(&unrelated)

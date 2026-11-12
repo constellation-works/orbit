@@ -78,9 +78,81 @@ fn labelled_claims_go_only_to_a_follower_that_carries_every_label() {
     );
 }
 
+/// A follower carrying only one of two required labels is a partial carrier:
+/// the pull it sends names that one label, yet the owner withholds the task and
+/// the idle pass names the label it lacks. Only a follower carrying both is
+/// handed the task, so admission needs every label, never any one of them.
+fn a_follower_carrying_one_of_two_required_labels_is_not_handed_the_task() {
+    let mut pair = Pair::with_owner(2, |owner| {
+        owner.with_machine_labels(vec!["gpu".to_string(), "xcode".to_string()])
+    });
+    let (labelled, plain) = (pair.tasks[0].clone(), pair.tasks[1].clone());
+    pair.wire
+        .owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled, "requires_labels": ["gpu", "xcode"], "model": "codex"}),
+        )
+        .expect("label owner task");
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Linux))
+        .with_machine_labels(vec!["gpu".to_string()]);
+
+    let drain = pair.start_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), plain);
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
+    let idle = pair.pass(&drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert_eq!(pair.owner_status(&labelled), "backlog");
+    assert!(
+        !pair.owner_has_claim_for_task(&labelled),
+        "{:#?}",
+        pair.owner_claims()
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").last().unwrap()["labels"],
+        json!(["gpu"]),
+        "the partial carrier declares only the label it has"
+    );
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("the idle pass is recorded");
+    let wait = recorded
+        .excluded
+        .iter()
+        .find(|entry| entry.task_id == labelled)
+        .unwrap_or_else(|| panic!("{labelled} is excluded: {recorded:#?}"));
+    assert_eq!(wait.reason.as_deref(), Some("host_labels_missing"));
+    assert_eq!(
+        wait.detail.as_deref(),
+        Some(
+            "waits for a host labelled `gpu`, `xcode` (requires_labels); \
+             the executor lacks `xcode`"
+        ),
+        "{wait:?}"
+    );
+
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["gpu".to_string(), "xcode".to_string()]);
+    let full_drain = pair.start_drain();
+    let full_leaf = pair.running_leaf(&full_drain, 1);
+    assert_eq!(pair.claimed_task(&full_leaf), labelled);
+}
+
 crate::scenario_table!(
     labelled_claims_go_only_to_a_follower_that_carries_every_label_scenarios,
-    labelled_claims_go_only_to_a_follower_that_carries_every_label
+    labelled_claims_go_only_to_a_follower_that_carries_every_label,
+    a_follower_carrying_one_of_two_required_labels_is_not_handed_the_task
 );
 
 /// Grants used to reach claimed implementers despite their closed owner

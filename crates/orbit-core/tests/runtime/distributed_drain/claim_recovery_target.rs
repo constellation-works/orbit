@@ -229,7 +229,8 @@ fn recover_through_tool(
 
 /// Recovery bounds its replay key and reason in core before any claim changes:
 /// the key needs 1..=128 bytes of ASCII letters, digits, `-` or `_` after
-/// trimming, and the reason 1..=2000 bytes. Surrounding space is trimmed.
+/// trimming, and the reason 1..=2000 bytes. Surrounding space is trimmed, so an
+/// empty or whitespace-only key or reason is refused too.
 #[test]
 fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_changes() {
     let pair = Pair::new(1);
@@ -237,7 +238,7 @@ fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_chan
     let leaf = pair.running_leaf(&drain, 1);
     let claim = claim_id(&pair, &leaf);
 
-    for key in ["has space", &"k".repeat(129)] {
+    for key in ["", "   ", "has space", &"k".repeat(129)] {
         let error = recover(&pair, &claim, "running", TaskStatus::Blocked, key).unwrap_err();
         assert!(
             matches!(error, OrbitError::InvalidInput(_)),
@@ -249,23 +250,32 @@ fn an_operator_recovery_key_and_reason_are_bounded_in_core_before_any_claim_chan
             "{key}: {error}"
         );
     }
-    let long_reason = "r".repeat(2001);
-    let error = pair
-        .wire
-        .owner
-        .recover_claim_as_operator(
-            &claim,
-            "running",
-            TaskStatus::Blocked,
-            "operator",
-            &long_reason,
-            "operator-recover",
-            "reason-bound",
-        )
-        .unwrap_err();
-    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
-    let error = recover_through_tool(&pair, &claim, &long_reason, "reason-bound").unwrap_err();
-    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
+    for reason in ["", " \t\n ", &"r".repeat(2001)] {
+        let error = pair
+            .wire
+            .owner
+            .recover_claim_as_operator(
+                &claim,
+                "running",
+                TaskStatus::Blocked,
+                "operator",
+                reason,
+                "operator-recover",
+                "reason-bound",
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{} byte reason: {error}",
+            reason.len()
+        );
+        let error = recover_through_tool(&pair, &claim, reason, "reason-bound").unwrap_err();
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{} byte reason through the tool: {error}",
+            reason.len()
+        );
+    }
     assert_eq!(pair.owner_claim(&claim)["claim"]["phase"], "running");
 
     // The boundary values pass, and padding around the key and expected phase
