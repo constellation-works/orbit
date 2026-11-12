@@ -89,7 +89,7 @@ impl OrbitError {
     /// The typed step-failure code this error carries, parsed once where a
     /// step failure is ingested from an `OrbitError`.
     ///
-    /// A remote-tool failure contributes its wire code verbatim. The
+    /// An ordinary remote-tool failure contributes its wire code verbatim. The
     /// owner-route variants — a destination that cannot be reached, an
     /// owner that is unavailable or cannot be negotiated with, a stale
     /// route to it — are the [`StepFailureCode::OwnerRouteUnavailable`]
