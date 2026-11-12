@@ -197,7 +197,8 @@ orbit experiment start brief-v2
 `experiments.enabled` is true, a `max_running` slot is free, and the
 definition is complete: at least two arms with unique names, exactly one
 control, positive weights, a primary metric, and config overlays only for
-keys on `experiments.config_keys`. It also checks the live prerequisites
+keys on `experiments.config_keys`. A memory overlay is also refused while
+`crew_memory.enabled` is false. It also checks the live prerequisites
 above — base-admissible instruction files and skill bundles, registered
 enabled agent-facing added tools, removal only of tools the handoff
 contract does not require, and resolvable overlay crews — and refuses

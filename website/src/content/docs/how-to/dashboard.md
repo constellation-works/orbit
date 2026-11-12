@@ -141,18 +141,28 @@ server's current directory when available), then the first active workspace.
 Choosing **All workspaces** in the picker is remembered too.
 
 In a window 1000px wide or narrower, the rail's **Drain** item shows a selected workspace's live drain from any view. Wider than that, the item is hidden; the Tasks dock's Drain tab beside the list shows the drain on the Tasks view instead.
-Under **All workspaces** it counts live workspace/host pairs across registered
-hosts, for example **2 live**, and a workspace registered on two hosts counts
-twice. Open it under **All workspaces** to see the fleet drains,
-one tab per host (each with a dot for its liveliest drain, hollow when the host
-is unreachable) and one line per workspace; the dashboard remembers the host
-tab you chose. Select a workspace to inspect it on its host.
+The item always opens `#tasks?dock=drain`. Under **All workspaces** its reading
+is a live count of workspace/host pairs, for example **2 live**, and a workspace
+registered on two hosts counts twice. Fleet drains are a separate **Fleet** tab
+in that dock, and only under **All workspaces**: one tab per host (a dot for
+the liveliest drain, hollow when the host is unreachable) and one line per
+workspace. The dashboard remembers the host tab you chose.
 
-- **All workspaces** lists tasks from every served workspace. Automation, the
-  auto-drain, settings, and other per-workspace panels are read-only there.
-  Task actions still work on a row that names its owning workspace and are
-  sent to that owner. A row without an owner stays read-only. Review approval
-  requires selecting the owning workspace, both in the row and task detail.
+- **All workspaces** lists tasks from the served workspaces you leave selected.
+  A **Workspaces** chip, after **More** and only when more than one workspace
+  is active, narrows that list. Checking every active workspace, or a choice
+  the browser has not stored, leaves `workspaces=` off the address. Leaving
+  exactly one workspace opens that board. Each status section lists its rows
+  workspace by workspace in picker order, and each row carries a color-coded
+  workspace pill. Pages are cut in that order, so one workspace's rows are not
+  split around another's. Automation, settings, and other per-workspace panels
+  stay read-only. The Drain tab does not: its card is titled **Auto-draining**.
+  A workspace select lists the active workspaces, and a **Drain host** select
+  lists that workspace's owner first, then followers that hold a replica.
+  Start and Stop stay on the card. The Workspaces chip does not narrow those
+  selects. Task actions still go to the named owner. A row without an owner
+  stays read-only. Review approval requires selecting the owning workspace,
+  both in the row and task detail.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.
@@ -168,7 +178,7 @@ prove that a particular task or run succeeded.
 
 | Rail | Shows |
 |---|---|
-| **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock has **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**. Under **All workspaces** a **Fleet** tab sits ahead of **Locks held**. An open task takes the dock's place. |
 | **Drain** | Shown only at 1000px and narrower. Above that width the Tasks dock's Drain tab sits beside the list instead. On a narrow window the item opens the Drain tab in place of the task list, where you start and stop a window by touch. While a drain runs, the item shows its state on every view. |
 | **Jobs** | Job runs and the job catalogue: **Live** (runs pending or running now), **History** (every run, newest first, and run detail), and **Catalogue** (jobs you can run by hand). See [Runs and errors](#runs-and-errors) and [Jobs](#jobs). |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
@@ -227,7 +237,10 @@ to open it even when the filter, page, or selected workspace hides it.
 **New task** proposes a task.
 
 Tasks are grouped in the order you act on them: **Awaiting approval**
-(`proposed`), review, blocked, in progress, then backlog. Each row shows the
+(`proposed`), review, blocked, in progress, then backlog. Under **All
+workspaces** each of those sections keeps that order and, inside it, lists
+rows workspace by workspace in the picker's order; each row has a
+color-coded workspace pill. Each row shows the
 title on its first line and the full task ID on its second, followed by what a
 backlog task waits on (`Waits on ORB-77`, `Throttled`) or where a running or
 blocked task's run is. An estimated regression risk appears as a percentage,
@@ -258,7 +271,9 @@ owner. The status list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has three tabs. **Drain** shows the auto-drain card and
+The right dock has **Drain**, **Locks held**, and **Log**. Under **All
+workspaces** a **Fleet** tab sits ahead of **Locks held**. Inside it, one tab
+per host and one line per workspace. **Drain** shows the auto-drain card and
 **Start a window** (window length, parallel tasks, and
 what happens after a task ships; see [auto-drain](#auto-drain)). On a replica,
 Start pulls directly from the owner. **Locks held** lists the files tasks
@@ -526,8 +541,11 @@ cannot change the task, the buttons are disabled.
 
 Cards appear in three places:
 
-- A blocked task's final-recovery decision sits in its block callout. See
-  [Blocked tasks: final recovery decides](../../reference/scheduling-yaml/#blocked-tasks-final-recovery-decides).
+- A blocked task's final-recovery decision sits in its block callout. When
+  the task has a failure-handoff receipt and required pre-landing review has
+  settled for that candidate, the card also offers **Approve and land**. See
+  [Recover from a failed delivery](../continuous-delivery/#7-recover-from-a-failed-delivery)
+  and [Blocked tasks: final recovery decides](../../reference/scheduling-yaml/#blocked-tasks-final-recovery-decides).
 - A proposed task that a pilot warning holds shows that decision in its
   pilot-hold callout.
 - Every other open decision, including one an agent raised on a human-crew task,
@@ -551,11 +569,15 @@ Cards appear in three places:
 
 The **Drain** tab in the Tasks dock contains the auto-drain card and
 **Start a window**: a time-bounded [delivery window](../continuous-delivery/)
-that ships approved backlog tasks in parallel. Select one active workspace to
-start a window. On a replica checkout, Start pulls work from its owner without
-leaving Tasks. At 1000px and narrower the rail's **Drain** item opens this tab, or
-the fleet overview in **All workspaces** mode. On a narrow window the dock takes
-the place of the task
+that ships approved backlog tasks in parallel. On one workspace, start a
+window for that workspace. When the fleet lists followers, a **Drain host**
+select chooses the owner (the default) or a follower; a follower runs the
+pull. Under **All workspaces** the card is titled **Auto-draining**: pick the
+workspace and the host there, then start or stop, without leaving the
+aggregate. The Tasks **Workspaces** chip does not narrow those selects. On a
+replica checkout, Start pulls work from its owner without leaving Tasks. At
+1000px and narrower the rail's **Drain** item opens this Drain tab. On a
+narrow window the dock takes the place of the task
 list; the rail's **Tasks** item returns to it, keeping the list's filters.
 
 Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the
