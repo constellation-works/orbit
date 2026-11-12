@@ -79,6 +79,41 @@ function markerRadius(bucket) {
   return 2.4 + Math.min(2.6, Math.log10(tasks + 1) * 1.3);
 }
 
+// Rows of `text` whose rendered width stays within `maxWidth`. A space breaks
+// first; a crew reference with no space breaks mid-token so the bubble can
+// stay inside the plot (STD-07 §R4, §R32). `measure` is the rendered width.
+function wrapTipLine(text, maxWidth, measure) {
+  if (!text) return [];
+  if (!(maxWidth > 0) || measure(text) <= maxWidth) return [text];
+  const lines = [];
+  let rest = text;
+  while (rest) {
+    if (measure(rest) <= maxWidth) {
+      lines.push(rest);
+      break;
+    }
+    let best = 1;
+    let lo = 1;
+    let hi = rest.length - 1;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (measure(rest.slice(0, mid)) <= maxWidth) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    const space = rest.lastIndexOf(" ", best);
+    const cut = space > 0 ? space : best;
+    lines.push(rest.slice(0, cut).trimEnd());
+    const next = rest.slice(cut).trimStart();
+    if (next === rest) break;
+    rest = next;
+  }
+  return lines;
+}
+
 function pointLabel(crew, bucket) {
   return `${crew}, ${rangeText(bucket)}: ${bucket.regressed} of ${bucket.tasks} tasks regressed (n=${bucket.tasks}), ${percent(bucket.rate)} (95% ${percent(bucket.low)}–${percent(bucket.high)})${bucket.sparse ? `; fewer than ${curves.sparse_outcomes} regressed tasks` : ""}`;
 }
@@ -243,17 +278,42 @@ function buildPlot(drawnSeries, WIDTH) {
   };
   // The hover and focus tooltip: one bubble drawn over the plot, so a
   // keyboard reader sees a point's count and interval, not only a focus ring.
+  // The bubble is measured from the rendered 12px tip text and wrapped to the
+  // plot, then clamped inside it. An unwrapped long crew line is wider than a
+  // phone plot, and the SVG clips that overflow with no scroll (STD-07 §R4).
   const tip = svg("g", { class: "agents-curves-tip", visibility: "hidden", "aria-hidden": "true", "pointer-events": "none" });
   const showTip = (lines, cx, cy) => {
-    const boxW = Math.ceil(Math.max(...lines.map((line) => line.length)) * 6.6) + 16;
-    const boxH = lines.length * 15 + 10;
+    const probe = svg("text", { class: "agents-curves-tip-text", visibility: "hidden" });
+    plot.append(probe);
+    const measure = (text) => {
+      probe.textContent = text;
+      try {
+        const width = probe.getComputedTextLength();
+        return Number.isFinite(width) && width > 0 ? width : text.length * 7.2;
+      } catch {
+        return text.length * 7.2;
+      }
+    };
+    const maxBox = Math.max(8, WIDTH - 8);
+    const maxInner = Math.max(1, maxBox - 17);
+    let wrapped = [];
+    let textW = 0;
+    try {
+      wrapped = lines.flatMap((line) => wrapTipLine(line, maxInner, measure));
+      if (!wrapped.length) wrapped = [""];
+      textW = Math.max(...wrapped.map((line) => measure(line)));
+    } finally {
+      probe.remove();
+    }
+    const boxW = Math.min(maxBox, Math.ceil(textW) + 16);
+    const boxH = wrapped.length * 15 + 10;
     let bx = cx + 12;
     if (bx + boxW > WIDTH - 4) bx = cx - 12 - boxW;
-    bx = Math.max(4, bx);
-    const by = Math.min(HEIGHT - 4 - boxH, Math.max(4, cy - boxH / 2));
+    bx = Math.max(4, Math.min(bx, Math.max(4, WIDTH - 4 - boxW)));
+    const by = Math.min(Math.max(4, HEIGHT - 4 - boxH), Math.max(4, cy - boxH / 2));
     tip.replaceChildren(
       svg("rect", { class: "agents-curves-tip-box", x: bx, y: by, width: boxW, height: boxH, rx: 4 }),
-      ...lines.map((line, i) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + i * 15 }, line)),
+      ...wrapped.map((line, i) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + i * 15 }, line)),
     );
     tip.setAttribute("visibility", "visible");
   };
