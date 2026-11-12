@@ -798,14 +798,14 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
 }
 
 /// A prerequisite read that cannot yet prove its evidence (the attempt is still
-/// running or was superseded) is a deliberate hold: the PR stays open, the task
-/// stays in review, and the run is refused rather than failed.
+/// running, was superseded, or did not fail) is a deliberate hold: the PR stays
+/// open, the task stays in review, and the run is refused rather than failed.
 #[test]
 fn missing_required_prerequisite_holds_unreadable_evidence() {
     isolated(
         "infrastructure::missing_required_prerequisite_holds_unreadable_evidence",
         |sandbox| {
-            for case in ["running", "superseded"] {
+            for case in ["running", "superseded", "non_failed"] {
                 in_fresh_row(sandbox, |row| {
                     tracing::info!(case, "prerequisite evidence hold");
                     let fx = fixture_with_workflow(row);
@@ -826,6 +826,9 @@ fn missing_required_prerequisite_holds_unreadable_evidence() {
                             let mut second = value["workflow_runs"][0].clone();
                             second["id"] = json!(701);
                             value["workflow_runs"].as_array_mut().unwrap().push(second);
+                        }),
+                        "non_failed" => update(&fx, "run-before", |value| {
+                            value["conclusion"] = json!("cancelled");
                         }),
                         _ => unreachable!(),
                     }
