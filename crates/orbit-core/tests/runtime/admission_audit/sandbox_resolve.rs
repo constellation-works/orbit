@@ -332,9 +332,17 @@ fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
                 .iter()
                 .filter(|rule| !rule.starts_with('!'))
                 .collect::<Vec<_>>();
+            // [ORB-24077] The lexical index rides with the global task store
+            // so nested Orbit task writes can index; it is the one grant
+            // under the registered checkout, and only its database and
+            // sidecars, never `state/**`.
+            let lexical_index = format!("{}/.orbit/state/semantic.db*", canonical_repo.display());
             for root in &protected {
                 assert!(
-                    writes.iter().all(|rule| !rule.starts_with(root.as_str())),
+                    writes
+                        .iter()
+                        .filter(|rule| **rule != &lexical_index)
+                        .all(|rule| !rule.starts_with(root.as_str())),
                     "{provider} reviewer from {} must not write under {root}: {writes:?}",
                     cwd.display()
                 );
