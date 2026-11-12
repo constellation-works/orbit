@@ -265,45 +265,76 @@ pub(crate) fn record_completion_hold<H: RuntimeHost + ?Sized>(
     hold: &CompletionHold,
 ) -> Result<(), OrbitError> {
     for task_id in task_ids {
-        let mut record = hold.clone();
-        if record.matched_task_id.as_deref() == Some(task_id.as_str()) {
-            record.matched_task_id = None;
-        }
-        let task = host.get_task(task_id)?;
-        let history = host.get_task_history(task_id)?;
-        if current_completion_hold(task.status, &history) == Some(&record) {
+        let Some((comment, entry)) = completion_hold_record(host, task_id, hold)? else {
             continue;
-        }
-        let summary = record.summary();
-        let now = chrono::Utc::now();
+        };
         host.apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
-                append_comments: vec![TaskComment {
-                    at: now,
-                    by: "system".to_string(),
-                    message: format!(
-                        "{summary}. Run {} was authorized to complete this task; the \
-                         `completion.hold` rule kept it in review for a person to approve.",
-                        record.run_id
-                    ),
-                    operation_id: None,
-                }],
-                append_history: vec![TaskHistoryEntry {
-                    at: now,
-                    by: "system".to_string(),
-                    event: COMPLETION_HELD_EVENT.to_string(),
-                    note: Some(summary),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(orbit_types::task::TaskDecision::CompletionHeld(record)),
-                }],
+                append_comments: vec![comment],
+                append_history: vec![entry],
                 ..TaskAutomationUpdate::default()
             },
         )?;
     }
     Ok(())
+}
+
+/// [ORB-24233] [`record_completion_hold`] for the task of a live owner
+/// landing. The landing holds the claim in its handed-off phase, which refuses
+/// an unscoped task write, so the hold is recorded through that claim.
+pub(crate) fn record_landing_completion_hold<H: RuntimeHost + ?Sized>(
+    host: &H,
+    handoff_id: &str,
+    task_id: &str,
+    hold: &CompletionHold,
+) -> Result<(), OrbitError> {
+    let Some((comment, entry)) = completion_hold_record(host, task_id, hold)? else {
+        return Ok(());
+    };
+    host.record_handoff_landing_completion_hold(handoff_id, &entry, &comment.message)
+}
+
+/// The comment and `completion_held` history entry that record `hold` on
+/// `task_id`, or `None` when the task's current hold already records the same
+/// match for the same run.
+fn completion_hold_record<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    hold: &CompletionHold,
+) -> Result<Option<(TaskComment, TaskHistoryEntry)>, OrbitError> {
+    let mut record = hold.clone();
+    if record.matched_task_id.as_deref() == Some(task_id) {
+        record.matched_task_id = None;
+    }
+    let task = host.get_task(task_id)?;
+    let history = host.get_task_history(task_id)?;
+    if current_completion_hold(task.status, &history) == Some(&record) {
+        return Ok(None);
+    }
+    let summary = record.summary();
+    let now = chrono::Utc::now();
+    let comment = TaskComment {
+        at: now,
+        by: "system".to_string(),
+        message: format!(
+            "{summary}. Run {} was authorized to complete this task; the \
+             `completion.hold` rule kept it in review for a person to approve.",
+            record.run_id
+        ),
+        operation_id: None,
+    };
+    let entry = TaskHistoryEntry {
+        at: now,
+        by: "system".to_string(),
+        event: COMPLETION_HELD_EVENT.to_string(),
+        note: Some(summary),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(orbit_types::task::TaskDecision::CompletionHeld(record)),
+    };
+    Ok(Some((comment, entry)))
 }
 
 /// Evaluate completion holds for an exact candidate, retaining unreadable-path holds.

@@ -234,6 +234,36 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// [ORB-24233] Record the completion hold of a live landing attempt through
+    /// its claim: the `completion_held` history entry and the system comment.
+    /// The store admits it only while the claim is handed off to that attempt,
+    /// so the owner's landing never sends an unscoped task write.
+    pub(crate) fn record_handoff_landing_completion_hold(
+        &self,
+        handoff_id: &str,
+        history: &orbit_types::task::TaskHistoryEntry,
+        comment: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(comment.as_bytes());
+        self.stores().tasks().mutate_execution_claim(
+            Some(&context),
+            &format!("landing-completion-hold:{handoff_id}:{attempt}:{digest}"),
+            &ClaimMutation::RecordLandingCompletionHold {
+                handoff_id: handoff_id.to_string(),
+                history: history.clone(),
+                comment: comment.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
     fn landing_observation(
         &self,
         update: &HandoffLandingUpdate,
