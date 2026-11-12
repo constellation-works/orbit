@@ -12,9 +12,14 @@ use orbit_types::identity::ReasoningEffort;
 /// did, or one whose launch record was not yet written. Returns the leaf and
 /// its claim.
 fn settled_without_effort(pair: &Pair) -> (String, String) {
-    let prior_settles = pair.wire.calls("orbit.drain.claim.settle").len();
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
+    cancel_without_effort(pair, leaf)
+}
+
+/// [`settled_without_effort`] for a leaf already running on the follower.
+fn cancel_without_effort(pair: &Pair, leaf: String) -> (String, String) {
+    let prior_settles = pair.wire.calls("orbit.drain.claim.settle").len();
     let task = pair.claimed_task(&leaf);
     let claim = pair
         .admission(&leaf)
@@ -572,6 +577,132 @@ fn a_late_model_report_fills_an_absent_model_and_never_overwrites_one() {
     assert_eq!(owner_state(&pair), before, "the held model stands");
 }
 
+/// Replaying a pre-crew late report with the same effort and model records the
+/// newer follower's crew, so upgrading a follower can repair old attribution.
+fn a_replayed_crewless_report_can_be_enriched_with_its_crew() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, claim) = settled_without_effort(&pair);
+    forget_owner_settlement(&pair, &claim, None);
+    record_follower_launch_on(&pair, &leaf, ReasoningEffort::High, "model-luna");
+
+    pair.wire
+        .call(
+            "",
+            "orbit.drain.claim.effort",
+            json!({
+                "claim_id": claim,
+                "run_id": leaf,
+                "reasoning_effort": "high",
+                "crew_model": "model-luna",
+            }),
+        )
+        .expect("the older crewless report is accepted");
+    assert_eq!(
+        owner_crew_models_and_efforts(&pair),
+        [(json!("sol"), json!("model-luna"), json!("high"))],
+        "before the upgraded follower reports its crew"
+    );
+
+    set_follower_run_crew(&pair, &leaf, "luna");
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.replayed, report.models_replayed),
+        (1, 1),
+        "{report:#?}"
+    );
+    assert_eq!(
+        owner_crew_models_and_efforts(&pair),
+        [(json!("luna"), json!("model-luna"), json!("high"))],
+        "the same effort and model replay while the crew attribution is enriched"
+    );
+}
+
+/// Give the follower's leaf run `leaf` the crew it actually ran as, as its
+/// run record holds it.
+fn set_follower_run_crew(pair: &Pair, leaf: &str, crew: &str) {
+    let mut run = pair.follower_jobs.get_job_run(leaf).unwrap().unwrap();
+    run.resolved_crew = Some(crew.into());
+    let workspace = pair.follower.workspace_id().unwrap();
+    pair.follower
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .unwrap();
+}
+
+/// The owner's implementer scorecard rows as `(crew, model, effort)`.
+fn owner_crew_models_and_efforts(pair: &Pair) -> Vec<(Value, Value, Value)> {
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["crew"].clone(),
+                row["model"].clone(),
+                row["reasoning_effort"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// [ORB-24206] A task re-crewed between two pulled claims, each settled
+/// without a settlement record and each late-reported with the crew its leaf
+/// ran as. The first leaf ran as `luna` although the task began its attempt
+/// crewed `sol`; the second ran as `opus` after the re-crew. Each attempt keys
+/// to the crew its own report names together with its model, never to the
+/// crew history held at its start.
+fn a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (first_leaf, first_claim) = settled_without_effort(&pair);
+    let task = pair.claimed_task(&first_leaf);
+    forget_owner_settlement(&pair, &first_claim, None);
+    set_follower_run_crew(&pair, &first_leaf, "luna");
+    record_follower_launch_on(&pair, &first_leaf, ReasoningEffort::High, "model-luna");
+
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("operator crew update");
+
+    let second_drain = pair.run_drain();
+    let second_leaf = pair.running_leaf(&second_drain, 1);
+    let (second_leaf, second_claim) = cancel_without_effort(&pair, second_leaf);
+    forget_owner_settlement(&pair, &second_claim, None);
+    set_follower_run_crew(&pair, &second_leaf, "opus");
+    record_follower_launch_on(&pair, &second_leaf, ReasoningEffort::High, "model-opus");
+
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (report.examined, report.recorded, report.models_recorded),
+        (2, 2, 2),
+        "{report:#?}"
+    );
+    let mut rows = owner_crew_models_and_efforts(&pair);
+    rows.retain(|(_, model, _)| *model == json!("model-luna") || *model == json!("model-opus"));
+    rows.sort_by_key(|(crew, _, _)| crew.to_string());
+    assert_eq!(
+        rows,
+        [
+            (json!("luna"), json!("model-luna"), json!("high")),
+            (json!("opus"), json!("model-opus"), json!("high")),
+        ],
+        "each attempt counts under the crew its own report named"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     late_effort_report_scenarios,
@@ -584,4 +715,6 @@ crate::scenario_table!(
     a_connection_failure_remains_owner_unreachable,
     a_late_report_for_a_claim_without_a_settlement_record_is_recorded,
     a_late_model_report_fills_an_absent_model_and_never_overwrites_one,
+    a_replayed_crewless_report_can_be_enriched_with_its_crew,
+    a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew,
 );

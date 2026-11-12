@@ -146,7 +146,9 @@ impl OrbitRuntime {
     /// overwrites an effort or model it holds: the same value replays, a
     /// different one is refused and counted as a conflict. An owner that
     /// predates the model report records the effort and ignores the model,
-    /// which is counted. A leaf this host
+    /// which is counted. The report also names the crew the leaf run used
+    /// [ORB-24206], from the leaf's own run record, so an attempt is keyed to
+    /// that crew with its model. A leaf this host
     /// holds no matching record of is counted and nothing is sent. Changes
     /// nothing on this host; running it again records nothing new.
     pub fn backfill_claimed_leaf_effort(&self) -> Result<ClaimedEffortBackfill, OrbitError> {
@@ -226,6 +228,16 @@ impl OrbitRuntime {
                 // An owner that predates the model report ignores the field
                 // and still records the effort.
                 input["crew_model"] = json!(model);
+            }
+            if let Some(crew) = leaf
+                .resolved_crew
+                .as_deref()
+                .filter(|crew| !crew.is_empty())
+            {
+                // The crew the leaf ran as, sent with its model so the owner
+                // keys the attempt to both [ORB-24206]. An owner that predates
+                // it ignores the field.
+                input["crew"] = json!(crew);
             }
             let answer = transport
                 .call(selector, CLAIM_EFFORT_TOOL, input)

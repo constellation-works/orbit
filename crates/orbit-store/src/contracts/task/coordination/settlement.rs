@@ -653,6 +653,12 @@ pub struct LateLeafEffort {
     /// The effort's wire name, or `null` for the provider default. Always
     /// present: a report of an unknown effort is never sent.
     pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used, as the report carried it [ORB-24206]. Absent
+    /// when the follower predates the field or did not know the crew. The
+    /// attempt is keyed to this crew and the model read with it, not to the
+    /// task's crew at the attempt's start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
     pub recorded_at: String,
 }
 
@@ -664,6 +670,23 @@ impl LateLeafEffort {
             && self.run_id == other.run_id
             && self.reasoning_effort == other.reasoning_effort
     }
+}
+
+/// A crew added to an already-recorded late effort report. Kept in its own
+/// immutable row so a newer follower can enrich a crewless report without
+/// rewriting the effort row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafCrew {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    /// The effort report this crew enriches.
+    pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used.
+    pub crew: String,
+    pub recorded_at: String,
 }
 
 /// A follower's late report of the model a leaf it already settled ran its

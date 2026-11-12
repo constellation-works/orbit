@@ -1447,7 +1447,9 @@ A claimed leaf's run lives in the follower's store, so the owner's
 settlement each leaf sent: its kind, evidence class (`provider_unavailable`,
 `baseline_red`, `forge_unavailable`, `evidence_hold`, `final_recovery`,
 `failure`, or `summary` for an untyped one), typed failure class, crew and the
-model it resolved to (`crew_model`, absent from a follower that predates it),
+model it resolved to (`crew_model`, absent from a follower that predates it;
+when the settlement names no crew, the crew comes from its follower's late
+effort report when that report names one [ORB-24206]),
 the leaf's worktree `branch` and absolute `worktree_path` on the follower (also
 absent from a follower that predates them; the task detail panel shows them),
 the leaf's `reasoning_effort` when its follower reported it (a wire name, or

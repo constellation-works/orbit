@@ -258,13 +258,19 @@ impl LeafSettlement {
             run_evidence: LeafRunEvidenceView::of(inspection.leaf_run_evidence.take()),
             accounting: SettlementAccounting::of(SettlementOutcome::Unrecorded, "unrecorded"),
         };
+        // The crew a follower's late report carries fills a settlement that
+        // names none, so the attempt keys to the crew that ran it [ORB-24206].
+        let late_crew = inspection
+            .late_leaf_effort
+            .as_ref()
+            .and_then(|report| report.crew.clone());
         if let Some(record) = inspection.settlement {
             settlement.settled_at = record.settled_at;
             settlement.kind = Some(record.kind);
             settlement.evidence = record.evidence.as_str();
             settlement.failure_class = record.failure_class;
             settlement.review_decision_pending = record.review_decision_pending;
-            settlement.crew = record.crew;
+            settlement.crew = record.crew.or(late_crew);
             settlement.crew_model = record.crew_model;
             settlement.reasoning_effort = record.reasoning_effort;
             settlement.failed_step_id = record.failed_step_id;
@@ -277,6 +283,7 @@ impl LeafSettlement {
         }
         // Its follower's late reports are all the attribution such a claim
         // has [ORB-24150].
+        settlement.crew = late_crew;
         settlement.reasoning_effort = inspection
             .late_leaf_effort
             .take()
@@ -375,6 +382,10 @@ impl crate::OrbitRuntime {
             })
             .map(|claim| LateClaimAttribution {
                 claim_id: claim.claim.claim_id.clone(),
+                crew: claim
+                    .late_leaf_effort
+                    .as_ref()
+                    .and_then(|report| report.crew.clone()),
                 crew_model: claim
                     .late_leaf_model
                     .as_ref()
@@ -396,6 +407,9 @@ impl crate::OrbitRuntime {
 /// give them: the claim settled before the owner kept settlement records.
 pub(crate) struct LateClaimAttribution {
     pub(crate) claim_id: String,
+    /// The crew the late report named, which keys the attempt with its model
+    /// [ORB-24206].
+    pub(crate) crew: Option<String>,
     pub(crate) crew_model: Option<String>,
     /// The effort's wire name, `None` inside for the provider default.
     pub(crate) reasoning_effort: Option<Option<String>>,
