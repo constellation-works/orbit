@@ -226,7 +226,8 @@ impl Draft<'_> {
 
     /// The implementation attempt at `index`, or Not scored when the task
     /// has no attempt to charge. An attempt admitted as
-    /// `no-diff-expected` work is not implementation, so its problems
+    /// `no-diff-expected` work is not implementation, and an attempt that
+    /// launched no implementer is no implementer unit, so their problems
     /// charge no implementer row.
     fn implementer(self, index: Option<usize>) -> Charge {
         let Some(attempt) = index.and_then(|index| self.task.attempts.get(index)) else {
@@ -234,6 +235,9 @@ impl Draft<'_> {
         };
         if attempt.no_diff() {
             return self.not_scored("no_diff_expected");
+        }
+        if !attempt.implementer {
+            return self.not_scored("no_implementer");
         }
         let runner = attempt.runner.clone();
         let anchor = attempt.start;

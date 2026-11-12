@@ -144,11 +144,12 @@ pub(super) fn tier(task: &TaskFacts) -> &'static str {
 }
 
 /// Whether an attempt counts as implementation in the window: it started
-/// in the window and the task was not `no-diff-expected` work when the
-/// attempt was admitted. The one filter the headline rows, the fleet
+/// in the window, the task was not `no-diff-expected` work when the
+/// attempt was admitted, and its run launched an implementer (or is not
+/// proven not to have). The one filter the headline rows, the fleet
 /// expectations and the by-type cells all share.
 pub(super) fn counted(attempt: &Attempt, window: WindowBounds) -> bool {
-    window.admits(attempt.start) && !attempt.no_diff()
+    window.admits(attempt.start) && attempt.implements()
 }
 
 /// Each row's counted tasks whose execution `execution` admits: one task

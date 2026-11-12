@@ -41,7 +41,7 @@ pub(super) fn execution_census(
         let mut models = BTreeSet::new();
         let mut counted = false;
         for attempt in &task.attempts {
-            if !window.admits(attempt.start) || attempt.no_diff() {
+            if !window.admits(attempt.start) || !attempt.implements() {
                 continue;
             }
             counted = true;

@@ -29,6 +29,8 @@ fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
                 end: Some(now),
                 runner: Default::default(),
                 job: true,
+                local: true,
+                implementer: true,
                 tags: Vec::new(),
             };
             attempt.runner.crew = Some(crew.into());
@@ -328,6 +330,8 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
             end: Some(now),
             runner: Default::default(),
             job: true,
+            local: true,
+            implementer: true,
             tags: Vec::new(),
         };
         attempt.runner.crew = Some((*crew).into());
@@ -456,6 +460,8 @@ fn implementer_rows_use_launch_effort_when_invocation_never_completed() {
             end: Some(now),
             runner: Default::default(),
             job: true,
+            local: true,
+            implementer: true,
             tags: Vec::new(),
         };
         attempt.runner.crew = Some("opus".into());
@@ -1013,6 +1019,8 @@ fn reviewer_rows_keep_each_settlements_own_effort() {
         end: Some(now),
         runner: Default::default(),
         job: true,
+        local: true,
+        implementer: true,
         tags: Vec::new(),
     };
     attempt.runner.crew = Some("impl".into());
@@ -1116,6 +1124,8 @@ fn reviewer_rows_keep_re_review_settlements_own_effort() {
         end: Some(now),
         runner: Default::default(),
         job: true,
+        local: true,
+        implementer: true,
         tags: Vec::new(),
     };
     attempt.runner.crew = Some("impl".into());
@@ -1309,6 +1319,8 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
             end: Some(at + chrono::Duration::minutes(5)),
             runner: Default::default(),
             job: true,
+            local: true,
+            implementer: true,
             tags: Vec::new(),
         };
         attempt.runner.crew = Some("opus".into());
@@ -1733,6 +1745,8 @@ fn labelled_facts(units: &[LabelledUnit]) -> AgentFacts {
             end: Some(now),
             runner: Default::default(),
             job: true,
+            local: true,
+            implementer: true,
             tags: Vec::new(),
         };
         attempt.runner.crew = Some(unit.crew.into());

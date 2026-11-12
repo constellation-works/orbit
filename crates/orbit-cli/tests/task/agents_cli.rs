@@ -759,6 +759,81 @@ fn agents_scorecard_and_show_use_launch_effort_when_invocation_never_completed()
     assert_eq!(detail["row"]["reasoning_effort"], json!("high"), "{detail}");
 }
 
+/// An attempt whose own run provably launched no implementer (its complete
+/// audit trail ran only `final_recovery`, and no implementing invocation or
+/// launch exists) is not an implementer unit. An attempt whose run left no
+/// audit trail, or whose trail started `implement_one`, stays one
+/// [ORB-24150].
+#[test]
+fn agents_scorecard_drops_an_attempt_whose_run_launched_no_implementer() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_drops_an_attempt_whose_run_launched_no_implementer",
+    ) {
+        return;
+    }
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let seed = |title: &str, run_id: &str| {
+        agents.seed_fixture_run(
+            title.into(),
+            Some(TaskComplexity::Low),
+            "sol",
+            "model-fixture",
+            run_id,
+            JobRunState::Failed,
+        )
+    };
+    let recovery = seed("recovery only", "jrun-recovery-only");
+    seed("no audit trail", "jrun-no-trail");
+    seed("implemented without telemetry", "jrun-implemented");
+    let at = Utc::now() - chrono::Duration::minutes(30);
+    let trail = |run_id: &str, activities: &[&str]| {
+        let mut events = vec![("run.started", "run_started", None)];
+        events.extend(
+            activities
+                .iter()
+                .map(|name| ("activity.started", "activity_started", Some(*name))),
+        );
+        events.push(("run.finished", "run_finished", None));
+        for (index, (event_type, body_kind, activity)) in events.into_iter().enumerate() {
+            let event_id = format!("{run_id}-{index}");
+            let mut payload = json!({ "event_id": event_id, "body_kind": body_kind });
+            if let Some(activity) = activity {
+                payload["activity_name"] = json!(activity);
+            }
+            let ts = at + chrono::Duration::seconds(i64::try_from(index).unwrap());
+            agents.audit(run_id, event_id, event_type, ts, payload);
+        }
+    };
+    trail(
+        "jrun-recovery-only",
+        &[
+            "worktree",
+            "resume_candidate",
+            "final_recovery",
+            "pr_failure_handoff",
+        ],
+    );
+    agents.invoke(
+        "jrun-recovery-only",
+        "final_recovery",
+        "model-fixture",
+        &recovery,
+        None,
+    );
+    trail("jrun-implemented", &["worktree", "implement_one"]);
+
+    let card = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    let rows = card["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one row for the implementer units: {card}");
+    assert_eq!(rows[0]["label"], "model-fixture @ effort unknown", "{card}");
+    assert_eq!(
+        rows[0]["units"],
+        json!(2),
+        "the recovery-only attempt is no unit; the other two stay: {card}"
+    );
+}
+
 /// `orbit migrate --backfill-dispatch-effort` attributes an invocation that
 /// predates dispatch identities to the effort its audited launch argv
 /// rendered, in each provider's flag form, and leaves it unknown without a
