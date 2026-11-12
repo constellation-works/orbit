@@ -1261,18 +1261,13 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   .host-block { display: none; }
 }
 
-/* The rail is a single-select. The Tasks chip filter reuses the option list
-   for several picks, and both popups are placed from the trigger's box. */
-.workspace-picker { position: relative; width: 100%; min-width: 0; }
-.workspace-picker > button.workspace-select { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; }
-.workspace-picker > button.workspace-select > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-picker > button.workspace-select::after { content: ""; flex: none; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); margin: -3px 2px 0 0; }
+/* The Tasks chip uses a custom listbox for multi-workspace filtering. The
+   rail workspace picker stays a native select with its browser popup. */
 .workspace-options { position: fixed; z-index: 100; left: 12px; bottom: auto; max-width: calc(100vw - 24px); max-height: 50vh; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .workspace-options[hidden] { display: none; }
 .workspace-options [role="option"] { display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; }
 .workspace-options [role="option"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .workspace-options [role="option"][aria-disabled="true"] { opacity: 0.55; cursor: default; }
-.workspace-options:not([aria-multiselectable="true"]) [role="option"][aria-selected="true"] { background: var(--bg-selected); }
 .workspace-options input { pointer-events: none; }
 /* Each entry's text is the colour key for the All workspaces task pills. */
 .workspace-options [role="option"][data-ws-color] { color: var(--ws); }

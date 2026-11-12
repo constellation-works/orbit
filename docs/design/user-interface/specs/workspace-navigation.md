@@ -8,7 +8,8 @@ last_validated: 2026-11-11
 # Spec: Workspace Navigation Across Hosts
 
 > **Partly implemented.** The host × All workspaces drain controls in §4 reuse
-> the existing dashboard, and the rail's workspace dropdown is a single-select:
+> the existing dashboard, and the rail's workspace dropdown is a native single-select
+> with the browser-provided popup:
 > **All workspaces**, then only the workspaces the selected host owns
 > (`checkout_role` on each `/api/workspaces` row; no role counts as owned), so a
 > follower's replica checkout has no board on any host. Narrowing several owned
@@ -54,15 +55,14 @@ jobs of these four workspaces" has to visit four boards.
    workspace binding already holds both; the list response must expose them.
 3. Rows are merged by logical workspace ID. A catalog entry holds the workspace ID and name,
    the owner host, and the capacity hosts.
-4. The workspace picker lists each catalog entry once, grouped under its owner's name. It is
+4. The proposed catalog picker lists each entry once, grouped under its owner's name. It is
    a multi-select over the catalog, not a native select. Each
    owner's entries sit in a `role="group"` labelled with the owner's name, and a non-selectable
    label row shows that name above them; the label row is not a `role="option"`, so it cannot
-   be ticked. The dashboard ships a single-select rail today (**All workspaces**, then the
-   selected host's owned workspaces) and a Tasks chip-row multi-select that narrows All
-   workspaces. That rail list is flat, so the owner rows arrive with the catalog. The host
-   picker is the one that stays a native select. A replica checkout never produces its own
-   entry.
+   be ticked. The dashboard's rail remains a native single-select today (**All workspaces**,
+   then the selected host's owned workspaces), and a separate Tasks chip listbox narrows All
+   workspaces. The rail list is flat, so the owner rows arrive with the catalog. The host
+   picker is also a native select. A replica checkout never produces its own entry.
 5. A workspace whose owner is not registered on the serving host, or does not answer, stays in
    the picker marked **owner unreachable**. Its views show that state. The dashboard does not
    read the replica's local store in its place.

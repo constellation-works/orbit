@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, workspaceColor, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, fetchDashboardChrome, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, refreshChips, refreshPinnedTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import { initTaskCreate } from './js/task-create.js';
@@ -1547,90 +1547,32 @@ async function initWorkspaceSelector() {
   return true;
 }
 
-let workspacePickerUnsubscribe = null;
-
-function placeWorkspaceList(anchor, list) {
-  list.hidden = false;
-  const rect = anchor.getBoundingClientRect();
-  const width = Math.min(list.offsetWidth || rect.width, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
-  const height = list.offsetHeight;
-  const below = rect.bottom + 4;
-  const top = below + height + 12 <= window.innerHeight ? below : Math.max(12, rect.top - height - 4);
-  list.style.left = `${left}px`;
-  list.style.top = `${top}px`;
-}
-
 function buildWorkspaceSelector() {
-  workspacePickerUnsubscribe?.();
-  const select = el("button", { type: "button", class: "workspace-select", title: "Workspace", "aria-label": "Workspace", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-controls": "workspace-options" });
+  const select = el("select", { class: "workspace-select", title: "Workspace", "aria-label": "Workspace" });
   select.id = "workspace-select";
-  const label = el("span");
-  select.append(label);
-  const list = el("div", { id: "workspace-options", class: "workspace-options", role: "listbox", "aria-label": "Workspaces" });
-  list.hidden = true;
-  const paint = () => {
-    const current = getWorkspace() || "";
-    const named = dashboardWorkspaces.find(ws => ws.id === current);
-    label.textContent = current ? (named?.name || current) : "All workspaces";
-    for (const option of list.children) {
-      const selected = option.dataset.workspace === current;
-      option.setAttribute("aria-selected", String(selected));
-    }
-  };
-  const close = () => { list.hidden = true; select.setAttribute("aria-expanded", "false"); };
-  const open = () => {
-    placeWorkspaceList(select, list);
-    select.setAttribute("aria-expanded", "true");
-    list.querySelector('[aria-selected="true"]')?.focus();
-  };
-  const choose = (id) => {
-    const next = id || null;
-    const changed = next !== getWorkspace();
-    if (changed) setWorkspace(next);
+  const allOption = el("option", { text: "All workspaces" });
+  allOption.value = "";
+  select.appendChild(allOption);
+
+  const current = getWorkspace() || "";
+  for (const ws of dashboardWorkspaces) {
+    const active = ws.status === "active";
+    const label = active ? ws.name : `${ws.name} (unavailable)`;
+    const option = el("option", { text: label });
+    option.value = ws.id;
+    option.disabled = !active;
+    if (ws.id === current) option.selected = true;
+    select.appendChild(option);
+  }
+  if (!current) allOption.selected = true;
+
+  select.addEventListener("change", () => {
+    setWorkspace(select.value);
     rememberWorkspace();
     persistScopeToUrl();
-    close();
-    select.focus();
-    if (changed) refreshDashboard();
-  };
-  const wireOption = (option, id, available) => {
-    option.tabIndex = -1;
-    option.dataset.workspace = id;
-    const commit = () => { if (available) choose(id); };
-    // pointerdown runs before focusout can close the list, and preventDefault
-    // keeps the key target so a click does not commit a second time.
-    option.addEventListener("pointerdown", (event) => { event.preventDefault(); commit(); });
-    option.addEventListener("keydown", (event) => {
-      const options = [...list.children];
-      let index = options.indexOf(option);
-      if (event.key === " " || event.key === "Enter") { event.preventDefault(); commit(); }
-      else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-        event.preventDefault();
-        index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
-        options[index].focus();
-      } else if (event.key === "Escape") { event.preventDefault(); close(); select.focus(); }
-    });
-    list.append(option);
-  };
-  const allOption = el("div", { role: "option", "aria-selected": "false" }, ["All workspaces"]);
-  wireOption(allOption, "", true);
-  for (const ws of dashboardWorkspaces) {
-    const available = ws.status === "active";
-    const option = el("div", { role: "option", "aria-selected": "false", "aria-disabled": String(!available) }, [
-      ws.name + (available ? "" : " (unavailable)"),
-    ]);
-    // The entry's text is the colour key for the workspace pills on the All
-    // workspaces task list: the same palette slot, from the same function.
-    option.dataset.wsColor = String(workspaceColor(ws.id));
-    wireOption(option, ws.id, available);
-  }
-  select.addEventListener("click", () => list.hidden ? open() : close());
-  select.addEventListener("keydown", event => { if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); open(); } });
-  const picker = el("div", { class: "workspace-picker" }, [select, list]);
-  picker.addEventListener("focusout", event => { if (!picker.contains(event.relatedTarget)) close(); });
-  workspacePickerUnsubscribe = onWorkspaceChange(() => { if (select.isConnected) paint(); });
-  paint();
+    refreshDashboard();
+  });
+
   const note = el("span", {
     class: "workspace-scope-note is-inactive",
     text: "Workspace filter inactive",
@@ -1644,9 +1586,17 @@ function buildWorkspaceSelector() {
   const host = $("rail-workspace");
   if (!host) return;
   host.innerHTML = "";
-  host.appendChild(picker);
+  host.appendChild(select);
   host.appendChild(note);
 }
+
+// A native select keeps its own value, so a scope change made elsewhere (the
+// Tasks chip narrowing to one workspace) must move it here. Registered once at
+// module load, so rebuilding the select adds no listener.
+onWorkspaceChange(() => {
+  const select = $("workspace-select");
+  if (select) select.value = getWorkspace() || "";
+});
 
 // ORB-10874/ORB-10872: workspace + window live in the query string so a
 // reload or copied link restores the same dashboard scope. `persistScopeToUrl`
