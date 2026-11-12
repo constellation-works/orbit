@@ -151,7 +151,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Regression with escape `test_not_selected`, `platform_only`, `nondeterministic` or `unclassified` | `regression_from` classification | Not scored | — |
 | Regression with nature `merge_reintroduced` or `contract_drift`, regardless of escape | `regression_from` classification | Not scored | — |
 | Finding closed by an authorized decision (`Disposed`) | review report | Reviewer | the review run that raised it |
-| False reject (§5.3), counted instead of the implementer's reject | settlement comments, candidate commits | Reviewer | the review run that rejected |
+| False reject (§5.3), counted instead of the implementer's reject | typed review settlements in task history (settlement comments for older records), candidate commits | Reviewer | the review run that rejected |
 | Reviewer fix that failed owner revalidation | gate escalation | Reviewer | the review run that made the fix |
 | Finding filed as a task by a review job and REJECTED by finding verification | `finding_verified` history | Reviewer | the review job run that filed it |
 | Review verdict `incomplete` | review report | Reviewer | the review run; Not scored (`infrastructure`) when run failure classification names the block that followed as infrastructure |
@@ -172,7 +172,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 
 - **Implementation run**: the activity job run that produced the candidate. A problem recorded on a task is charged to the implementation run whose span (the run's start to the next status change, as `run_spans` computes it today) contains the problem's timestamp. If none does, it goes to the most recent run before it.
 - **Final implementation run**: the run whose candidate landed. Landed credit and `no_test` regressions go to it.
-- **Review run**: the review gate's settlement comment for the attempt. Its reviewer line names that review's crew, provider and model — one comment identity, not the row's aggregated contributing crews. The row's recorded effort comes from the matching review invocation (§2's main-invocation rule), never from the comment; a review with no matching invocation takes the effort of its run's matching launch record under §2's launch-record fallback, and stays effort unknown only when no launch record matches either. A re-review round settles through the same gate with the same comment lead, so a settlement matches the gate's own step or any `re_review*` step, narrowed to the invocations that ended after the previous settlement and by its own settlement time. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
+- **Review run**: the review gate's settlement for the attempt, read from its typed `review_settled` history event (the settlement comment for records written before that event). Its reviewer names that review's crew, provider and model — one settlement identity, not the row's aggregated contributing crews. The row's recorded effort comes from the matching review invocation (§2's main-invocation rule), never from the comment; a review with no matching invocation takes the effort of its run's matching launch record under §2's launch-record fallback, and stays effort unknown only when no launch record matches either. A re-review round settles through the same gate with the same comment lead, so a settlement matches the gate's own step or any `re_review*` step, narrowed to the invocations that ended after the previous settlement and by its own settlement time. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
 - **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot.rs`).
 
 ### 3.3 The attribution strip
@@ -534,7 +534,7 @@ How a review job's filed findings are judged:
 
 How a `reject` is judged:
 
-- The settlement comment lists each finding that stays open with a `Cited:` line naming the paths it cites (`path` or `path:line`). The scan reads the rejected candidate (the settlement's final candidate, else its implementation commit) and the candidate the next settlement on the task reviewed.
+- The typed settlement (`review_settled` history) lists each finding that stays open with the paths it cites, taken from the certificate's finding paths. For a record written before typed history, the settlement comment's `Cited:` line names those paths instead (`path` or `path:line`). The scan reads the rejected candidate (the settlement's final candidate, else its implementation commit) and the candidate the next settlement on the task reviewed.
 - It compares each cited path's blob between those two commits in the workspace repository, without fetching. A path whose content differs, or that exists in only one of them, was changed.
 - A cited finding whose path changed **held**. When no cited path changed and the next review passed (`accept` or `accept_with_fixes`), the reject is a **false reject**: it counts against the reviewer, and the implementer is not charged a review reject for it.
 - A reject with no next settlement yet, no cited path, or a commit the repository cannot read is not judged. It earns nothing and costs the reviewer nothing; the implementer's review reject stands. Settlements written before the gate recorded `Cited:` lines are never judged.
@@ -687,7 +687,7 @@ The deprecated `orbit orchestrator scorecard|show` command and `orbit.orchestrat
 One `AgentFacts` scan per workspace serves all three roles and the attribution strip. It reads:
 - every task created or updated in the last 90 days, with its history and comments;
 - the implementation job runs (owned and claimed PR and local delivery) active in that time, matched to the tasks their input names, read without their steps;
-- the review gate's settlement and escalation comments, and, for each judged `reject`, the cited paths' blobs in the rejected and next reviewed candidates, read from the workspace repository without fetching;
+- the review gate's typed settlements in task history (settlement comments for records written before them) and escalation comments, and, for each judged `reject`, the cited paths' blobs in the rejected and next reviewed candidates, read from the workspace repository without fetching;
 - the `finding_verified` history of review findings filed as tasks;
 - the `regression_from` links and failed claim settlements;
 - task-pilot receipts and the codebase facts the pilot terms need (landed files, base-conflict blocks, lock denials with their holders, lock-wait episodes), from the incremental Analytics › Codebase scan (`codebase_scan`), whose stored per-task facts keep the pilot receipts. A failed codebase scan leaves the pilots role without rows and logs a warning rather than failing the other roles.
