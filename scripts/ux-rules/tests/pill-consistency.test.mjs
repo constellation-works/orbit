@@ -180,13 +180,14 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
   test("shipped CSS: records the triaging and repairing pills of one task list", { skip: !ENABLED }, async () => {
     const task = (inner) => `<li class="row" style="display:flex;gap:8px">${inner}</li>`;
     const markup = `<ul class="rows">
-      ${task(`<span class="title-tags"><a class="chip active-triage-chip" href="#r1">triaging</a><span class="delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span>`)}
-      ${task(`<span class="title-tags"><a class="chip active-triage-chip" href="#r2">triaging</a><span class="delivery-attention-badge repairing" role="img">review · repairing 2/3</span></span>`)}
+      ${task(`<span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span>`)}
+      ${task(`<span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r2">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 2/3</span></span>`)}
     </ul>`;
     const { page, result } = await measure(1440, markup, { css: CSS, style: "" });
     try {
       evidence.cases.push({ shipped_css: true, status: result.status, failures: result.measurements.failures ?? [] });
       assert.ok(["pass", "fail"].includes(result.status), JSON.stringify(result.measurements));
+      assert.equal(result.measurements.matched, 4, `expected both shipped pill kinds to be measured: ${JSON.stringify(result.measurements)}`);
     } finally {
       await page.close();
     }
