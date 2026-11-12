@@ -470,7 +470,9 @@ function proposalNodes() {
 function proposalItem(proposal) {
   const closed = proposal.status !== "open";
   const dates = [`Opened ${formatDate(proposal.created_at)}`];
+  // An expired proposal is closed at expires_at with no decision time.
   if (closed && proposal.decided_at) dates.push(`Closed ${formatDate(proposal.decided_at)}`);
+  else if (proposal.status === "expired") dates.push(`Expired ${formatDate(proposal.expires_at)}`);
   else dates.push(`Expires ${formatDate(proposal.expires_at)}`);
   const summary = el("summary", {}, [
     el("span", { class: "memory-proposal-model", text: proposal.key }),

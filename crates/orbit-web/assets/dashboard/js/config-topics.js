@@ -387,9 +387,12 @@ function drawerNode(payload, context) {
     save.addEventListener('click', saveWith(init));
     actions.appendChild(save);
   }
-  const remove = el('button', { class: 'config-action ghost', text: 'Remove workspace value' }); remove.type = 'button'; remove.disabled = session.pending;
+  // A global-only drawer (lockGlobal) has no workspace value to clear, so its
+  // Remove clears the global value; the label names the scope it removes.
+  const removeScope = session.lockGlobal ? 'global' : 'workspace';
+  const remove = el('button', { class: 'config-action ghost', text: `Remove ${removeScope} value` }); remove.type = 'button'; remove.disabled = session.pending;
   remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=workspace`, 'DELETE', undefined, visit)));
+    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit)));
   const close = el('button', { class: 'config-action ghost', text: 'Close' }); close.type = 'button';
   close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
   actions.append(remove, close); panel.appendChild(actions);
