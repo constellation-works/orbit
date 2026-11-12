@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 
 use crate::application::agents::attribution::{Charge, Credit, Owner};
 use crate::application::agents::effort::{
-    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
+    EffortSource, MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
+    main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::facts::{Attempt, ExecutionMode, Problem, Review, TaskFacts};
 use crate::application::agents::score::{
@@ -75,7 +76,12 @@ pub(super) type Key = ModelEffortKey;
 /// An attempt's row: its model and the recorded effort of its run's main
 /// implementing invocation for `task`.
 pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Key {
-    let effort = main_invocation_effort(
+    key_with_source(facts, task, attempt).0
+}
+
+/// [`key`] and the source that decided the attempt's effort.
+fn key_with_source(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> (Key, EffortSource) {
+    let (effort, source) = main_effort_with_source(
         facts,
         MainInvocationUnit {
             run_id: attempt.runner.run_id.as_deref(),
@@ -86,9 +92,13 @@ pub(super) fn key(facts: &AgentFacts, task: &TaskFacts, attempt: &Attempt) -> Ke
             after: None,
             until: None,
             reported: attempt.runner.reported_effort.as_ref(),
+            crew: attempt.runner.crew.as_deref(),
         },
     );
-    model_effort_key(attempt.runner.model.as_deref(), effort)
+    (
+        model_effort_key(attempt.runner.model.as_deref(), effort),
+        source,
+    )
 }
 
 /// A charge's row, from the run it charges.
@@ -104,6 +114,7 @@ fn charge_key(facts: &AgentFacts, charge: &Charge) -> Key {
             after: None,
             until: None,
             reported: charge.reported_effort.as_ref(),
+            crew: charge.crew.as_deref(),
         },
     );
     model_effort_key(charge.model.as_deref(), effort)
@@ -122,6 +133,7 @@ fn credit_key(facts: &AgentFacts, credit: &Credit) -> Key {
             after: None,
             until: None,
             reported: credit.reported_effort.as_ref(),
+            crew: credit.crew.as_deref(),
         },
     );
     model_effort_key(credit.model.as_deref(), effort)
@@ -712,6 +724,7 @@ fn row_input<'a>(
             .cloned()
             .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
         crews: crews_of(facts, window, &row, tasks),
+        effort_sources: effort_sources_of(facts, window, &row, tasks),
         model: row.0,
         effort: row.1,
         units: tasks.len(),
@@ -794,6 +807,64 @@ pub(super) fn crews_of(
         }
     }
     crews.into_iter().collect()
+}
+
+/// The dispatch identity the crew-label fallback gives each implementation
+/// run whose attempt has no recorded effort but whose recorded crew label is
+/// a `<crew>@<effort>` reference, by run id [ORB-24150]. The model ranking's
+/// effort split counts that run's identity-less invocations under it, so the
+/// split and the scorecard rows agree.
+pub(in crate::application::agents) fn crew_label_run_identities(
+    facts: &AgentFacts,
+) -> std::collections::HashMap<String, orbit_types::telemetry::AgentExecutionIdentity> {
+    let mut identities = std::collections::HashMap::new();
+    for task in &facts.tasks {
+        for attempt in &task.attempts {
+            let (Some(run_id), Some(crew)) = (&attempt.runner.run_id, &attempt.runner.crew) else {
+                continue;
+            };
+            let ((_, effort), source) = key_with_source(facts, task, attempt);
+            if source != EffortSource::CrewLabel {
+                continue;
+            }
+            let Some(effort) = effort.and_then(|effort| effort.parse().ok()) else {
+                continue;
+            };
+            identities.insert(
+                run_id.clone(),
+                orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some(crew.clone()),
+                    reasoning_effort: Some(effort),
+                },
+            );
+        }
+    }
+    identities
+}
+
+/// The row's tasks by the source that decided the effort of their latest
+/// counted attempt in the row.
+fn effort_sources_of(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    row: &Key,
+    tasks: &[&TaskFacts],
+) -> BTreeMap<&'static str, usize> {
+    let mut sources = BTreeMap::new();
+    for task in tasks {
+        let source = task
+            .attempts
+            .iter()
+            .rev()
+            .filter(|attempt| counted(attempt, window))
+            .map(|attempt| key_with_source(facts, task, attempt))
+            .find(|(key, _)| key == row)
+            .map(|(_, source)| source);
+        if let Some(source) = source {
+            *sources.entry(source.as_str()).or_default() += 1;
+        }
+    }
+    sources
 }
 
 pub(super) fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {

@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+use orbit_types::telemetry::AgentExecutionIdentity;
 
 use serde_json::{Map, Value, json};
 
@@ -17,9 +19,9 @@ pub(super) fn crews_json(row: &ModelRow) -> Vec<Value> {
         .collect()
 }
 
+/// One board row. `effort_split` is the row's [`effort_split`].
 pub(super) fn row_json(
-    facts: &AgentFacts,
-    window: WindowBounds,
+    effort_split: Value,
     row: &ModelRow,
     board: &board::Board,
     index: usize,
@@ -104,7 +106,7 @@ pub(super) fn row_json(
         "landed_tasks": round(row.landed),
         "landed_rate": (units > 0).then(|| round4(row.landed / units as f64)),
         "crews": crews_json(row),
-        "effort_split": effort_split(facts, window, &row.model),
+        "effort_split": effort_split,
         "tiers": tiers_json(row, &scales.scales),
         "lines": { "changed": row.lines, "tasks": row.sized_tasks },
         "execution": execution_json(execution),
@@ -149,10 +151,21 @@ pub(super) fn not_scored(facts: &AgentFacts, window: WindowBounds) -> Value {
 }
 
 /// The model's completed implementation invocations in the window by
-/// reasoning effort.
-fn effort_split(facts: &AgentFacts, window: WindowBounds, model: &str) -> Value {
-    json!(orbit_store::contracts::agent_effort_usage(
-        facts.invocations.iter_invocations().filter(|fact| {
+/// reasoning effort. An invocation with no recorded dispatch identity counts
+/// under the effort its run's crew label states when the scorecard's effort
+/// key resolved that run's attempt from the label (`opus@medium`), so the
+/// split never shows it as unknown while the scorecard row names the effort.
+/// `labelled` is [`crate::application::agents::roles::crew_label_run_identities`].
+pub(super) fn effort_split(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    model: &str,
+    labelled: &HashMap<String, AgentExecutionIdentity>,
+) -> Value {
+    let invocations: Vec<_> = facts
+        .invocations
+        .iter_invocations()
+        .filter(|fact| {
             window.admits(fact.ts)
                 && fact.model.as_deref() == Some(model)
                 && matches!(
@@ -160,6 +173,20 @@ fn effort_split(facts: &AgentFacts, window: WindowBounds, model: &str) -> Value 
                     Some("implement_one" | "agent_implement")
                 )
         })
+        .map(
+            |fact| match (&fact.execution, labelled.get(&fact.job_run_id)) {
+                (None, Some(identity)) => {
+                    std::borrow::Cow::Owned(orbit_store::contracts::InvocationAccountingFact {
+                        execution: Some(identity.clone()),
+                        ..fact.clone()
+                    })
+                }
+                _ => std::borrow::Cow::Borrowed(fact),
+            },
+        )
+        .collect();
+    json!(orbit_store::contracts::agent_effort_usage(
+        invocations.iter().map(std::convert::AsRef::as_ref)
     ))
 }
 

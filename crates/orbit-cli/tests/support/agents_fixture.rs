@@ -284,6 +284,19 @@ impl AgentsFixture {
         ts: chrono::DateTime<Utc>,
         payload: Value,
     ) {
+        self.audit_linked(run_id, event_id, event_type, ts, None, payload);
+    }
+
+    /// [`Self::audit`] with the event's causal parent, as the run writes it.
+    pub(crate) fn audit_linked(
+        &self,
+        run_id: &str,
+        event_id: String,
+        event_type: &str,
+        ts: chrono::DateTime<Utc>,
+        parent_event_id: Option<String>,
+        payload: Value,
+    ) {
         self.runtime
             .sqlite_store()
             .unwrap()
@@ -296,7 +309,7 @@ impl AgentsFixture {
                 ts,
                 run_id: run_id.into(),
                 agent_identity: "system".into(),
-                parent_event_id: None,
+                parent_event_id,
                 workspace_path: None,
                 payload_json: payload.to_string(),
             })

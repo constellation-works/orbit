@@ -116,6 +116,7 @@ impl Assessment {
                 after: None,
                 until: None,
                 reported: None,
+                crew: run.and_then(|run| run.crew.as_deref()),
             },
         );
         model_effort_key(run.and_then(|run| run.model.as_deref()), effort)

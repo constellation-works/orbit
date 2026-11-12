@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 use super::RoleSpec;
 use crate::application::agents::attribution::Owner;
 use crate::application::agents::effort::{
-    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
+    main_invocation_effort, model_effort_key,
 };
 use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
@@ -155,6 +156,8 @@ struct Row<'a> {
     review_jobs: usize,
     tallies: BTreeMap<&'static str, Tally<'a>>,
     crews: BTreeSet<String>,
+    /// The row's units by the source that decided their effort.
+    effort_sources: BTreeMap<&'static str, usize>,
     outcomes: BTreeMap<&'static str, usize>,
     /// Each review gate settlement's tier and whether its verdict passed.
     verdicts: Vec<(&'static str, bool)>,
@@ -238,7 +241,7 @@ fn rows(
             let run_id = task
                 .attempt_at(review.at)
                 .and_then(|index| task.attempts[index].runner.run_id.clone());
-            let effort = main_invocation_effort(
+            let (effort, source) = main_effort_with_source(
                 facts,
                 MainInvocationUnit {
                     run_id: run_id.as_deref(),
@@ -254,6 +257,7 @@ fn rows(
                         .max(),
                     until: Some(review.at),
                     reported: None,
+                    crew: runner.crew.as_deref(),
                 },
             );
             let row = rows
@@ -262,6 +266,7 @@ fn rows(
             if let Some(crew) = &runner.crew {
                 row.crews.insert(crew.clone());
             }
+            *row.effort_sources.entry(source.as_str()).or_default() += 1;
             let unit_id = review_unit_id(&task.id, &review.attempt_id);
             row.unit(
                 unit_id.clone(),
@@ -333,7 +338,7 @@ fn rows(
         // The filing task itself ran as a task executor, so its filing
         // unit counts under that executor invocation; a gate review in
         // the same run is an independent reviewer's work.
-        let effort = main_invocation_effort(
+        let (effort, source) = main_effort_with_source(
             facts,
             MainInvocationUnit {
                 run_id: runner.run_id.as_deref(),
@@ -344,6 +349,7 @@ fn rows(
                 after: None,
                 until: None,
                 reported: runner.reported_effort.as_ref(),
+                crew: runner.crew.as_deref(),
             },
         );
         let row = rows
@@ -352,6 +358,7 @@ fn rows(
         if let Some(crew) = &runner.crew {
             row.crews.insert(crew.clone());
         }
+        *row.effort_sources.entry(source.as_str()).or_default() += 1;
         let unit_id = review_job_unit_id(filer, index);
         row.unit(
             unit_id.clone(),
@@ -448,6 +455,7 @@ fn rows(
                     .filter(|_| matches!(activity, MainActivity::Review))
                     .map(|_| charge.anchor),
                 reported: charge.reported_effort.as_ref(),
+                crew: charge.crew.as_deref(),
             },
         );
         let row = rows
@@ -510,6 +518,7 @@ fn rows(
                     .cloned()
                     .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
                 crews,
+                effort_sources: row.effort_sources,
                 model: key.0,
                 effort: key.1,
                 units: row.units,

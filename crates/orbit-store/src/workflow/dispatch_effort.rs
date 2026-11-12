@@ -11,7 +11,10 @@
 //! as a dispatch identity marked as backfilled. For a run whose invocation
 //! never completed there is no invocation to record on, so it records each
 //! readable launch on its own, stamped with that launch's time and attributed to the
-//! one step whose audit interval contains it. A later launch of the same
+//! step its causal links name (the launch's parent `activity.started`, whose
+//! parent is the `step.started`; a run-level activity such as `final_recovery`
+//! by its own name), else to the one step whose audit interval contains it
+//! [ORB-24150]. A later launch of the same
 //! step is its own record. A launch a dispatch-time row already covers — the
 //! closest sibling of the same run, step, provider and model within a minute,
 //! including a sibling whose effort cannot be read — is left as that row. An
@@ -22,7 +25,8 @@
 //! An invocation stays unrecorded (and its effort `unknown`) when no launch
 //! event matches (including events that predate both effort sources), or when
 //! the matching events disagree on the effort or carry an effort this binary
-//! cannot read. A launch stays unrecorded when no single step contains it,
+//! cannot read. A launch stays unrecorded when neither its causal links nor a
+//! single step interval prove its step,
 //! when it names no provider, or when that launch's own effort cannot be
 //! read; another launch of the same step is recorded on its own.
 //! `cli.invocation.activity` events carry no argv or effort and are never a
@@ -76,8 +80,8 @@ pub struct DispatchEffortBackfill {
     /// recorded on its own and the scorecard scan's launch-record fallback
     /// reads it.
     pub launch_only_recorded: usize,
-    /// Launches left unrecorded because no single step of their run provably
-    /// contained them.
+    /// Launches left unrecorded because neither their causal links nor a
+    /// single step interval of their run proved the step that ran them.
     pub launch_only_no_step: usize,
     /// Launches left unrecorded because the event named no provider.
     pub launch_only_no_provider: usize,

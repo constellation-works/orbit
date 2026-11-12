@@ -24,6 +24,7 @@ mod tier_reference;
 
 pub(super) use evidence::{by_type_cells, per_task_rows};
 pub(in crate::application::agents) use ledger::{LedgerRow, LedgerTask, implementer_ledger};
+pub(in crate::application::agents) use performance::crew_label_run_identities;
 pub(super) use size_curves::{TIERS as SIZE_CURVE_TIERS, size_curves};
 
 pub(super) const ROLE: super::RoleSpec = super::RoleSpec {

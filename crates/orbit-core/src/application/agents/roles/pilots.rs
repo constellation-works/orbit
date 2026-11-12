@@ -28,7 +28,8 @@ use serde_json::{Value, json};
 use super::RoleSpec;
 use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, WarningRow};
 use crate::application::agents::effort::{
-    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
+    EffortSource, MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
+    model_effort_key,
 };
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
@@ -336,8 +337,13 @@ impl Graded {
     /// The row the assessment counts in: its model and the recorded effort
     /// of its pilot run's main piloting invocation.
     pub(in crate::application::agents) fn key(&self, facts: &AgentFacts) -> ModelEffortKey {
+        self.key_with_source(facts).0
+    }
+
+    /// [`Graded::key`] and the source that decided the effort.
+    fn key_with_source(&self, facts: &AgentFacts) -> (ModelEffortKey, EffortSource) {
         let run = self.run.as_ref();
-        let effort = main_invocation_effort(
+        let (effort, source) = main_effort_with_source(
             facts,
             MainInvocationUnit {
                 run_id: self.run_id().as_deref(),
@@ -348,9 +354,13 @@ impl Graded {
                 after: None,
                 until: None,
                 reported: None,
+                crew: run.and_then(|run| run.crew.as_deref()),
             },
         );
-        model_effort_key(run.and_then(|run| run.model.as_deref()), effort)
+        (
+            model_effort_key(run.and_then(|run| run.model.as_deref()), effort),
+            source,
+        )
     }
 
     pub(in crate::application::agents) fn crew(&self) -> Option<&str> {
@@ -738,6 +748,14 @@ fn row_input<'a>(
             .cloned()
             .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
         crews,
+        effort_sources: assessed
+            .iter()
+            .fold(BTreeMap::new(), |mut sources, (graded, _)| {
+                *sources
+                    .entry(graded.key_with_source(facts).1.as_str())
+                    .or_default() += 1;
+                sources
+            }),
         model: row.0,
         effort: row.1,
         units,

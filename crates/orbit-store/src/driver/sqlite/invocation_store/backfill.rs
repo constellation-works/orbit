@@ -183,12 +183,21 @@ impl Store {
         Ok(true)
     }
 
-    /// Launches of workspace runs, grouped by the step whose audit interval
-    /// contains the launch, then by provider and model. Each launch in a
-    /// group is recorded on its own. A launch in no step interval, or in
-    /// more than one, is not grouped: its step cannot be proven. A launch
-    /// that names no provider is not grouped either. Both are counted in
-    /// the omissions rather than guessed.
+    /// Launches of workspace runs, grouped by the step that ran the launch,
+    /// then by provider and model. Each launch in a group is recorded on its
+    /// own. The run's own causal links prove the step first: a launch's
+    /// `parent_event_id` names the `activity.started` that launched it, whose
+    /// parent is its `step.started` [ORB-24150]. A step nested in another
+    /// (`implement_one` in `implement_bundle`, a `pilot` worker in `pilots`)
+    /// and parallel workers of one step are told apart this way, where their
+    /// audit intervals overlap. A run-level activity with no step
+    /// (`final_recovery`) is proven by its own `activity.started` and grouped
+    /// under that activity's name, the id its invocations record. A launch
+    /// with no such chain falls back to the one step whose audit interval
+    /// contains it. A launch neither proves, in no interval or in more than
+    /// one, is not grouped: its step cannot be proven. A launch that names no
+    /// provider is not grouped either. Both are counted in the omissions
+    /// rather than guessed.
     pub fn list_unrecorded_launch_groups(
         &self,
         workspace_id: &str,
@@ -207,8 +216,15 @@ impl Store {
         };
         let mut launches_stmt = conn
             .prepare(
-                "SELECT event_id, ts, payload_json FROM v2_audit_events \
+                "SELECT event_id, ts, payload_json, parent_event_id FROM v2_audit_events \
                  WHERE workspace_id = ?1 AND run_id = ?2 AND event_type = ?3 ORDER BY id",
+            )
+            .map_err(sqlite_store_error)?;
+        let mut causes_stmt = conn
+            .prepare(
+                "SELECT event_id, event_type, parent_event_id, payload_json FROM v2_audit_events \
+                 WHERE workspace_id = ?1 AND run_id = ?2 \
+                   AND event_type IN ('step.started', 'activity.started')",
             )
             .map_err(sqlite_store_error)?;
         let mut steps_stmt = conn
@@ -239,7 +255,7 @@ impl Store {
             let Some(crew) = crews.get(&run_id) else {
                 continue;
             };
-            let launches: Vec<RecordedLaunch> = launches_stmt
+            let launches: Vec<(RecordedLaunch, Option<String>)> = launches_stmt
                 .query_map(
                     rusqlite::params![workspace_id, run_id, CLI_INVOCATION_STARTED_EVENT],
                     |row| {
@@ -247,6 +263,7 @@ impl Store {
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
                         ))
                     },
                 )
@@ -254,13 +271,14 @@ impl Store {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(sqlite_store_error)?
                 .into_iter()
-                .filter_map(|(event_id, ts, payload)| {
-                    RecordedLaunch::parse(event_id, &ts, &payload)
+                .filter_map(|(event_id, ts, payload, parent)| {
+                    RecordedLaunch::parse(event_id, &ts, &payload).map(|launch| (launch, parent))
                 })
                 .collect();
             if launches.is_empty() {
                 continue;
             }
+            let causes = CausalEvents::read(&mut causes_stmt, workspace_id, &run_id)?;
             // Step intervals of this run, from its own audit trail.
             let mut intervals: Vec<StepInterval> = Vec::new();
             let step_rows = steps_stmt
@@ -302,25 +320,31 @@ impl Store {
                     open.finished_at = Some(at);
                 }
             }
-            for launch in launches {
-                let containing: Vec<&StepInterval> = intervals
-                    .iter()
-                    .filter(|interval| {
-                        launch.event.started_at >= interval.started_at
-                            && interval
-                                .finished_at
-                                .is_none_or(|end| launch.event.started_at <= end)
-                    })
-                    .collect();
-                let [only] = containing.as_slice() else {
-                    omissions.no_step += 1;
-                    continue;
+            for (launch, parent) in launches {
+                let step_id = match causes.activity_of(parent.as_deref()) {
+                    Some(activity) => activity.to_string(),
+                    None => {
+                        let containing: Vec<&StepInterval> = intervals
+                            .iter()
+                            .filter(|interval| {
+                                launch.event.started_at >= interval.started_at
+                                    && interval
+                                        .finished_at
+                                        .is_none_or(|end| launch.event.started_at <= end)
+                            })
+                            .collect();
+                        let [only] = containing.as_slice() else {
+                            omissions.no_step += 1;
+                            continue;
+                        };
+                        only.step_id.clone()
+                    }
                 };
                 let Some(provider) = launch.provider.clone() else {
                     omissions.no_provider += 1;
                     continue;
                 };
-                let key = (&only.step_id, &provider, &launch.model);
+                let key = (&step_id, &provider, &launch.model);
                 if let Some(group) = groups
                     .iter_mut()
                     .find(|group: &&mut UnrecordedLaunchGroup| {
@@ -334,7 +358,7 @@ impl Store {
                 } else {
                     groups.push(UnrecordedLaunchGroup {
                         run_id: run_id.clone(),
-                        activity_id: only.step_id.clone(),
+                        activity_id: step_id.clone(),
                         provider,
                         model: launch.model.clone(),
                         run_resolved_crew: crew.clone().filter(|crew| !crew.trim().is_empty()),
@@ -506,6 +530,81 @@ struct StepInterval {
     step_id: String,
     started_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
+}
+
+/// How far a launch's causal chain is followed before it is treated as
+/// unproven; real chains are two links (launch, activity, step).
+const CAUSAL_CHAIN_LIMIT: usize = 16;
+
+/// A run's `step.started` and `activity.started` audit events by event id:
+/// the causal links from a launch to the step or run-level activity that ran
+/// it.
+struct CausalEvents {
+    by_id: std::collections::HashMap<String, CausalEvent>,
+}
+
+/// One causal link: its parent, and the step id (`step.started`) or
+/// activity name (`activity.started`) it names.
+struct CausalEvent {
+    step: bool,
+    parent: Option<String>,
+    name: Option<String>,
+}
+
+impl CausalEvents {
+    fn read(
+        stmt: &mut rusqlite::Statement<'_>,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Self, OrbitError> {
+        let rows = stmt
+            .query_map(rusqlite::params![workspace_id, run_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(sqlite_store_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)?;
+        let by_id = rows
+            .into_iter()
+            .map(|(event_id, event_type, parent, payload)| {
+                let step = event_type == "step.started";
+                let payload = serde_json::from_str::<serde_json::Value>(&payload).ok();
+                let name = payload
+                    .as_ref()
+                    .and_then(|payload| payload.get(if step { "step_id" } else { "activity_name" }))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .map(str::to_string);
+                (event_id, CausalEvent { step, parent, name })
+            })
+            .collect();
+        Ok(Self { by_id })
+    }
+
+    /// The step, else the run-level activity, a launch whose parent is
+    /// `parent` ran under: the first `step.started` up its causal chain, or,
+    /// when the chain ends at an `activity.started` with no parent, that
+    /// activity's name. `None` when the chain is absent, broken, unnamed or
+    /// too long: the launch is then not proven by its links.
+    fn activity_of(&self, parent: Option<&str>) -> Option<&str> {
+        let mut current = parent?;
+        for _ in 0..CAUSAL_CHAIN_LIMIT {
+            let event = self.by_id.get(current)?;
+            if event.step {
+                return event.name.as_deref();
+            }
+            match event.parent.as_deref() {
+                Some(next) => current = next,
+                None => return event.name.as_deref(),
+            }
+        }
+        None
+    }
 }
 
 /// A launch event with the model it launched, before matching.

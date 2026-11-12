@@ -312,7 +312,7 @@ change starts a new season (§4.2).
   size-adjusted escaped-regression expectation) and sums them per model, pooling every
   model-and-recorded-effort scorecard row across its crews and effort levels. A model's
   expectation on a shared term is therefore the sum of its model-and-effort scorecard rows. A task
-  two rows of one model both worked counts once per row, as on the scorecard. The board stays pooled by model alone; each row's `effort_split` uses the same `(model, reasoning_effort)` encoding as the scorecards (a wire name, `null` for the provider default, `unknown` for unrecorded work).
+  two rows of one model both worked counts once per row, as on the scorecard. The board stays pooled by model alone; each row's `effort_split` uses the same `(model, reasoning_effort)` encoding as the scorecards (a wire name, `null` for the provider default, `unknown` for unrecorded work). An implementing invocation with no dispatch identity counts under its run's crew-label effort when the scorecard resolved that run's attempt from a `<crew>@<effort>` label (agent-scorecards §2, Crew-label fallback) [ORB-24150].
 - **Measures recorded today.** Escaped regressions, review outcome and crew-caused rework
   are measured. CI failures and tool-call errors report `unmeasured` while model attribution
   is unavailable. Final recoveries also report `unmeasured`: R1 records their fault, but the

@@ -36,8 +36,23 @@
 //! that a pulled attempt whose follower reported its leaf's effort on the
 //! claim settlement counts under that report [ORB-23825]: the follower read
 //! it from its own records by this same rule.
+//!
+//! Last, and only when none of those recorded sources names an effort, a
+//! unit whose own recorded crew label is a `<crew>@<effort>` reference
+//! (`opus@medium`) counts under that effort [ORB-24150]: the label is the
+//! reference the unit was dispatched under, so a row never says `effort
+//! unknown` while its crew list states the effort. A recorded effort always
+//! wins over the label, even when they disagree. A bare crew label (`opus`)
+//! names no effort and stays `unknown`: no per-unit record keeps the effort a
+//! bare crew resolved to at dispatch, and today's crew configuration is never
+//! read back into past work. [`EffortSource`] says which source decided, and
+//! `orbit agents show` reports a row's units by source. The model ranking's
+//! effort split counts an identity-less implementing invocation under its
+//! run's crew-label effort when this key resolved that run's attempt from the
+//! label, so the split and the scorecard rows agree.
 
 use orbit_store::contracts::InvocationAccountingFact;
+use orbit_types::identity::{CREW_EFFORT_SEPARATOR, ReasoningEffort};
 
 use super::facts::{AgentInvocationFacts, AgentLaunchFacts};
 use super::{AgentFacts, MODEL_UNKNOWN};
@@ -141,6 +156,47 @@ pub(super) struct MainInvocationUnit<'a> {
     /// settlement, when it reported one: the fallback for a unit this host
     /// holds no matching invocation or launch record of.
     pub(super) reported: Option<&'a RecordedEffort>,
+    /// The crew label recorded for the unit (`opus@medium`, `opus`): the
+    /// last fallback, used only when it carries an explicit `@<effort>`.
+    pub(super) crew: Option<&'a str>,
+}
+
+/// Which source decided a unit's effort, in precedence order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum EffortSource {
+    /// The unit's main completed invocation.
+    Invocation,
+    /// The latest matching launch record of an invocation that never
+    /// completed.
+    LaunchRecord,
+    /// The effort a pulled attempt's follower reported on its claim
+    /// settlement or later.
+    FollowerReport,
+    /// The `@<effort>` of the unit's recorded crew label.
+    CrewLabel,
+    /// No source names an effort: the unit is `effort unknown`.
+    Unrecorded,
+}
+
+impl EffortSource {
+    /// The source's wire name in scorecard output.
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            EffortSource::Invocation => "invocation",
+            EffortSource::LaunchRecord => "launch_record",
+            EffortSource::FollowerReport => "follower_report",
+            EffortSource::CrewLabel => "crew_label",
+            EffortSource::Unrecorded => "unrecorded",
+        }
+    }
+}
+
+/// The effort a crew label states: `Some` for a `<crew>@<effort>` reference
+/// with a known effort name, `None` for a bare crew or an unparsable suffix.
+fn crew_label_effort(crew: &str) -> Option<RecordedEffort> {
+    let (_, effort) = crew.trim().split_once(CREW_EFFORT_SEPARATOR)?;
+    let effort: ReasoningEffort = effort.parse().ok()?;
+    Some(Some(effort.to_string()))
 }
 
 /// Whether the invocation recorded under pipeline step `step` can have
@@ -158,26 +214,44 @@ fn step_produced(id: &str, step: &str) -> bool {
 /// invocations in its job run, preferring those linked to its task, the
 /// one with the longest recorded duration. When no completed invocation
 /// of the run matches, the latest launch record of the run for the same
-/// activity and model supplies the effort. `unknown` when the unit
-/// recorded no run, or neither a matching invocation nor a matching
-/// launch record.
+/// activity and model supplies the effort, then the follower's report, then
+/// an explicit `@<effort>` on the unit's crew label. `unknown` when none of
+/// them names one.
 pub(super) fn main_invocation_effort(
     facts: &AgentFacts,
     unit: MainInvocationUnit<'_>,
 ) -> RecordedEffort {
-    let effort = recorded_main_effort(&facts.invocations, &facts.launches, unit);
-    match unit.reported {
-        Some(reported) if effort.as_deref() == Some(EFFORT_UNKNOWN) => reported.clone(),
-        _ => effort,
+    main_effort_with_source(facts, unit).0
+}
+
+/// [`main_invocation_effort`] and the source that decided it.
+pub(super) fn main_effort_with_source(
+    facts: &AgentFacts,
+    unit: MainInvocationUnit<'_>,
+) -> (RecordedEffort, EffortSource) {
+    let (effort, source) = recorded_main_effort(&facts.invocations, &facts.launches, unit);
+    if effort.as_deref() != Some(EFFORT_UNKNOWN) {
+        return (effort, source);
+    }
+    if let Some(reported) = unit.reported
+        && reported.as_deref() != Some(EFFORT_UNKNOWN)
+    {
+        return (reported.clone(), EffortSource::FollowerReport);
+    }
+    match unit.crew.and_then(crew_label_effort) {
+        Some(labelled) => (labelled, EffortSource::CrewLabel),
+        None => (effort, EffortSource::Unrecorded),
     }
 }
 
-/// [`main_invocation_effort`] from this host's own records alone.
+/// [`main_invocation_effort`] from this host's own records alone, with
+/// whether an invocation or a launch record decided it.
 fn recorded_main_effort(
     invocations: &AgentInvocationFacts,
     launches: &AgentLaunchFacts,
     unit: MainInvocationUnit<'_>,
-) -> RecordedEffort {
+) -> (RecordedEffort, EffortSource) {
+    let unrecorded = || (Some(EFFORT_UNKNOWN.to_string()), EffortSource::Unrecorded);
     let MainInvocationUnit {
         run_id: Some(run_id),
         activity,
@@ -187,9 +261,10 @@ fn recorded_main_effort(
         after,
         until,
         reported: _,
+        crew: _,
     } = unit
     else {
-        return Some(EFFORT_UNKNOWN.to_string());
+        return unrecorded();
     };
     let candidates = invocations.invocations_for_run(run_id).filter(|fact| {
         activity.matches(fact.activity_id.as_deref())
@@ -222,7 +297,10 @@ fn recorded_main_effort(
             .then(left.ts.cmp(&right.ts))
             .then(left.id.cmp(&right.id))
     }) {
-        return effort_of_invocation(main);
+        return match effort_of_invocation(main) {
+            effort if effort.as_deref() == Some(EFFORT_UNKNOWN) => unrecorded(),
+            effort => (effort, EffortSource::Invocation),
+        };
     }
     // No completed invocation of this unit's run matched: the agent may
     // have launched without ever completing (a failed, interrupted, held
@@ -245,15 +323,15 @@ fn recorded_main_effort(
                 .cmp(&right.started_at)
                 .then(left.id.cmp(&right.id))
         })
-        .map_or_else(
-            || Some(EFFORT_UNKNOWN.to_string()),
-            |record| {
+        .map_or_else(unrecorded, |record| {
+            (
                 record
                     .identity
                     .reasoning_effort
-                    .map(|effort| effort.to_string())
-            },
-        )
+                    .map(|effort| effort.to_string()),
+                EffortSource::LaunchRecord,
+            )
+        })
 }
 
 impl crate::OrbitRuntime {
@@ -264,7 +342,7 @@ impl crate::OrbitRuntime {
     /// it. `Some(None)` is the provider default, and `None` an effort this
     /// host does not know (no matching record, or an unreadable store), which
     /// the follower then omits. Attribution only; never derived from crew
-    /// configuration.
+    /// configuration or the leaf's crew label.
     pub(crate) fn leaf_reported_effort(
         &self,
         run: &orbit_types::workflow::JobRun,
@@ -294,7 +372,7 @@ impl crate::OrbitRuntime {
                 Vec::new()
             });
         let run_id = run.run_id.to_string();
-        let effort = recorded_main_effort(
+        let (effort, _) = recorded_main_effort(
             &invocations.into(),
             &launches.into(),
             MainInvocationUnit {
@@ -306,6 +384,7 @@ impl crate::OrbitRuntime {
                 after: None,
                 until: None,
                 reported: None,
+                crew: None,
             },
         );
         (effort.as_deref() != Some(EFFORT_UNKNOWN)).then_some(effort)

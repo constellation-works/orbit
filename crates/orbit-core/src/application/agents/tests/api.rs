@@ -1704,3 +1704,222 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
         "a judged fault is scoped to the model that worked the run"
     );
 }
+
+/// One implementer unit for the crew-label fixtures: its crew label, its run
+/// (with an invocation: whether it recorded a dispatch identity and its
+/// effort) and the effort a follower reported for it.
+/// A labelled unit's run id and, when it completed an invocation, whether
+/// that invocation recorded a dispatch identity and at which effort.
+type LabelledRun = Option<(
+    &'static str,
+    Option<(bool, Option<orbit_types::identity::ReasoningEffort>)>,
+)>;
+
+struct LabelledUnit {
+    task_id: &'static str,
+    crew: &'static str,
+    run: LabelledRun,
+    reported: Option<Option<String>>,
+}
+
+fn labelled_facts(units: &[LabelledUnit]) -> AgentFacts {
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(1);
+    let mut tasks = Vec::new();
+    let mut invocations = Vec::new();
+    for (index, unit) in units.iter().enumerate() {
+        let mut attempt = Attempt {
+            start,
+            end: Some(now),
+            runner: Default::default(),
+            job: true,
+            tags: Vec::new(),
+        };
+        attempt.runner.crew = Some(unit.crew.into());
+        attempt.runner.model = Some("m1".into());
+        attempt.runner.reported_effort.clone_from(&unit.reported);
+        if let Some((run_id, invoked)) = unit.run {
+            attempt.runner.run_id = Some(run_id.into());
+            if let Some((identity, effort)) = invoked {
+                invocations.push(invocation(
+                    index as i64 + 1,
+                    (run_id, unit.task_id),
+                    unit.crew,
+                    effort,
+                    identity,
+                    60_000,
+                    now,
+                ));
+            }
+        }
+        tasks.push(TaskFacts {
+            id: unit.task_id.into(),
+            title: "crew label effort".into(),
+            status: TaskStatus::Done,
+            tags: Vec::new(),
+            context_files: Vec::new(),
+            complexity: Some(TaskComplexity::Low),
+            created_at: start,
+            landed: true,
+            dropped: false,
+            attempts: vec![attempt],
+            final_attempt: Some(0),
+            execution: super::super::ExecutionMode::Managed,
+            landed_at: Some(now),
+            records: Vec::new(),
+            reviews: Vec::new(),
+            filed: None,
+            warnings: Default::default(),
+        });
+    }
+    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
+    AgentFacts {
+        invocations: invocations.into(),
+        launches: Default::default(),
+        computed_at: now,
+        tasks_scanned: tasks.len(),
+        tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots: Vec::new(),
+    }
+}
+
+/// [ORB-24150] A unit with no invocation effort, launch record or follower
+/// report whose recorded crew label is `<crew>@<effort>` counts under that
+/// effort on the implementer scorecard and the model ranking's effort split,
+/// and the detail names the crew label as its source; a bare crew label stays
+/// effort unknown. Before the fix both labelled units were `effort unknown`.
+#[test]
+fn crew_label_effort_counts_when_no_effort_is_recorded() {
+    use super::super::{RankQuery, RankSeasons, agent_detail_with_effort, agent_rank};
+    let facts = labelled_facts(&[
+        // No run at all: no invocation, launch record or report.
+        LabelledUnit {
+            task_id: "label-no-run",
+            crew: "opus@medium",
+            run: None,
+            reported: None,
+        },
+        // A completed invocation with no dispatch identity.
+        LabelledUnit {
+            task_id: "label-old-invocation",
+            crew: "opus@medium",
+            run: Some(("run-old", Some((false, None)))),
+            reported: None,
+        },
+        LabelledUnit {
+            task_id: "bare",
+            crew: "opus",
+            run: None,
+            reported: None,
+        },
+    ]);
+    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
+    let payload = agent_scorecard(&facts, AgentRole::Implementers, &query, Duration::ZERO);
+    let rows = payload["rows"].as_array().unwrap();
+    let by_label = |label: &str| {
+        rows.iter()
+            .find(|row| row["label"] == label)
+            .unwrap_or_else(|| panic!("no {label} row: {payload}"))
+    };
+    let medium = by_label("m1 @ medium");
+    assert_eq!(medium["units"], json!(2), "{payload}");
+    assert_eq!(medium["effort_sources"], json!({"crew_label": 2}));
+    assert_eq!(medium["crews"], json!(["opus@medium"]));
+    let unknown = by_label("m1 @ effort unknown");
+    assert_eq!(
+        unknown["units"],
+        json!(1),
+        "a bare crew label names no effort"
+    );
+    assert_eq!(unknown["effort_sources"], json!({"unrecorded": 1}));
+
+    let detail = agent_detail_with_effort(
+        &facts,
+        AgentRole::Implementers,
+        &query,
+        "opus@medium",
+        Some("m1"),
+        Some("medium"),
+        Duration::ZERO,
+    )
+    .unwrap();
+    assert_eq!(detail["row"]["effort_sources"], json!({"crew_label": 2}));
+
+    let live = RankQuery::parse(None, None, None, None, true).unwrap();
+    let rank = agent_rank(&facts, &live, &RankSeasons::default(), Duration::ZERO);
+    let split = rank["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["model"] == "m1")
+        .unwrap_or_else(|| panic!("no m1 ranking row: {rank}"))["effort_split"]
+        .clone();
+    assert_eq!(
+        split,
+        json!([{
+            "crew": "opus@medium",
+            "model": "m1",
+            "reasoning_effort": "medium",
+            "invocations": 1,
+            "tasks": 1,
+            "duration_ms": 60_000,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "provider_cost_usd": 0.0,
+            "provider_cost_count": 0,
+        }]),
+        "the identity-less invocation counts under its run's crew-label effort"
+    );
+}
+
+/// [ORB-24150] A recorded effort — invocation, launch record or follower
+/// report — wins over a crew label that names a different one.
+#[test]
+fn recorded_effort_wins_over_a_crew_label_effort() {
+    use orbit_types::identity::ReasoningEffort::Medium;
+    let facts = labelled_facts(&[
+        LabelledUnit {
+            task_id: "invocation-medium",
+            crew: "opus@high",
+            run: Some(("run-recorded", Some((true, Some(Medium))))),
+            reported: None,
+        },
+        LabelledUnit {
+            task_id: "reported-low",
+            crew: "opus@high",
+            run: None,
+            reported: Some(Some("low".into())),
+        },
+    ]);
+    let payload = agent_scorecard(
+        &facts,
+        AgentRole::Implementers,
+        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
+        Duration::ZERO,
+    );
+    let rows = payload["rows"].as_array().unwrap();
+    let labels: BTreeSet<&str> = rows
+        .iter()
+        .map(|row| row["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        BTreeSet::from(["m1 @ low", "m1 @ medium"]),
+        "{payload}"
+    );
+    let by_label = |label: &str| rows.iter().find(|row| row["label"] == label).unwrap();
+    assert_eq!(
+        by_label("m1 @ medium")["effort_sources"],
+        json!({"invocation": 1})
+    );
+    assert_eq!(
+        by_label("m1 @ low")["effort_sources"],
+        json!({"follower_report": 1})
+    );
+}
