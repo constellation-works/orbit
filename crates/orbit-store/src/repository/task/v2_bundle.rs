@@ -21,9 +21,9 @@ use orbit_types::task::{
 use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::driver::file::task_bundle::{
     PENDING_WRITE_FILE_NAME, append_jsonl_row, append_jsonl_rows,
-    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope, read_bundle_at,
-    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
-    read_search_docs_at, recover_pending_write, write_bundle_at,
+    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
+    read_artifact_manifest_at, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
+    read_envelope_at, read_events_at, read_search_docs_at, recover_pending_write, write_bundle_at,
 };
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
@@ -364,6 +364,16 @@ impl TaskBundleStoreV2 {
     ) -> Result<TaskBundleV2, OrbitError> {
         let bundle_dir = self.bundle_path(task_id)?;
         read_bundle_lightweight_consistently(&bundle_dir)
+    }
+
+    /// Read only a task's artifact manifest, under the same shared lock and
+    /// interrupted-commit refusal as a lightweight bundle read.
+    pub(crate) fn read_artifact_manifest(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        read_artifact_manifest_consistently(&bundle_dir)
     }
 
     pub(crate) fn delete_bundle(&self, task_id: &str) -> Result<bool, OrbitError> {
@@ -730,6 +740,23 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
             refuse_interrupted_commit(bundle_dir)?;
             read_bundle_lightweight_at(bundle_dir)
+        })
+    })
+}
+
+/// Same lock as [`read_bundle_lightweight_consistently`], reading only the
+/// artifact manifest instead of assembling the whole bundle.
+fn read_artifact_manifest_consistently(
+    bundle_dir: &Path,
+) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+    if !bundle_dir.try_exists()? {
+        return read_artifact_manifest_at(bundle_dir);
+    }
+
+    hold_step(BUNDLE_READ_STEP, || {
+        with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
+            read_artifact_manifest_at(bundle_dir)
         })
     })
 }
