@@ -250,9 +250,10 @@ sentinel data and model stubs in disposable directories for such checks; never d
 real credentialed model to reproduce an isolation defect.
 
 The command refuses, and prints the requested grant set, when the manifest asks for an
-unconfined backend (`backend.sandbox: none`), an `fs.write` root that resolves outside that
-temp workspace, `network: any`, or any `env_pass` variable. A write root is judged where it
-lands after rendering with manifest defaults plus explicit fixture overrides and resolving relative paths
+unconfined backend (`backend.sandbox: none`), an `fs.write` root or `fs.write_files` file that
+resolves outside that temp workspace, `network: any`, or any `env_pass` variable. A write root
+or file is judged where it lands after rendering with manifest defaults plus explicit fixture
+overrides and resolving relative paths
 against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
 directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin
@@ -324,11 +325,33 @@ grants the user authorizes.
 
 | Grant | What the manifest asks for | What granting it does |
 |---|---|---|
-| `fs` | `permissions.fs.read` / `.write` | Opens exactly those paths to the sandboxed backend. |
+| `fs` | `permissions.fs.read` / `.write` / `.write_files` | Opens exactly those paths to the sandboxed backend. `write_files` opens only the named existing files, never their parent directory (see below). |
 | `network` | `permissions.network: loopback\|any` | Lets the backend reach the network; without it, TCP is refused. |
 | `env_pass` | `permissions.env_pass` | Copies those variables from Orbit's environment into the child. `ORBIT_*` names are reserved for Orbit's own envelope: `validate_structure` refuses a manifest that names one, and the privilege-bearing ones (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach the child even so. |
 | `orbit_tools` | `permissions.orbit_tools` | Lets the backend call those Orbit tools back through `orbit tool run`, and nothing else. |
 | `unsandboxed` | `backend.sandbox: none` | Runs the backend with no confinement at all. Agents in a sandboxed run cannot call it; the broker refuses the call. |
+
+`permissions.fs.write_files` is the exact-file write request. Use it for an existing file the
+backend must modify, such as a runtime file named by `{{config.<key>}}`, without also opening
+its directory:
+
+```yaml
+permissions:
+  fs:
+    write_files: ["{{config.runtime_file}}"]
+```
+
+Each entry must render to an absolute physical path of an existing regular file that the
+current user owns, with one hard link and no group or other write bits. Spell it physically:
+on macOS, `/private/tmp/...` rather than the `/tmp` alias. Symbolic links,
+missing files, directories, and paths that pass through a symbolic link or an unsafe
+directory are refused. Orbit never creates such a file or widens its grant: creating,
+replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
+covers a `write_files` entry only when it names that file or one of its ancestor
+directories. Adding an entry, or changing where a config value resolves, needs consent
+again. Linux binds the existing inode, and on macOS an ordinary file name becomes a literal
+file rule. Neither grants sibling files. Do not request a file whose name contains `*` or
+`?`: macOS reads those characters as wildcards, so the grant can reach other files.
 
 A plugin that requests a grant the host has not given registers its tools
 **inactive**: a call is refused with a diagnostic naming the grant and the
