@@ -24,7 +24,7 @@
 
 import {
   syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
-  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime,
+  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDate, formatDateTime,
   bindTaskLink, relativeTime, statusPill,
 } from './common.js';
 import {
@@ -792,7 +792,8 @@ function taskCell(row, review) {
 
 function startsCell(row) {
   const hold = row.drain_hold;
-  if (hold) return el("td", { class: "fc-unforecastable", title: hold.detail, text: hold.kind === "scheduled" ? `starts ${hold.starts_at?.slice(0, 10) || "later"}` : `Excluded · ${hold.reason === "no_drain_tag" ? "no-drain" : hold.reason || "drain policy"}` });
+  // The start date on the dashboard clock, not the UTC calendar day of the string.
+  if (hold) return el("td", { class: "fc-unforecastable", title: hold.detail, text: hold.kind === "scheduled" ? `starts ${hold.starts_at ? formatDate(hold.starts_at) : "later"}` : `Excluded · ${hold.reason === "no_drain_tag" ? "no-drain" : hold.reason || "drain policy"}` });
   if (row.unforecastable) return el("td", { class: "fc-unforecastable", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable });
   if (row.status === "in-progress") return el("td", { class: "num", text: "running" });
   return el("td", { class: "num", text: formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) });

@@ -9,7 +9,7 @@
 // drawn; sparse-outcome buckets get hollow markers. Display only: nothing
 // here enters a score. Nodes use `el()`, the chart inline SVG.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { el, fetchJson, getWorkspaceRevision, onWorkspaceChange } from './common.js';
 
 const TIER_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "X-hard", unassessed: "Unassessed" };
 // Series colours by position in the window's series list, so toggling a
@@ -19,11 +19,14 @@ const SERIES_SLOTS = 20;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 let complexity = "";
-// `null` until the reader picks: then the crews they chose.
+// `null` until the reader picks: then the crews they chose. Kept across window
+// and complexity changes (a crew absent from one window stays chosen), and
+// cleared on a workspace change so that workspace's default curves show.
 let picked = null;
 let curves = null;
 let curvesScope = null;
 let curvesRequest = 0;
+onWorkspaceChange(() => { picked = null; });
 function curvesPath(selectedWindow, execution) {
   const tier = complexity ? `&complexity=${encodeURIComponent(complexity)}` : "";
   return `/api/agents/implementers/size-curves?window=${encodeURIComponent(selectedWindow)}${tier}&execution=${encodeURIComponent(execution || "managed")}`;
@@ -143,7 +146,9 @@ function slot(crew) {
 }
 
 function toggle(crew, on, rerender) {
-  const next = selectedCrews();
+  // Start from the stored choice, not the crews in this window's series: a
+  // crew the window lacks stays in the choice, so it returns when it appears.
+  const next = new Set(picked ?? selectedCrews());
   if (on) next.add(crew);
   else next.delete(crew);
   picked = next;
