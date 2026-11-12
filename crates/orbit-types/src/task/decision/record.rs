@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::{
     CiFailureIdentity, CodeScanningAlertEvidence, DesktopMutationReceipt, PilotAdmissionVerdict,
-    PublicationSettlingObservation, RecordedFinalRecovery,
+    PublicationSettlingObservation, RecordedCrewAssignment, RecordedFinalRecovery,
 };
 use crate::task::{ContextFilesWidening, RegressionRiskMarks, TagsChanged};
 use crate::workflow::{
@@ -164,6 +164,11 @@ pub enum TaskDecision {
     /// The `completion.hold` rule that kept a completion-authorized run's
     /// task in `review`, recorded on the `completion_held` event.
     CompletionHeld(crate::workflow::CompletionHold),
+    /// The crew and provenance before and after a crew change, recorded on
+    /// the `crew_assigned` or `crew_redrawn` event. Read it through
+    /// [`RecordedCrewAssignment::from_entry`], which decodes entries written
+    /// before it from their note.
+    CrewAssignment(RecordedCrewAssignment),
 }
 
 /// Creation receipt of a task an auto-task job step minted.

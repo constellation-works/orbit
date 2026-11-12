@@ -4,9 +4,10 @@ use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CrewSource, FINAL_RECOVERY_DECIDED_EVENT,
-    GRANTED_TOOLS_CHANGED_EVENT, RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry,
-    TaskStatus, canonical_artifact_path, granted_tools_change_note,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CREW_ASSIGNED_EVENT, CrewAssignmentState,
+    CrewSource, FINAL_RECOVERY_DECIDED_EVENT, GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment,
+    RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry, TaskStatus,
+    canonical_artifact_path, granted_tools_change_note,
 };
 use orbit_types::workflow::{SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED};
 use serde_json::Value;
@@ -464,10 +465,13 @@ impl OrbitRuntime {
                 None if replacement.is_none() => "pool draw (no crew available)".to_string(),
                 None => "explicit name".to_string(),
             };
+            let after_source = crew_source
+                .clone()
+                .unwrap_or_else(|| task.crew_source.clone());
             append_history.push(TaskHistoryEntry {
                 at: chrono::Utc::now(),
                 by: effective_label.clone(),
-                event: "crew_assigned".to_string(),
+                event: CREW_ASSIGNED_EVENT.to_string(),
                 note: Some(format!(
                     "crew changed from `{}` to `{}` via {source}",
                     describe_optional_field_value(task.crew.as_deref()),
@@ -476,7 +480,10 @@ impl OrbitRuntime {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
-                decision: None,
+                decision: Some(TaskDecision::CrewAssignment(RecordedCrewAssignment::new(
+                    CrewAssignmentState::new(task.crew.clone(), task.crew_source.clone()),
+                    CrewAssignmentState::new(replacement.clone(), after_source),
+                ))),
             });
         }
         if let (Some((before, state)), Some(after)) =

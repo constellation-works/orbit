@@ -15,7 +15,10 @@ use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{CrewSource, RedrawReason, TaskHistoryEntry};
+use orbit_types::task::{
+    CREW_ASSIGNED_EVENT, CrewAssignmentState, CrewSource, RecordedCrewAssignment, RedrawReason,
+    TaskDecision, TaskHistoryEntry,
+};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
@@ -428,9 +431,9 @@ impl OrbitRuntime {
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: "crew_assigned".to_string(),
-                            // The new crew is the note's last backticked name,
-                            // which attempt attribution reads.
+                            event: CREW_ASSIGNED_EVENT.to_string(),
+                            // The new crew stays the note's last backticked
+                            // name for readers of entries without a decision.
                             note: Some(format!(
                                 "crew changed from `{}` to `{crew}` {}",
                                 current.crew.as_deref().unwrap_or("(none)"),
@@ -439,7 +442,18 @@ impl OrbitRuntime {
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            decision: Some(TaskDecision::CrewAssignment(
+                                RecordedCrewAssignment::new(
+                                    CrewAssignmentState::new(
+                                        current.crew.clone(),
+                                        current.crew_source.clone(),
+                                    ),
+                                    CrewAssignmentState::new(
+                                        Some(crew.to_string()),
+                                        Some(written.source.clone()),
+                                    ),
+                                ),
+                            )),
                         }],
                         ..Default::default()
                     },
@@ -459,7 +473,7 @@ impl OrbitRuntime {
         Ok(self
             .get_task_history(task_id)?
             .iter()
-            .any(|entry| entry.event == "crew_assigned" && entry.at > at))
+            .any(|entry| entry.event == CREW_ASSIGNED_EVENT && entry.at > at))
     }
 
     /// Whether the task's latest local `run` was cancelled before it

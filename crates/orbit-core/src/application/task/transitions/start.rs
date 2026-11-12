@@ -449,7 +449,15 @@ impl OrbitRuntime {
                         crew_source: crew_source.clone(),
                         append_history: crew_assignment
                             .as_ref()
-                            .map(crew_assigned_history)
+                            .map(|assignment| {
+                                crew_assigned_history(
+                                    orbit_types::task::CrewAssignmentState::new(
+                                        task.crew.clone(),
+                                        task.crew_source.clone(),
+                                    ),
+                                    assignment,
+                                )
+                            })
                             .into_iter()
                             .chain(crew_redraw_history.clone())
                             .collect(),

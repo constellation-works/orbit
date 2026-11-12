@@ -2,7 +2,9 @@ use orbit_common::OrbitError;
 use orbit_config::ComplexityCrewPools;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
-    CrewSource, Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus,
+    CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CrewAssignmentState, CrewSource,
+    RecordedCrewAssignment, Task, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
+    TaskStatus,
 };
 use serde_json::{Value, json};
 
@@ -629,7 +631,7 @@ impl OrbitRuntime {
                     append_history: vec![TaskHistoryEntry {
                         at: now,
                         by: SYSTEM_ACTOR_LABEL.to_string(),
-                        event: "crew_assigned".to_string(),
+                        event: CREW_ASSIGNED_EVENT.to_string(),
                         note: Some(format!(
                             "assigned crew `{replacement}` from pool:{} (provider-limit reassignment from `{}`: {})",
                             plan.complexity.as_str(),
@@ -639,7 +641,18 @@ impl OrbitRuntime {
                         from_status: None,
                         to_status: None,
                         operation_id: None,
-                        decision: None,
+                        decision: Some(TaskDecision::CrewAssignment(
+                            RecordedCrewAssignment::new(
+                                CrewAssignmentState::new(
+                                    current.crew.clone(),
+                                    current.crew_source.clone(),
+                                ),
+                                CrewAssignmentState::new(
+                                    Some(replacement.to_string()),
+                                    Some(CrewSource::Pool(plan.complexity)),
+                                ),
+                            ),
+                        )),
                     }],
                     ..Default::default()
                 },
@@ -730,12 +743,25 @@ impl OrbitRuntime {
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: "crew_redrawn".to_string(),
+                            event: CREW_REDRAWN_EVENT.to_string(),
                             note: Some(note.to_string()),
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            // The redraw keeps the source the guard above
+                            // read; only the crew moves.
+                            decision: Some(TaskDecision::CrewAssignment(
+                                RecordedCrewAssignment::new(
+                                    CrewAssignmentState::new(
+                                        Some(original.to_string()),
+                                        Some(source.clone()),
+                                    ),
+                                    CrewAssignmentState::new(
+                                        Some(replacement.to_string()),
+                                        Some(source.clone()),
+                                    ),
+                                ),
+                            )),
                         }],
                         ..Default::default()
                     },

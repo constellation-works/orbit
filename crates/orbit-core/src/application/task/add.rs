@@ -402,7 +402,11 @@ impl OrbitRuntime {
             &task.id,
             StoreTaskUpdateParams {
                 actor: SYSTEM_ACTOR_LABEL.to_string(),
-                append_history: vec![crew_assigned_history(assignment)],
+                // Creation is the first assignment: no crew preceded it.
+                append_history: vec![crew_assigned_history(
+                    orbit_types::task::CrewAssignmentState::default(),
+                    assignment,
+                )],
                 ..Default::default()
             },
         );

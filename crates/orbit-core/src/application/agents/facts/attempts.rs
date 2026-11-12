@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{RecordedCrewAssignment, Task, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
 use super::super::records::{landed, run_spans};
@@ -116,12 +116,12 @@ pub(super) fn assigned_runner(
     };
     let settled = field("/claim_id").and_then(|claim| pulled.get(claim.as_str()));
     let assignments = || {
-        history
-            .iter()
-            .filter(|entry| matches!(entry.event.as_str(), "crew_assigned" | "crew_redrawn"))
+        history.iter().filter_map(|entry| {
+            RecordedCrewAssignment::from_entry(entry).map(|assignment| (entry.at, assignment))
+        })
     };
-    let crew = match assignments().rfind(|entry| entry.at <= start) {
-        Some(entry) => entry.note.as_deref().and_then(assigned_crew),
+    let crew = match assignments().rfind(|(at, _)| *at <= start) {
+        Some((_, assignment)) => assignment.known_after_crew().map(str::to_string),
         None if assignments().next().is_none() => task.crew.clone(),
         None => None,
     };
@@ -131,14 +131,6 @@ pub(super) fn assigned_runner(
         run_id: field("/run_context/run_id"),
         reported_effort: settled.and_then(|runner| runner.reported_effort.clone()),
     }
-}
-
-/// The crew an assignment note ends on: its last backticked name, which every
-/// assignment and redraw note gives last. A placeholder such as `(none)` is no
-/// crew.
-pub(super) fn assigned_crew(note: &str) -> Option<String> {
-    let last = note.split('`').skip(1).step_by(2).last()?;
-    (!last.is_empty() && !last.starts_with(['(', '<'])).then(|| last.to_string())
 }
 
 /// Whether a claim's pull opened the attempt starting at `start`: a job on
