@@ -1,13 +1,13 @@
 ---
 title: Model Ranking — Design
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-09
+last_updated: 2026-11-11
+last_validated: 2026-11-11
 status: Accepted
 feature: model-ranking
 doc_role: design
 type: design
-summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by cost within a band."
+summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by score within a band, with cost used for exact score ties."
 tags: [model-ranking, agent-scorecards]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/landing/checks/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
@@ -61,7 +61,7 @@ Not-scored causes stay Not scored.
 | Reliability | Tool-call errors | 5 | tool calls | Orbit tool calls in the row's implementing activities classed `expected` or `denied` (§5.3) | partly new |
 
 Quality carries 50 of the 100 weight points and reliability 30. The other 20 are
-deliberately unassigned: the [cost decision](4_decisions.md#cost-orders-a-tie-band-and-is-never-scored)
+deliberately unassigned: the [cost decision](4_decisions.md#score-orders-a-tie-band-cost-breaks-exact-score-ties)
 keeps efficiency out of the score.
 
 ### 3.1 Counting each event once
@@ -188,12 +188,12 @@ measure is exploratory. This adoption does not waive R1's coverage exit.
 
 ### 4.5 Order within a band
 
-Within a band, models are listed by **cost ratio**, cheapest first. The cost ratio is the
-row's list-price cost per task divided by the fleet's cost per task on the same tier mix.
-Cost is priced at provider list prices, so flat-rate subscriptions don't read as free.
-
-If a row's cost coverage is below 80% of its tasks, it is listed by `score` within the band
-with a `cost unknown` flag. Cost never moves a model across a band boundary.
+Within a band, models are listed by **score**, highest first. Exact score ties are ordered
+by the row's list-price cost per task divided by the fleet's cost per task on the same tier
+mix, cheapest first, then by model name. Cost is priced at provider list prices, so flat-rate
+subscriptions don't read as free. Rows with less than 80% cost coverage have unknown cost;
+on an exact score tie, priced rows come first and unknown-cost rows sort by model name.
+Cost never moves a model across a band boundary.
 
 ### 4.6 Value chart
 
@@ -332,8 +332,9 @@ change starts a new season (§4.2).
   bands. The interval and paired probabilities resample eligible models only; the
   leave-one-out mean is recomputed in every draw.
 - **Cost** is the scorecard's recorded run cost (the provider's cost, else the cost derived
-  from list prices). Within a band, priced models come first by cost ratio, then
-  `cost unknown` models by score.
+  from list prices). Within a band, rows are ordered by descending score. On an exact score
+  tie, priced models come first by cost ratio, then model name; unknown-cost models follow
+  by model name.
 - **Payload.** Per row: `score`, `raw_score`, `z`, `z_loo`, `z_shrunk`, `interval`
   (`p10`, `p90`), `rank` and `rank_label` (`2=`), `cost` (`ratio`, `per_task`,
   `expected_per_task`, `coverage`, `cost_unknown`), per-measure `actual`, `expected`,

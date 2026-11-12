@@ -1,5 +1,5 @@
 //! The model ranking over fixture facts at its public API: pooling, the
-//! settled window, eligibility, shrinkage, bands, cost order, unmeasured
+//! settled window, eligibility, shrinkage, bands, within-band order, unmeasured
 //! measures, parity with the implementer scorecard's expectations and
 //! calibrated seasons.
 use std::collections::BTreeMap;
@@ -135,6 +135,14 @@ fn mixed(index: usize) -> ReviewVerdict {
     }
 }
 
+fn one_better(index: usize) -> ReviewVerdict {
+    if index == 2 {
+        ReviewVerdict::Accept
+    } else {
+        mixed(index)
+    }
+}
+
 fn poor(index: usize) -> ReviewVerdict {
     if index.is_multiple_of(5) {
         ReviewVerdict::Accept
@@ -165,10 +173,30 @@ fn fleet() -> AgentFacts {
             cost: 2.0,
             days_ago: settled,
         },
-        // Indistinguishable from middle and cheaper: same band, listed first.
+        // Same score as middle but cheaper, so it wins an exact-score tie.
         Work {
             model: Some("twin"),
             crews: &["twin"],
+            tasks: 40,
+            verdict: mixed,
+            regressed: 4,
+            cost: 1.0,
+            days_ago: settled,
+        },
+        // A slightly higher score but a higher cost stays first in the band.
+        Work {
+            model: Some("near"),
+            crews: &["near"],
+            tasks: 40,
+            verdict: one_better,
+            regressed: 4,
+            cost: 4.0,
+            days_ago: settled,
+        },
+        // Same score and cost as twin: the final tie-break is model name.
+        Work {
+            model: Some("alpha"),
+            crews: &["alpha"],
             tasks: 40,
             verdict: mixed,
             regressed: 4,
@@ -248,7 +276,7 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
         .collect();
     assert_eq!(
         models,
-        ["strong", "twin", "middle", "weak", "small"],
+        ["strong", "near", "alpha", "twin", "middle", "weak", "small"],
         "board order"
     );
     assert_eq!(row(&payload, "strong")["units"], 40);
@@ -264,10 +292,11 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
     assert_eq!(payload["scales_source"], "window_estimate");
     assert!(payload["season"].is_null());
 
-    // Four eligible models qualify the board; strong is clearly ahead, the
-    // twins tie and share a band ordered by cost, weak is clearly behind.
+    // Six eligible models qualify the board. Near scores above the exact
+    // score tie but shares its band despite higher cost. The exact tie is
+    // ordered by cost, then by model name.
     assert_eq!(payload["qualified"], true);
-    assert_eq!(payload["eligible_models"], 4);
+    assert_eq!(payload["eligible_models"], 6);
     let labels: Vec<&str> = payload["rows"]
         .as_array()
         .unwrap()
@@ -276,13 +305,27 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
         .collect();
     // Band ranks are dense: the shared 2= band is followed by 3, never 4,
     // and the unranked ineligible row consumes no rank.
-    assert_eq!(labels, ["1", "2=", "2=", "3", "-"]);
+    assert_eq!(labels, ["1", "2=", "2=", "2=", "2=", "3", "-"]);
+    assert!(f(&row(&payload, "near")["score"]) > f(&row(&payload, "alpha")["score"]));
+    assert_eq!(
+        f(&row(&payload, "alpha")["score"]),
+        f(&row(&payload, "twin")["score"])
+    );
+    assert_eq!(
+        f(&row(&payload, "twin")["score"]),
+        f(&row(&payload, "middle")["score"])
+    );
+    assert_eq!(
+        f(&row(&payload, "alpha")["cost"]["ratio"]),
+        f(&row(&payload, "twin")["cost"]["ratio"])
+    );
     assert!(
-        f(&row(&payload, "twin")["cost"]["ratio"]) < f(&row(&payload, "middle")["cost"]["ratio"])
+        f(&row(&payload, "near")["cost"]["ratio"]) > f(&row(&payload, "middle")["cost"]["ratio"])
     );
     assert_eq!(row(&payload, "middle")["cost"]["cost_unknown"], false);
-    assert!(f(&payload["paired_probabilities"]["strong"]["twin"]) >= 0.8);
-    assert!(f(&payload["paired_probabilities"]["twin"]["middle"]) < 0.8);
+    assert!(f(&payload["paired_probabilities"]["strong"]["near"]) >= 0.8);
+    assert!(f(&payload["paired_probabilities"]["near"]["alpha"]) < 0.95);
+    assert!(f(&payload["paired_probabilities"]["alpha"]["twin"]) < 0.95);
     let small = row(&payload, "small");
     assert_eq!(small["eligible"], false);
     assert!(small["rank"].is_null() && small["interval"].is_null());
@@ -297,7 +340,7 @@ fn rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weig
         "an ineligible model still shows a score"
     );
 
-    for model in ["strong", "twin", "middle", "weak"] {
+    for model in ["strong", "near", "alpha", "twin", "middle", "weak"] {
         let row = row(&payload, model);
         // Measures without recorded events, and measures that never vary
         // (no rework in the fixture), leave the weight denominator.

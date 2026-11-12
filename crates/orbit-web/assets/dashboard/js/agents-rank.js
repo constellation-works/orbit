@@ -118,7 +118,7 @@ function metaText(payload) {
 
 function metaHint(payload) {
   const lines = [
-    "Score starts at 100. A higher score is better. Cost orders a band and is never part of the score.",
+    "Score starts at 100. A higher score is better. Rows in a band follow score order; exact ties use cost, then model name. Cost stays visible per row.",
     `Counting ${payload.execution || "managed"} tasks.`,
   ];
   if (payload.settle_lag) lines.push(`Settled boards end ${payload.settle_lag} before the requested instant.`);
@@ -404,7 +404,7 @@ function legendNode(payload) {
   const rules = payload.rules || {};
   const confidence = typeof rules.band_probability === "number" ? `${rankFormat.num(rules.band_probability * 100, 0)}%` : "80%";
   return el("div", { class: "agents-rank-legend" }, [
-    el("span", { text: `Shared ranks (2=) are one band at ${confidence} confidence. Cost orders a band and never crosses it.` }),
+    el("span", { text: `Shared ranks (2=) are one band at ${confidence} confidence. Rows follow score order; exact ties use cost, then model name. Cost never changes a band's rank.` }),
     el("span", { class: "agents-rank-legend-tiers" }, ["low", "medium", "hard", "xhard", "unassessed"].map(swatch)),
   ]);
 }
@@ -614,7 +614,7 @@ function howNode(payload) {
   const band = typeof rules.band_probability === "number" ? rankFormat.num(rules.band_probability, 2) : "the band threshold";
   const node = el("details", { class: "agents-how agents-disclosure" }, [
     el("summary", { text: "How the score works" }),
-    el("p", { text: `The score starts at 100. Each measured residual, already signed so that positive is better, is divided by the noise scale and weighted; a measure's contribution is the points it adds. The result shrinks toward the other eligible models (k = ${rankFormat.num(rules.shrinkage_k, 0)}), and ${draws} the 10th–90th percentile interval. Models share a band while the probability that one is ahead of the next stays below ${band}. A model with fewer than ${typeof rules.review_min_support === "number" ? rankFormat.num(rules.review_min_support, 0) : "the minimum"} reviewed deliveries has review outcome unmeasured, so its weight leaves that model's denominator. An unqualified board shows scores without bands. Cost orders a band and never changes it. A chart point is 100 + 10 × z on that tier's tasks only, before this shrinkage.` }),
+    el("p", { text: `The score starts at 100. Each measured residual, already signed so that positive is better, is divided by the noise scale and weighted; a measure's contribution is the points it adds. The result shrinks toward the other eligible models (k = ${rankFormat.num(rules.shrinkage_k, 0)}), and ${draws} the 10th–90th percentile interval. Models share a band while the probability that one is ahead of the next stays below ${band}. A model with fewer than ${typeof rules.review_min_support === "number" ? rankFormat.num(rules.review_min_support, 0) : "the minimum"} reviewed deliveries has review outcome unmeasured, so its weight leaves that model's denominator. An unqualified board shows scores without bands. Rows within a band follow score order; exact ties use cost, then model name. Cost never changes band membership. A chart point is 100 + 10 × z on that tier's tasks only, before this shrinkage.` }),
     list,
   ]);
   node.dataset.key = "how";

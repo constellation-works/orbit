@@ -6,7 +6,8 @@
 //! the weighted mean over the measures that count for the row is shrunk
 //! toward the other eligible models (K = 30), and a within-tier bootstrap
 //! gives the interval, the paired probabilities and the tie bands, each band
-//! ordered by cost. Measures whose events Orbit does not record yet report
+//! ordered by score, with cost and model name breaking exact score ties.
+//! Measures whose events Orbit does not record yet report
 //! as unmeasured and leave every weight denominator.
 //!
 //! The ranked window is the 30 days ending at the settled cutoff,
