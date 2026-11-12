@@ -530,9 +530,11 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-rank-box-head h4 { margin: 0; font-size: 14px; font-weight: 600; }
 .agents-rank-box-count { color: var(--fg-mute); font-weight: 400; font-family: var(--font-mono); font-size: 12px; }
 .agents-rank-box-meta { color: var(--fg-mute); font-size: 12px; }
-.agents-rank-pending-list { margin: 0; padding: 0; list-style: none; overflow-x: auto; }
-.agents-rank-pending-row { display: grid; grid-template-columns: minmax(220px, 1.3fr) 76px 110px minmax(240px, 1.6fr); gap: 4px 12px; align-items: center; min-height: 38px; min-width: 700px; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
-.agents-rank-pending-gatecell { display: flex; align-items: center; gap: 10px; }
+.agents-rank-pending-list { margin: 0; padding: 0; list-style: none; }
+/* Two lines at pair width: name, preview score and tasks on the first, the
+   gate progress underneath, so no label or count is squeezed or truncated. */
+.agents-rank-pending-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 12px; align-items: center; min-height: 38px; padding: 4px 0; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+.agents-rank-pending-gatecell { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .agents-rank-progress { display: block; width: 96px; flex: none; height: 4px; overflow: hidden; border-radius: 2px; background: var(--bg-well); }
 .agents-rank-progress > span { display: block; height: 100%; border-radius: 2px; background: var(--fg-disabled); }
 .agents-rank-pending-gate { color: var(--fg-mute); font-size: 12px; }
@@ -544,6 +546,20 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-rank-reason-bar { display: block; height: 6px; overflow: hidden; border-radius: 3px; background: var(--bg-well); }
 .agents-rank-reason-bar > span { display: block; height: 100%; background: #6b7686; }
 .agents-rank-reasons .agents-num { color: var(--fg-mute); text-align: right; }
+.agents-rank-pending-gate { min-width: 0; overflow-wrap: anywhere; }
+
+/* Not ranked beside Not scored: two top-aligned columns on a wide screen,
+   stacked (Not ranked first) below 900px, the breakpoint the breakdown
+   columns already stack at. Each column then holds about 430px or more,
+   which the two-line pending rows and the reason bars fit without sideways
+   scroll (STD-07 §R4, §R23). Collapsed, Not ranked is only its toggle, so
+   the pair goes single-column and Not scored takes the full width. */
+.agents-rank-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.agents-rank-pair:has(> .agents-rank-notranked > [hidden]) { grid-template-columns: minmax(0, 1fr); }
+.agents-rank-pair .agents-rank-reasons li { grid-template-columns: minmax(96px, 128px) minmax(0, 1fr) 40px; }
+@media (max-width: 900px) {
+  .agents-rank-pair { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Score against cost: one chart with a tier switch, and its table beside it. */
 .agents-rank-frontier { display: flex; flex-direction: column; gap: 12px; }
@@ -645,7 +661,6 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 }
 
 @media (max-width: 640px) {
-  .agents-rank-pending-row { min-width: 700px; }
   .agents-rank-tiers { width: 100%; }
   .agents-rank-tier { flex: 1; padding: 0 8px; }
   .agents-rank-tier-table .agents-table-wrap { overflow-x: auto; }
