@@ -290,8 +290,9 @@ pub enum DispatchError {
     InspectionToolsUnavailable { provider: String, reason: String },
 
     /// An image-input run cannot start: its executor declares no
-    /// `spec.image_input`, its crew sets `vision = false`, or it stages more
-    /// images or another format than the declaration admits. Configuration
+    /// `spec.image_input`, its crew sets `vision = false`, its `image_input`
+    /// request is malformed, or it stages more images or another format than
+    /// the declaration admits. Configuration
     /// errors never spend a provider session.
     #[error("image_input_unavailable: executor `{executor}`: {reason}")]
     ImageInputUnavailable { executor: String, reason: String },

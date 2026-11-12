@@ -121,3 +121,43 @@ fn branch_readers_round_trip_an_external_ref_suffix_containing_a_slash() {
 fn branch_readers_round_trip_an_external_ref_containing_a_slash_before_the_task() {
     assert_rendered_branch_owner("feature/{{ext.jira}}-{{task_id}}-{{hash}}", "team/ISSUE-1");
 }
+
+#[test]
+fn branch_readers_round_trip_a_repeated_task_placeholder() {
+    assert_rendered_branch_owner("feature/{{task_id}}/{{task_id}}-{{hash}}", "");
+}
+
+/// [ORB-24053] Under a repeated task placeholder, a branch whose occurrences
+/// disagree named ORB-20 by capture while the exact matcher refused both ids,
+/// so CI-failure routing attached it to a task it does not name. Every
+/// captured owner must also own the branch exactly; disagreeing ids own none.
+#[test]
+fn branch_readers_refuse_disagreeing_repeated_task_ids() {
+    let template = ConventionTemplate::parse_branch(
+        "branch.name_template",
+        "feature/{{task_id}}/{{task_id}}-{{hash}}",
+    )
+    .unwrap();
+    let body = "Delivers ORB-10 and ORB-20.";
+    for branch in [
+        "feature/ORB-10/ORB-20-0123abcd",
+        "feature/ORB-1/ORB-10-0123abcd",
+        "feature/ORB-10/ORB-1-0123abcd",
+    ] {
+        assert_eq!(
+            template.branch_task_id(branch, DEFAULT_BRANCH_PREFIX, &is_orb_id),
+            None,
+            "{branch}"
+        );
+        for id in ["ORB-1", "ORB-10", "ORB-20"] {
+            assert!(
+                !template.branch_names_task(branch, DEFAULT_BRANCH_PREFIX, id),
+                "{branch}: {id}"
+            );
+            assert!(
+                !names_task_delivery_pull_request(&template, branch, body, id),
+                "{branch}: {id}"
+            );
+        }
+    }
+}

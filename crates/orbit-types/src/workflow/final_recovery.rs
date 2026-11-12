@@ -316,6 +316,20 @@ impl FinalRecoveryDecision {
                     .as_deref()
                     .is_some_and(|value| !value.trim().is_empty())
             };
+            // The friction fields are optional, so the common text bound
+            // in [`Self::parse`] cannot list them; bound each one supplied.
+            for (field, value) in [
+                ("friction_id", friction_id),
+                ("friction_title", friction_title),
+                ("friction_body", friction_body),
+            ] {
+                if value
+                    .as_deref()
+                    .is_some_and(|value| value.trim().chars().count() > MAX_DECISION_TEXT_CHARS)
+                {
+                    return Err(FinalRecoveryError::FieldTooLong { field });
+                }
+            }
             match (
                 present(friction_id),
                 present(friction_title),

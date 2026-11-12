@@ -47,7 +47,9 @@ pub(super) fn admit_image_input(
     input: &Value,
     declared: Option<&ExecutorImageInput>,
 ) -> Result<Option<ImageInputPlan>, DispatchError> {
-    let Some(images) = requested_images(input) else {
+    let Some(images) =
+        requested_images(input).map_err(|error| unavailable(provider, &error.to_string()))?
+    else {
         return Ok(None);
     };
     let crew = input.get("crew").and_then(Value::as_str).unwrap_or("");
