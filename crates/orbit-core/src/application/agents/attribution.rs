@@ -506,6 +506,7 @@ pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
                             .filter(|_| matches!(activity, super::effort::MainActivity::Review))
                             .map(|_| charge.anchor),
                         reported: charge.reported_effort.as_ref(),
+                        crew: charge.crew.as_deref(),
                     },
                 );
                 let entry = rows

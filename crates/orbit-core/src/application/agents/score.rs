@@ -152,6 +152,10 @@ pub(super) struct RowInput<'a> {
     pub(super) effort: super::effort::RecordedEffort,
     /// The role's units of work in the window.
     pub(super) units: usize,
+    /// The row's units by the source that decided their effort
+    /// ([`super::effort::EffortSource`] wire names), so a crew-label effort
+    /// is told apart from a recorded one.
+    pub(super) effort_sources: BTreeMap<&'static str, usize>,
     pub(super) runs_without_model: usize,
     /// Reviews younger than the miss lookback; reviewers only.
     pub(super) provisional: Option<usize>,
@@ -475,6 +479,7 @@ impl Scored<'_> {
             "effort_label": super::effort::effort_label(&self.input.effort),
             "label": self.label(),
             "units": self.input.units,
+            "effort_sources": self.input.effort_sources,
             "below_support": self.below_support,
             "unjudged": self.input.unjudged,
             "rank": self.rank,

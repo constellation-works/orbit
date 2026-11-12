@@ -68,7 +68,9 @@ pub(super) fn implementer_size_curves(
 
 /// Each implementer row's tasks with the scorecard's per-task counts and
 /// expectations, for the model ranking.
-pub(super) use implementers::{LedgerRow, LedgerTask, implementer_ledger};
+pub(super) use implementers::{
+    LedgerRow, LedgerTask, crew_label_run_identities, implementer_ledger,
+};
 
 /// The tiers [`implementer_size_curves`] can narrow to.
 pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;

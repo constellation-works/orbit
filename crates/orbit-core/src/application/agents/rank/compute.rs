@@ -9,7 +9,7 @@ use super::board::ModelRow;
 use super::execution::{execution_census, execution_json};
 use super::measures::{COUNTING_ORDER, MEASURE_COUNT, MEASURES, measures_json};
 use super::query::RankQuery;
-use super::render::{crews_json, not_scored, round, row_json};
+use super::render::{crews_json, effort_split, not_scored, round, row_json};
 use super::sample::{DRAWS, Record};
 use super::season::{DEFINITION_VERSION, RankSeasons, Season, SeasonScale};
 use super::{board, sample};
@@ -137,6 +137,7 @@ pub fn agent_rank(
     });
     payload["execution_split"] = execution_json(&execution_board);
     payload["not_scored"] = not_scored(facts, window);
+    let labelled = crate::application::agents::roles::crew_label_run_identities(facts);
     payload["rows"] = Value::Array(
         board
             .order
@@ -148,8 +149,7 @@ pub fn agent_rank(
                     .cloned()
                     .unwrap_or_default();
                 row_json(
-                    facts,
-                    window,
+                    effort_split(facts, window, &rows[index].model, &labelled),
                     &rows[index],
                     &board,
                     index,

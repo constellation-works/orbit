@@ -430,6 +430,9 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         "Recorded effort: {}",
         effort_labels(&row["effort_breakdown"])
     )));
+    if let Some(sources) = effort_source_labels(&row["effort_sources"]) {
+        blocks.push(Block::text(format!("Effort source: {sources}")));
+    }
 
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let normalised = row["expected"].is_object();
@@ -719,6 +722,19 @@ fn number(value: &Value) -> String {
         Value::Number(number) => number.to_string(),
         _ => "-".into(),
     }
+}
+
+/// The row's units by the source that decided their effort, as
+/// `invocation 12, crew label 3`; `None` when the row reports none.
+fn effort_source_labels(value: &Value) -> Option<String> {
+    let sources = value.as_object().filter(|sources| !sources.is_empty())?;
+    Some(
+        sources
+            .iter()
+            .map(|(source, units)| format!("{} {}", source.replace('_', " "), number(units)))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn effort_labels(value: &Value) -> String {

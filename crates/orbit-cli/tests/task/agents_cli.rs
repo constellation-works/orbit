@@ -1323,3 +1323,183 @@ fn migrate_backfill_keeps_unreadable_sibling_on_the_dispatch_row() {
         "{quiet:?}"
     );
 }
+
+/// A launch whose audit intervals overlap — `implement_one` nested in
+/// `implement_bundle` — was skipped as "no single step provably contained the
+/// launch". Its causal links (launch → `activity.started` → `step.started`)
+/// prove its step, so it is recorded. A run-level `final_recovery` launch,
+/// which no step contains, is proven by its own `activity.started`. A launch
+/// whose recorded effort and argv disagree is still left unrecorded, and a
+/// second migrate records nothing new [ORB-24150].
+#[test]
+fn migrate_backfill_records_a_launch_its_causal_links_prove() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::migrate_backfill_records_a_launch_its_causal_links_prove",
+    ) {
+        return;
+    }
+    use orbit_types::identity::ReasoningEffort;
+
+    let agents = AgentsFixture::new();
+    let fixture = &agents.fixture;
+    let workspace = agents.workspace.clone();
+    let run_id = "jrun-backfill-nested-steps";
+    let task_id = agents.seed_task(
+        "backfill nested steps".into(),
+        "dispatch effort backfill fixture",
+    );
+    let now = Utc::now();
+    let start = now - chrono::Duration::hours(1);
+    agents.record_run_window(
+        run_id,
+        &task_id,
+        "nested-crew",
+        "model-fixture",
+        JobRunState::Failed,
+        (start, now),
+    );
+    let event_id = |name: &str| format!("v2evt-{run_id}-{name}");
+    let audit =
+        |name: &str, event_type: &str, minutes: i64, parent: Option<&str>, payload: Value| {
+            agents.audit_linked(
+                run_id,
+                event_id(name),
+                event_type,
+                start + chrono::Duration::minutes(minutes),
+                parent.map(event_id),
+                payload,
+            );
+        };
+    let launch = |effort: &str, argv_effort: &str| {
+        json!({
+            "body_kind": "cli_invocation_started", "provider": "claude", "model": "model-fixture",
+            "reasoning_effort": effort,
+            "argv_redacted": ["claude", "--model", "model-fixture", "--effort", argv_effort],
+        })
+    };
+    // Table rows: (name, event type, minutes after the run started, parent, body).
+    for (name, event_type, minutes, parent, body) in [
+        (
+            "bundle",
+            "step.started",
+            1,
+            None,
+            json!({ "body_kind": "step_started", "step_id": "implement_bundle" }),
+        ),
+        (
+            "one",
+            "step.started",
+            1,
+            Some("bundle"),
+            json!({ "body_kind": "step_started", "step_id": "implement_one" }),
+        ),
+        (
+            "one-activity",
+            "activity.started",
+            1,
+            Some("one"),
+            json!({ "body_kind": "activity_started", "activity_name": "implement_one" }),
+        ),
+        (
+            "nested-launch",
+            "cli.invocation.started",
+            2,
+            Some("one-activity"),
+            launch("high", "high"),
+        ),
+        (
+            "disagreeing-launch",
+            "cli.invocation.started",
+            3,
+            Some("one-activity"),
+            launch("high", "low"),
+        ),
+        (
+            "one-end",
+            "step.finished",
+            10,
+            Some("bundle"),
+            json!({ "body_kind": "step_finished", "step_id": "implement_one" }),
+        ),
+        (
+            "bundle-end",
+            "step.finished",
+            10,
+            None,
+            json!({ "body_kind": "step_finished", "step_id": "implement_bundle" }),
+        ),
+        (
+            "recovery",
+            "activity.started",
+            20,
+            None,
+            json!({ "body_kind": "activity_started", "activity_name": "final_recovery" }),
+        ),
+        (
+            "recovery-launch",
+            "cli.invocation.started",
+            21,
+            Some("recovery"),
+            launch("medium", "medium"),
+        ),
+    ] {
+        audit(name, event_type, minutes, parent, body);
+    }
+
+    let report = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    let report = &report["dispatch_effort_backfill"];
+    agents_fixture::assert_report(
+        report,
+        &[
+            ("launch_only_recorded", 2),
+            ("launch_only_no_step", 0),
+            ("launch_only_no_provider", 0),
+            ("launch_only_unreadable", 1),
+            ("launch_only_unmatched", 1),
+        ],
+    );
+
+    let runtime = agents.reopen();
+    let store = runtime.sqlite_store().unwrap();
+    let mut rows: Vec<_> = store
+        .agent_executions(&workspace, run_id)
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            let events = row
+                .backfill
+                .map(|backfill| backfill.event_ids)
+                .unwrap_or_default();
+            (row.activity_id, row.identity.reasoning_effort, events)
+        })
+        .collect();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "final_recovery".to_string(),
+                Some(ReasoningEffort::Medium),
+                vec![event_id("recovery-launch")],
+            ),
+            (
+                "implement_one".to_string(),
+                Some(ReasoningEffort::High),
+                vec![event_id("nested-launch")],
+            ),
+        ],
+        "the nested launch counts under its own step, the run-level launch under its activity, \
+         and the disagreeing launch is never recorded"
+    );
+
+    let again = fixture.json(&["migrate", "--backfill-dispatch-effort", "--json"]);
+    agents_fixture::assert_report(
+        &again["dispatch_effort_backfill"],
+        &[
+            ("launch_only_recorded", 0),
+            ("launch_only_no_step", 0),
+            ("launch_only_unreadable", 1),
+        ],
+    );
+    assert_eq!(store.agent_executions(&workspace, run_id).unwrap().len(), 2);
+}
