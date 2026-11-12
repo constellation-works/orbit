@@ -44,6 +44,10 @@ pub(super) fn permission_diff(
             (Some((previous_roots, requested_roots)), PluginGrant::Fs) => {
                 resolved_list_widened(&previous_roots.read, &requested_roots.read)
                     || resolved_list_widened(&previous_roots.write, &requested_roots.write)
+                    || requested_roots.write_files.iter().any(|file| {
+                        !previous_roots.write_files.contains(file)
+                            && !previous_roots.write.iter().any(|dir| file.starts_with(dir))
+                    })
             }
             _ => false,
         };
@@ -111,6 +115,7 @@ pub(super) fn fs_request_references_config(manifest: &PluginManifest) -> bool {
         .read
         .iter()
         .chain(manifest.spec.permissions.fs.write.iter())
+        .chain(manifest.spec.permissions.fs.write_files.iter())
         .any(|entry| {
             template_references(entry)
                 .iter()
@@ -121,6 +126,7 @@ pub(super) fn fs_request_references_config(manifest: &PluginManifest) -> bool {
 struct ResolvedFsRoots {
     read: Vec<PathBuf>,
     write: Vec<PathBuf>,
+    write_files: Vec<PathBuf>,
 }
 
 /// Render one manifest's fs lists the way [`orbit_tools::plugin::render_fs_roots`]
@@ -150,6 +156,12 @@ fn resolved_fs_roots(
             &layout.plugin_root,
             &vars,
             "spec.permissions.fs.write",
+        )?,
+        write_files: resolve_root_list(
+            &permissions.write_files,
+            &layout.plugin_root,
+            &vars,
+            "spec.permissions.fs.write_files",
         )?,
     })
 }
@@ -196,6 +208,9 @@ fn describe_resolved_fs(roots: &ResolvedFsRoots) -> String {
     if !roots.write.is_empty() {
         parts.push(format!("write={}", display_roots(&roots.write)));
     }
+    if !roots.write_files.is_empty() {
+        parts.push(format!("write_files={}", display_roots(&roots.write_files)));
+    }
     parts.join(" ")
 }
 
@@ -218,6 +233,7 @@ fn request_widened(
         PluginGrant::Fs => {
             contains_added(&before.fs.read, &after.fs.read)
                 || contains_added(&before.fs.write, &after.fs.write)
+                || contains_added(&before.fs.write_files, &after.fs.write_files)
         }
         PluginGrant::Network => network_rank(after.network) > network_rank(before.network),
         PluginGrant::EnvPass => contains_added(&before.env_pass, &after.env_pass),

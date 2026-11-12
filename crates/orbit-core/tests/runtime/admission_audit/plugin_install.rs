@@ -303,3 +303,110 @@ fn upgrade_enabled(
 }
 
 // Related boundary scenarios share the isolated table fixture.
+
+/// An exact file is a distinct consent capability. Changing only the config
+/// default must not carry that consent to a sibling (or a child spelling).
+#[cfg(unix)]
+#[test]
+fn exact_file_upgrade_requires_reconsent_for_a_new_destination_and_binds_the_digest() {
+    let test = "exact_file_upgrade_requires_reconsent_for_a_new_destination_and_binds_the_digest";
+    if !crate::admission_audit::isolate(module_path!(), test)
+        || !super::plugin_fixture::enter_isolated_child(module_path!(), test)
+    {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let root = fixture.sources.canonicalize().unwrap();
+    let first = root.join("runtime-id");
+    let second = root.join("other-runtime-id");
+    for path in [&first, &second] {
+        std::fs::write(path, "synthetic-id").unwrap();
+    }
+    let source = |version, dir, path: &Path| {
+        let block = format!(
+            "  config:\n    defaults:\n      out: \"{}\"\n  permissions:\n    fs:\n      write_files: [\"{{{{config.out}}}}\"]\n",
+            path.display()
+        );
+        let mut spec = PluginSpecFixture::new(dir, "exact");
+        spec.version = version;
+        spec.permissions = Some(&block);
+        fixture.write_plugin(spec)
+    };
+    let v1 = source("1.0.0", "exact-v1", &first);
+    let initial = install_plugin(
+        &fixture.runtime,
+        v1.to_str().unwrap(),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".into()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(initial.status, PluginStatus::Active);
+    let v2 = source("1.0.1", "exact-v2", &first);
+    let same = upgrade_plugin(
+        &fixture.runtime,
+        "exact",
+        Some(v2.to_str().unwrap()),
+        &PluginUpgradeOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        !same.grants_reset,
+        "the identical file retains consent: {same:?}"
+    );
+    assert_eq!(same.summary.granted, ["fs"]);
+    assert_ne!(initial.manifest_digest, same.summary.manifest_digest);
+    let v3 = source("1.0.2", "exact-v3", &second);
+    let changed = upgrade_plugin(
+        &fixture.runtime,
+        "exact",
+        Some(v3.to_str().unwrap()),
+        &PluginUpgradeOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        changed.grants_reset,
+        "a new default file needs re-consent: {changed:?}"
+    );
+    assert_eq!(changed.summary.status, PluginStatus::Disabled);
+    assert!(changed.summary.granted.is_empty());
+    let fs = changed
+        .permission_changes
+        .iter()
+        .find(|change| change.grant.as_str() == "fs")
+        .unwrap();
+    assert!(fs.widened);
+    assert!(
+        fs.requested
+            .as_deref()
+            .unwrap()
+            .contains(&second.display().to_string())
+    );
+
+    orbit_core::application::plugin::enable_plugin(
+        &fixture.runtime,
+        "exact",
+        &orbit_core::application::plugin::PluginEnableOptions {
+            grants: vec!["fs".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // An in-place edit of the new field cannot silently reuse installed
+    // consent or certification: the normal whole-manifest digest guard wins.
+    let manifest = Path::new(&changed.summary.install_path).join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, body.replace("write_files:", "read:")).unwrap();
+    let runtime = fixture.reopen();
+    let shown = orbit_core::application::plugin::show_plugin(&runtime, "exact").unwrap();
+    assert_eq!(shown.status, PluginStatus::Inactive);
+    assert!(
+        shown
+            .diagnostic
+            .unwrap()
+            .contains("does not match the stored digest")
+    );
+}

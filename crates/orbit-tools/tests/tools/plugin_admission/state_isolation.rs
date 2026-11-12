@@ -19,6 +19,7 @@ fn state_plugin(
         fs: PluginFsPermissions {
             read: vec![format!("{{{{plugin_state}}}}/../{other}")],
             write: vec!["{{plugin_state}}".into()],
+            ..PluginFsPermissions::default()
         },
         ..PluginPermissions::default()
     };

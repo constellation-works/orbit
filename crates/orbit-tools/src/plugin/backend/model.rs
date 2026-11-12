@@ -436,9 +436,10 @@ pub struct PluginBackendSpec {
 pub struct RenderedFsRoots {
     pub read: Vec<PathBuf>,
     pub write: Vec<PathBuf>,
+    pub write_files: Vec<PathBuf>,
 }
 
-/// Render both filesystem permission lists through one path-resolution rule.
+/// Render the filesystem permission lists through one path-resolution rule.
 ///
 /// Relative roots belong to the plugin that declared them, so every phase
 /// resolves them against `plugin_root`; they must never inherit the host
@@ -459,6 +460,12 @@ pub fn render_fs_roots(
             vars,
             &spec.plugin_root,
             "spec.permissions.fs.write",
+        )?,
+        write_files: render_root_list(
+            &spec.permissions.fs.write_files,
+            vars,
+            &spec.plugin_root,
+            "spec.permissions.fs.write_files",
         )?,
     })
 }
@@ -564,6 +571,43 @@ pub(super) fn scope_fs_roots(
                 field: format!("{field}[{index}]"),
                 declared: declared.get(index).cloned().unwrap_or_default(),
             });
+        }
+    }
+    effective
+}
+
+/// Exact files can be covered by a directory grant or the identical file;
+/// a grant naming something below a requested file never opens that child.
+pub(super) fn scope_fs_files(
+    requested: &[PathBuf],
+    declared: &[String],
+    granted: Option<&[PathBuf]>,
+    field: &str,
+    dropped: &mut Vec<DroppedFsRoot>,
+) -> Vec<EffectiveRoot> {
+    let mut effective = Vec::new();
+    for (index, path) in requested.iter().enumerate() {
+        let physical = physical_with_missing_tail(path);
+        let covered = granted.is_none_or(|roots| {
+            roots
+                .iter()
+                .any(|root| physical.starts_with(physical_with_missing_tail(root)))
+        });
+        let field = format!("{field}[{index}]");
+        let declared = declared.get(index).cloned().unwrap_or_default();
+        if covered {
+            if !effective
+                .iter()
+                .any(|root: &EffectiveRoot| root.path == *path)
+            {
+                effective.push(EffectiveRoot {
+                    path: path.clone(),
+                    field,
+                    declared,
+                });
+            }
+        } else {
+            dropped.push(DroppedFsRoot { field, declared });
         }
     }
     effective
