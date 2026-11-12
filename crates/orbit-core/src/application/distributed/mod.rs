@@ -87,7 +87,7 @@ pub use probe::{
     AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,
 };
 pub(crate) use pull_waiting::OwnerAnswer;
-pub use serve::TaskPullResponse;
+pub use serve::{LateEffortReportResult, TaskPullResponse};
 pub(crate) use settlement::{
     OWNER_BUSY_EPISODE_LIMIT, is_delivery_refusal_code, is_owner_refusal,
     is_owner_transport_failure, owner_refusal_code, settlement_refusal_backoff,

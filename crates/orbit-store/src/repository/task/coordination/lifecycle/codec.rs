@@ -13,6 +13,11 @@ pub(super) const HANDOFF_SETTLEMENT: &str = "distributed-handoff-settlement-v1";
 /// lifecycle readers never touch, so a rewrite of the lifecycle state cannot
 /// drop it.
 pub(super) const LEAF_RUN_EVIDENCE: &str = "distributed-leaf-run-evidence-v1";
+/// [ORB-24115] A follower's late report of a settled leaf's reasoning effort,
+/// one immutable row per claim keyed by claim id. A row family older
+/// lifecycle readers never touch, like the handoff and leaf-evidence
+/// sidecars; inspection fills the settlement's absent effort from it.
+pub(super) const LATE_LEAF_EFFORT: &str = "distributed-late-leaf-effort-v1";
 pub(super) const RECEIPT: &str = "distributed-claim-mutation-v1";
 /// A friction mutation's recorded friction, keyed by its receipt id.
 pub(super) const FRICTION: &str = "distributed-claim-friction-v1";

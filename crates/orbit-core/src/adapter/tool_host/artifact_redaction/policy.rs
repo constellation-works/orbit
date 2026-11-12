@@ -117,6 +117,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
@@ -350,6 +351,7 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => false,
         },
         OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {

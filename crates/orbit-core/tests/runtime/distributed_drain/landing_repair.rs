@@ -528,6 +528,7 @@ fn to_itself(owner: &OrbitRuntime) -> Arc<Wire> {
         gateless: Mutex::default(),
         refuse_settle: Mutex::default(),
         leaf_run_override: Mutex::default(),
+        predates_late_effort: Mutex::default(),
         observe_handoffs: Mutex::default(),
         accept_handoffs: Mutex::default(),
         local: Mutex::new(true),

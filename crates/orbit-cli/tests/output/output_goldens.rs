@@ -621,6 +621,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.decision.digest", Placement::Advertised),
     ("orbit.decision.submit", Placement::Advertised),
     ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.effort", Placement::Unadvertised),
     ("orbit.drain.claim.settle", Placement::Unadvertised),
     ("orbit.drain.claims", Placement::Unadvertised),
     ("orbit.drain.probe", Placement::Unadvertised),

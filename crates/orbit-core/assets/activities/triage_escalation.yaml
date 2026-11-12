@@ -28,6 +28,7 @@ spec:
     - orbit.auto_task:update
     - orbit.command.exec
     - orbit.drain.claim.bind
+    - orbit.drain.claim.effort
     - orbit.drain.claim.settle
     - orbit.pipeline.invoke
     - orbit.routine.control

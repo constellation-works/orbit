@@ -194,6 +194,14 @@ Like the crew repair, it applies pending migrations first. It matches each invoc
 
 A run whose agent launched but whose invocation never finished has no invocation to recover. The same command records one effort for each of that run's audited launches, at the time of that launch, when the run's step history shows exactly one step that contained it. Each readable launch is recorded on its own. A dispatch-time row covers the closest launch of the same step, provider and model within a minute, including a launch whose effort cannot be read, and that row is left as it is. An unreadable launch is counted and is never given an inferred effort. Running the command again records nothing new. The report says how many of those launches it recorded, and how many it left unrecorded because no single step contained the launch, the launch named no provider, or that launch's effort sources disagreed or could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
 
+Attempts another machine ran for a [pull drain](../distributed-drain/) are not in the owner's store. A follower reports each leaf's effort when it settles the claim; for leaves it settled before it did, run this on the follower, after `--backfill-dispatch-effort` there:
+
+```bash
+orbit migrate --backfill-claimed-effort --workspace my-project
+```
+
+It reads each settled leaf's effort from the follower's own records and sends it to the owner, which records it only for claims that follower ran and never replaces an effort it already holds: a disagreeing report is refused and counted. Running it again records nothing new. The report counts every claim it examined by outcome, including leaves left `effort unknown` because the follower holds no matching record of them, and reports refused by an owner too old to accept them. Leaves of followers that never run it stay `effort unknown`.
+
 ### Forward compatibility and upgrades
 
 If a workspace was created or migrated by a newer Orbit binary:

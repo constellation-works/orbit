@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Behavioral evidence matrix for the advertised MCP tools and their verified limits."
-last_updated: 2026-11-08
+last_updated: 2026-11-11
 last_validated: 2026-10-23
 ---
 
@@ -96,7 +96,9 @@ The five former public tools (`orbit_drain_probe`, `orbit_drain_receipt_lookup`,
 `orbit_drain_claim_bind`, `orbit_drain_claim_settle`, `orbit_task_pull`) are absent
 from ordinary local, federated and managed-agent discovery. Public `tools/call`
 refuses their canonical and advertised spellings before admission or mutation.
-They have no public compatibility aliases.
+They have no public compatibility aliases. The late effort report
+`orbit_drain_claim_effort` ([ORB-24115]) was internal from the start and is refused
+the same way.
 
 `internal_drain::public_drain_calls_and_spoofed_initialize_are_refused_and_audited`
 uses production stdio and checks that the internal drain tools are absent from

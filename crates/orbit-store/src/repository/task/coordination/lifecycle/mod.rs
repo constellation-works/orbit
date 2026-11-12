@@ -9,6 +9,7 @@ use crate::repository::task::v2_bundle::TaskBundleV2;
 mod codec;
 mod evidence;
 mod inspect;
+mod late_effort;
 mod leaf_evidence;
 mod mutate;
 mod releases;

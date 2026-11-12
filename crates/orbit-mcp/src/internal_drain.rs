@@ -5,7 +5,7 @@ pub const INTERNAL_DRAIN_PROTOCOL: u64 = 1;
 pub(crate) const CALL_METHOD: &str = "orbit/internal/drain/call";
 pub(crate) const PREFLIGHT_METHOD: &str = "orbit/internal/drain/preflight";
 
-/// Resolve only the five protocol operations, including their retired wire names.
+/// Resolve only the six protocol operations, including their retired wire names.
 /// This does not grant access: public requests use it to refuse both spellings.
 pub fn internal_drain_name(name: &str) -> Option<&'static str> {
     match name {
@@ -15,6 +15,7 @@ pub fn internal_drain_name(name: &str) -> Option<&'static str> {
         }
         "orbit.drain.claim.bind" | "orbit_drain_claim_bind" => Some("orbit.drain.claim.bind"),
         "orbit.drain.claim.settle" | "orbit_drain_claim_settle" => Some("orbit.drain.claim.settle"),
+        "orbit.drain.claim.effort" | "orbit_drain_claim_effort" => Some("orbit.drain.claim.effort"),
         "orbit.task.pull" | "orbit_task_pull" => Some("orbit.task.pull"),
         _ => None,
     }

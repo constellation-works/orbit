@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 last_validated: 2026-11-05
 status: Draft
 feature: distributed-drain
@@ -1426,16 +1426,17 @@ the probe reports the first refusal admission would raise by running the same or
   names both fingerprints.
   Matching crate versions alone are insufficient on development branches. This is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
-- The five distributed-drain protocol operations are `orbit.drain.probe`,
-  `orbit.drain.receipt.lookup`, `orbit.task.pull`, `orbit.drain.claim.bind` and
-  `orbit.drain.claim.settle` ([ORB-12495], [ORB-13625]). The owner serves them over its
+- The six distributed-drain protocol operations are `orbit.drain.probe`,
+  `orbit.drain.receipt.lookup`, `orbit.task.pull`, `orbit.drain.claim.bind`,
+  `orbit.drain.claim.settle` ([ORB-12495], [ORB-13625]) and `orbit.drain.claim.effort`
+  ([ORB-24115]). The owner serves them over its
   deterministic internal runtime route; a follower uses that route, with no public MCP
-  fallback. The MCP adapter omits all five from ordinary discovery and refuses public calls
+  fallback. The MCP adapter omits all six from ordinary discovery and refuses public calls
   under both their dotted names and underscore aliases, including in an operator session.
   Their handlers remain active in the CLI/runtime tool registry. Owner-side diagnostic calls
   use `orbit tool run`: probe and receipt lookup are read-only, while the separate
   `orbit.drain.claims` listing is operator-only ([§3.1](#31-attempt-ownership-and-recovery))
-  and is not a public MCP tool or one of the five protocol operations. `orbit run settlements`
+  and is not a public MCP tool or one of the six protocol operations. `orbit run settlements`
   lists only settled claims' failure and release settlements and needs no operator capability
   ([ORB-14439]). Handoff approval is dashboard-only; operators can also recover claims and
   revoke handoffs through the `orbit task recover-claim` and `orbit task revoke-handoff` CLI
@@ -1460,6 +1461,16 @@ the probe reports the first refusal admission would raise by running the same or
   default), and they count the pulled attempt under it. Attribution only, like the crew; an
   owner that predates it warns and ignores it, and the owner never derives it from its own crew
   configuration.
+  A follower reports the effort of a leaf it settled without one afterwards through
+  `orbit.drain.claim.effort` (`claim_id`, `run_id`, `reasoning_effort`), sent by
+  `orbit migrate --backfill-claimed-effort` on the follower ([ORB-24115]). The owner accepts it
+  only from the claim's executing machine (the trusted session's, as for settlement), for the
+  run bound to the claim, once the claim is settled with a settlement record, and keeps it in an
+  immutable `distributed-late-leaf-effort-v1` row keyed by claim id that lifecycle readers never
+  touch. Inspection fills the settlement record's effort from it only while the record holds
+  none. The same effort replays; a different one is refused as `effort_conflict` and the held
+  effort stands. An owner that predates the operation refuses it on its internal route before
+  any store write; it changes no claim, task, run or settlement outcome.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

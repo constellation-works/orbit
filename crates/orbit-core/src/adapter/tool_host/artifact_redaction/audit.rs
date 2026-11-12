@@ -153,6 +153,7 @@ fn artifact_target<'a>(
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => Err(OrbitError::Execution(format!(
                 "unsupported redaction audit action: {action:?}"
             ))),
@@ -189,6 +190,7 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
             | DrainVerb::Pull
             | DrainVerb::ClaimBind
             | DrainVerb::ClaimSettle
+            | DrainVerb::ClaimEffort
             | DrainVerb::Claims => verb.tool_name(),
         },
         OrbitBuiltinAction::WorkspaceClaim(verb) => match verb {

@@ -183,6 +183,21 @@ pub trait TaskStoreBackend: Send + Sync {
             "leaf run evidence requires a claim journal".into(),
         ))
     }
+    /// [ORB-24115] Record a follower's late report of the reasoning effort a
+    /// settled claim's leaf ran at (`None` for the provider default) in its
+    /// own immutable row, refused unless `machine_id` ran the claim and bound
+    /// `run_id` to it. Never overwrites an effort the claim already holds.
+    fn record_late_leaf_effort(
+        &self,
+        _claim_id: &str,
+        _machine_id: &str,
+        _run_id: &str,
+        _effort: Option<String>,
+    ) -> Result<crate::contracts::LateLeafEffortWrite, OrbitError> {
+        Err(OrbitError::Store(
+            "a late effort report requires a claim journal".into(),
+        ))
+    }
     /// Retain one task-branch CI receipt, or queue it for a current protecting
     /// claim. The claim check and decision share the commit boundary.
     fn record_deferred_branch_observation(

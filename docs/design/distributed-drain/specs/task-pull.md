@@ -2,7 +2,7 @@
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
 last_validated: 2026-11-05
-last_updated: 2026-11-05
+last_updated: 2026-11-11
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -21,13 +21,14 @@ receipt. The internal store foundation implements admission receipts, claims and
 Operational admission-receipt compaction and storage accounting are available on the owner
 through `orbit doctor admission-receipts [--compact]` ([ORB-19424]). The retention
 requirements below remain the contract.
-For follower execution, the five protocol
+For follower execution, the six protocol
 operations — the
 [preflight probe](../2_design.md#41-read-only-admission-probe),
 [receipt lookup](#read-only-receipt-reconciliation), `orbit.task.pull`,
-`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — use the deterministic owner/follower
+`orbit.drain.claim.bind`, `orbit.drain.claim.settle` and the late effort report
+`orbit.drain.claim.effort` ([ORB-24115]) — use the deterministic owner/follower
 internal runtime route ([ORB-12495], [ORB-13625]). Their handlers remain active in the CLI/runtime
-tool registry, while the MCP adapter omits all five from ordinary discovery and refuses public
+tool registry, while the MCP adapter omits all six from ordinary discovery and refuses public
 calls under both dotted and underscore names, including in operator sessions. The owner-side
 probe and receipt diagnostics remain available through `orbit tool run`; operators also use
 `orbit tool run orbit.drain.claims` for the separate claim inspection, which is off MCP. Handoff

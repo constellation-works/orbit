@@ -625,3 +625,46 @@ pub(crate) struct ClaimCommitEffects {
     /// System comments of CI observations landing in this commit.
     pub observation_comments: Vec<String>,
 }
+
+/// A follower's late report of the reasoning effort a leaf it already settled
+/// ran at [ORB-24115]: the effort its settlement did not carry, read afterwards
+/// from the follower's own records by the rule it reports at settlement. The
+/// owner keeps it in its own immutable row beside the claim, and a claim
+/// inspection fills an absent [`ClaimSettlementRecord::reasoning_effort`] from
+/// it, so the agent scorecards count it exactly as a reported settlement.
+/// Attribution only, like the settlement's own report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafEffort {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    /// The effort's wire name, or `null` for the provider default. Always
+    /// present: a report of an unknown effort is never sent.
+    pub reasoning_effort: Option<String>,
+    pub recorded_at: String,
+}
+
+impl LateLeafEffort {
+    /// Whether `other` reports the same effort for the same leaf.
+    #[must_use]
+    pub fn same_fact(&self, other: &Self) -> bool {
+        self.machine_id == other.machine_id
+            && self.run_id == other.run_id
+            && self.reasoning_effort == other.reasoning_effort
+    }
+}
+
+/// What recording a late effort report for a settled claim did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LateLeafEffortWrite {
+    /// The report was recorded.
+    Recorded,
+    /// The claim already holds this effort, on its settlement or from an
+    /// earlier report; nothing was written.
+    Replayed,
+    /// The claim already holds a different effort, which stands; nothing was
+    /// written. `held` is that effort (`None` for the provider default).
+    Conflict { held: Option<String> },
+}
