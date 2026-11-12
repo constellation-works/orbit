@@ -673,6 +673,13 @@ pub(crate) fn is_delivery_refusal_code(code: Option<&str>) -> bool {
 }
 
 pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+    // A preserved JSON-RPC answer (`-32602` included) stays an owner-side
+    // failure for settlement, reconcile and bind pacing, as it was when it
+    // surfaced as an unreachable destination. Only the late-effort classifier
+    // reads it as structured data.
+    if error.is_json_rpc_refusal() {
+        return false;
+    }
     matches!(error, OrbitError::DeliveryRefused { .. })
         || matches!(error, OrbitError::RemoteTool { code, .. }
             if orbit_types::workflow::DeliveryRefusal::from_error_code(code.as_str()).is_some())

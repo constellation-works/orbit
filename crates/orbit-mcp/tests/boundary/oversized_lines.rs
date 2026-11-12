@@ -423,13 +423,37 @@ fn exercise_legacy_rpc_refusal() {
             ToolSessionContext::default(),
         )
         .expect_err("the old owner must refuse the unknown operation");
-    let OrbitError::UnreachableDestination(message) = error else {
-        panic!("the JSON-RPC refusal keeps the existing transport error type: {error}");
+    let OrbitError::RemoteTool {
+        code,
+        message,
+        payload,
+    } = error
+    else {
+        panic!("the JSON-RPC refusal is preserved as structured data: {error}");
     };
+    assert_eq!(code.as_str(), "invalid_input", "{code}");
+    assert_eq!(error_rpc_code(&payload), Some(-32602), "{payload}");
+    assert_eq!(
+        payload["rpc_message"], "unknown internal drain operation",
+        "{payload}"
+    );
     assert!(
         message.contains(
             "'orbit/internal/drain/call' failed: {\"code\":-32602,\"message\":\"unknown internal drain operation\"}"
         ),
-        "preserve the invalid-params wire shape the late-effort classifier reads: {message}"
+        "keep the diagnostic text as detail: {message}"
     );
+    // The preserved structured fields classify the legacy reply without
+    // reading the formatted message.
+    let preserved = OrbitError::RemoteTool {
+        code,
+        message,
+        payload,
+    };
+    assert!(preserved.is_unknown_internal_drain_operation());
+    assert!(preserved.is_json_rpc_refusal());
+}
+
+fn error_rpc_code(payload: &Value) -> Option<i64> {
+    payload["rpc_code"].as_i64()
 }

@@ -557,9 +557,12 @@ impl DestinationSession {
                     ));
                 }
                 if let Some(error) = message.get("error") {
-                    return Err(unreachable(
-                        &self.destination,
-                        format!("'{method}' failed: {error}"),
+                    // Preserve the JSON-RPC error's structured code and
+                    // message; the formatted text is only diagnostic detail.
+                    return Err(OrbitError::json_rpc_refusal(
+                        &self.destination.machine_id,
+                        method,
+                        error,
                     ));
                 }
                 return Ok(message);

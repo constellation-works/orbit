@@ -1501,13 +1501,16 @@ admitted session cases in `federated/probe/tests/session.rs`:
 The legacy invalid-params wire shape is not an admitted unit test.
 `unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal` in
 `crates/orbit-mcp/tests/boundary/oversized_lines.rs` drives a scripted SSH
-peer through `DestinationProbe::open_internal_drain_route` and
-`RoutedSession::call_internal_drain`. The peer's JSON-RPC `-32602` reply for
-`orbit.drain.claim.effort` stays `UnreachableDestination` and keeps
-`"code":-32602` plus `unknown internal drain operation`, the text the public
-late-effort regression classifies as an unsupported owner. A connection
-failure stays a separate unreachable outcome in that regression. No
-production visibility is widened for the move.
+peer through `DestinationProbe::open_internal_drain_route` and the returned
+session's `call_internal_drain`. The peer's JSON-RPC `-32602` reply for
+`orbit.drain.claim.effort` surfaces as `RemoteTool` with code `invalid_input`
+and typed `rpc_code` `-32602` and `rpc_message` `unknown internal drain
+operation` fields; the formatted `"code":-32602` text stays the diagnostic
+detail. The public late-effort regression classifies those fields as an
+unsupported owner, while settlement, reconcile and worktree GC still treat the
+same answer as an unreachable owner. A connection failure stays a separate
+unreachable outcome in that regression. No production visibility is widened
+for the move.
 
 The eight originally admitted orbit-mcp tests remain, including the private
 SSH proxy argv seam in `remote/tests/proxy.rs`.

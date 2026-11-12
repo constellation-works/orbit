@@ -410,6 +410,31 @@ fn an_owner_that_predates_the_report_refuses_it_without_changing_state() {
     assert_eq!(owner_efforts(&pair), [json!("unknown")]);
 }
 
+/// Another structured JSON-RPC refusal is a refusal, not owner-unsupported
+/// or owner-unreachable, and changes no state.
+fn another_rpc_refusal_is_refused_without_changing_state() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let (leaf, _) = settled_without_effort(&pair);
+    record_follower_launch(&pair, &leaf, ReasoningEffort::High);
+    *pair.wire.late_effort_rpc_refusal.lock().unwrap() =
+        Some((-32603, "internal error".to_string()));
+    let owner_before = owner_state(&pair);
+    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    assert_eq!(
+        (
+            report.examined,
+            report.refused,
+            report.owner_unsupported,
+            report.owner_unreachable
+        ),
+        (1, 1, 0, 0),
+        "{report:#?}"
+    );
+    assert_eq!(report.rows[0].outcome, ClaimedEffortOutcome::Refused);
+    assert_eq!(owner_state(&pair), owner_before);
+    assert_eq!(owner_efforts(&pair), [json!("unknown")]);
+}
+
 /// A genuine connection failure remains an unreachable owner, with no state
 /// change on either host.
 fn a_connection_failure_remains_owner_unreachable() {
@@ -555,6 +580,7 @@ crate::scenario_table!(
     a_late_report_disagreeing_with_a_held_effort_is_refused_and_counted,
     a_leaf_without_a_follower_record_stays_unknown_and_is_counted,
     an_owner_that_predates_the_report_refuses_it_without_changing_state,
+    another_rpc_refusal_is_refused_without_changing_state,
     a_connection_failure_remains_owner_unreachable,
     a_late_report_for_a_claim_without_a_settlement_record_is_recorded,
     a_late_model_report_fills_an_absent_model_and_never_overwrites_one,

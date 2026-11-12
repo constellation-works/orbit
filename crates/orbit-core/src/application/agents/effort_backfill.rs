@@ -134,9 +134,6 @@ const CLAIM_EFFORT_TOOL: &str = "orbit.drain.claim.effort";
 /// The refusal an owner whose build predates the report answers on its
 /// internal drain route for a tool it does not know.
 const UNKNOWN_DRAIN_TOOL_REFUSAL: &str = "requires the internal runtime route";
-/// The invalid-params response an older owner returns for an unknown
-/// internal drain operation.
-const UNKNOWN_DRAIN_OPERATION_REFUSAL: &str = "unknown internal drain operation";
 
 impl OrbitRuntime {
     /// Report to each owner the reasoning effort of every leaf this follower
@@ -264,12 +261,7 @@ impl OrbitRuntime {
 fn refused_outcome(error: &OrbitError) -> ClaimedEffortOutcome {
     let message = error.to_string();
     if message.contains(UNKNOWN_DRAIN_TOOL_REFUSAL)
-        || matches!(
-            error,
-            OrbitError::UnreachableDestination(message)
-                if message.contains("\"code\":-32602")
-                    && message.contains(UNKNOWN_DRAIN_OPERATION_REFUSAL)
-        )
+        || error.is_unknown_internal_drain_operation()
         || matches!(
             error,
             OrbitError::NotFound {
@@ -281,6 +273,10 @@ fn refused_outcome(error: &OrbitError) -> ClaimedEffortOutcome {
         ClaimedEffortOutcome::OwnerUnsupported
     } else if message.contains("effort_conflict") || message.contains("model_conflict") {
         ClaimedEffortOutcome::Conflict
+    } else if error.is_json_rpc_refusal() {
+        // A structured RPC refusal other than the legacy unknown-operation
+        // reply is an answer from the owner, not a connection failure.
+        ClaimedEffortOutcome::Refused
     } else if crate::application::distributed::is_owner_transport_failure(error) {
         ClaimedEffortOutcome::OwnerUnreachable
     } else {

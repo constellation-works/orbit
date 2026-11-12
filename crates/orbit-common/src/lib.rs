@@ -32,9 +32,9 @@ pub mod test_process;
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
     DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
-    ForgePushHoldFailure, HostRegistryCode, LOCK_BUSY_ERROR_CODE, NotFoundKind, NoticeRefusalCode,
-    OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
-    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
+    ForgePushHoldFailure, HostRegistryCode, JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE,
+    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass,
+    ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
     SourceRepairRunStateRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
     WorkflowEvidenceUnavailable, WorkspaceClaimHeld, is_lock_busy_message,
 };

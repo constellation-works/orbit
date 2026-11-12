@@ -8,7 +8,84 @@ use super::{
     TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
+/// The JSON-RPC invalid-params code. An owner whose internal drain
+/// registry predates an operation answers it with this code.
+pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
+
+/// The structured `message` field of the legacy invalid-params reply for an
+/// unknown internal drain operation. Compared as a whole structured field,
+/// never searched inside a formatted message.
+const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
+
 impl OrbitError {
+    /// Preserve a destination's JSON-RPC error answer as structured data.
+    ///
+    /// The numeric `code` and string `message` fields are kept typed in the
+    /// [`Self::RemoteTool`] payload (`rpc_code` / `rpc_message`), so callers
+    /// classify from those fields rather than a formatted string. The
+    /// formatted text stays only as the human-readable detail.
+    pub fn json_rpc_refusal(machine_id: &str, method: &str, error: &serde_json::Value) -> Self {
+        let rpc_code = error.get("code").and_then(serde_json::Value::as_i64);
+        let rpc_message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let code = match rpc_code {
+            Some(JSON_RPC_INVALID_PARAMS_CODE) => RemoteToolCode::InvalidInput,
+            Some(-32601) => RemoteToolCode::NotFound,
+            Some(other) => RemoteToolCode::Other(format!("json_rpc_{other}")),
+            None => RemoteToolCode::Other("json_rpc_error".to_string()),
+        };
+        let mut payload = serde_json::json!({
+            "code": code.as_str(),
+            "message": rpc_message,
+            "rpc_message": rpc_message,
+        });
+        if let Some(rpc_code) = rpc_code {
+            payload["rpc_code"] = serde_json::json!(rpc_code);
+        }
+        if let Some(data) = error.get("data") {
+            payload["rpc_data"] = data.clone();
+        }
+        Self::RemoteTool {
+            code,
+            message: format!("{machine_id}: '{method}' failed: {error}"),
+            payload,
+        }
+    }
+
+    /// The structured JSON-RPC code this error carries, when it is a
+    /// preserved JSON-RPC refusal.
+    pub fn json_rpc_code(&self) -> Option<i64> {
+        match self {
+            Self::RemoteTool { payload, .. } => {
+                payload.get("rpc_code").and_then(serde_json::Value::as_i64)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this error is a preserved JSON-RPC refusal.
+    pub fn is_json_rpc_refusal(&self) -> bool {
+        matches!(self, Self::RemoteTool { payload, .. } if payload.get("rpc_message").is_some())
+    }
+
+    /// Whether this is the legacy owner's unknown-internal-drain-operation
+    /// refusal, decided from its structured RPC code and message fields.
+    pub fn is_unknown_internal_drain_operation(&self) -> bool {
+        match self {
+            Self::RemoteTool { payload, .. } => {
+                payload.get("rpc_code").and_then(serde_json::Value::as_i64)
+                    == Some(JSON_RPC_INVALID_PARAMS_CODE)
+                    && payload
+                        .get("rpc_message")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE)
+            }
+            _ => false,
+        }
+    }
+
     /// The typed step-failure code this error carries, parsed once where a
     /// step failure is ingested from an `OrbitError`.
     ///
