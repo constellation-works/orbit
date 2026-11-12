@@ -11,7 +11,10 @@ use super::{
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRoot};
+use orbit_types::workflow::{
+    CI_CHECK_RERUN_EVENT, CiCheckRerunEvent, CiCheckRerunJob, CiCheckRerunRecord, CiRerunAdmission,
+    CiRerunPlan, CiRerunRoot,
+};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -452,13 +455,39 @@ fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
     let run_id = plan.run_id;
     let reply=host.run_private_vcs_operation(operations::CI_RERUN_FAILED,json!({"workspace_path":workspace,"run_id":run_id.to_string(),"plan":plan,"deadline_ms":deadline_ms}));
     if reply.is_ok() {
-        let jobs=plan.roots.iter().map(|root| {
-            let original=plan.failed_jobs.iter().find(|job|job["id"].as_u64()==Some(root.job_id));
-            json!({"job_id":root.job_id,"check":root.check,"classification":root.classification,"signature":root.signature,"run_attempt":plan.run_attempt,"started_at":original.map(|job|job["started_at"].clone()),"completed_at":original.map(|job|job["completed_at"].clone())})
-        }).collect::<Vec<_>>();
-        let note=json!({"head":plan.head_sha,"pr_number":pr,"run_id":plan.run_id,"event":"pull_request","jobs":jobs}).to_string();
+        let jobs = plan
+            .roots
+            .iter()
+            .map(|root| {
+                let original = plan
+                    .failed_jobs
+                    .iter()
+                    .find(|job| job["id"].as_u64() == Some(root.job_id));
+                let time =
+                    |key: &str| original.and_then(|job| job[key].as_str().map(str::to_string));
+                CiCheckRerunJob {
+                    job_id: Some(root.job_id),
+                    check: Some(root.check.clone()),
+                    classification: Some(root.classification.clone()),
+                    signature: Some(root.signature.clone()),
+                    run_attempt: Some(plan.run_attempt),
+                    started_at: time("started_at"),
+                    completed_at: time("completed_at"),
+                }
+            })
+            .collect();
+        let note = CiCheckRerunRecord {
+            head: Some(plan.head_sha.clone()),
+            pr_number: Some(pr),
+            run_id: Some(plan.run_id),
+            event: Some(CiCheckRerunEvent::PullRequest),
+            jobs,
+            legacy_pull_requests: Vec::new(),
+        }
+        .to_history_note()
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
         if let Some(handoff) = handoff {
-            host.record_handoff_landing_history(handoff, "ci_check_rerun", &note)?;
+            host.record_handoff_landing_history(handoff, CI_CHECK_RERUN_EVENT, &note)?;
         } else {
             for task in tasks {
                 host.apply_task_automation_update(
@@ -467,7 +496,7 @@ fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
                         append_history: vec![orbit_types::task::TaskHistoryEntry {
                             at: chrono::Utc::now(),
                             by: "system".into(),
-                            event: "ci_check_rerun".into(),
+                            event: CI_CHECK_RERUN_EVENT.into(),
                             note: Some(note.clone()),
                             from_status: None,
                             to_status: None,

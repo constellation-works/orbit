@@ -41,6 +41,174 @@ pub struct CiRerunPlan {
     pub authentication: Value,
 }
 
+/// A failed-jobs retry that was sent: the durable `ci_check_rerun` receipt.
+pub const CI_CHECK_RERUN_EVENT: &str = "ci_check_rerun";
+
+/// The provider event a sent retry reran. Receipts written before the event
+/// was recorded omit it ([`CiCheckRerunRecord::event`] is `None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiCheckRerunEvent {
+    PullRequest,
+    Other(String),
+}
+
+impl CiCheckRerunEvent {
+    fn from_token(token: &str) -> Self {
+        match token {
+            "pull_request" => Self::PullRequest,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    fn as_token(&self) -> &str {
+        match self {
+            Self::PullRequest => "pull_request",
+            Self::Other(other) => other,
+        }
+    }
+}
+
+impl Serialize for CiCheckRerunEvent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_token())
+    }
+}
+
+/// One rerun root in a [`CiCheckRerunRecord`]. Every field is optional on
+/// read: older receipts omit the attempt and job timing, and a malformed
+/// value reads as absent rather than failing the whole receipt. The
+/// producer always writes every key; absent timing is written as `null`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct CiCheckRerunJob {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_attempt: Option<u64>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+impl CiCheckRerunJob {
+    fn from_legacy(job: &Value) -> Self {
+        Self {
+            job_id: job["job_id"].as_u64(),
+            check: json_text(&job["check"]),
+            classification: json_text(&job["classification"]),
+            signature: json_text(&job["signature"]),
+            run_attempt: job["run_attempt"].as_u64(),
+            started_at: json_text(&job["started_at"]),
+            completed_at: json_text(&job["completed_at"]),
+        }
+    }
+
+    /// When the rerun's original attempt completed, if recorded as RFC 3339.
+    pub fn completed_time(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.completed_at
+            .as_deref()
+            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+    }
+}
+
+/// The `ci_check_rerun` history note: the head, PR and provider run a sent
+/// retry targeted, with the roots it reran.
+///
+/// [`Self::from_history_note`] is the one compatibility decoder. It keeps
+/// the identity optional so a reader can tell a receipt that omits or
+/// garbles its head or run from a valid one, reads older PR-number aliases
+/// into [`Self::legacy_pull_requests`], and never requires today's complete
+/// producer shape. Serialization writes the producer shape unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct CiCheckRerunRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<CiCheckRerunEvent>,
+    pub jobs: Vec<CiCheckRerunJob>,
+    /// PR numbers an older receipt named under another key or shape. Read
+    /// only; never written.
+    #[serde(skip)]
+    pub legacy_pull_requests: Vec<u64>,
+}
+
+impl CiCheckRerunRecord {
+    /// Decode a history note. `None` when the note is missing or is not JSON
+    /// (an unreadable receipt); fields that are absent or of the wrong shape
+    /// read as `None`.
+    pub fn from_history_note(note: Option<&str>) -> Option<Self> {
+        let note = serde_json::from_str::<Value>(note?).ok()?;
+        let number = |value: &Value| {
+            value
+                .as_u64()
+                .or_else(|| value["number"].as_u64())
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        };
+        let mut legacy_pull_requests = Vec::new();
+        for key in ["pull_request_numbers", "pull_requests"] {
+            if let Some(list) = note[key].as_array() {
+                legacy_pull_requests.extend(list.iter().filter_map(number));
+            }
+        }
+        for key in ["pull_request_number", "pr"] {
+            legacy_pull_requests.extend(number(&note[key]));
+        }
+        Some(Self {
+            head: json_text(&note["head"]),
+            pr_number: number(&note["pr_number"]),
+            run_id: note["run_id"].as_u64(),
+            event: note["event"].as_str().map(CiCheckRerunEvent::from_token),
+            jobs: note["jobs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(CiCheckRerunJob::from_legacy)
+                .collect(),
+            legacy_pull_requests,
+        })
+    }
+
+    /// The history note the producer writes.
+    pub fn to_history_note(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Every PR number the receipt names, current key and legacy aliases.
+    pub fn pull_request_numbers(&self) -> impl Iterator<Item = u64> + '_ {
+        self.pr_number
+            .into_iter()
+            .chain(self.legacy_pull_requests.iter().copied())
+    }
+
+    /// The action identity: a full 40-hex head and a provider run id.
+    /// `None` when the receipt omitted or malformed either.
+    pub fn action_identity(&self) -> Option<(&str, u64)> {
+        let head = self.head.as_deref()?;
+        let valid = head.len() == 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit());
+        valid.then_some((head, self.run_id?))
+    }
+
+    /// Whether this receipt reran a `pull_request` run. A receipt that
+    /// predates the recorded event counts as one.
+    pub fn reran_pull_request(&self) -> bool {
+        self.event
+            .as_ref()
+            .is_none_or(|event| *event == CiCheckRerunEvent::PullRequest)
+    }
+}
+
+fn json_text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
 /// Owner-configured budget for logged infrastructure/transient failures.
 /// Conclusion-only cancellations/timeouts, a failure whose log is only a
 /// `ci-await` timeout, and flaky failures retain one rerun.
@@ -211,23 +379,16 @@ pub fn decide_ci_rerun_with_policy(
                     ));
                 }
             }
-        } else if entry.event == "ci_check_rerun" {
-            let prior = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<Value>(note).ok());
-            let Some(prior) = prior else {
+        } else if entry.event == CI_CHECK_RERUN_EVENT {
+            let Some(prior) = CiCheckRerunRecord::from_history_note(entry.note.as_deref()) else {
                 return CiRerunAdmission::Refused("unreadable legacy CI retry history".into());
             };
-            if !prior["head"].as_str().is_some_and(|head| {
-                head.len() == 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit())
-            }) || prior["run_id"].as_u64().is_none()
-            {
+            let Some((head, _)) = prior.action_identity() else {
                 return CiRerunAdmission::Refused(
                     "legacy CI retry history omitted its action identity".into(),
                 );
-            }
-            if prior["head"] == plan.head_sha {
+            };
+            if head == plan.head_sha {
                 legacy_spent = true;
             }
         }

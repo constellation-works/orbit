@@ -7,6 +7,7 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use orbit_types::workflow::{CI_CHECK_RERUN_EVENT, CiCheckRerunRecord};
 
 use super::super::super::super::ci::log_signature;
 use super::super::super::operations::{
@@ -392,52 +393,66 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                 }
             }
         }
-        for entry in history
-            .iter()
-            .filter(|entry| matches!(entry.event.as_str(), "ci_base_suspect" | "ci_check_rerun"))
-        {
-            let Some(note) = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<Value>(note).ok())
-            else {
-                continue;
+        for entry in &history {
+            let prior = match entry.event.as_str() {
+                CI_CHECK_RERUN_EVENT => {
+                    let Some(receipt) =
+                        CiCheckRerunRecord::from_history_note(entry.note.as_deref())
+                    else {
+                        continue;
+                    };
+                    // A receipt that names a different PR cannot be this PR's rerun.
+                    if names_other_pull_request(receipt.pull_request_numbers(), pr_number)
+                        || !receipt.reran_pull_request()
+                    {
+                        continue;
+                    }
+                    let Some(rerun) = receipt.jobs.iter().find(|rerun| {
+                        rerun.check.as_deref() == Some(check)
+                            && rerun.signature.as_deref() == Some(signature)
+                    }) else {
+                        continue;
+                    };
+                    PriorFailure {
+                        head: receipt.head.clone(),
+                        run: receipt.run_id,
+                        completed: rerun.completed_time(),
+                        attempt: rerun.run_attempt,
+                    }
+                }
+                "ci_base_suspect" => {
+                    let Some(note) = entry
+                        .note
+                        .as_deref()
+                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                    else {
+                        continue;
+                    };
+                    let noted = legacy_pull_request_numbers(&note);
+                    if names_other_pull_request(noted.into_iter(), pr_number)
+                        || note["check"] != check
+                        || note["signature"] != signature
+                    {
+                        continue;
+                    }
+                    PriorFailure {
+                        head: note["head"].as_str().map(str::to_string),
+                        run: note["run_id"].as_u64(),
+                        completed: note["completed_at"]
+                            .as_str()
+                            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+                        attempt: note["run_attempt"].as_u64(),
+                    }
+                }
+                _ => continue,
             };
-            // A note that names a different PR cannot be this PR's rerun.
-            let noted = legacy_pull_request_numbers(&note);
-            if !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number)) {
-                continue;
-            }
-            if let Some(event) = note["event"].as_str()
-                && event != "pull_request"
-                && entry.event == "ci_check_rerun"
-            {
-                continue;
-            }
-            let prior = if entry.event == "ci_check_rerun" {
-                note["jobs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|prior| prior["check"] == check && prior["signature"] == signature)
-                    .map(|prior| (note["head"].as_str(), note["run_id"].as_u64(), prior))
-            } else {
-                (note["check"] == check && note["signature"] == signature).then_some((
-                    note["head"].as_str(),
-                    note["run_id"].as_u64(),
-                    &note,
-                ))
-            };
-            let Some((Some(prior_head), Some(prior_run), prior)) = prior else {
+            let (Some(prior_head), Some(prior_run)) = (prior.head.as_deref(), prior.run) else {
                 continue;
             };
             if prior_head != head || prior_run != current_run {
                 continue;
             }
-            let completed = prior["completed_at"]
-                .as_str()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-            let Some(completed) = completed else {
+            let Some(completed) = prior.completed else {
                 continue;
             };
             if current_start < completed {
@@ -446,7 +461,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             // A rerun keeps the run identity and advances its attempt.
             // The numeric job id may be reassigned for the new attempt;
             // the workflow/job identity is already bound by `check`.
-            let later_attempt = match prior["run_attempt"].as_u64() {
+            let later_attempt = match prior.attempt {
                 Some(prior_attempt) => current_attempt > prior_attempt,
                 None => current_attempt > 1,
             };
@@ -456,6 +471,20 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
         }
     }
     false
+}
+
+/// The earlier failed attempt a rerun receipt or base-suspect note records.
+struct PriorFailure {
+    head: Option<String>,
+    run: Option<u64>,
+    completed: Option<chrono::DateTime<chrono::FixedOffset>>,
+    attempt: Option<u64>,
+}
+
+/// Whether a note names PR numbers and none of them is `pr_number`.
+fn names_other_pull_request(noted: impl Iterator<Item = u64>, pr_number: Option<u64>) -> bool {
+    let noted = noted.collect::<Vec<_>>();
+    !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number))
 }
 
 /// Surface the base-wide suspicion once per owning task and exact failure,

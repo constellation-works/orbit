@@ -24,11 +24,11 @@
 use std::collections::BTreeMap;
 
 use orbit_types::workflow::{
-    CI_FAILURE_RECLASSIFIED_EVENT, CI_FAILURE_RECORDED_EVENT, CI_FAILURE_SCHEMA_VERSION,
-    CI_RERUN_RESERVED_EVENT, CiFailureClass, CiFailureClassChange, CiFailureLedgerEntry,
-    CiFailureReclassification, CiFailureRecord, CiRerunPlan, ci_failure_ledger,
+    CI_CHECK_RERUN_EVENT, CI_FAILURE_RECLASSIFIED_EVENT, CI_FAILURE_RECORDED_EVENT,
+    CI_FAILURE_SCHEMA_VERSION, CI_RERUN_RESERVED_EVENT, CiCheckRerunRecord, CiFailureClass,
+    CiFailureClassChange, CiFailureLedgerEntry, CiFailureReclassification, CiFailureRecord,
+    CiRerunPlan, ci_failure_ledger,
 };
-use serde_json::Value;
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
@@ -205,17 +205,15 @@ pub(super) fn failed_again_on_rerun(
                     && plan.run_attempt < attempt
                     && plan.roots.iter().any(|root| root.check == check)
             })
-        } else if entry.event == "ci_check_rerun" {
-            serde_json::from_str::<Value>(note).is_ok_and(|note| {
-                note["head"] == head
-                    && note["run_id"].as_u64() == Some(run)
-                    && note["jobs"].as_array().is_some_and(|jobs| {
-                        jobs.iter().any(|rerun| {
-                            rerun["check"] == check
-                                && rerun["run_attempt"]
-                                    .as_u64()
-                                    .is_some_and(|rerun_attempt| rerun_attempt < attempt)
-                        })
+        } else if entry.event == CI_CHECK_RERUN_EVENT {
+            CiCheckRerunRecord::from_history_note(Some(note)).is_some_and(|receipt| {
+                receipt.head.as_deref() == Some(head)
+                    && receipt.run_id == Some(run)
+                    && receipt.jobs.iter().any(|rerun| {
+                        rerun.check.as_deref() == Some(check)
+                            && rerun
+                                .run_attempt
+                                .is_some_and(|rerun_attempt| rerun_attempt < attempt)
                     })
             })
         } else {
@@ -235,9 +233,8 @@ pub(super) fn head_was_rerun(history: &[orbit_types::task::TaskHistoryEntry], he
             CI_RERUN_RESERVED_EVENT => {
                 serde_json::from_str::<CiRerunPlan>(note).is_ok_and(|plan| plan.head_sha == head)
             }
-            "ci_check_rerun" => {
-                serde_json::from_str::<Value>(note).is_ok_and(|note| note["head"] == head)
-            }
+            CI_CHECK_RERUN_EVENT => CiCheckRerunRecord::from_history_note(Some(note))
+                .is_some_and(|receipt| receipt.head.as_deref() == Some(head)),
             _ => false,
         }
     })
