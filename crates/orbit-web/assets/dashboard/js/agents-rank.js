@@ -7,7 +7,7 @@
 // (js/agents-rank-frontier.js). Everything is derived from the payload; HTML
 // uses `el()`.
 
-import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint, formatDateTime } from './common.js';
+import { el, syncNodes, fetchJson, requestPanel, pinnedInfoHint, formatDateTime, getWorkspaceRevision } from './common.js';
 import * as rankFormat from './agents-rank-format.js';
 import { rankFrontierNode } from './agents-rank-frontier.js';
 
@@ -32,12 +32,19 @@ const NOT_SCORED_REASONS = {
   unclassified: "unclassified regressions",
 };
 
-// Reader state that survives polls: which breakdowns are open, and whether the
-// reader collapsed the "Not ranked" section.
+// Reader state survives polls, but disclosures reset for a new window or workspace.
 const openModels = new Set();
-let pendingOpen = true;
+let pendingOpen = false;
+let rankedOpen = false;
+let disclosureScope = "";
 
 export function fetchAndRenderRank({ window: selectedWindow, execution, live, onCount }) {
+  const scope = JSON.stringify([selectedWindow, getWorkspaceRevision()]);
+  if (scope !== disclosureScope) {
+    disclosureScope = scope;
+    rankedOpen = false;
+    pendingOpen = false;
+  }
   const body = document.getElementById(BODY_ID);
   if (body) body.classList.add("agents-body-rank");
   const path = `/api/agents/rank?window=${encodeURIComponent(selectedWindow)}&execution=${encodeURIComponent(execution)}${live ? "&live=true" : ""}`;
@@ -235,17 +242,37 @@ function ladderNode(payload, ladder) {
     el("th", { text: "Tasks" }),
     el("th", { class: "agents-num", text: "Landed" }),
   ]);
-  const groups = ladder.bands.map((band) => bandBody(payload, band, ladder.axis));
+  let visibleCount = 0;
+  const groups = ladder.bands.map((band) => {
+    const tail = visibleCount >= 20;
+    visibleCount += band.rows.length;
+    const group = bandBody(payload, band, ladder.axis);
+    if (tail) group.dataset.rankTail = "true";
+    group.hidden = tail && !rankedOpen;
+    return group;
+  });
+  const tailCount = ladder.bands.reduce((count, band, index) => count + (groups[index].dataset.rankTail ? band.rows.length : 0), 0);
   const table = el("table", { class: "agents-table agents-rank-ladder" }, [el("thead", {}, [head]), ...groups]);
   const wrap = el("div", { class: "agents-table-wrap agents-rank-ladder-wrap", role: "region", "aria-label": "Model ranking" }, [table]);
   wrap.tabIndex = 0;
+  const toggle = tailCount ? el("button", { type: "button", class: "agents-rank-disclosure" }) : null;
+  const updateToggle = () => {
+    for (const group of groups) if (group.dataset.rankTail) group.hidden = !rankedOpen;
+    toggle.textContent = rankedOpen ? "Show fewer" : `Show all (${tailCount} more)`;
+    toggle.setAttribute("aria-expanded", String(rankedOpen));
+  };
+  if (toggle) {
+    updateToggle();
+    toggle.addEventListener("click", () => { rankedOpen = !rankedOpen; updateToggle(); });
+  }
   const empty = ladder.bands.length ? null : el("p", { class: "agents-rank-note", text: "No model has passed the evidence gate yet." });
   const node = el("section", { class: "agents-rank-board", "aria-label": "Model ranking" }, [
     empty || wrap,
+    toggle,
     legendNode(payload),
   ]);
   node.dataset.key = "board";
-  node.dataset.hash = JSON.stringify([ladder.ranked, payload.qualified, payload.measures]);
+  node.dataset.hash = JSON.stringify([ladder.ranked, payload.qualified, payload.measures, disclosureScope, rankedOpen]);
   return node;
 }
 
@@ -456,20 +483,22 @@ function pendingNode(payload, pending) {
       ]),
     ]);
   }));
-  const summary = el("summary", { class: "agents-rank-notranked-summary" }, [
-    el("span", { class: "agents-rank-notranked-title", text: "Not ranked" }),
-    el("span", { class: "agents-rank-box-count", text: rankFormat.plural(pending.length, "model") }),
-    gate.length ? el("span", { class: "agents-rank-box-meta", text: `needs ${gate.join(" across ")}` }) : null,
-  ]);
-  const node = el("details", { class: "agents-rank-box agents-rank-notranked", "aria-label": "Not ranked" }, [
-    summary,
+  const content = el("div", {}, [
+    gate.length ? el("p", { class: "agents-rank-box-meta", text: `Needs ${gate.join(" across ")}` }) : null,
     list,
     el("p", { class: "agents-rank-note", text: "Scores here are unshrunk previews and carry no band." }),
   ]);
-  node.open = pendingOpen;
-  node.addEventListener("toggle", () => { pendingOpen = node.open; });
+  const toggle = el("button", { type: "button", class: "agents-rank-disclosure" });
+  const updateToggle = () => {
+    content.hidden = !pendingOpen;
+    toggle.textContent = pendingOpen ? "Hide unranked" : `Show unranked (${pending.length})`;
+    toggle.setAttribute("aria-expanded", String(pendingOpen));
+  };
+  updateToggle();
+  toggle.addEventListener("click", () => { pendingOpen = !pendingOpen; updateToggle(); });
+  const node = el("section", { class: "agents-rank-box agents-rank-notranked", "aria-label": "Not ranked" }, [toggle, content]);
   node.dataset.key = "notranked";
-  node.dataset.hash = JSON.stringify(pending);
+  node.dataset.hash = JSON.stringify([pending, rules, disclosureScope, pendingOpen]);
   return node;
 }
 
