@@ -171,7 +171,7 @@ in member manifests with `workspace = true`.
 
 ### Foundation and kernel
 
-- **orbit-types** holds shared serde contracts, pure constructors, and narrow domain errors, organized as domain modules (`identity`, `workspace`, `task`, `workflow`, …). It does no I/O of any kind. Its serde shapes are persisted contracts.
+- **orbit-types** holds shared serde contracts, pure constructors, and narrow domain errors, organized as domain modules (`identity`, `workspace`, `task`, `workflow`, …). It does no I/O of any kind. Its serde shapes are persisted contracts. It also owns shared job ids that several crates decide on, including the shipped delivery-leaf ids (`task_pr_pipeline`, `task_local_pipeline`, `task_claimed_pr_pipeline`, `task_claimed_local_pipeline`) and their membership predicates in `workflow/job.rs`; `orbit-store`, `orbit-runtime`, `orbit-engine` and `orbit-core` name those constants rather than spelling the ids.
   The review contract also owns the canonical `review-*` artifact namespace
   classifier shared by Core's task update path, claimed-worker broker and
   external-evidence guards, and the live-report validator used by tools and Core.

@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-10-29
+last_validated: 2026-11-11
 ---
 # Per-Module Sibling tests/ Directory
 
@@ -38,7 +38,7 @@ fn internal_helper() { ... }                       // private — invisible to s
 ```rust
 // src/command/tests/mod.rs
 mod skill;
-mod render;
+mod render;   // a stem that a leaf binds as a test double needs `pub(super) mod`; see Layout shapes
 ```
 
 ```rust
@@ -49,7 +49,7 @@ use super::super::skill::install_skill;            // up two: tests/ -> command 
 fn installs_skill_into_workspace() { ... }
 ```
 
-The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. A private item is a signal to reassess the test's admission and boundary. Use an existing exported helper or runtime entry point when it proves the same guarantee economically; keep a qualifying private seam beside its source. Do not widen production visibility solely for test access.
+The principle: keep production directory listings free of `#[cfg(test)]` artefacts, and let the file structure itself enforce that tests only exercise public seams. A private item is a signal to reassess the test's admission and boundary. Use an existing exported helper or runtime entry point when it proves the same guarantee economically. A qualifying private seam stays in the sibling tests file. It calls `pub`, `pub(crate)` or `pub(super)` items, or a `#[cfg(test)]` probe that production builds do not compile. `pub(super)` is the visibility a sibling test may require on a production seam such as a trait the fixture implements. Widening that seam to `pub` or `pub(crate)` only for the test is debt. Mounting the harness as a child of the leaf with `#[path]` is a violation.
 
 ## When to reach for it
 
@@ -59,7 +59,7 @@ The principle: keep production directory listings free of `#[cfg(test)]` artefac
 
 ## When NOT to
 
-- **You're tempted to "fix" a test failure by widening a private to `pub(crate)` purely for test access.** That's the smell the structural enforcement is meant to catch. Either restructure so the seam is at a deliberate public boundary, or accept that the helper is covered transitively through its caller. Visibility widening that exists *only* for tests is debt.
+- **You're tempted to "fix" a test failure by widening a private to `pub(crate)` purely for test access.** That's the smell the structural enforcement is meant to catch. Either restructure so the seam is at a deliberate public boundary, or accept that the helper is covered transitively through its caller. Visibility widening that exists *only* for tests is debt. A `#[cfg(test)]` probe ([Layout shapes](#layout-shapes)) is not that widening: production builds do not compile it.
 - **You're writing an integration test that exercises the crate's public API end-to-end.** Add a module to the crate's integration binary for that area, `tests/<area>/main.rs` ([Integration-test cost](test_strategy.md#integration-test-cost)). It compiles against the crate's public surface, which is exactly what integration tests want.
 - Persistence and index lifecycle behavior that can use exported store and query helpers belongs in that area binary too; `crates/orbit-search/tests/lexical/main.rs` covers its SQLite migration and synchronous FTS updates through `LexicalIndex`.
 - **The module has zero non-trivial logic worth a unit test.** Don't scaffold an empty `tests/` for the sake of uniformity.
@@ -117,6 +117,41 @@ src/command/
 
 This nests the test module as a *child* of the source module. Children can read parent privates, so the structural "test only public" enforcement is lost — the convention then depends entirely on author discipline. Use the sibling layout shown above instead.
 
+A leaf `#[path]` declaration is the same child module with the file moved. It is a violation even when the body sits in the parent's `tests/` directory. See [Layout shapes](#layout-shapes).
+
+## Layout shapes
+
+The test-layout sweep reads this list. One shape is admitted.
+
+- **Sibling `tests/` (admitted).** The parent module declares `#[cfg(test)] mod tests;`. Rust resolves that to `<parent>/tests.rs` or `<parent>/tests/mod.rs`; having both is error E0761, so keep one. Each `<parent>/tests/<stem>.rs` covers the sibling source `<stem>.rs` and is not a child of that source. An explicit `#[path]` in a module root that names that same `tests/mod.rs` is this same shape, not the leaf form below. A module root is a `mod.rs`, a `lib.rs` or `main.rs` directly under `src/`, or a `<name>.rs` that owns a `<name>/` directory. `#[path]` resolves from the declaring file's directory, so write `"tests/mod.rs"` in a `mod.rs`, `lib.rs` or `main.rs`, and `"<name>/tests/mod.rs"` in `<name>.rs`. Prefer the bare `mod tests;` spelling.
+- **Inline `mod tests { ... }` (violation).** A test module written inside a source file is a child of that file. Migrate it with the recipe below.
+- **`*_tests.rs` beside the source (violation).** A sibling file whose name carries a `_tests` suffix. Move it under `<parent>/tests/` and drop the suffix.
+- **Nested `<file>/tests/` (violation).** The directory anti-pattern above. The test module is a child of the leaf.
+- **Leaf `#[path]` test module (violation).** A fault, security or platform harness keeps its body in the sibling file. Wiring that file from a leaf source file (any source file that is not a module root, as defined above) makes `tests` a child of the leaf:
+
+```rust
+#[cfg(test)]
+#[path = "tests/<stem>.rs"]
+mod tests;
+```
+
+`use super::*` then reaches that leaf's private items, private fields and private traits. The same violation is any other `#[path]` on a `#[cfg(test)] mod tests` in a leaf file, whatever path it names. Putting the body at `<parent>/tests/<stem>.rs` does not make the module a sibling: the parent's `tests/mod.rs` does not own it, and adding `mod <stem>;` there while the leaf declaration remains compiles the file twice.
+
+### Admission does not change the layout
+
+[test_strategy.md](test_strategy.md) admits a unit test only when a boundary test cannot prove the same guarantee economically: combinatorial pure logic, deterministic interleaving or fault injection, a security or safety invariant, or platform-kernel behaviour. That admission decides whether the test may exist. It does not admit a child of the leaf.
+
+Keep an admitted harness in the sibling file.
+
+- Call items that are already `pub`, `pub(crate)` or `pub(super)`.
+- When the harness must drive an item that stays private in production builds, add a `#[cfg(test)]` probe with `pub(super)` or `pub(crate)` and call the probe. The production item stays private.
+- `pub(super)` on the production item itself fits when that item is already the parent module's seam, such as a trait the sibling fixture implements. Do not widen it to `pub` or `pub(crate)` only so a test can call it.
+- A leaf that binds a test double (`use tests as ...` under `cfg(test)`) binds the sibling module instead (`use super::tests::<stem> as ...`). That import needs the sibling declared `pub(super) mod <stem>;` in `<parent>/tests/mod.rs`: a plain `mod <stem>;` there is private to `<parent>::tests`, and the leaf `<parent>::<stem>` sits outside it, so the import fails with E0603 even when the double's functions are `pub(crate)`. The double's functions are `pub(crate)` inside that `#[cfg(test)]` module, so the production build does not see them.
+
+### `#[path]` that is not this shape
+
+`#[path]` that shares a fixture between the library and a crate-root integration binary is not a unit-test layout. The admission helpers included from `lib.rs` and `tests/runtime/main.rs` are that case, and they stay. A path attribute on the module root's own `mod tests`, as above, is the sibling layout.
+
 ## Reference: `orbit-mcp::adapter`
 
 The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod test_support;` and `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. The private SSH proxy argv case stays in `orbit-mcp/src/remote/tests/proxy.rs`. Destination-session fault injection stays in `orbit-mcp/src/federated/probe/tests/session.rs`, beside `probe/session.rs`, because that reader is not a public seam. Listener bind policy, capability classes, server identity, and federated routing run through the crate-root `tests/boundary/` binary. Registry's public identity, publication and persistence cases share the crate-root `orbit-registry/tests/registry/main.rs` binary. Only the two admitted migration writer-fault and read/lock-interleaving harnesses remain in `orbit-registry/src/tests/workspace_registry.rs`, with their private callbacks and exact child entry point intact. Each test file accesses its sibling source through the narrowest deliberate visibility.
@@ -139,7 +174,7 @@ For each source file with an inline `#[cfg(test)] mod tests { ... }`:
 3. Move the test body into `<parent>/tests/<source_filename>.rs`. Replace `use super::*;` with `use super::super::<source_module_name>::<item>;` — these must go through `pub` / `pub(crate)` / `pub(super)`.
 4. Append `mod <source_filename_stem>;` to `<parent>/tests/mod.rs`.
 5. Delete the inline block from the source file.
-6. If a test requires a truly private item, check its admission and use an existing public boundary when possible. Preserve a qualifying private fault, security or platform harness without widening production visibility solely for tests; do not fall back to the nested anti-pattern above.
+6. If a test requires a truly private item, check its admission and use an existing public boundary when possible. Preserve a qualifying private fault, security or platform harness in the sibling file. Reach an item that must stay private in production through a `#[cfg(test)]` probe (`pub(super)` or `pub(crate)`) that production builds do not compile. Give `pub(super)` only to a seam the parent module already shares, such as a trait the fixture implements. Do not fall back to the nested directory above or to a leaf `#[path]` module.
 7. `cargo test -p <crate>` must pass.
 
 For each sibling `*_tests.rs` file:
@@ -156,6 +191,17 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 3. Ensure `<parent>/mod.rs` declares `#[cfg(test)] mod tests;` once for the whole parent module.
 4. Update imports through the sibling path (`use super::super::<file>::<item>;`).
 5. `cargo test -p <crate>` must pass.
+
+For each leaf `#[cfg(test)] #[path = "tests/<stem>.rs"] mod tests;` (see [Layout shapes](#layout-shapes)):
+
+1. Keep the test body at `<parent>/tests/<stem>.rs` when it already lives there. Otherwise move it to that path.
+2. Declare it from the parent, once: `#[cfg(test)] mod tests;` on the parent module root, and `mod <stem>;` in `<parent>/tests/mod.rs`, written `pub(super) mod <stem>;` when a leaf binds the sibling as a test double (step 4). Remove the leaf `#[path]` declaration in the same change. Declaring both compiles the file twice.
+3. Replace `use super::*;` and `use super::<item>` with `use super::super::<stem>::<item>;`. Those items must be `pub`, `pub(crate)` or `pub(super)`.
+4. When the harness calls, constructs or assigns a private item, add a `#[cfg(test)]` probe with `pub(super)` or `pub(crate)` and call that probe. Leave the production item private. A leaf that imported its own test module (`use tests as ...` under `cfg(test)`) imports `super::tests::<stem>` instead; its sibling declaration must be `pub(super) mod <stem>;` (step 2), or the import is E0603. The double's functions are `pub(crate)` inside the `#[cfg(test)]` sibling module.
+5. Carry the leaf declaration's `cfg` (platform gates included) onto the sibling `mod <stem>;`.
+6. `cargo test -p <crate>` must pass.
+
+A module-root `#[path]` that names the sibling `tests/mod.rs` is already the sibling layout. Leave it, or spell it `#[cfg(test)] mod tests;`, which resolves to the same file while no `tests.rs` sits beside `tests/mod.rs` (E0761).
 
 ## What tests assert (invariants vs. policy)
 

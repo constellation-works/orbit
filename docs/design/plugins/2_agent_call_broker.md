@@ -482,7 +482,7 @@ service side regardless.
   `dry_run` to false. A missing or invalid required field, or an invalid optional field,
   is `plugin_broker_invalid_request`; unrecognized fields are ignored.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
-  the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
+  the run's worktree, it names a workspace other than the run's (the run's own workspace is accepted under any of its spellings: logical id, registered name or task-partition id; a run with no recorded workspace accepts none), it asks for a dry run (the
   nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
   five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS` and a resident cycle's guarded ship, decision raise, landing and move to `done`
   (§3). Claimed-owner calls also pass

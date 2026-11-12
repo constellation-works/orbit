@@ -121,7 +121,8 @@ impl OrbitRuntime {
     ) -> Result<DrainWindowExtensionChange, OrbitError> {
         self.require_workspace_claim(EXTEND_OPERATION, request.claim_token)?;
         let request_id = audit_execution_id("window_extend");
-        let outcome = self.apply_drain_window_extension(request, &request_id);
+        let requested_at = Utc::now();
+        let outcome = self.apply_drain_window_extension(request, &request_id, requested_at);
         match &outcome {
             Ok(change) => self.record_drain_control_completion(
                 EXTEND_COMPLETION_AUDIT,
@@ -148,7 +149,14 @@ impl OrbitRuntime {
         }
         let change = outcome?;
         if let Some(limit) = &change.worker_limit {
-            self.record_combined_drain_worker_limit_completion(limit)?;
+            self.record_combined_drain_worker_limit_audit(
+                limit,
+                &request_id,
+                request.actor,
+                request.source,
+                request.reason,
+                requested_at,
+            )?;
         }
         Ok(change)
     }
@@ -157,6 +165,7 @@ impl OrbitRuntime {
         &self,
         request: DrainWindowExtensionRequest<'_>,
         request_id: &str,
+        requested_at: DateTime<Utc>,
     ) -> Result<DrainWindowExtensionChange, OrbitError> {
         let run_id = request.run_id;
         let run = self
@@ -193,7 +202,7 @@ impl OrbitRuntime {
             Some(_) => Some(self.submitted_max_active_leaf_runs(&run)?),
             None => None,
         };
-        self.record_extension_request(&run, request_id, request)?;
+        self.record_extension_request(&run, request_id, requested_at, request)?;
 
         let pull_drain = run.job_id == PULL_DRAIN_JOB;
         let mut decided: Option<(bool, DateTime<Utc>, DateTime<Utc>, u32)> = None;
@@ -359,6 +368,7 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
         request_id: &str,
+        requested_at: DateTime<Utc>,
         request: DrainWindowExtensionRequest<'_>,
     ) -> Result<(), OrbitError> {
         self.record_pipeline_audit(
@@ -376,7 +386,7 @@ impl OrbitRuntime {
                 "reason": request.reason,
                 "actor": request.actor,
                 "source": request.source,
-                "requested_at": Utc::now().to_rfc3339(),
+                "requested_at": requested_at.to_rfc3339(),
             }),
             None,
         )

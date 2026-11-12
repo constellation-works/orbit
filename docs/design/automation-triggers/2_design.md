@@ -462,7 +462,10 @@ in `partition_decisions` and `task_outcomes`. The state consumer releases these
 members for observation and preparation under their current eligibility and
 fingerprint, without a failure record or spending retry budget. Retired or
 active tasks therefore leave the eligible set; an edited eligible task is
-prepared afresh. Invalid assessments and unresolved write failures still fail.
+prepared afresh. An apply whose unresolved tasks are all apply-rejected
+assessments (`invalid` after the targeted repair round) passes the guard as
+held regardless of its applied count; other invalid outcomes and unresolved
+write failures still fail.
 A blocked-by-decision, duplicate, or low-utility verdict is a fresh
 assessment with `ready=false`; do not rerun it every clock tick. Invalid or failed
 assessments retry within budget, then wait for material change or explicit reset.

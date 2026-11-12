@@ -18,7 +18,6 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 pub(crate) use crate::runtime::host_resource::delivery::DeliveryResourceClass;
 pub(crate) use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::delivery::{
@@ -100,7 +99,7 @@ impl OrbitRuntime {
                 .and_then(|input| input.get(RESOURCE_CLASS_KEY))
                 .and_then(|class| serde_json::from_value(class.clone()).ok());
         }
-        let claimed = CLAIMED_LEAF_JOBS.contains(&job);
+        let claimed = orbit_types::workflow::is_claimed_delivery_leaf_job(job);
         if !claimed && !SUBMITTED_DELIVERY_JOBS.contains(&job) {
             return None;
         }

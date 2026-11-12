@@ -3,7 +3,7 @@ summary: "Glossary — Host Registry"
 type: design
 title: "Glossary — Host Registry"
 owner: codex
-last_updated: 2026-11-07
+last_updated: 2026-11-11
 last_validated: 2026-10-24
 status: Accepted
 feature: host-registry
@@ -23,13 +23,13 @@ related_artifacts: [ORB-14448, ORB-14449]
 | machine.name | Changeable human display name for the local machine, set through global config |
 | machine.task_prefix | Immutable machine-local namespace projected into task allocation |
 | Host | Operator-facing noun for one Orbit installation, identified by its `[machine] id`. The local host runs the command; a remote host is reached over SSH. See [host-commands](../specs/host-commands.md). |
-| Host file | `~/.orbit/hosts.toml`, written by `orbit host`. It stores each registered remote's name, SSH target, `machine_id`, `task_prefix`, and optional registration-time `host_os` snapshot. Reachability, version, protocol and workspaces are read live, not stored. Federated serve, pull drains and replica worktree GC read it. It replaces `mcp-destinations.toml`, which is read only while it is the sole file and is migrated by the first `orbit host` mutation. See [host-commands](../specs/host-commands.md). |
+| Host file | `~/.orbit/hosts.toml`, written by `orbit host` ([ORB-14448]). It stores each registered remote's name, SSH target, `machine_id`, `task_prefix`, and optional registration-time `host_os` snapshot. Reachability, version, protocol and workspaces are read live, not stored. Federated serve, pull drains and replica worktree GC read it. It replaces `mcp-destinations.toml`, which is read only while it is the sole file and is migrated by the first `orbit host` mutation. See [host-commands](../specs/host-commands.md). |
 | Host facts | What a host's discovery envelope says about itself: `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint`, and optional `host_os`. Probes by `orbit host` and `orbit doctor` read these live; registration separately stores `machine_id`, `task_prefix`, and the optional OS snapshot. |
 | `host_os` | Optional `linux`, `macos`, or `windows` snapshot captured when a remote host is registered. It supports creation-time crew-pool selection for registered hosts serving a workspace. Entries without it are unknown to that selection; an OS change leaves the old snapshot until the host is removed and added again. |
 | Skew | A registered host's `binary_version` or `protocol_fingerprint` differs from this machine's. `orbit host list` flags it; `orbit doctor` fails for a host this machine pulls from when its `protocol_fingerprint` differs or pull admission refuses its version, and warns on other differences. |
 | Host name | The operator's name for a host. For the local host it is `machine.name`; for a remote it is the entry's `name`, which defaults to the remote's own `machine.name`. `orbit host show\|rename\|remove` resolve it case-insensitively, or by exact `machine_id`. |
-| Prefix table | Per-process map from task prefix to host, built from the local `machine.task_prefix` and the host file. It is the key for task-id routing. See [host-routing](../specs/host-routing.md). |
-| Id-routed tool | A task tool whose target is one task id and whose `workspace` is optional: `orbit.task.show`, `update`, `reject`, `delete`, `artifact.get`, `artifact.put`, `review_reset`, `reconcile_review`, `repilot` and `requeue`. Routed CLI and federated MCP calls without a selector go to the host the id's prefix names; direct v1 MCP servers do not relay to another host. Each builtin declares its route at its definition site; the registry rejects unclassified or misdeclared tools and a boundary test checks builtin classifications. See [host-routing](../specs/host-routing.md#routed-calls). |
+| Prefix table | Per-process map from task prefix to host, built from the local `machine.task_prefix` and the host file. It is the key for task-id routing ([ORB-14449]). See [host-routing](../specs/host-routing.md). |
+| Id-routed tool | A task tool whose target is one task id and whose `workspace` is optional: `orbit.task.show`, `update`, `reject`, `delete`, `orbit.task.artifact` actions `get` and `put`, and `orbit.task.recover` actions `review_reset`, `reconcile_review`, `repilot` and `requeue` ([ORB-23280]). `recover_claim`, `retry_handoff` and `revoke_handoff` are not id-routed. Routed CLI and federated MCP calls without a selector go to the host the id's prefix names; direct v1 MCP servers do not relay to another host. Each builtin declares its route at its definition site; the registry rejects unclassified or misdeclared tools and a boundary test checks builtin classifications. See [host-routing](../specs/host-routing.md#routed-calls). |
 | `--host` | Names a host, by name or `machine_id`, for `--workspace` on routable task commands (`show`, `update`, `artifact put\|get`, `review-reset`, `reconcile-review …`, `requeue`, `repilot`), on the non-routed `orbit task recover-claim` and `orbit task revoke-handoff`, and on `orbit tool run`, and for `--pull` on `orbit run auto`. Resolves to the selector that host lists. Host-local commands reject it with an `ssh <target> orbit …` hint. See [host-routing](../specs/host-routing.md#--host). |
 | Machine identity implementation | MachineIdentity lifecycle in orbit-registry; persistence-neutral machine ID and name validators in orbit-types |
 | Workspace registry | The machine-local ~/.orbit/workspaces.json catalog owned by orbit-registry |
@@ -48,5 +48,6 @@ related_artifacts: [ORB-14448, ORB-14449]
 
 - [ORB-14448] implemented the host file and orbit host operations.
 - [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-23280] consolidated MCP tool families behind an action field, including the id-routed task tools.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

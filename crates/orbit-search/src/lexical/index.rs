@@ -52,6 +52,18 @@ impl LexicalIndex {
         }
     }
 
+    /// Whether indexing writes cannot land through this handle: the store
+    /// opened read-only, or no store opened at all because the storage
+    /// refused it. Best-effort indexers skip instead of attempting a write
+    /// known to fail on every task write; the index then stays stale until
+    /// a reindex from writable storage. [ORB-24077]
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Ready(store) => store.is_read_only(),
+            Self::Unavailable(_) => true,
+        }
+    }
+
     /// The opened store, or the operator-facing reason it is unavailable.
     pub fn store(&self) -> Result<&LexicalStore, OrbitError> {
         match self {

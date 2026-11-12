@@ -74,6 +74,11 @@ it still returns `updated` or `corroborated` with the stored expiry untouched.
   owner: a reachable follower that owns nothing listed is read through its owners and is never a
   `degraded` entry, while a configured destination that does not answer, and an owner with no
   configured destination, both degrade.
+- Both routes share the list order and the `limit` rule: the order is `Notice::cmp_list_order` in
+  `orbit-types` (kind incident, maintenance, info; newest `updated_at`; id), and the bound and
+  default are `NOTICE_LIST_MAX_LIMIT`/`NOTICE_LIST_DEFAULT_LIMIT` in `orbit-common`'s notice
+  operation spec. An out-of-range `limit` is the same `notice_invalid_field` refusal with or
+  without a workspace, and the workspace-less caller refuses it before reading any owner.
 
 ## Scope
 

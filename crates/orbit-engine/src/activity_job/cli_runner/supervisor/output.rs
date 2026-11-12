@@ -26,6 +26,7 @@ pub(super) struct TracedCaptureSink {
     capture: SharedOutputCapture,
     context: OutputLineContext,
     line_buf: Vec<u8>,
+    relay_line_was_split: bool,
     claude_frame: Vec<u8>,
     oversized_claude_frame: bool,
 }
@@ -36,6 +37,7 @@ impl TracedCaptureSink {
             capture,
             context,
             line_buf: Vec::new(),
+            relay_line_was_split: false,
             claude_frame: Vec::new(),
             oversized_claude_frame: false,
         }
@@ -89,10 +91,13 @@ impl OutputSink for TracedCaptureSink {
                 .push(bytes);
         }
         let Self {
-            context, line_buf, ..
+            context,
+            line_buf,
+            relay_line_was_split,
+            ..
         } = self;
         tracing::dispatcher::with_default(&context.dispatch, || {
-            emit_output_chunk(context, bytes, line_buf);
+            emit_output_chunk(context, bytes, line_buf, relay_line_was_split);
         });
         SinkVerdict::Continue
     }
@@ -119,7 +124,12 @@ fn output_events_enabled() -> bool {
     tracing::enabled!(target: "orbit_engine::activity_job::cli_runner::supervisor", tracing::Level::INFO)
 }
 
-fn emit_output_chunk(context: &OutputLineContext, raw: &[u8], line_buf: &mut Vec<u8>) {
+fn emit_output_chunk(
+    context: &OutputLineContext,
+    raw: &[u8],
+    line_buf: &mut Vec<u8>,
+    relay_line_was_split: &mut bool,
+) {
     if !output_events_enabled() {
         return;
     }
@@ -128,21 +138,25 @@ fn emit_output_chunk(context: &OutputLineContext, raw: &[u8], line_buf: &mut Vec
     // recognized Claude `content_block_*` stream event is repeated in full
     // by its `assistant` frame, so it earns no `agent_output` record. Lines
     // past the event limit are emitted in pieces as before (the capture
-    // passes oversized lines through unchanged), and a final unterminated
-    // line is flushed by `finish`, so only whole lines at or under the
-    // limit can be recognized and dropped here. Observed-byte accounting
-    // has already counted every byte before this relay decision.
+    // passes oversized lines through unchanged). Keep their physical-line
+    // state until the newline so a JSON-shaped suffix is never classified as
+    // a complete Claude event. A final unterminated line is flushed by
+    // `finish`, so only whole lines at or under the limit can be recognized
+    // and dropped here. Observed-byte accounting has already counted every
+    // byte before this relay decision.
     let drop_redundant_claude = context.provider == "claude" && context.stream == "stdout";
     for segment in raw.split_inclusive(|byte| *byte == b'\n') {
         line_buf.extend_from_slice(segment);
         if segment.ends_with(b"\n") || line_buf.len() >= OUTPUT_LINE_EVENT_LIMIT_BYTES {
             let redundant = drop_redundant_claude
                 && segment.ends_with(b"\n")
+                && !*relay_line_was_split
                 && line_buf.len() <= OUTPUT_LINE_EVENT_LIMIT_BYTES
                 && redundant_claude_content_event(line_buf);
             if !redundant {
                 emit_output_line(context, line_buf);
             }
+            *relay_line_was_split = !segment.ends_with(b"\n");
             line_buf.clear();
         }
     }

@@ -248,7 +248,7 @@ impl<'a> Assessor<'a> {
         if run.state != JobRunState::Success
             || state.run_id != run.run_id
             || state.job_id != run.job_id
-            || run.job_id != "task_pr_pipeline"
+            || run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
             || !assigned
             || state.step_states.get(&assessment.delivery_step_index) != Some(&JobRunState::Success)
             || owner.job_run_id.as_deref() != Some(assessment.delivery_run_id.as_str())

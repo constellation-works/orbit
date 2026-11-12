@@ -15,6 +15,7 @@ pub(crate) mod test_support;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use orbit_common::governance::notice::NOTICE_LIST_DEFAULT_LIMIT;
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_types::record::{AuthorClass, EffectiveStatus, Notice, NoticeKind, NoticeScope};
 use serde::Serialize;
@@ -99,7 +100,7 @@ impl Default for NoticeListFilter {
             linked_task: None,
             author_class: None,
             host: None,
-            limit: Some(50),
+            limit: Some(NOTICE_LIST_DEFAULT_LIMIT),
         }
     }
 }

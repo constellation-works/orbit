@@ -324,7 +324,7 @@ impl OrbitRuntime {
         // Pending, running and retrying are the live delivery states. Skipped
         // is non-terminal but is not a delivery in progress.
         match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".to_string()),
+            job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.to_string()),
             task_id: Some(task.id.clone()),
             states: vec![
                 JobRunState::Pending,

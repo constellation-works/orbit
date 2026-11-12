@@ -3,11 +3,11 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-11-07
+last_updated: 2026-11-11
 last_validated: 2026-11-04
 status: Draft
 stage: shipped
-next: "Release-readiness example (ORB-20166) stays disabled until its owner prerequisites are met; completion contracts/history (ORB-20165), historical reuse (ORB-22649) and condition facts over accepted history (ORB-20397) shipped"
+next: "Release-readiness example stays disabled until owner prerequisites (ORB-20166)"
 feature: activity-job
 doc_role: overview
 tags: ["activity-job"]
@@ -122,12 +122,14 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | V2 audit envelope and disk sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002] |
 | CLI agent runtime path | `crates/orbit-engine/src/activity_job/cli_runner/mod.rs` | [T20260419-0104] |
 | `fsProfile` enforcement | `crates/orbit-policy`, `tool_context_for_activity`, CLI describe/get surfaces | [T20260419-0503] |
+| Delivery-leaf job ids and membership predicates (one owner for store, runtime, engine and core) | `crates/orbit-types/src/workflow/job.rs` | [ORB-24042] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
 
 ---
 
 ## Task References
 
+- **[ORB-24042]** — Give the delivery-leaf job ids one owner in `orbit-types`.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.

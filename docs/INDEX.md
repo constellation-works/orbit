@@ -169,7 +169,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Activity / Job](./design/activity-job/1_overview.md) | Release-readiness example (ORB-20166) stays disabled until its owner prerequisites are met; completion contracts/history (ORB-20165), historical reuse (ORB-22649) and condition facts over accepted history (ORB-20397) shipped | codex |
+| [Activity / Job](./design/activity-job/1_overview.md) | Release-readiness example stays disabled until owner prerequisites (ORB-20166) | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
 | [Auditability](./design/auditability/1_overview.md) | — | codex |

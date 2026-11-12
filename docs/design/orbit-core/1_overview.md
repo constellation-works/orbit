@@ -198,17 +198,20 @@ moved the backlog forecast out of `task` to its own place in the order:
   since [ORB-17937] also a
   pull drain's `DrainClaimedLeaf` (with its `ClaimedLeafStage`) and the
   `HostProviderHold` crew draws skip, with the `canonical_provider` name it
-  compares; since [ORB-17938] also the `LOCAL_ROUTE_JOB` job name, the
+  compares; since [ORB-17938] also the
   filing tags job's crew pools route to the sweep purpose
   (`CI_FAILURE_TAG`, `DEPENDABOT_TAG`, `CODE_SCANNING_TAG` and
   `RECONCILIATION_FOLLOW_UP_TAG_PREFIX`) and the `PublishedDelivery` a
-  deferred gate grant reports; since [ORB-17939] also the
+  deferred gate grant reports; the local delivery-leaf job id moved to
+  `TASK_LOCAL_PIPELINE_JOB` in `orbit-types` with [ORB-24042]. Since
+  [ORB-17939], `application::contracts` also holds the
   `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` build gate that `distributed`
   enforces and `review`'s handoff console reports. It imports none of the
   ten modules in the order above it, and every consumer, including `orbit-cli` and `orbit-cmd`,
   imports these items from there. These shapes are still internal to Orbit,
-  so they stay in Core rather than `orbit-types`. Their string values and
-  serde shapes did not change.
+  so the other listed items stay in Core rather than `orbit-types`; the local
+  delivery-leaf job id is the exception described above. Their string values
+  and serde shapes did not change.
 - **Ports.** A lower module that needs behaviour from a higher one owns a
   trait. The higher module implements it on `OrbitRuntime`, so composing the
   runtime binds it, and the lower module never names the higher one.
@@ -604,5 +607,6 @@ the lower modules’ direct edges into `landing`.
 - [ORB-23019] — cut tag instructions' overlay query through `tag_instructions::TagInstructionExperimentPort`, implemented by `experiment`, and guarded the single-file module's paths and inherent calls into `experiment` while leaving the helper reads legal.
 - [ORB-23334] — cut automation's catalog, history, dedupe and mint reads into `auto_tasks` through `automation::AutomationAutoTaskPort`, implemented by `auto_tasks`, and guarded automation paths and inherent calls into `auto_tasks`.
 - [ORB-23421] — cut task's corpus back-edge through `task::TaskCorpusPort`, implemented by `agent_corpus`, re-pointed its blob reads at `task::base_revision`, and added `agent_corpus` to the guarded `task` upper modules.
+- [ORB-24042] — gave the delivery-leaf job ids one owner in `orbit-types`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
