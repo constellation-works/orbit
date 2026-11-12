@@ -89,16 +89,21 @@ impl OrbitError {
     /// The typed step-failure code this error carries, parsed once where a
     /// step failure is ingested from an `OrbitError`.
     ///
-    /// A remote-tool failure contributes its wire code verbatim. The
+    /// An ordinary remote-tool failure contributes its wire code verbatim. The
     /// owner-route variants — a destination that cannot be reached, an
     /// owner that is unavailable or cannot be negotiated with, a stale
     /// route to it — are the [`StepFailureCode::OwnerRouteUnavailable`]
     /// the claimed worker's owner route raises; their messages are kept
     /// as they are, and the typing happens here instead of in a bracketed
-    /// marker stamped into the text.
+    /// marker stamped into the text. A preserved JSON-RPC refusal also
+    /// classifies as [`StepFailureCode::OwnerRouteUnavailable`], keeping
+    /// the typing it had before PR #9155 preserved it as a remote-tool reply.
     ///
     /// [`StepFailureCode::OwnerRouteUnavailable`]: orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable
     pub fn step_failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        if self.is_json_rpc_refusal() {
+            return Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable);
+        }
         match self {
             Self::RemoteTool { code, .. } => {
                 Some(orbit_types::workflow::StepFailureCode::parse(code.as_str()))
