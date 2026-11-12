@@ -100,10 +100,11 @@ pub(super) fn run_target(
     // field is asked once, in the same attempt, for a corrected envelope
     // instead of failing into step recovery, final recovery and a fresh
     // implementation.
+    let mut refused_correction = None;
     if !dispatched.reviewer
         && matches!(dispatched_spec, ActivityV2Spec::AgentLoop(_))
         && is_implementer_step(step, t)
-        && let Some((corrected, corrected_input)) = correct_implementer_contract(
+        && let Some(correction) = correct_implementer_contract(
             step,
             t,
             ctx,
@@ -112,9 +113,16 @@ pub(super) fn run_target(
             &dispatched.outcome,
         )
     {
-        persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatched.outcome);
-        dispatched.outcome = corrected;
-        dispatched_input = corrected_input;
+        match correction {
+            ContractCorrection::Accepted { outcome, input } => {
+                persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatched.outcome);
+                dispatched.outcome = outcome;
+                dispatched_input = input;
+            }
+            ContractCorrection::Refused { outcome, input } => {
+                refused_correction = Some((input, outcome));
+            }
+        }
     }
     let Dispatched {
         outcome: mut dispatch,
@@ -122,6 +130,12 @@ pub(super) fn run_target(
         ..
     } = dispatched;
     persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
+    // [ORB-24154] A correction that completed without a successful response
+    // still spent its invocation. It is persisted once, after the original's,
+    // while the original refusal stays the step outcome.
+    if let Some((input, outcome)) = &refused_correction {
+        persist_dispatch_invocation(ctx, &step.id, input, outcome);
+    }
     if timed_out {
         record_pipeline(ctx, &step.id, dispatch.output.clone());
         return Err(DispatchError::ReviewGateRefused {
@@ -397,17 +411,33 @@ const CONTRACT_CORRECTION_AUDIT_BYTES: usize = 1_024;
 /// Longest refused value the correction input quotes back.
 const CONTRACT_CORRECTION_VALUE_BYTES: usize = 4_096;
 
+/// A completed contract correction. Either way its invocation was spent, so
+/// the caller persists it exactly once.
+enum ContractCorrection {
+    /// A successful response: its fields overlay the original's.
+    Accepted {
+        outcome: super::super::dispatcher::DispatchOutcome,
+        input: Value,
+    },
+    /// A response that is not successful: the original refusal stands.
+    Refused {
+        outcome: super::super::dispatcher::DispatchOutcome,
+        input: Value,
+    },
+}
+
 /// Ask an agent-loop implementer once to correct a successful response that
 /// fails only the output contract [ORB-24143]. The same activity is dispatched
 /// again with `contract_correction` (the refused field, the refusal and the
 /// refused value); the activity's instruction tells it that its side effects
 /// are done and only the envelope is wanted, and the engine repeats nothing.
 ///
-/// Returns the corrected dispatch and its input, or `None` when no correction
-/// applies or it did not produce a successful response, so the original
-/// response meets the ordinary refusal. The corrected response's fields
-/// overlay the original's, so an envelope that restates only the corrected
-/// field keeps the rest. A blocker, a failure and a timeout are never corrected.
+/// Returns `None` when no correction applies or its dispatch yields no outcome.
+/// Otherwise the completed correction is returned for the caller to persist
+/// [ORB-24154]: an accepted one's corrected response has its fields overlaid
+/// on the original's, so an envelope that restates only the corrected field
+/// keeps the rest; a refused one leaves the original response to meet the
+/// ordinary refusal. A blocker, a failure and a timeout are never corrected.
 fn correct_implementer_contract(
     step: &JobV2Step,
     t: &TargetStep,
@@ -415,7 +445,7 @@ fn correct_implementer_contract(
     spec: &ActivityV2Spec,
     input: &Value,
     first: &super::super::dispatcher::DispatchOutcome,
-) -> Option<(super::super::dispatcher::DispatchOutcome, Value)> {
+) -> Option<ContractCorrection> {
     if !first.success
         || input.get(CONTRACT_CORRECTION_KEY).is_some()
         || orbit_types::workflow::agent_blocker_from_output(&first.output).is_some()
@@ -459,9 +489,9 @@ fn correct_implementer_contract(
             "refused_value": refused_value,
         }),
     );
-    let corrected = match dispatch_once(step, t, ctx, spec, &corrected_input) {
-        Ok(Some(corrected)) if corrected.outcome.success => corrected.outcome,
-        Ok(_) => return None,
+    let mut corrected = match dispatch_once(step, t, ctx, spec, &corrected_input) {
+        Ok(Some(corrected)) => corrected.outcome,
+        Ok(None) => return None,
         Err(error) => {
             tracing::warn!(
                 target: "orbit.engine.job_executor",
@@ -473,7 +503,12 @@ fn correct_implementer_contract(
             return None;
         }
     };
-    let mut corrected = corrected;
+    if !corrected.success {
+        return Some(ContractCorrection::Refused {
+            outcome: corrected,
+            input: corrected_input,
+        });
+    }
     let mut merged = first.output.clone();
     if let (Some(merged), Some(overlay)) = (merged.as_object_mut(), corrected.output.as_object()) {
         for (key, value) in overlay {
@@ -481,7 +516,10 @@ fn correct_implementer_contract(
         }
         corrected.output = Value::Object(merged.clone());
     }
-    Some((corrected, corrected_input))
+    Some(ContractCorrection::Accepted {
+        outcome: corrected,
+        input: corrected_input,
+    })
 }
 
 /// Return the first malformed claimed artifact array or reserved path,

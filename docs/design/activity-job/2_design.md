@@ -1808,7 +1808,9 @@ work, filed tasks and attachments stand and asks only for the corrected envelope
 implemented or filed twice and no step recovery, final recovery or second `implement_one` run
 starts. The correction's fields overlay the original response. A correction dispatch that
 fails, or a response still malformed after it, falls back to the ordinary refusal and failure
-path, so the correction is asked once.
+path, so the correction is asked once. A completed correction whose response is not successful
+keeps the original refusal as the step outcome, and its invocation trace is still persisted once,
+after the original's (ORB-24154).
 
 A typed stop keeps its type when the retry after step recovery reaches it, as
 it does when the first attempt does (ORB-21581). A settled review awaiting
