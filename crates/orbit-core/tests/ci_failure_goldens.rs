@@ -179,7 +179,12 @@ fn description_only_owner(runtime: &OrbitRuntime, owner: &str) -> String {
             .get_task_history(&legacy.id)
             .unwrap()
             .iter()
-            .all(|entry| entry.decision.is_none())
+            // Creation records its crew assignment [ORB-24023]; the legacy
+            // shape is the absence of any CI-failure decision.
+            .all(|entry| matches!(
+                entry.decision,
+                None | Some(orbit_types::task::TaskDecision::CrewAssignment(_))
+            ))
     );
     legacy.id
 }
