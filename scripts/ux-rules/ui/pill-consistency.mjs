@@ -81,7 +81,9 @@ export async function check(ctx) {
     for (const el of H.all("*")) {
       if (el.matches(INTERACTIVE) || el.closest(INTERACTIVE) || el.closest(FILTER_BAR)) continue;
       const f = facts(el);
-      if (f) pills.push({ el, f });
+      // The document-order index is the pill's identity: selector, top and
+      // width are not unique (two triaging chips in one row share all three).
+      if (f) pills.push({ el, f, index: pills.length });
     }
     const pillSet = new Set(pills.map((p) => p.el));
     const innermost = pills.filter((p) => ![...p.el.querySelectorAll("*")].some((c) => pillSet.has(c)));
@@ -105,7 +107,7 @@ export async function check(ctx) {
     for (const p of innermost) {
       const kind = p.el.closest("[data-ux-pill]")?.getAttribute("data-ux-pill") || "";
       const row = rowOf(p.el);
-      const item = { ...H.elementFacts(p.el), kind, ...p.f };
+      const item = { ...H.elementFacts(p.el), kind, ...p.f, pill_index: p.index };
       if (row) {
         add("row|" + idOf(row) + "|" + kind, "row", H.selectorOf(row), item);
         add("list|" + idOf(row.parentElement) + "|" + kind, "list", H.selectorOf(row.parentElement), item);
@@ -118,7 +120,8 @@ export async function check(ctx) {
   let matched = 0; const failures = []; const observed = []; const seen = new Set(); const failed = new Set();
   for (const group of groups) {
     const items = group.items;
-    for (const item of items) if (!seen.has(item.selector + "|" + item.top + "|" + item.width_px)) { seen.add(item.selector + "|" + item.top + "|" + item.width_px); matched += 1; observed.push(item); }
+    // One element in a row group and a list group counts once; distinct pills never share an index.
+    for (const item of items) if (!seen.has(item.pill_index)) { seen.add(item.pill_index); matched += 1; observed.push(item); }
     // Modal value within tolerance; a tie keeps the value met first.
     const modalOf = ({ key, tolerance }) => {
       let best = items[0];
@@ -134,7 +137,7 @@ export async function check(ctx) {
       for (const item of items) {
         if (item === reference || Math.abs(item[spec.key] - reference[spec.key]) <= spec.tolerance) continue;
         // One pill can sit in a row group and a list group; report it once.
-        const identity = [item.selector, item.top, item.width_px, spec.property].join("|");
+        const identity = [item.pill_index, spec.property].join("|");
         if (failed.has(identity)) continue;
         failed.add(identity);
         failures.push({
