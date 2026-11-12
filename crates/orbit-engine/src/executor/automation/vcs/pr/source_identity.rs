@@ -415,7 +415,7 @@ fn successful_push<H: RuntimeHost + ?Sized>(
     let Ok(Some(state)) = host.read_run_state(run_id) else {
         return Ok(None);
     };
-    if state.run_id != run_id || state.job_id != "task_pr_pipeline" {
+    if state.run_id != run_id || state.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB {
         return Ok(None);
     }
     let Some(push) = state.pipeline.get("push") else {

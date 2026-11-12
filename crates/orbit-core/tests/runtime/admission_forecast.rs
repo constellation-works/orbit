@@ -961,8 +961,12 @@ fn two_admitter_processes_cannot_fill_one_gap_twice() {
         .runtime
         .admit_against_forecast(|forecast| {
             std::fs::write(rendezvous.join("holding"), "").unwrap();
-            // The second admitter asks for the lock while this one holds it.
-            std::thread::sleep(StdDuration::from_secs(1));
+            // Explicit bounded coordination: do not commit until the second
+            // admitter has signalled, while this process still holds the
+            // admission lock, that it is at its request boundary. Its actual
+            // lock wait may be arbitrarily short if it is delayed after
+            // signalling, so no elapsed-time assumption is made.
+            wait_for(&rendezvous.join("requesting"));
             Ok(admit_if_it_fits(forecast, &fixture.workspace, "ORB-first"))
         })
         .unwrap();
@@ -977,9 +981,13 @@ fn two_admitter_processes_cannot_fill_one_gap_twice() {
     let second: Value =
         serde_json::from_slice(&std::fs::read(rendezvous.join("result.json")).unwrap()).unwrap();
     assert!(first, "the empty host fits the first delivery");
+    // Contention was established by coordination, not elapsed time: the
+    // first admitter observed `requesting` while still holding the lock
+    // (it could not commit before that file appeared), and the second
+    // signalled it only after observing `holding`.
     assert!(
-        second["waited_ms"].as_u64().unwrap() >= 500,
-        "the second admitter asked while the first held the lock: {second}"
+        rendezvous.join("requesting").exists(),
+        "the second admitter signalled its request while the first held the lock"
     );
     assert_eq!(second["seen"], json!(["ORB-first"]), "{second}");
     assert_eq!(second["admitted"], json!(false), "{second}");
@@ -995,7 +1003,10 @@ fn second_admitter(rendezvous: &Path) {
     let workspace = runtime.workspace_id().unwrap();
     std::fs::write(rendezvous.join("ready"), "").unwrap();
     wait_for(&rendezvous.join("holding"));
-    let asked = Instant::now();
+    // Signal the request boundary before asking: the holder waits for this
+    // file before committing, so the request is known to overlap its hold
+    // even if this process is delayed between signalling and asking.
+    std::fs::write(rendezvous.join("requesting"), "").unwrap();
     let (admitted, seen) = runtime
         .admit_against_forecast(|forecast| {
             let seen: Vec<String> = forecast
@@ -1015,7 +1026,6 @@ fn second_admitter(rendezvous: &Path) {
         json!({
             "admitted": admitted,
             "seen": seen,
-            "waited_ms": u64::try_from(asked.elapsed().as_millis()).unwrap(),
         })
         .to_string(),
     )

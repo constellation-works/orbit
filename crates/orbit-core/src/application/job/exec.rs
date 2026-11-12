@@ -30,7 +30,6 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
-use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
 use crate::application::job::{
@@ -45,7 +44,7 @@ fn held_failure(
     error_code: Option<&str>,
     message: Option<&str>,
 ) -> Option<HeldFailure> {
-    if CLAIMED_LEAF_JOBS.contains(&job_id) {
+    if orbit_types::workflow::is_claimed_delivery_leaf_job(job_id) {
         HeldFailure::of_claimed_leaf(error_code, message)
     } else {
         HeldFailure::of_local(error_code, message)

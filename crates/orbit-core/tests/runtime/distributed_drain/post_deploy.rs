@@ -197,6 +197,7 @@ fn a_done_recovery_is_refused_while_a_post_deploy_criterion_is_owed() {
             orbit_types::task::TaskStatus::Done,
             "operator",
             "merged by hand",
+            "operator-recover",
             "recover-done",
         )
         .expect_err("done while a post-deploy criterion is owed")

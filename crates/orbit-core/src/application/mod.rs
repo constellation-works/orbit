@@ -39,6 +39,7 @@ pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
 pub mod notice;
+pub mod operator_input;
 pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod resident;

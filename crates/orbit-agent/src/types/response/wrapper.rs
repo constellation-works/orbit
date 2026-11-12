@@ -5,7 +5,7 @@
 //! with no envelope (a model answering in prose), but not the category. A
 //! turn-limit ending still exits 0 with `is_error: true`,
 //! `subtype: "error_max_turns"`, `terminal_reason: "max_turns"`, and both
-//! `result` and `structured_output` null. Those runs used to collapse into the
+//! `result` and `structured_output` null. Such runs would otherwise collapse into the
 //! generic [ORB-10449] "stdout does not contain an Orbit response envelope"
 //! message, which tells an operator nothing about why a full-cost run ended.
 //!

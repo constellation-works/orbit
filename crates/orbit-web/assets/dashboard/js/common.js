@@ -8,14 +8,34 @@ const params = new URLSearchParams(window.location.search);
 // The aggregate choice has no workspace id, so it is written as the reserved
 // `workspace=all` token; without one a reload or shared link would read the
 // missing parameter as "pick the default workspace" and silently change scope.
+// Several `workspaces=` values select that aggregate and narrow it. One value
+// selects that workspace's board, the same as `?workspace=<id>`.
 export const ALL_WORKSPACES_TOKEN = "all";
-const linkedWorkspace = params.get("workspace") || null;
-let aggregateLinked = linkedWorkspace === ALL_WORKSPACES_TOKEN;
-let currentWorkspace = aggregateLinked ? null : linkedWorkspace;
-let selectedWorkspaces = params.getAll("workspaces");
+
+function scopeFromWorkspaceParams(searchParams) {
+  const listed = [...new Set(searchParams.getAll("workspaces").filter(Boolean))].sort();
+  const linked = searchParams.get("workspace") || null;
+  if (listed.length > 1) return { workspace: null, aggregate: true, filter: listed };
+  if (listed.length === 1) return { workspace: listed[0], aggregate: false, filter: [] };
+  if (linked === ALL_WORKSPACES_TOKEN) return { workspace: null, aggregate: true, filter: [] };
+  return { workspace: linked, aggregate: false, filter: [] };
+}
+
+const initialScope = scopeFromWorkspaceParams(params);
+let aggregateLinked = initialScope.aggregate;
+let currentWorkspace = initialScope.workspace;
+// Narrowing for the All workspaces task list. Empty means every workspace.
+// A concrete board does not clear this, so returning to All restores it.
+let selectedWorkspaces = initialScope.filter;
 
 export function getSelectedWorkspaces() {
   return currentWorkspace ? [currentWorkspace] : [...selectedWorkspaces];
+}
+
+/// The All workspaces task filter, including while a board is open. Empty
+/// means every workspace. A board's own id is not part of this list.
+export function workspaceFilterIds() {
+  return [...selectedWorkspaces];
 }
 
 /// Whether a `/api/workspaces` row is one this host owns. A row with no
@@ -51,14 +71,13 @@ export function getUnownedReplicas() {
   return unownedReplicas;
 }
 
+/// Replace the All workspaces task filter. Does not change the open board.
+/// An empty list means every workspace. Callers that collapse the filter to
+/// one workspace open that board themselves.
 export function setSelectedWorkspaces(ids) {
-  const next = [...new Set(ids)].sort();
-  if (!next.length) return;
-  const workspace = next.length === 1 ? next[0] : null;
-  if (workspace === currentWorkspace && JSON.stringify(next) === JSON.stringify(selectedWorkspaces)) return;
+  const next = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))].sort();
+  if (next.length === selectedWorkspaces.length && next.every((id, index) => id === selectedWorkspaces[index])) return;
   selectedWorkspaces = next;
-  currentWorkspace = workspace;
-  aggregateLinked = !workspace;
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
 }
@@ -242,10 +261,8 @@ export function onWorkspaceChange(listener) {
 
 export function setWorkspace(id) {
   const next = id || null;
-  const selectionChanged = !next && selectedWorkspaces.length > 0;
-  selectedWorkspaces = next ? [next] : [];
   if (next) aggregateLinked = false;
-  if (next === currentWorkspace && !selectionChanged) return;
+  if (next === currentWorkspace) return;
   currentWorkspace = next;
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
@@ -256,13 +273,23 @@ export function setWorkspace(id) {
 // listeners re-render labels when the list arrives.
 let workspaceNames = new Map();
 const workspaceNameListeners = new Set();
+// Owned rows last given to `setWorkspaceNames`, in that list's order. The
+// Tasks filter and the All workspaces drain select both read this catalog;
+// the task filter does not narrow the drain select.
+let workspaceCatalog = [];
 
 export function setWorkspaceNames(workspaces) {
   const list = (Array.isArray(workspaces) ? workspaces : []).filter((workspace) => workspace && workspace.id);
+  workspaceCatalog = list;
   workspaceNames = new Map(list.filter((workspace) => workspace.name).map((workspace) => [workspace.id, workspace.name]));
   workspaceOrder = new Map(list.map((workspace, index) => [workspace.id, index]));
   workspaceColorSlots = assignWorkspaceColorSlots(list.map((workspace) => workspace.id));
   for (const listener of workspaceNameListeners) listener();
+}
+
+/// Owned workspaces last published by `setWorkspaceNames`, in list order.
+export function workspaceCatalogEntries() {
+  return workspaceCatalog;
 }
 
 // Where a workspace sits in the picker (`/api/workspaces` order); the All
@@ -831,14 +858,25 @@ export function restoreScopeFromUrl() {
   // stream, and marks the host's workspaces for reloading. The workspace below
   // is then the one this entry names on that host.
   requestHostSwitch(query.get("host") || null, { fromHistory: true });
+  const listed = [...new Set(query.getAll("workspaces").filter(Boolean))];
   const linked = query.get("workspace");
-  if (linked === ALL_WORKSPACES_TOKEN) {
-    // The workspace count still belongs to the host being left. Keep the
-    // address's intent until discovery decides whether this host can aggregate.
+  // The workspace count still belongs to the host being left. Keep the
+  // address's intent until discovery decides whether this host can aggregate.
+  // Several workspace values open All workspaces with that filter. One value
+  // opens that board. An address with neither leaves the workspace alone.
+  if (listed.length > 1) {
+    aggregateLinked = true;
+    setSelectedWorkspaces(listed);
+    setWorkspace(null);
+  } else if (listed.length === 1) {
+    setSelectedWorkspaces([]);
+    setWorkspace(listed[0]);
+  } else if (linked === ALL_WORKSPACES_TOKEN) {
+    setSelectedWorkspaces([]);
     aggregateLinked = true;
     setWorkspace(null);
-    if (query.getAll("workspaces").length) setSelectedWorkspaces(query.getAll("workspaces"));
   } else if (linked) {
+    setSelectedWorkspaces([]);
     setWorkspace(linked);
   }
   // Scope listeners reset their view state, and one clears the open task from

@@ -14,6 +14,9 @@ mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 
+#[cfg(test)]
+mod tests;
+
 use ci::log_answer as ci_log_answer;
 use ci::rerun as ci_rerun;
 pub(super) use ci::{

@@ -10,13 +10,6 @@ pub(super) const SUCCESSOR_CHAIN_WINDOW: usize = 64;
 /// The candidate and publication checkpoints a newer execution must not hold.
 pub(super) const PUBLICATION_KEYS: [&str; 4] = ["commit", "push", "pr_open", "landing_push"];
 
-/// A run of this job can bind the task. A gate or auto-dispatch wrapper also
-/// carries the task, but its delivery child is the binding.
-pub(super) fn binds_task(job_id: &str) -> bool {
-    matches!(job_id, "task_pr_pipeline" | "task_local_pipeline")
-        || job_id.starts_with("task_claimed_")
-}
-
 impl OrbitRuntime {
     pub(super) fn repairable_published_source(
         &self,
@@ -112,7 +105,11 @@ impl OrbitRuntime {
         }
         runs[current_at + 1..source_at]
             .iter()
-            .filter(|run| binds_task(&run.job_id))
+            // A run of a delivery leaf can bind the task. A gate or auto-dispatch
+            // wrapper also carries the task, but its delivery child is the binding.
+            .filter(|run| {
+                orbit_types::workflow::is_delivery_leaf_job_by_claimed_prefix(&run.job_id)
+            })
             .map(|run| {
                 if run.created_at >= current.created_at {
                     return Err(refuse(
@@ -141,7 +138,7 @@ impl OrbitRuntime {
             )
             || successor.finished_at.is_none()
             || run_owner_liveness(successor) != RunOwnerLiveness::Stopped
-            || successor.job_id != "task_pr_pipeline"
+            || successor.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
             || successor.executed_on != source.executed_on
             || successor.input.as_ref().is_none_or(|i| {
                 i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])

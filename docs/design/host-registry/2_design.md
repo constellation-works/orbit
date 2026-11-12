@@ -3,7 +3,7 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-10-26
+last_updated: 2026-11-11
 last_validated: 2026-10-19
 status: Accepted
 feature: host-registry
@@ -159,7 +159,7 @@ Orbit Web loads local workspaces from orbit-registry, derives checkout-path heal
 
 ### MCP
 
-orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` and `orbit.task.artifact` action `get` are the exceptions: an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
+orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` and `orbit.task.artifact` action `get` are the exceptions ([ORB-23280]): an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
 
 orbit.workspace.list returns active logical workspaces that have a checkout registered on the accepting machine. Its envelope carries the accepting machine's `machine_id` and, additively, its `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`; the private federated discovery path carries the same keys. This includes locally registered replicas and excludes active checkoutless catalog entries; owner_machine_id is not a discovery filter. Remote MCP uses direct SSH stdio, and the local proxy does not resolve workspaces, inspect checkouts or read the remote registry.
 
@@ -197,5 +197,6 @@ Older databases may retain tables and migration records from the removed fleet-r
 - [ORB-14449] implemented task-prefix routing and --host selection.
 - [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
 - [ORB-16763] added registration-time host OS facts for serving-host crew selection.
+- [ORB-23280] consolidated MCP tool families behind an action field, so id-routed artifact and recovery calls name an action.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

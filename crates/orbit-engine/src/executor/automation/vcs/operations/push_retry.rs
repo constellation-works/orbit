@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_common::process::jitter::JitterRng;
-use orbit_common::{ForgePushHoldFailure, OrbitError};
+use orbit_common::{ForgePushHoldFailure, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
 use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
@@ -206,7 +206,8 @@ impl Pushed {
 
 /// Why a push did not reach the remote.
 pub(super) enum PushFailure {
-    /// Not retried: a permanent refusal, a timeout, a failed confirmation.
+    /// Not retried: a permanent refusal, an unconfirmed timeout, or a failed
+    /// confirmation read.
     Error(OrbitError),
     /// Every attempt in the budget was refused for a transient reason.
     Exhausted(Box<PushExhausted>),
@@ -289,14 +290,33 @@ fn bounded_diagnostic(text: &str) -> String {
     text[..end].to_string()
 }
 
+/// What a publication read showed for the pushed ref.
+enum PublicationObservation {
+    /// Every effective push URL has `head_sha` at `target_ref`.
+    Landed(orbit_exec::ExecutionResult),
+    /// The destination has no such ref.
+    Absent,
+    /// The ref is present and names a different commit.
+    OtherSha(String),
+}
+
+/// How one remote's `ls-remote` output names `target_ref`.
+enum RefTip {
+    Exact,
+    Absent,
+    OtherSha(String),
+}
+
 /// Whether every effective publication destination holds `head_sha` at
 /// `target_ref`. A failed remote read is an error, so it stops further
-/// mutations instead of reading as an unconfirmed push.
+/// mutations instead of reading as an unconfirmed push. Anything other than
+/// an exact match reports why, so a timed-out push can name the miss without
+/// a second probe.
 fn confirmed_at_publication_destination(
     repo_root: &Path,
     target_ref: &str,
     head_sha: &str,
-) -> Result<Option<orbit_exec::ExecutionResult>, OrbitError> {
+) -> Result<PublicationObservation, OrbitError> {
     let listed = execute(
         "git",
         vec![
@@ -366,27 +386,133 @@ fn confirmed_at_publication_destination(
             LONG_TIMEOUT_MS,
             "push remote confirmation",
         )?;
-        let holds = remote.stdout.lines().any(|line| {
-            let mut fields = line.split_whitespace();
-            fields
-                .next()
-                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
-                && fields.next() == Some(target_ref)
-                && fields.next().is_none()
-        });
-        if !holds {
-            return Ok(None);
-        }
-        if confirmation.is_none() {
-            confirmation = Some(remote);
+        match observed_ref_tip(&remote.stdout, target_ref, head_sha) {
+            RefTip::Exact => {
+                if confirmation.is_none() {
+                    confirmation = Some(remote);
+                }
+            }
+            RefTip::Absent => return Ok(PublicationObservation::Absent),
+            RefTip::OtherSha(sha) => return Ok(PublicationObservation::OtherSha(sha)),
         }
     }
-    Ok(confirmation)
+    match confirmation {
+        Some(result) => Ok(PublicationObservation::Landed(result)),
+        None => Err(OrbitError::Execution(
+            "private automation VCS push remote confirmation found no effective push URL for 'origin'"
+                .to_string(),
+        )),
+    }
+}
+
+/// The tip `stdout` names for `target_ref`. An exact `head_sha` match wins
+/// over any other line for that ref.
+fn observed_ref_tip(stdout: &str, target_ref: &str, head_sha: &str) -> RefTip {
+    let mut other = None;
+    for line in stdout.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(sha) = fields.next() else {
+            continue;
+        };
+        if fields.next() != Some(target_ref) || fields.next().is_some() {
+            continue;
+        }
+        if sha.eq_ignore_ascii_case(head_sha) {
+            return RefTip::Exact;
+        }
+        if other.is_none() {
+            other = Some(sha.to_string());
+        }
+    }
+    match other {
+        Some(sha) => RefTip::OtherSha(sha),
+        None => RefTip::Absent,
+    }
+}
+
+/// A timed-out push that the publication read did not show as landed.
+/// Permanent: the push is not sent again, and a later transient retry must
+/// not treat the confirmation detail as a reason to resend it.
+fn timed_out_confirmation_error(
+    operation: &str,
+    target_ref: &str,
+    head_sha: &str,
+    observation: Result<PublicationObservation, OrbitError>,
+) -> OrbitError {
+    let outcome = match observation {
+        Ok(PublicationObservation::Absent) => "confirmation absent".to_string(),
+        Ok(PublicationObservation::OtherSha(sha)) => {
+            format!("confirmation at another sha {sha}")
+        }
+        Ok(PublicationObservation::Landed(_)) => {
+            "confirmation unreadable: landed observation was not accepted".to_string()
+        }
+        Err(error) => {
+            let detail = error.to_string().replace(['\n', '\r'], " ");
+            format!("confirmation unreadable: {detail}")
+        }
+    };
+    let message = format!(
+        "private automation VCS {operation} failed: process timed out pushing commit {head_sha} \
+         to {target_ref}; {outcome}"
+    );
+    OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+        operation: operation.to_string(),
+        class: PrivateVcsFailureClass::Other,
+        message,
+        read_throttle: None,
+    }))
+}
+
+/// One probe after a timed-out push. A lost reply may hide a push that
+/// landed; an exact ref is success, and any other outcome fails without
+/// sending the push again.
+fn confirm_timed_out_push(
+    repo_root: &Path,
+    target_ref: &str,
+    head_sha: &str,
+    operation: &str,
+    attempt: u32,
+    waited_ms: u64,
+) -> Result<Pushed, PushFailure> {
+    let observation = confirmed_at_publication_destination(repo_root, target_ref, head_sha);
+    match observation {
+        Ok(PublicationObservation::Landed(confirmation)) => {
+            tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",
+                operation,
+                attempt,
+                waited_ms,
+                target_ref,
+                head_sha,
+                "confirmed push landed after a timeout"
+            );
+            Ok(Pushed {
+                result: confirmation,
+                attempts: attempt,
+                waited_ms,
+            })
+        }
+        other => {
+            tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
+                operation,
+                attempt,
+                waited_ms,
+                target_ref,
+                head_sha,
+                "timed-out push was not confirmed at the publication destination"
+            );
+            Err(PushFailure::Error(timed_out_confirmation_error(
+                operation, target_ref, head_sha, other,
+            )))
+        }
+    }
 }
 
 /// Retry only transient push failures, confirming the exact remote ref before
 /// resending. A lost reply may hide a successful push, including one that
-/// consumed its force-with-lease. A failed remote read stops further mutations.
+/// consumed its force-with-lease. A timeout is confirmed once the same way
+/// and is not retried: an exact ref is a landed push, and any other outcome
+/// fails. A failed remote read stops further mutations.
 pub(super) fn execute_push_with_transient_retry(
     args: &[String],
     repo_root: &Path,
@@ -416,7 +542,12 @@ pub(super) fn execute_push_with_transient_retry(
         )
         .map_err(PushFailure::Error)?;
         let diagnostic = format!("{}\n{}", result.stdout, result.stderr);
-        if result.success || result.timed_out || !is_transient_push_failure(&diagnostic) {
+        if result.timed_out {
+            return confirm_timed_out_push(
+                repo_root, target_ref, head_sha, operation, attempt, waited_ms,
+            );
+        }
+        if result.success || !is_transient_push_failure(&diagnostic) {
             return succeeded(result, operation)
                 .map(|result| Pushed {
                     result,
@@ -433,7 +564,7 @@ pub(super) fn execute_push_with_transient_retry(
         // wrote, not the fetch remote: a plain `ls-remote origin` reads
         // the fetch URL, and probing the resolved push URL by URL would
         // apply `insteadOf` to it a second time [ORB-17671, ORB-17686].
-        if let Some(confirmation) =
+        if let PublicationObservation::Landed(confirmation) =
             confirmed_at_publication_destination(repo_root, target_ref, head_sha)
                 .map_err(PushFailure::Error)?
         {

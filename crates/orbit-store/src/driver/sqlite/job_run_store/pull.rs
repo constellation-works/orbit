@@ -6,7 +6,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
+    self, JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
     RunIdRole,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -358,7 +358,7 @@ fn occupancy(
     let reviewing = active
         .iter()
         .filter(|(_, job, state)| {
-            job == CLAIMED_PR_PIPELINE
+            job == workflow::TASK_CLAIMED_PR_PIPELINE_JOB
                 && state
                     .as_deref()
                     .and_then(|raw| serde_json::from_str::<PipelineState>(raw).ok())
@@ -458,8 +458,8 @@ pub(super) fn drain_occupancy(
 /// bypass the lifecycle the claim exists to enforce.
 fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     match request.ship.mode.as_str() {
-        "pr" => Ok(CLAIMED_PR_PIPELINE),
-        "local" => Ok(CLAIMED_LOCAL_PIPELINE),
+        "pr" => Ok(workflow::TASK_CLAIMED_PR_PIPELINE_JOB),
+        "local" => Ok(workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB),
         _ => Err(invalid("unsupported pulled leaf mode")),
     }
 }
@@ -518,9 +518,6 @@ fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
     })
 }
 
-pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
-pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
-
 /// The loose-leaf wrapper the legacy drain dispatches. It occupies a slot on
 /// behalf of the leaf beneath it, so it is only counted while nothing beneath
 /// it is.
@@ -529,10 +526,7 @@ const LEGACY_WRAPPER_PIPELINE: &str = "task_auto_pipeline";
 /// Every leaf definition that occupies one drain slot: the legacy pair a
 /// non-pulled drain still dispatches, and the claimed pair a pulled one does.
 fn is_leaf_pipeline(job: &str) -> bool {
-    matches!(
-        job,
-        "task_pr_pipeline" | "task_local_pipeline" | CLAIMED_PR_PIPELINE | CLAIMED_LOCAL_PIPELINE
-    )
+    workflow::is_delivery_leaf_job(job)
 }
 
 pub(super) fn allocate(
@@ -660,7 +654,7 @@ pub(super) fn mutate(
                 // [ORB-17773] `crew_source` and `complexity` ride the
                 // snapshot so the follower can re-draw an automatic
                 // assignment under its own usage pressure.
-                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
                 input["experiment_capture"] = serde_json::to_value(record.receipt.as_ref().and_then(|receipt| receipt.experiments.as_ref())).map_err(|error| OrbitError::Store(format!("serialize experiment capture: {error}")))?;
                 // Carry the profile key already chosen by admission into the
                 // queued leaf. The host forecast then exchanges its reservation

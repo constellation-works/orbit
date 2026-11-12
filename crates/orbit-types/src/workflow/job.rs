@@ -9,6 +9,59 @@ use serde_json::Value;
 use crate::identity::OrbitId;
 use crate::workflow::JobRunStateError;
 
+/// Shipped delivery leaf that publishes a task through a pull request.
+pub const TASK_PR_PIPELINE_JOB: &str = "task_pr_pipeline";
+
+/// Shipped delivery leaf that lands a task on the local base branch.
+pub const TASK_LOCAL_PIPELINE_JOB: &str = "task_local_pipeline";
+
+/// Claimed delivery leaf a pull drain runs to publish through a pull request.
+pub const TASK_CLAIMED_PR_PIPELINE_JOB: &str = "task_claimed_pr_pipeline";
+
+/// Claimed delivery leaf a pull drain runs to land on the local base branch.
+pub const TASK_CLAIMED_LOCAL_PIPELINE_JOB: &str = "task_claimed_local_pipeline";
+
+/// Leaf definitions that only a claim may run; each claimed leaf is a whole
+/// delivery.
+pub const CLAIMED_DELIVERY_LEAF_JOBS: &[&str] = &[
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+    TASK_CLAIMED_PR_PIPELINE_JOB,
+];
+
+/// The four shipped delivery leaves: the PR and local leaves, owned or claimed.
+pub const DELIVERY_LEAF_JOBS: &[&str] = &[
+    TASK_PR_PIPELINE_JOB,
+    TASK_LOCAL_PIPELINE_JOB,
+    TASK_CLAIMED_PR_PIPELINE_JOB,
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+];
+
+/// Id prefix shared by claimed delivery leaves. Callers that historically
+/// matched claimed leaves by prefix keep doing so through this constant.
+pub const CLAIMED_DELIVERY_LEAF_PREFIX: &str = "task_claimed_";
+
+/// Whether `job` is one of the owner's delivery leaves (PR or local).
+pub fn is_owner_delivery_leaf_job(job: &str) -> bool {
+    job == TASK_PR_PIPELINE_JOB || job == TASK_LOCAL_PIPELINE_JOB
+}
+
+/// Whether `job` is exactly one of the claimed delivery leaves.
+pub fn is_claimed_delivery_leaf_job(job: &str) -> bool {
+    CLAIMED_DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is exactly one of the four shipped delivery leaves.
+pub fn is_delivery_leaf_job(job: &str) -> bool {
+    DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is an owner delivery leaf or carries the claimed-leaf id
+/// prefix ([`CLAIMED_DELIVERY_LEAF_PREFIX`]). Unlike [`is_delivery_leaf_job`]
+/// this admits any `task_claimed_*` id, which the source-repair paths rely on.
+pub fn is_delivery_leaf_job_by_claimed_prefix(job: &str) -> bool {
+    is_owner_delivery_leaf_job(job) || job.starts_with(CLAIMED_DELIVERY_LEAF_PREFIX)
+}
+
 pub const fn default_job_max_active_runs() -> u32 {
     1
 }

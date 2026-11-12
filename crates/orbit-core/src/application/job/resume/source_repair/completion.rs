@@ -45,7 +45,7 @@ impl OrbitRuntime {
         let Some(run) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
-        if run.job_id != "task_pr_pipeline" {
+        if run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB {
             return Ok(None);
         }
         let tasks = task_ids

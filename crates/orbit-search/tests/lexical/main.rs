@@ -145,6 +145,40 @@ fn writes_updates_deletes_and_rebuilds_fts_synchronously() {
     );
 }
 
+/// [ORB-24077] The write-free/observational open stays read-only all the way
+/// to the composed handle, so task writes through such a runtime cannot
+/// reach the index; an ordinary open of the same database stays writable.
+#[test]
+fn read_only_open_reports_itself_read_only_and_rejects_index_writes() {
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let path = dir.path().join("search.db");
+    let writable = LexicalIndex::open(&path).expect("open writable");
+    assert!(!writable.is_read_only(), "ordinary open is writable");
+    writable
+        .store()
+        .expect("store")
+        .index_task(&task("task-a", "cobalt routing observatory"))
+        .expect("index through the writable open");
+    drop(writable);
+
+    let read_only = LexicalIndex::open_read_only(&path).expect("open read-only");
+    assert!(read_only.is_read_only(), "observational open is read-only");
+    let store = read_only.store().expect("store");
+    assert!(store.is_read_only());
+    assert!(
+        store
+            .index_task(&task("task-b", "quartz routing telescope"))
+            .is_err(),
+        "a read-only store must not accept an index write"
+    );
+    assert_eq!(
+        bm25_top_k(store, "cobalt observatory", Some("task"), None, 10).expect("query")[0]
+            .source_id,
+        "task-a",
+        "reads still serve the previously indexed corpus"
+    );
+}
+
 #[test]
 fn first_open_migrates_legacy_vectors_and_preserves_search() {
     let dir = tempfile::tempdir().expect("fixture directory");

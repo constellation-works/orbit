@@ -16,14 +16,6 @@ use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
-/// The jobs whose runs implement a task: the PR and local delivery leaves,
-/// owned or claimed.
-pub(super) const IMPLEMENTATION_JOBS: &[&str] = &[
-    "task_pr_pipeline",
-    "task_local_pipeline",
-    "task_claimed_pr_pipeline",
-    "task_claimed_local_pipeline",
-];
 /// Leads of the review gate's settlement comment, before the attempt id.
 pub(super) const SETTLEMENT_LEADS: &[&str] = &[
     "before-PR review settled attempt `",

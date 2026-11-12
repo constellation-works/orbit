@@ -6,7 +6,7 @@ spec:
   type: agent_loop
   description: >
     Assessment step for the v2 assess-and-fix loop example. Consumes the
-    current diff and emits a structured verdict.
+    implementation diff and emits a structured verdict.
   input_schema_json:
     type: object
     required: [diff]
@@ -31,10 +31,12 @@ spec:
         items:
           type: object
   instruction: |
-    Assess the diff and return a structured verdict. Emit `decision: approved`
+    Assess the given diff and return a structured verdict. Emit `decision: approved`
     only when there are no blocking issues; otherwise emit
-    `changes_requested` with findings and a non-zero `blocking_count`. Carry
-    previously raised findings forward in the loop input so it converges.
+    `changes_requested` with findings and a non-zero `blocking_count`. The diff
+    input is the frozen implementation diff, and no loop input carries findings
+    back into a later assessment: each iteration judges the same original diff,
+    while the findings flow forward to the fix step, which commits to the branch.
   tools:
     - orbit.audit.*
   on_denial: terminate

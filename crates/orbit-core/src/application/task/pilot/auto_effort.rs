@@ -122,11 +122,9 @@ impl OrbitRuntime {
         let resolved = self.auto_effort_crew_choice(crew, &subject);
         let draw = ActivityCrewDraw {
             crew: resolved.resolved.clone(),
-            source: format!(
-                "{}; {}",
-                family.source,
-                crate::application::contracts::auto_effort_note(&resolved)
-            ),
+            source: family
+                .source
+                .with_note(&crate::application::contracts::auto_effort_note(&resolved)),
             eligible_pool: family.eligible_pool.clone(),
             auto_effort: Some(resolved),
         };

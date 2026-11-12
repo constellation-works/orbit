@@ -112,13 +112,69 @@ impl RunDispatch {
                 ))
             })?;
         if let Some(workspace) = workspace
-            && self.run.workspace.as_deref() != Some(workspace)
+            && !self.names_run_workspace(workspace)
         {
             return Err(OrbitError::PolicyDenied(format!(
                 "the plugin broker serves only this run's workspace, not `{workspace}`"
             )));
         }
         Ok(resolved)
+    }
+
+    /// Whether `selector` is a spelling of this run's own workspace.
+    ///
+    /// The run records the logical catalog id, while a nested `orbit` forwards
+    /// the store identity it resolved the caller's selector to (the task
+    /// partition id), and a caller may spell the workspace by its registered
+    /// name. All of them name one workspace, so the comparison is between the
+    /// workspace's spellings, not between two strings. Fail-closed: a run with
+    /// no recorded workspace, an unreadable registry or a selector that is not
+    /// one of the run's spellings is refused, never admitted by default.
+    fn names_run_workspace(&self, selector: &str) -> bool {
+        let Some(recorded) = self.run.workspace.as_deref() else {
+            return false;
+        };
+        if recorded == selector {
+            return true;
+        }
+        let mut spellings = BTreeSet::from([recorded.to_string()]);
+        let registry = orbit_registry::workspace_registry::load_registry_from_read_only(
+            &orbit_registry::workspace_registry::registry_path_for(&self.runtime.global_root()),
+        )
+        .ok()
+        .map(|load| load.registry);
+        if let Some(registry) = &registry
+            && let Ok(workspace) =
+                orbit_registry::workspace_registry::resolve_logical_workspace(registry, recorded)
+        {
+            spellings.insert(workspace.id.clone());
+            // A name another workspace shares does not identify this one.
+            if orbit_registry::workspace_registry::resolve_logical_workspace(
+                registry,
+                &workspace.name,
+            )
+            .is_ok_and(|named| named.id == workspace.id)
+            {
+                spellings.insert(workspace.name.clone());
+            }
+        }
+        // The host runtime serves this run, so its own identities are the
+        // run's too, but only once the run's recorded workspace is one of them.
+        let mut runtime_identities = Vec::new();
+        if let Ok(id) = self.runtime.workspace_id() {
+            runtime_identities.push(id);
+        }
+        if let Some(binding) = self.runtime.workspace_runtime_binding() {
+            runtime_identities.push(binding.logical_workspace_id.clone());
+            runtime_identities.push(binding.task_partition_id.clone());
+        }
+        if runtime_identities
+            .iter()
+            .any(|identity| spellings.contains(identity))
+        {
+            spellings.extend(runtime_identities);
+        }
+        spellings.contains(selector)
     }
 
     /// The run's own activity policy, applied fail-closed: an allowlist

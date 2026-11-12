@@ -1,722 +1,79 @@
 //! A task whose delivery PR an operator merged outside Orbit settles to done
-//! from that merge, through the owner pass and the operator entry point.
-//!
-//! Each test injects a fake forge holding the repository's merged PRs: the
-//! most recent ones its listing returns, and older ones only a lookup by
-//! number reaches. Execution claims are coordination rows written the way
-//! the claim allocator writes them, so the store's own guards decide.
-//!
-//! A claimed delivery's handoff is accepted, authorized, dispatched, stopped
-//! and revoked through the owner's own claim mutations and operator console,
-//! so the claim journal decides whether a revoked handoff settles.
-
-use std::collections::{BTreeMap, VecDeque};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+//! from that merge. Tests inject a fake forge (recent listing plus older
+//! by-number lookup); claims and handoffs use the owner's own mutations, so
+//! the store's guards decide.
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_core::application::review::{DistributedClaimState, ExpectedCandidate};
-use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
-use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
-use orbit_core::runtime::task_pr_forge::{
-    ForgePullRequest, LeasePullRequest, MergedPullRequest, PullRequestBlockers,
-    PullRequestMergeOutcome, TaskPrForge,
-};
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionRunContext,
-    AdmissionShipContract, ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
-};
-use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_core::TaskStatus;
+use orbit_core::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
+use orbit_core::runtime::task_pr_forge::ForgePullRequest;
+use orbit_store::contracts::HandoffObservation;
+use orbit_store::contracts::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::task::ExternalRef;
-use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
-use orbit_types::workflow::handoff::{
-    HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
-    LandingAttemptState, LandingStartState, TaskHandoff,
-};
-use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
 use serde_json::json;
-use tempfile::TempDir;
+use std::time::{Duration, Instant};
 
-const BOT: &str = "orbit-bot";
-const MERGE_COMMIT: &str = "03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9";
-/// The owner policy a `done` claim contract names, which acceptance matches
-/// against the owner's observed completion authority.
-const COMPLETION_POLICY: &str = "workspace-config:workflow.distributed_completion";
-/// The branch a claimed handoff lands on, unlike the workspace base branch.
-const LANDING: &str = "release-landing";
+use crate::external_merge_fixture::*;
+pub(crate) use crate::external_merge_fixture::{Fixture, Handoff};
 
 mod pr_supersession;
 
-/// How far a claimed handoff's completion authority got.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Authority {
-    /// Accepted under a `review` contract: it awaits operator approval.
-    Unapproved,
-    /// Accepted under a `done` contract: the owner's landing job carries it.
-    Authorized,
-    /// Its authorized landing stopped while its claim still holds completion authority.
-    Stopped,
-    /// Authorized, its landing attempt stopped, then revoked by an operator:
-    /// the observed release-prep case.
-    Revoked,
-    /// Authorized and revoked while its landing attempt is still dispatched.
-    RevokedWhileDispatched,
-}
+crate::scenario_table!(
+    released_claims,
+    released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref,
+    released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch,
+    a_live_leaf_carrying_a_released_claim_task_prevents_settlement
+);
+crate::scenario_table!(
+    eligible_and_blocked,
+    external_merge_settlement_refuses_every_ineligible_status,
+    a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_its_files,
+    the_operator_settles_one_task_from_a_merge_older_than_the_listing
+);
+crate::scenario_table!(
+    handoff_claims,
+    a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit,
+    landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path,
+    a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged,
+    external_merge_recovery_suggestions_include_the_observed_claim_phase,
+    the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither,
+    a_template_body_without_a_task_placeholder_still_settles_an_external_merge
+);
+crate::scenario_table!(
+    clock_ticks,
+    clock_tick_settles_blocked_and_review_tasks_without_a_drain,
+    clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled,
+    clock_tick_forge_failure_does_not_fail_the_tick
+);
+crate::scenario_table!(
+    stopped_handoff,
+    stopped_handoff_settles_a_deleted_branch_after_two_operator_updates
+);
 
-/// A claimed delivery the owner accepted as a typed handoff.
-struct Handoff {
-    task: String,
-    claim_id: String,
-    handoff_id: String,
-}
-
-#[derive(Default)]
-struct ForgeState {
-    /// Fail the merged listing and every lookup by number, as a forge outage
-    /// would.
-    fail_merged: bool,
-    /// What the most-recently-merged listing returns.
-    recent: Vec<MergedPullRequest>,
-    /// Merged PRs only a lookup by number reaches.
-    older: BTreeMap<u64, MergedPullRequest>,
-    /// Open and closed-unmerged PRs return no merge from the forge.
-    unmerged: BTreeMap<u64, &'static str>,
-    closed: Vec<u64>,
-    open: BTreeMap<u64, ForgePullRequest>,
-    closure_comments: BTreeMap<u64, String>,
-}
-
-#[derive(Default, Clone)]
-struct FakeForge(Arc<Mutex<ForgeState>>);
-
-impl FakeForge {
-    fn merged(
-        number: u64,
-        head: String,
-        body: String,
-        author: &str,
-        base: &str,
-    ) -> MergedPullRequest {
-        MergedPullRequest {
-            pull: ForgePullRequest {
-                number,
-                head_branch: head,
-                body,
-                author: author.to_string(),
-            },
-            base_branch: base.to_string(),
-            head_sha: "0dbd8e2000000000000000000000000000000000".to_string(),
-            merge_commit: MERGE_COMMIT.to_string(),
-        }
-    }
-
-    /// A delivery PR of `task_id`, merged into `base` by `author`.
-    fn merge_recent(&self, number: u64, task_id: &str, author: &str, base: &str) {
-        self.0.lock().unwrap().recent.push(Self::merged(
-            number,
-            format!("orbit/{task_id}-47642870"),
-            format!("Delivers {task_id}.\n\nOrbit run jrun-1"),
-            author,
-            base,
-        ));
-    }
-}
-
-impl TaskPrForge for FakeForge {
-    fn open_pull_requests(&self, _repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().open.values().cloned().collect())
-    }
-
-    fn merged_pull_requests(
-        &self,
-        _repo_root: &Path,
-    ) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        let state = self.0.lock().unwrap();
-        if state.fail_merged {
-            return Err(OrbitError::Execution("forge unavailable".into()));
-        }
-        Ok(state.recent.clone())
-    }
-
-    fn merged_pull_request(
-        &self,
-        _repo_root: &Path,
-        number: u64,
-    ) -> Result<Option<MergedPullRequest>, OrbitError> {
-        let state = self.0.lock().unwrap();
-        if state.fail_merged {
-            return Err(OrbitError::Execution("forge unavailable".into()));
-        }
-        if state.unmerged.contains_key(&number) {
-            return Ok(None);
-        }
-        Ok(state
-            .recent
-            .iter()
-            .chain(state.older.values())
-            .find(|merged| merged.pull.number == number)
-            .cloned())
-    }
-
-    fn authenticated_login(&self, _repo_root: &Path) -> Result<String, OrbitError> {
-        Ok(BOT.to_string())
-    }
-
-    fn close_pull_request(
-        &self,
-        _repo_root: &Path,
-        number: u64,
-        comment: &str,
-    ) -> Result<(), OrbitError> {
-        let mut state = self.0.lock().unwrap();
-        state.open.remove(&number);
-        state.closed.push(number);
-        state.closure_comments.insert(number, comment.to_string());
-        Ok(())
-    }
-}
-
-struct Fixture {
-    _root: TempDir,
-    runtime: OrbitRuntime,
-    forge: FakeForge,
-    base: String,
-}
-
-impl Fixture {
-    fn new() -> Self {
-        Self::with_config("")
-    }
-
-    fn with_config(config: &str) -> Self {
-        crate::scenarios::require_isolated_mutable_fixture("task_external_merge::Fixture::new");
-        let root =
-            TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
-        let global_root = root.path().join("global");
-        let repo_root = root.path().join("repo");
-        let workspace_root = repo_root.join(".orbit");
-        std::fs::create_dir_all(&global_root).expect("create global root");
-        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
-        std::fs::write(repo_root.join("shared.txt"), "fixture\n").expect("write shared file");
-        std::fs::write(workspace_root.join("config.toml"), config).expect("write config");
-        let forge = FakeForge::default();
-        let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
-            .expect("build test runtime")
-            .with_task_pr_forge(Arc::new(forge.clone()));
-        let base = runtime.workspace_base_branch().to_string();
-        Self {
-            _root: root,
-            runtime,
-            forge,
-            base,
-        }
-    }
-
-    /// A task on `shared.txt` in `status`, with `prs` recorded the way
-    /// delivery records them.
-    fn add_task(&self, title: &str, status: TaskStatus, prs: &[u64]) -> String {
-        self.runtime
-            .add_task(TaskAddParams {
-                title: title.to_string(),
-                description: format!("Fixture task: {title}"),
-                acceptance_criteria: vec!["Fixture task is observable.".to_string()],
-                plan: "Fixture plan.".to_string(),
-                context_files: vec!["file:shared.txt".to_string()],
-                complexity: TaskComplexity::Low,
-                status: Some(status),
-                external_refs: prs
-                    .iter()
-                    .map(|number| ExternalRef::github_pr(number.to_string()).unwrap())
-                    .collect(),
-                ..Default::default()
-            })
-            .expect("add task")
-            .id
-    }
-
-    /// A running execution claim of `task_id` on `shared.txt`.
-    fn claim(&self, task_id: &str, run_id: &str) {
-        self.claim_with_phase(task_id, run_id, "running");
-    }
-
-    /// A live execution claim in `phase` on `shared.txt`.
-    fn claim_with_phase(&self, task_id: &str, run_id: &str, phase: &str) {
-        let claim_id = format!("claim-{run_id}");
-        let claim = json!({
-            "claim_id": claim_id,
-            "task_id": task_id,
-            "request_id": format!("req-{run_id}"),
-            "executed_on": {"machine_id": "machine-1", "machine_name": null},
-            "run_context": {"run_id": run_id, "job_name": "test-job", "machine_name": null},
-            "footprint": ["file:shared.txt"],
-            "reservation_id": format!("res-{run_id}"),
-            "reservation_expires_at": (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
-            "phase": phase,
-        });
-        rusqlite::Connection::open(self.runtime.global_root().join("orbit.db"))
-            .unwrap()
-            .execute(
-                "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
-                 VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
-                rusqlite::params![
-                    self.runtime.workspace_id().unwrap(),
-                    claim_id,
-                    claim.to_string(),
-                    Utc::now().to_rfc3339()
-                ],
-            )
-            .unwrap();
-    }
-
-    /// Bind `task_id` to a running run of this process.
-    fn bind_live_run(&self, task_id: &str) {
-        let jobs = orbit_store::compose::workspace_job_run_store(
-            self.runtime.sqlite_store().unwrap(),
-            self.runtime.workspace_id().unwrap(),
-        );
-        let run = jobs
-            .insert_job_run(
-                "task_pr_pipeline",
-                1,
-                Utc::now(),
-                Some(json!({ "task_ids": [task_id] })),
-                None,
-            )
-            .unwrap();
-        jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
-            .unwrap();
-        self.runtime
-            .apply_task_automation_update(
-                task_id,
-                TaskAutomationUpdate {
-                    job_run_id: Some(run.run_id),
-                    ..TaskAutomationUpdate::default()
-                },
-            )
-            .expect("bind the run");
-    }
-
-    fn status(&self, task_id: &str) -> TaskStatus {
-        self.runtime.get_task(task_id).unwrap().status
-    }
-
-    fn boundary(&self) -> TaskCommitBoundary {
-        TaskCommitBoundary::new(
-            self.runtime.sqlite_store().unwrap(),
-            TaskRegistryStore::open(&task_registry_path(&self.runtime.global_root())).unwrap(),
-            self.runtime.workspace_id().unwrap(),
-        )
-        .unwrap()
-    }
-
-    /// Admit a real claim of a new task for a follower's leaf `leaf-<number>`
-    /// under a `pr` contract landing on `landing`, completing as `done` under
-    /// the owner's policy or waiting in `review`, and bind the leaf. Returns
-    /// the task, its claim and the bound leaf's invocation.
-    fn bound_claim(
-        &self,
-        number: u64,
-        landing: &str,
-        done: bool,
-    ) -> (String, String, ClaimInvocation) {
-        self.bound_claim_with_mode(number, landing, done, "pr")
-    }
-
-    fn bound_claim_with_mode(
-        &self,
-        number: u64,
-        landing: &str,
-        done: bool,
-        mode: &str,
-    ) -> (String, String, ClaimInvocation) {
-        let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
-        let boundary = self.boundary();
-        let ship = AdmissionShipContract {
-            mode: mode.into(),
-            base_branch: self.base.clone(),
-            landing_branch: landing.into(),
-            before_pr: false,
-            before_landing: false,
-            completion: if done { "done" } else { "review" }.into(),
-            authorization_reference: done.then(|| COMPLETION_POLICY.to_string()),
-            review: None,
-        };
-        let request = AdmissionRequest {
-            labels: Vec::new(),
-            request_id: format!("req-{number}"),
-            caller_version: "test".into(),
-            caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_fingerprint: None,
-            caller_before_pr: false,
-            review_gate: true,
-            selective_review: false,
-            visual_resolution: 0,
-            run_context: AdmissionRunContext {
-                run_id: format!("drain-{number}"),
-                job_name: "workspace_pull_pipeline".into(),
-                machine_name: None,
-            },
-            ship: ship.clone(),
-            crews: None,
-            os: None,
-            browser_kit: false,
-            admissible: None,
-        };
-        let repo = self._root.path().join("repo");
-        let location = ExecutionLocation {
-            machine_id: "follower".into(),
-            machine_name: None,
-        };
-        let identity = if mode == "local" {
-            AdmissionIdentity::trusted_local(location)
-        } else {
-            AdmissionIdentity::trusted_remote(location)
-        };
-        let AdmissionLookup::Found { receipt, .. } = boundary
-            .admit_task(
-                &identity,
-                &request,
-                &AdmissionOrdering::default(),
-                "test",
-                &repo,
-                &repo.join(".orbit"),
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &|_, _, _| Ok(None),
-            )
-            .unwrap()
-        else {
-            panic!("admission receipt missing");
-        };
-        let claim = receipt
-            .claim
-            .clone()
-            .unwrap_or_else(|| panic!("task not admitted: {receipt:?}"));
-        assert_eq!(claim.task_id, task);
-        let run = ClaimRun {
-            machine_id: "follower".into(),
-            run_id: format!("leaf-{number}"),
-        };
-        let worker = ClaimInvocation::trusted_worker(
-            task.clone(),
-            claim.claim_id.clone(),
-            "follower".into(),
-            None,
-        );
-        self.runtime
-            .mutate_execution_claim(
-                Some(&worker),
-                "bind",
-                &ClaimMutation::Bind {
-                    run: run.clone(),
-                    ship,
-                },
-            )
-            .unwrap();
-        let worker = ClaimInvocation::trusted_worker(
-            task.clone(),
-            claim.claim_id.clone(),
-            "follower".into(),
-            Some(run),
-        );
-        (task, claim.claim_id, worker)
-    }
-
-    /// Admit and bind a real claim, then release its held PR or fail with a
-    /// kept candidate. Neither path accepts a handoff or adds a task PR ref.
-    fn released_pr(&self, number: u64, held: bool, landing: &str) -> String {
-        let (task, claim_id, worker) = self.bound_claim(number, landing, false);
-        let head = format!("orbit/{task}-claimed");
-        let mut evidence = ClaimEvidence {
-            summary: Some("Leaf stopped after opening its PR".into()),
-            ..Default::default()
-        };
-        if held {
-            evidence.evidence_hold = Some(
-                serde_json::from_value(json!({
-                    "schema_version": 1, "attempt_id": "review", "lineage_key": "lineage",
-                    "run_id": format!("leaf-{number}"),
-                    "candidate": {"commit": MERGE_COMMIT, "tree": MERGE_COMMIT},
-                    "task_meaning_digest": "fixture", "requirements": [],
-                    "published_ref": format!("refs/heads/orbit-evidence/{task}")
-                }))
-                .unwrap(),
-            );
-            evidence.held_pull_request = Some(
-                serde_json::from_value(json!({
-                    "number": number.to_string(), "head": head
-                }))
-                .unwrap(),
-            );
-        } else {
-            evidence.failure = Some(
-                serde_json::from_value(json!({
-                    "class": "candidate", "reason": "Leaf failed after opening its PR",
-                    "candidate": {
-                        "branch": head, "head_sha": MERGE_COMMIT,
-                        "pull_request": number.to_string(), "published": true
-                    }
-                }))
-                .unwrap(),
-            );
-        }
-        let mutation = if held {
-            ClaimMutation::Release(evidence)
-        } else {
-            ClaimMutation::Fail(evidence)
-        };
-        self.runtime
-            .mutate_execution_claim(Some(&worker), "release", &mutation)
-            .unwrap();
-        assert!(
-            self.runtime
-                .get_task(&task)
-                .unwrap()
-                .external_refs
-                .is_empty()
-        );
-        assert!(
-            self.boundary()
-                .find_accepted_handoff(&claim_id)
-                .unwrap()
-                .is_none()
-        );
-        task
-    }
-
-    /// A follower's leaf hands off pull request `number`, landing on
-    /// [`LANDING`], and the owner accepts it; its completion authority then
-    /// goes as far as `authority` says, through the owner's own landing
-    /// mutations and operator console.
-    fn handed_off(&self, number: u64, authority: Authority) -> Handoff {
-        self.handed_off_with_delivery(number, authority, HandoffDelivery::PullRequest { number })
-    }
-
-    /// A follower's leaf hands off `delivery`, then follows `authority`.
-    fn handed_off_with_delivery(
-        &self,
-        number: u64,
-        authority: Authority,
-        delivery: HandoffDelivery,
-    ) -> Handoff {
-        let authorized = authority != Authority::Unapproved;
-        let mode = if matches!(&delivery, HandoffDelivery::LocalCandidate) {
-            "local"
-        } else {
-            "pr"
-        };
-        let (task, claim_id, worker) =
-            self.bound_claim_with_mode(number, LANDING, authorized, mode);
-        let (candidate_revision, base_revision) = if authority == Authority::Stopped {
-            let repo = self.runtime.paths().repo_root.clone();
-            settlement_git(&repo, &["init", "-q", "-b", &self.base]);
-            settlement_git(&repo, &["add", "shared.txt"]);
-            settlement_git(&repo, &["commit", "-qm", "base"]);
-            let base = settlement_revision(&repo, "HEAD");
-            if self.base != LANDING {
-                settlement_git(&repo, &["branch", LANDING]);
-            }
-            settlement_git(
-                &repo,
-                &["checkout", "-qb", &format!("orbit/{task}-47642870")],
-            );
-            std::fs::write(repo.join("delivery.txt"), "candidate\n").unwrap();
-            settlement_git(&repo, &["add", "delivery.txt"]);
-            settlement_git(&repo, &["commit", "-qm", "candidate"]);
-            let candidate = settlement_revision(&repo, "HEAD");
-            settlement_git(&repo, &["checkout", "-q", &self.base]);
-            (candidate, base)
-        } else {
-            (
-                SourceRevision {
-                    commit: "a".repeat(40),
-                    tree: "b".repeat(40),
-                },
-                SourceRevision {
-                    commit: "c".repeat(40),
-                    tree: "d".repeat(40),
-                },
-            )
-        };
-        let handoff = TaskHandoff {
-            schema_version: 1,
-            workspace_id: self.runtime.workspace_id().unwrap(),
-            task_id: task.clone(),
-            claim_id: claim_id.clone(),
-            machine_id: "follower".into(),
-            run_id: format!("leaf-{number}"),
-            candidate: HandoffCandidate {
-                repository: "owner/repository".into(),
-                source_branch: format!("orbit/{task}-47642870"),
-                base_branch: self.base.clone(),
-                landing_branch: LANDING.into(),
-                candidate: candidate_revision,
-                base: base_revision,
-                delivery,
-            },
-            review: HandoffReview {
-                selective_receipt: None,
-                policy: ReviewTiming::None,
-                disposition: HandoffReviewDisposition::NotRequired,
-            },
-            execution_summary: "Outcome: success".into(),
-            validation: vec![],
-            footprint_widening: vec![],
-            owed_criteria: vec![],
-            regression_from: vec![],
-            visual: None,
-        };
-        let observation = HandoffObservation {
-            footprint_widening: vec![],
-            candidate: handoff.candidate.clone(),
-            required_commands: vec![],
-            owner_completion_authority: authorized.then(|| COMPLETION_POLICY.to_string()),
-            review: None,
-            known_red: vec![],
-            light_delivery: vec![],
-        };
-        self.runtime
-            .mutate_execution_claim(
-                Some(&worker.with_handoff_observation(observation)),
-                "handoff",
-                &ClaimMutation::AcceptHandoff(handoff),
-            )
-            .expect("the owner accepts the handoff");
-        assert_eq!(self.status(&task), TaskStatus::Review);
-        let handoff_id = self
-            .runtime
-            .accepted_task_handoff(&claim_id)
-            .unwrap()
-            .handoff_id;
-
-        let operator =
-            ClaimInvocation::trusted_operator(task.clone(), claim_id.clone(), "operator".into());
-        let landing = |mutation_id: &str, mutation: ClaimMutation| {
-            self.runtime
-                .mutate_execution_claim(Some(&operator), mutation_id, &mutation)
-                .unwrap_or_else(|error| panic!("{mutation_id}: {error}"));
-        };
-        if matches!(
-            authority,
-            Authority::Revoked | Authority::RevokedWhileDispatched | Authority::Stopped
-        ) {
-            landing(
-                "dispatch",
-                ClaimMutation::DispatchLanding {
-                    handoff_id: handoff_id.clone(),
-                    job_run_id: None,
-                },
-            );
-        }
-        if matches!(authority, Authority::Revoked | Authority::Stopped) {
-            landing(
-                "stop",
-                ClaimMutation::StopLanding {
-                    handoff_id: handoff_id.clone(),
-                    reason: json!({
-                        "schema_version": 1,
-                        "kind": "owner_landing_refusal",
-                        "reason": {"value": "the pull request's required checks are not green"},
-                        "observation": {"classification": {"value": "blocked"}},
-                    })
-                    .to_string(),
-                    repairable: false,
-                    requeue: false,
-                },
-            );
-        }
-        if matches!(
-            authority,
-            Authority::Revoked | Authority::RevokedWhileDispatched
-        ) {
-            self.runtime
-                .revoke_handoff_as_operator(
-                    &handoff_id,
-                    &ExpectedCandidate {
-                        candidate_commit: "a".repeat(40),
-                        base_commit: "c".repeat(40),
-                    },
-                    "operator",
-                    "the release PR will be merged by hand",
-                    "revoke",
-                )
-                .expect("the operator revokes completion authority");
-        }
-        Handoff {
-            task,
-            claim_id,
-            handoff_id,
-        }
-    }
-
-    /// The phase of `claim_id` on the owner.
-    fn claim_phase(&self, claim_id: &str) -> ExecutionClaimPhase {
-        self.runtime
-            .inspect_execution_claims()
-            .unwrap()
-            .into_iter()
-            .find(|state| state.claim.claim_id == claim_id)
-            .unwrap_or_else(|| panic!("no claim {claim_id}"))
-            .claim
-            .phase
-    }
-
-    /// The owner console's completion authority for `task`'s handoff.
-    fn console_authority(&self, task: &str) -> serde_json::Value {
-        let console = self
-            .runtime
-            .distributed_claim_console_filtered(Some(task), DistributedClaimState::All, true)
-            .unwrap();
-        console["claims"][0]["handoff"]["authority"].clone()
-    }
-}
-
-#[test]
 fn released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref",
-    ) {
-        return;
-    }
     for held in [true, false] {
         let fx = Fixture::new();
-        // The captured branch remains authoritative when workspace config differs.
-        let landing = "captured-landing";
+        let landing = "captured-landing"; // captured branch stays authoritative
         let number = if held { 101 } else { 102 };
         let task = fx.released_pr(number, held, landing);
-        fx.forge
-            .merge_recent(number, &task, "follower-bot", landing);
+        fx.merge(number, &task, "follower-bot", landing);
         let settlement = if held {
-            fx.runtime
-                .settle_externally_merged_task(&task)
-                .expect("held PR settles")
+            fx.settle_one(&task)
         } else {
-            let mut settled = fx
-                .runtime
-                .settle_externally_merged_tasks()
-                .expect("owner pass settles kept PR");
-            assert_eq!(settled.len(), 1);
+            let mut settled = fx.settle_all();
+            assert_eq!(settled.len(), 1, "held={held}");
             settled.pop().unwrap()
         };
-        assert_eq!(settlement.pr_number, number);
-        assert_eq!(settlement.task_id, task);
-        assert_eq!(fx.status(&task), TaskStatus::Done);
-        let history = fx.runtime.get_task_history(&task).unwrap();
-        let note = history
-            .iter()
-            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
-            .unwrap()
-            .note
-            .as_deref()
-            .unwrap();
+        assert_eq!(
+            (settlement.pr_number, &settlement.task_id),
+            (number, &task),
+            "held={held}"
+        );
+        fx.assert_done(&task, "held settles to done");
+        let note = fx.settled_note(&task);
         assert!(
             note.contains(&format!("#{number}"))
                 && note.contains(MERGE_COMMIT)
@@ -726,13 +83,7 @@ fn released_claim_pull_requests_settle_without_an_accepted_handoff_or_task_ref()
     }
 }
 
-#[test]
 fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::released_claim_pull_requests_require_a_merge_naming_the_task_into_the_captured_branch",
-    ) {
-        return;
-    }
     for held in [true, false] {
         for rejected in [
             "open",
@@ -743,83 +94,60 @@ fn released_claim_pull_requests_require_a_merge_naming_the_task_into_the_capture
             "missing-receipt",
             "mismatched-receipt",
         ] {
+            let case = format!("{held}/{rejected}");
             let fx = Fixture::new();
             let task = fx.released_pr(103, held, "captured-landing");
             let before = fx.status(&task);
+            let receipt_sql = |sql: &str| {
+                rusqlite::Connection::open(fx.runtime.global_root().join("orbit.db"))
+                    .unwrap()
+                    .execute(sql, [fx.runtime.workspace_id().unwrap()])
+                    .unwrap()
+            };
             match rejected {
-                "open" | "closed" => {
-                    fx.forge.0.lock().unwrap().unmerged.insert(103, rejected);
-                }
-                "wrong-base" => fx.forge.merge_recent(103, &task, BOT, &fx.base),
-                "wrong-task" => fx
-                    .forge
-                    .merge_recent(103, "OTHER-1", BOT, "captured-landing"),
+                "open" | "closed" => fx.mark_unmerged(103, rejected),
+                "wrong-base" => fx.merge(103, &task, BOT, &fx.base.clone()),
+                "wrong-task" => fx.merge(103, "OTHER-1", BOT, "captured-landing"),
                 "other-claim" => {
-                    // The merge names an unrelated task, on the captured branch.
-                    // Only this task's released claim records the PR, so the
-                    // named task must not settle from another task's claim.
                     let unrelated = fx.add_task("Unrelated", TaskStatus::Blocked, &[]);
-                    fx.forge
-                        .merge_recent(103, &unrelated, BOT, "captured-landing");
+                    fx.merge(103, &unrelated, BOT, "captured-landing");
                     assert!(
                         fx.runtime
                             .settle_externally_merged_task(&unrelated)
-                            .is_err()
+                            .is_err(),
+                        "{case}"
                     );
-                    assert_eq!(fx.status(&unrelated), TaskStatus::Blocked);
+                    fx.assert_status(&unrelated, TaskStatus::Blocked, &case);
                 }
                 "missing-receipt" => {
-                    fx.forge.merge_recent(103, &task, BOT, "captured-landing");
-                    rusqlite::Connection::open(fx.runtime.global_root().join("orbit.db"))
-                        .unwrap().execute(
-                            "DELETE FROM task_coordination_rows WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
-                            [fx.runtime.workspace_id().unwrap()],
-                        ).unwrap();
+                    fx.merge(103, &task, BOT, "captured-landing");
+                    receipt_sql(
+                        "DELETE FROM task_coordination_rows WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
+                    );
                 }
                 "mismatched-receipt" => {
-                    fx.forge.merge_recent(103, &task, BOT, "captured-landing");
-                    rusqlite::Connection::open(fx.runtime.global_root().join("orbit.db"))
-                        .unwrap().execute(
-                            "UPDATE task_coordination_rows SET payload_json = json_set(payload_json, '$.receipt.claim.task_id', 'OTHER-1') WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
-                            [fx.runtime.workspace_id().unwrap()],
-                        ).unwrap();
+                    fx.merge(103, &task, BOT, "captured-landing");
+                    receipt_sql(
+                        "UPDATE task_coordination_rows SET payload_json = json_set(payload_json, '$.receipt.claim.task_id', 'OTHER-1') WHERE workspace_id = ?1 AND kind = 'distributed-admission-receipt-v1'",
+                    );
                 }
                 _ => unreachable!(),
             }
             assert!(
                 fx.runtime.settle_externally_merged_task(&task).is_err(),
-                "{held}/{rejected}"
+                "{case}"
             );
-            assert!(
-                fx.runtime
-                    .settle_externally_merged_tasks()
-                    .unwrap()
-                    .is_empty(),
-                "{held}/{rejected}"
-            );
-            assert_eq!(fx.status(&task), before, "{held}/{rejected}");
-            assert!(
-                !fx.runtime
-                    .get_task_history(&task)
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT),
-                "{held}/{rejected}"
-            );
+            assert!(fx.settle_all().is_empty(), "{case}");
+            fx.assert_status(&task, before, &case);
+            fx.assert_no_settled(&task, &case);
         }
     }
 }
 
-#[test]
 fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::a_live_leaf_carrying_a_released_claim_task_prevents_settlement",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     let task = fx.released_pr(104, true, &fx.base);
-    fx.forge.merge_recent(104, &task, BOT, &fx.base);
+    fx.merge(104, &task, BOT, &fx.base);
     let jobs = orbit_store::compose::workspace_job_run_store(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
@@ -832,29 +160,16 @@ fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
         None,
     )
     .unwrap();
-    let error = fx.runtime.settle_externally_merged_task(&task).unwrap_err();
+    let error = fx.settle_err(&task, "live leaf refuses");
+    assert!(error.contains("live `run auto` leaf carries it"), "{error}");
     assert!(
-        error
-            .to_string()
-            .contains("live `run auto` leaf carries it"),
-        "{error}"
+        fx.settle_all().is_empty(),
+        "live leaf: owner pass settles nothing"
     );
-    assert!(
-        fx.runtime
-            .settle_externally_merged_tasks()
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(fx.status(&task), TaskStatus::InProgress);
+    fx.assert_status(&task, TaskStatus::InProgress, "live leaf stays in progress");
 }
 
-#[test]
 fn external_merge_settlement_refuses_every_ineligible_status() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::external_merge_settlement_refuses_every_ineligible_status",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     for status in [
         TaskStatus::Proposed,
@@ -864,40 +179,35 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
         TaskStatus::Archived,
         TaskStatus::Rejected,
     ] {
-        let initial = if status == TaskStatus::Archived {
-            TaskStatus::Proposed
-        } else {
-            status
-        };
-        let task = fx.add_task("Ineligible status", initial, &[105]);
+        let task = fx.add_task(
+            "Ineligible status",
+            if status == TaskStatus::Archived {
+                TaskStatus::Proposed
+            } else {
+                status
+            },
+            &[105],
+        );
         if status == TaskStatus::Archived {
             fx.runtime.archive_task(&task).unwrap();
         }
-        fx.forge.merge_recent(105, &task, BOT, &fx.base);
-        let error = fx.runtime.settle_externally_merged_task(&task).unwrap_err();
+        fx.merge(105, &task, BOT, &fx.base.clone());
+        let error = fx.settle_err(&task, "ineligible status refuses");
         let condition = if status == TaskStatus::Backlog {
             "backlog task has no preserved failure-handoff requeue"
         } else {
             "only a blocked, in-progress, review or preserved failure-handoff backlog task settles"
         };
-        assert!(error.to_string().contains(condition), "{error}");
-        assert_eq!(fx.status(&task), status);
+        assert!(error.contains(condition), "{status:?}: {error}");
+        fx.assert_status(&task, status, "ineligible status unchanged");
     }
     assert!(
-        fx.runtime
-            .settle_externally_merged_tasks()
-            .unwrap()
-            .is_empty()
+        fx.settle_all().is_empty(),
+        "no ineligible task settles in owner pass"
     );
 }
 
-#[test]
 fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_its_files() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_its_files",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     // ORB-16371: the operator merged the blocked task's delivery PR while
     // another task's run held a claim on the same files.
@@ -910,22 +220,19 @@ fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_
     fx.bind_live_run(&live_run);
     fx.claim(&holder, "jrun-20261017-0625-t1");
     fx.claim(&own_claim, "jrun-own-claim");
-
-    fx.forge.merge_recent(4937, &merged, BOT, &fx.base);
-    fx.forge.merge_recent(50, &own_claim, BOT, &fx.base);
-    fx.forge.merge_recent(51, &other_branch, BOT, "release");
-    fx.forge.merge_recent(52, &not_delivery, "alice", &fx.base);
-    fx.forge.0.lock().unwrap().recent.push(FakeForge::merged(
+    fx.merge(4937, &merged, BOT, &fx.base.clone());
+    fx.merge(50, &own_claim, BOT, &fx.base.clone());
+    fx.merge(51, &other_branch, BOT, "release");
+    fx.merge(52, &not_delivery, "alice", &fx.base.clone());
+    fx.push_merged(
         53,
         format!("orbit/{not_delivery}-dddd4444"),
         format!("Delivers {not_delivery}0."),
         BOT,
-        &fx.base,
-    ));
-    fx.forge.merge_recent(54, &live_run, BOT, &fx.base);
-
-    // The agent-shaped manual close is still a start, and the overlapping
-    // claim refuses it: the settlement must not depend on that edge.
+        &fx.base.clone(),
+    );
+    fx.merge(54, &live_run, BOT, &fx.base.clone());
+    // A manual start beside another claim is refused; settlement must not depend on it.
     let refused = fx
         .runtime
         .run_tool(
@@ -939,43 +246,29 @@ fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_
             .contains("task footprint overlaps an execution claim"),
         "{refused}"
     );
-
-    let settled = fx
-        .runtime
-        .settle_externally_merged_tasks()
-        .expect("owner pass");
-
+    let settled = fx.settle_all();
     assert_eq!(
         settled
             .iter()
-            .map(|settlement| (settlement.task_id.as_str(), settlement.pr_number))
+            .map(|s| (s.task_id.as_str(), s.pr_number))
             .collect::<Vec<_>>(),
         vec![(merged.as_str(), 4937)],
         "only the delivery PR merged into the target branch settles its task"
     );
-    assert_eq!(settled[0].previous_status, TaskStatus::Blocked);
-    assert_eq!(settled[0].merge_commit, MERGE_COMMIT);
-
+    assert_eq!(
+        (settled[0].previous_status, &settled[0].merge_commit),
+        (TaskStatus::Blocked, &MERGE_COMMIT.to_string()),
+        "blocked settlement identity"
+    );
     let task = fx.runtime.get_task(&merged).unwrap();
-    assert_eq!(task.status, TaskStatus::Done);
+    assert_eq!(task.status, TaskStatus::Done, "merged task done");
     assert!(
         task.execution_summary.contains("#4937") && task.execution_summary.contains(MERGE_COMMIT),
         "the summary names the landing: {}",
         task.execution_summary
     );
-    let history = fx.runtime.get_task_history(&merged).unwrap();
-    let entry = history
-        .iter()
-        .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
-        .expect("the settlement is recorded in history");
-    assert_eq!(entry.from_status, Some(TaskStatus::Blocked));
-    assert_eq!(entry.to_status, Some(TaskStatus::Done));
-    let note = entry.note.as_deref().unwrap_or_default();
-    assert!(
-        note.contains("#4937") && note.contains(MERGE_COMMIT) && note.contains(&fx.base),
-        "the landing note names the PR, branch and merge commit: {note}"
-    );
-
+    fx.history_is(&merged, TaskStatus::Blocked, TaskStatus::Done, "history");
+    fx.note_has(&merged, &["#4937", MERGE_COMMIT, fx.base.as_str()], "note");
     for (task_id, status, why) in [
         (&own_claim, TaskStatus::Blocked, "its own claim is live"),
         (
@@ -991,83 +284,41 @@ fn a_blocked_task_settles_from_its_merged_delivery_pr_while_another_task_claims_
         (&live_run, TaskStatus::InProgress, "its own run is live"),
         (&holder, TaskStatus::InProgress, "it has no PR"),
     ] {
-        assert_eq!(fx.status(task_id), status, "{why}");
+        fx.assert_status(task_id, status, why);
     }
-
-    let again = fx
-        .runtime
-        .settle_externally_merged_tasks()
-        .expect("owner pass");
-    assert!(again.is_empty(), "a settled task does not settle twice");
+    assert!(
+        fx.settle_all().is_empty(),
+        "a settled task does not settle twice"
+    );
 }
 
-#[test]
 fn the_operator_settles_one_task_from_a_merge_older_than_the_listing() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::the_operator_settles_one_task_from_a_merge_older_than_the_listing",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     let reviewed = fx.add_task("Approved on the forge", TaskStatus::Review, &[70, 71]);
     let claimed = fx.add_task("Claimed by its own run", TaskStatus::Blocked, &[80]);
     fx.claim(&claimed, "jrun-own-claim");
-    {
-        let mut state = fx.forge.0.lock().unwrap();
-        state.older.insert(
-            71,
-            FakeForge::merged(
-                71,
-                format!("orbit/{reviewed}-aaaa1111"),
-                format!("Delivers {reviewed}."),
-                BOT,
-                &fx.base,
-            ),
-        );
-        state.older.insert(
-            80,
-            FakeForge::merged(
-                80,
-                format!("orbit/{claimed}-bbbb2222"),
-                format!("Delivers {claimed}."),
-                BOT,
-                &fx.base,
-            ),
-        );
-    }
-
+    fx.older_merge(71, &reviewed);
+    fx.older_merge(80, &claimed);
     assert!(
-        fx.runtime
-            .settle_externally_merged_tasks()
-            .expect("owner pass")
-            .is_empty(),
+        fx.settle_all().is_empty(),
         "the owner pass reads only the recent listing"
     );
-    assert_eq!(fx.status(&reviewed), TaskStatus::Review);
-
-    let settlement = fx
-        .runtime
-        .settle_externally_merged_task(&reviewed)
-        .expect("the operator settles the task");
-    assert_eq!(settlement.pr_number, 71);
-    assert_eq!(settlement.previous_status, TaskStatus::Review);
-    assert_eq!(fx.status(&reviewed), TaskStatus::Done);
-
-    let refused = fx
-        .runtime
-        .settle_externally_merged_task(&claimed)
-        .expect_err("a task with its own live claim is not settled");
+    fx.assert_status(&reviewed, TaskStatus::Review, "older merge not in listing");
+    let settlement = fx.settle_one(&reviewed);
+    assert_eq!(
+        (settlement.pr_number, settlement.previous_status),
+        (71, TaskStatus::Review),
+        "operator settlement"
+    );
+    fx.assert_done(&reviewed, "operator settles reviewed");
+    let refused = fx.settle_err(&claimed, "a task with its own live claim is not settled");
     assert!(
-        refused.to_string().contains("jrun-own-claim"),
+        refused.contains("jrun-own-claim"),
         "the refusal names the task's own claim: {refused}"
     );
-    assert_eq!(fx.status(&claimed), TaskStatus::Blocked);
-
-    let refused = fx
-        .runtime
-        .settle_externally_merged_task(&reviewed)
-        .expect_err("a done task does not settle again");
-    assert!(refused.to_string().contains("'done'"), "{refused}");
+    fx.assert_status(&claimed, TaskStatus::Blocked, "claimed stays blocked");
+    let refused = fx.settle_err(&reviewed, "a done task does not settle again");
+    assert!(refused.contains("'done'"), "{refused}");
 }
 
 crate::scenario_table!(
@@ -1078,40 +329,21 @@ crate::scenario_table!(
 fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
     let fx = Fixture::new();
     let (task, claim_id, worker) = fx.bound_claim(4940, LANDING, false);
-    let handoff = TaskHandoff {
-        schema_version: 1,
-        workspace_id: fx.runtime.workspace_id().unwrap(),
-        task_id: task.clone(),
-        claim_id: claim_id.clone(),
-        machine_id: "follower".into(),
-        run_id: "leaf-4940".into(),
-        candidate: HandoffCandidate {
-            repository: "owner/repository".into(),
-            source_branch: format!("orbit/{task}-47642870"),
-            base_branch: fx.base.clone(),
-            landing_branch: LANDING.into(),
-            candidate: SourceRevision {
-                commit: "42bfe17000000000000000000000000000000000".into(),
-                tree: "b".repeat(40),
-            },
-            base: SourceRevision {
-                commit: "c".repeat(40),
-                tree: "d".repeat(40),
-            },
-            delivery: HandoffDelivery::PullRequest { number: 4940 },
-        },
-        review: HandoffReview {
-            selective_receipt: None,
-            policy: ReviewTiming::None,
-            disposition: HandoffReviewDisposition::NotRequired,
-        },
-        execution_summary: "Follower candidate is complete".into(),
-        validation: vec![],
-        footprint_widening: vec![],
-        owed_criteria: vec![],
-        regression_from: vec![],
-        visual: None,
+    let rev = |c: &str, t: &str| SourceRevision {
+        commit: c.into(),
+        tree: t.into(),
     };
+    let handoff = fx.handoff_obj(
+        &task,
+        &claim_id,
+        4940,
+        (
+            rev("42bfe17000000000000000000000000000000000", &"b".repeat(40)),
+            rev(&"c".repeat(40), &"d".repeat(40)),
+        ),
+        HandoffDelivery::PullRequest { number: 4940 },
+        "Follower candidate is complete",
+    );
     let observation = HandoffObservation {
         candidate: handoff.candidate.clone(),
         required_commands: vec!["newly-required-check".into()],
@@ -1137,16 +369,21 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
             TaskStatus::Blocked,
             "operator",
             "Follower stopped; its refused handoff's PR was rescued by hand",
+            "operator-recover",
             "recover-rescued",
         )
         .unwrap();
-    fx.forge.merge_recent(4940, &task, BOT, LANDING);
-    assert!(fx.runtime.get_task(&task).unwrap().external_refs.is_empty());
+    fx.merge(4940, &task, BOT, LANDING);
+    assert!(
+        fx.runtime.get_task(&task).unwrap().external_refs.is_empty(),
+        "recovered: no task PR ref"
+    );
     assert!(
         fx.boundary()
             .find_accepted_handoff(&claim_id)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "recovered: no accepted handoff"
     );
     let merged = fx.forge.0.lock().unwrap().recent[0].clone();
     for case in [
@@ -1173,7 +410,7 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
                 "42bfe17000000000000000000000000000000000",
             )
             .expect_err(case);
-        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{case}");
+        fx.assert_status(&task, TaskStatus::Blocked, case);
     }
     fx.forge.0.lock().unwrap().recent[0] = merged;
     fx.runtime
@@ -1184,58 +421,56 @@ fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
             "42bfe17000000000000000000000000000000000",
         )
         .expect("an operator can settle the recovered delivery without force");
-    assert_eq!(fx.status(&task), TaskStatus::Done);
-    assert_eq!(fx.claim_phase(&claim_id), ExecutionClaimPhase::Revoked);
-    let history = fx.runtime.get_task_history(&task).unwrap();
-    let note = history
-        .iter()
-        .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
-        .unwrap()
-        .note
-        .as_deref()
-        .unwrap();
-    for evidence in [
-        "operator-rescued",
+    fx.assert_done(&task, "recovered settles");
+    fx.assert_phase(
         &claim_id,
-        "42bfe17000000000000000000000000000000000",
-        "0dbd8e2000000000000000000000000000000000",
-        MERGE_COMMIT,
-        LANDING,
-    ] {
-        assert!(note.contains(evidence), "missing {evidence}: {note}");
-    }
+        ExecutionClaimPhase::Revoked,
+        "recovered claim revoked",
+    );
+    fx.note_has(
+        &task,
+        &[
+            "operator-rescued",
+            &claim_id,
+            "42bfe17000000000000000000000000000000000",
+            "0dbd8e2000000000000000000000000000000000",
+            MERGE_COMMIT,
+            LANDING,
+        ],
+        "recovered note",
+    );
 }
 
-#[test]
 fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit",
-    ) {
-        return;
-    }
     for owner_pass in [false, true] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4930, Authority::Revoked);
         let task = handoff.task.as_str();
-        assert_eq!(
-            fx.claim_phase(&handoff.claim_id),
-            ExecutionClaimPhase::HandedOff
+        fx.assert_phase(
+            &handoff.claim_id,
+            ExecutionClaimPhase::HandedOff,
+            "revoked claim handed off",
         );
-
-        // The owner console names the way out while the task is stuck.
-        let authority = fx.console_authority(task);
-        assert_eq!(authority["state"], "revoked");
+        let authority = fx.console_authority(task); // console names the way out
+        assert_eq!(
+            authority["state"], "revoked",
+            "console revoked: {authority}"
+        );
         let command = authority["settle_command"]
             .as_str()
             .expect("a revoked pull-request handoff names its settle command");
-        assert_eq!(command, format!("orbit task settle-merged {task}"));
+        assert_eq!(
+            command,
+            format!("orbit task settle-merged {task}"),
+            "console settle command"
+        );
         assert!(
             authority["summary"].as_str().unwrap().contains(command),
             "the summary the dashboard shows carries the command: {authority}"
         );
 
         // A human merged the handoff's own PR into its landing branch.
-        fx.forge.merge_recent(4930, task, "alice", LANDING);
+        fx.merge(4930, task, "alice", LANDING);
         let requests = fx.runtime.landing_start_requests().unwrap();
         let attempts = fx.runtime.landing_attempts().unwrap();
         assert_eq!(requests.len(), 1);
@@ -1243,25 +478,31 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
         assert_eq!(attempts[0].state, LandingAttemptState::Stopped);
 
         let settlement = if owner_pass {
-            let mut settled = fx
-                .runtime
-                .settle_externally_merged_tasks()
-                .expect("owner pass");
+            let mut settled = fx.settle_all();
             assert_eq!(settled.len(), 1, "{settled:?}");
             settled.pop().unwrap()
         } else {
-            fx.runtime
-                .settle_externally_merged_task(task)
-                .expect("the operator settles the revoked handoff's task")
+            fx.settle_one(task)
         };
-        assert_eq!(settlement.task_id, task);
-        assert_eq!(settlement.pr_number, 4930);
-        assert_eq!(settlement.previous_status, TaskStatus::Review);
-        assert_eq!(settlement.base_branch, LANDING);
-        assert_eq!(settlement.merge_commit, MERGE_COMMIT);
-
+        assert_eq!(
+            (
+                &settlement.task_id,
+                settlement.pr_number,
+                settlement.previous_status,
+                &settlement.base_branch,
+                &settlement.merge_commit
+            ),
+            (
+                &task.to_string(),
+                4930,
+                TaskStatus::Review,
+                &LANDING.to_string(),
+                &MERGE_COMMIT.to_string()
+            ),
+            "revoked settlement"
+        );
         let settled = fx.runtime.get_task(task).unwrap();
-        assert_eq!(settled.status, TaskStatus::Done);
+        assert_eq!(settled.status, TaskStatus::Done, "revoked task done");
         assert!(
             settled
                 .external_refs
@@ -1269,18 +510,13 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
             "the landing PR is recorded on the task: {:?}",
             settled.external_refs
         );
-        let history = fx.runtime.get_task_history(task).unwrap();
-        let entry = history
-            .iter()
-            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
-            .expect("the settlement is recorded in history");
-        assert_eq!(entry.from_status, Some(TaskStatus::Review));
-        assert_eq!(entry.to_status, Some(TaskStatus::Done));
-        let note = entry.note.as_deref().unwrap_or_default();
-        assert!(
-            note.contains("#4930") && note.contains(MERGE_COMMIT) && note.contains(LANDING),
-            "the landing note names the PR, branch and merge commit: {note}"
+        fx.history_is(
+            task,
+            TaskStatus::Review,
+            TaskStatus::Done,
+            "revoked history",
         );
+        fx.note_has(task, &["#4930", MERGE_COMMIT, LANDING], "revoked note");
 
         // The claim settled in the same write and protects nothing.
         let claims = fx.runtime.inspect_execution_claims().unwrap();
@@ -1292,24 +528,14 @@ fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_o
         // No authorization, landing request or attempt was added or reopened.
         assert_eq!(fx.runtime.landing_start_requests().unwrap(), requests);
         assert_eq!(fx.runtime.landing_attempts().unwrap(), attempts);
-
         assert!(
-            fx.runtime
-                .settle_externally_merged_tasks()
-                .unwrap()
-                .is_empty(),
+            fx.settle_all().is_empty(),
             "a settled task does not settle twice"
         );
     }
 }
 
-#[test]
 fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path",
-    ) {
-        return;
-    }
     for authority in [Authority::Stopped, Authority::Revoked] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4939, authority);
@@ -1319,30 +545,39 @@ fn landing_a_stopped_authorized_handoff_reports_its_stop_and_retry_path() {
             .land_task_pull_request(&handoff.task, None)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("task_landing_refused"), "{error}");
+        assert!(
+            error.contains("task_landing_refused"),
+            "{authority:?}: {error}"
+        );
         if authority == Authority::Stopped {
-            assert!(error.contains("required checks are not green"), "{error}");
-            assert!(error.contains("retry-handoff"), "{error}");
-            assert!(!error.contains("operator revoked"), "{error}");
+            assert!(
+                error.contains("required checks are not green")
+                    && error.contains("retry-handoff")
+                    && !error.contains("operator revoked"),
+                "{error}"
+            );
         } else {
             assert!(error.contains("operator revoked"), "{error}");
         }
-        assert_eq!(fx.runtime.landing_attempts().unwrap(), before);
         assert_eq!(
-            fx.claim_phase(&handoff.claim_id),
-            ExecutionClaimPhase::HandedOff
+            fx.runtime.landing_attempts().unwrap(),
+            before,
+            "{authority:?}"
         );
-        assert_eq!(fx.status(&handoff.task), TaskStatus::Review);
+        fx.assert_phase(
+            &handoff.claim_id,
+            ExecutionClaimPhase::HandedOff,
+            "stopped/revoked claim handed off",
+        );
+        fx.assert_status(
+            &handoff.task,
+            TaskStatus::Review,
+            "stopped/revoked task in review",
+        );
     }
 }
 
-#[test]
 fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merged",
-    ) {
-        return;
-    }
     for (case, authority, reason) in [
         (
             "unapproved",
@@ -1367,34 +602,17 @@ fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merg
         let handoff = fx.handed_off(4931, authority);
         let task = handoff.task.as_str();
         match case {
-            // Another PR naming the task, by the delivery identity, merged
-            // into the landing branch: only the handoff's own PR counts.
-            "other-pr" => fx.forge.merge_recent(4932, task, BOT, LANDING),
-            "other-branch" => fx.forge.merge_recent(4931, task, BOT, &fx.base),
-            "unmerged" => {
-                fx.forge.0.lock().unwrap().unmerged.insert(4931, "open");
-            }
-            _ => fx.forge.merge_recent(4931, task, BOT, LANDING),
+            // only the handoff's own PR counts
+            "other-pr" => fx.merge(4932, task, BOT, LANDING),
+            "other-branch" => fx.merge(4931, task, BOT, &fx.base.clone()),
+            "unmerged" => fx.mark_unmerged(4931, "open"),
+            _ => fx.merge(4931, task, BOT, LANDING),
         }
-        let refused = fx
-            .runtime
-            .settle_externally_merged_task(task)
-            .expect_err(case)
-            .to_string();
+        let refused = fx.settle_err(task, case);
         assert!(refused.contains(reason), "{case}: {refused}");
-        assert!(
-            fx.runtime
-                .settle_externally_merged_tasks()
-                .unwrap()
-                .is_empty(),
-            "{case}"
-        );
-        assert_eq!(fx.status(task), TaskStatus::Review, "{case}");
-        assert_eq!(
-            fx.claim_phase(&handoff.claim_id),
-            ExecutionClaimPhase::HandedOff,
-            "{case}"
-        );
+        assert!(fx.settle_all().is_empty(), "{case}");
+        fx.assert_status(task, TaskStatus::Review, case);
+        fx.assert_phase(&handoff.claim_id, ExecutionClaimPhase::HandedOff, case);
         if authority == Authority::Authorized {
             assert!(
                 fx.console_authority(task)["settle_command"].is_null(),
@@ -1404,73 +622,50 @@ fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merg
     }
 }
 
-#[test]
 fn external_merge_recovery_suggestions_include_the_observed_claim_phase() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::external_merge_recovery_suggestions_include_the_observed_claim_phase",
-    ) {
-        return;
-    }
+    let recover = |claim: &str, phase: &str| {
+        format!(
+            "orbit task recover-claim {claim} --phase {phase} --status blocked --reason <reason> --request <key>"
+        )
+    };
     for phase in ["claimed", "running", "repair_pending"] {
         let fx = Fixture::new();
         let task = fx.add_task("Live claim refusal", TaskStatus::InProgress, &[4935]);
-        let run_id = format!("live-{phase}");
-        fx.claim_with_phase(&task, &run_id, phase);
-        fx.forge.merge_recent(4935, &task, BOT, &fx.base);
-
-        let refusal = fx
-            .runtime
-            .settle_externally_merged_task(&task)
-            .expect_err("a live claim refuses settlement")
-            .to_string();
-        let expected = format!(
-            "orbit task recover-claim claim-{run_id} --phase {phase} --status blocked --reason <reason> --request <key>"
+        fx.claim_with_phase(&task, &format!("live-{phase}"), phase);
+        fx.merge(4935, &task, BOT, &fx.base.clone());
+        let refusal = fx.settle_err(&task, "a live claim refuses settlement");
+        assert!(
+            refusal.contains(&recover(&format!("claim-live-{phase}"), phase)),
+            "{phase}: {refusal}"
         );
-        assert!(refusal.contains(&expected), "{phase}: {refusal}");
     }
-
     for (case, authority) in [
         ("unapproved", Authority::Unapproved),
         ("authorized-pending", Authority::Authorized),
     ] {
         let fx = Fixture::new();
         let handoff = fx.handed_off(4936, authority);
-        fx.forge.merge_recent(4936, &handoff.task, BOT, LANDING);
-
-        let refusal = fx
-            .runtime
-            .settle_externally_merged_task(&handoff.task)
-            .expect_err(case)
-            .to_string();
-        let expected = format!(
-            "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
-            handoff.claim_id
+        fx.merge(4936, &handoff.task, BOT, LANDING);
+        let refusal = fx.settle_err(&handoff.task, case);
+        assert!(
+            refusal.contains(&recover(&handoff.claim_id, "handed_off")),
+            "{case}: {refusal}"
         );
-        assert!(refusal.contains(&expected), "{case}: {refusal}");
     }
-
     let fx = Fixture::new();
     let handoff =
         fx.handed_off_with_delivery(4937, Authority::Revoked, HandoffDelivery::LocalCandidate);
-    let refusal = fx
-        .runtime
-        .settle_externally_merged_task(&handoff.task)
-        .expect_err("a revoked handoff without a pull request refuses settlement")
-        .to_string();
-    let expected = format!(
-        "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
-        handoff.claim_id
+    let refusal = fx.settle_err(
+        &handoff.task,
+        "a revoked handoff without a pull request refuses settlement",
     );
-    assert!(refusal.contains(&expected), "{refusal}");
+    assert!(
+        refusal.contains(&recover(&handoff.claim_id, "handed_off")),
+        "{refusal}"
+    );
 }
 
-#[test]
 fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither",
-    ) {
-        return;
-    }
     fn settle(
         fx: &Fixture,
         handoff: &Handoff,
@@ -1496,9 +691,7 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
             },
         )
     }
-
-    // Each claim holds the fixture's one file, so each needs its own owner.
-    let authorized_fx = Fixture::new();
+    let authorized_fx = Fixture::new(); // each claim holds the one file: own owner per fixture
     let authorized = authorized_fx.handed_off(4933, Authority::Authorized);
     let fx = Fixture::new();
     let revoked = fx.handed_off(4934, Authority::Revoked);
@@ -1530,98 +723,91 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
             .is_err(),
             "{why}"
         );
-        assert_eq!(owner.status(&handoff.task), TaskStatus::Review, "{why}");
-        assert_eq!(
-            owner.claim_phase(&handoff.claim_id),
-            ExecutionClaimPhase::HandedOff,
-            "a refused write leaves the claim handed off: {why}"
-        );
+        owner.assert_status(&handoff.task, TaskStatus::Review, why);
+        owner.assert_phase(&handoff.claim_id, ExecutionClaimPhase::HandedOff, why);
     }
-
     let result = settle(&fx, &revoked, 4934, LANDING, "settle").expect("the exact settlement");
-    assert_eq!(result.phase, ExecutionClaimPhase::Revoked);
-    assert_eq!(result.status, TaskStatus::Done);
-    assert_eq!(fx.status(&revoked.task), TaskStatus::Done);
     assert_eq!(
-        fx.claim_phase(&revoked.claim_id),
-        ExecutionClaimPhase::Revoked
+        (result.phase, result.status),
+        (ExecutionClaimPhase::Revoked, TaskStatus::Done),
+        "owner store settlement"
+    );
+    fx.assert_done(&revoked.task, "owner store task done");
+    fx.assert_phase(
+        &revoked.claim_id,
+        ExecutionClaimPhase::Revoked,
+        "owner store claim revoked",
     );
 }
-
-/// A merged delivery whose body is a repository template with no task
-/// placeholder still settles, because of the generated identity comment.
-/// The same body from another author, on another branch, without the token,
-/// or naming only a longer id does not.
-#[test]
+/// Template body without a placeholder settles via the identity comment;
+/// another author/branch, no token, or a longer id does not.
 fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::a_template_body_without_a_task_placeholder_still_settles_an_external_merge",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
-    let task = fx.add_task("Fix the widget", TaskStatus::Review, &[61]);
-    let bare = fx.add_task("Template text only", TaskStatus::Review, &[62]);
-    let human = fx.add_task("Merged by a human", TaskStatus::Review, &[63]);
-    let other_base = fx.add_task("Merged elsewhere", TaskStatus::Review, &[64]);
-    let other_head = fx.add_task("Another branch", TaskStatus::Review, &[65]);
-    let lookalike = fx.add_task("Lookalike id", TaskStatus::Review, &[66]);
-
-    let identity = |id: &str| format!("<!-- orbit-delivery-task: {id} -->");
-    let body = format!("## Summary\n\nFix the widget\n\n{}", identity(&task));
-    let mut recent = fx.forge.0.lock().unwrap();
-    recent.recent.push(FakeForge::merged(
-        61,
-        format!("orbit/{task}-0123abcd"),
-        body.clone(),
-        BOT,
-        &fx.base,
-    ));
-    recent.recent.push(FakeForge::merged(
-        62,
-        format!("orbit/{bare}-0123abcd"),
-        "## Summary\n\nFix the widget".to_string(),
-        BOT,
-        &fx.base,
-    ));
-    recent.recent.push(FakeForge::merged(
-        63,
-        format!("orbit/{human}-0123abcd"),
-        format!("## Summary\n\nFix the widget\n\n{}", identity(&human)),
-        "alice",
-        &fx.base,
-    ));
-    recent.recent.push(FakeForge::merged(
-        64,
-        format!("orbit/{other_base}-0123abcd"),
-        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_base)),
-        BOT,
-        "release",
-    ));
-    recent.recent.push(FakeForge::merged(
-        65,
-        format!("orbit/{other_head}0-0123abcd"),
-        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_head)),
-        BOT,
-        &fx.base,
-    ));
-    recent.recent.push(FakeForge::merged(
-        66,
-        format!("orbit/{lookalike}-0123abcd"),
-        format!("## Summary\n\nFix the widget\n\n<!-- orbit-delivery-task: {lookalike}0 -->"),
-        BOT,
-        &fx.base,
-    ));
-    drop(recent);
-
-    let settlement = fx
-        .runtime
-        .settle_externally_merged_task(&task)
-        .expect("the template body names the task");
-    assert_eq!(settlement.pr_number, 61);
-    assert_eq!(settlement.task_id, task);
-    assert_eq!(fx.status(&task), TaskStatus::Done);
-
+    let (task, bare, human, other_base, other_head, lookalike) = (
+        fx.add_task("Fix the widget", TaskStatus::Review, &[61]),
+        fx.add_task("Template text only", TaskStatus::Review, &[62]),
+        fx.add_task("Merged by a human", TaskStatus::Review, &[63]),
+        fx.add_task("Merged elsewhere", TaskStatus::Review, &[64]),
+        fx.add_task("Another branch", TaskStatus::Review, &[65]),
+        fx.add_task("Lookalike id", TaskStatus::Review, &[66]),
+    );
+    let idc = |id: &str| format!("<!-- orbit-delivery-task: {id} -->");
+    let body = |id: &str| format!("## Summary\n\nFix the widget\n\n{}", idc(id));
+    let base = fx.base.clone();
+    for (n, head, b, author, bs) in [
+        (
+            61,
+            format!("orbit/{task}-0123abcd"),
+            body(&task),
+            BOT,
+            base.as_str(),
+        ),
+        (
+            62,
+            format!("orbit/{bare}-0123abcd"),
+            "## Summary\n\nFix the widget".into(),
+            BOT,
+            base.as_str(),
+        ),
+        (
+            63,
+            format!("orbit/{human}-0123abcd"),
+            body(&human),
+            "alice",
+            base.as_str(),
+        ),
+        (
+            64,
+            format!("orbit/{other_base}-0123abcd"),
+            body(&other_base),
+            BOT,
+            "release",
+        ),
+        (
+            65,
+            format!("orbit/{other_head}0-0123abcd"),
+            body(&other_head),
+            BOT,
+            base.as_str(),
+        ),
+        (
+            66,
+            format!("orbit/{lookalike}-0123abcd"),
+            body(&format!("{lookalike}0")),
+            BOT,
+            base.as_str(),
+        ),
+    ] {
+        fx.push_merged(n, head, b, author, bs);
+    }
+    // Row 66 body must name only the longer id, as `body(&format!(...))` does.
+    let settlement = fx.settle_one(&task);
+    assert_eq!(
+        (settlement.pr_number, &settlement.task_id),
+        (61, &task),
+        "template settlement"
+    );
+    fx.assert_done(&task, "template settles");
     for (id, why) in [
         (&bare, "the template text has no task token"),
         (&human, "a human author is not the delivery identity"),
@@ -1633,7 +819,7 @@ fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() 
             fx.runtime.settle_externally_merged_task(id).is_err(),
             "{why}"
         );
-        assert_eq!(fx.status(id), TaskStatus::Review, "{why}");
+        fx.assert_status(id, TaskStatus::Review, why);
     }
 }
 
@@ -1648,98 +834,43 @@ fn external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref() 
     );
     let sibling = fx.add_task("Mentioned task", TaskStatus::Review, &[61]);
     let owner = fx.add_task("Merged task", TaskStatus::Review, &[61]);
-    fx.forge.0.lock().unwrap().recent.push(FakeForge::merged(
+    fx.push_merged(
         61,
         format!("feature/X-{sibling}-{owner}-0123abcd"),
         format!("Delivers {owner}; follows {sibling}."),
         BOT,
-        &fx.base,
-    ));
-    assert!(fx.runtime.settle_externally_merged_task(&sibling).is_err());
-    assert_eq!(fx.status(&sibling), TaskStatus::Review);
-    let settlement = fx.runtime.settle_externally_merged_task(&owner).unwrap();
-    assert_eq!(settlement.pr_number, 61);
-    assert_eq!(settlement.task_id, owner);
-    assert_eq!(fx.status(&owner), TaskStatus::Done);
+        &fx.base.clone(),
+    );
+    assert!(
+        fx.runtime.settle_externally_merged_task(&sibling).is_err(),
+        "sibling does not settle"
+    );
+    fx.assert_status(&sibling, TaskStatus::Review, "sibling stays in review");
+    let settlement = fx.settle_one(&owner);
+    assert_eq!(
+        (settlement.pr_number, &settlement.task_id),
+        (61, &owner),
+        "sibling owner settlement"
+    );
+    fx.assert_done(&owner, "sibling owner done");
 }
 
-struct TickProvider {
-    runtime: OrbitRuntime,
-    replica: bool,
-}
-
-impl RoutineWorkspaceProvider for TickProvider {
-    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
-        let workspace = Workspace {
-            id: self.runtime.workspace_id()?,
-            name: "tick-workspace".into(),
-            owner_machine_id: None,
-            git_remote: None,
-            ship_mode: None,
-            base_branch: "main".into(),
-            status: WorkspaceStatus::Active,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-        let pair = (workspace, self.runtime.clone());
-        if self.replica {
-            Ok(DiscoveredWorkspaces {
-                replicas: vec![pair],
-                ..DiscoveredWorkspaces::default()
-            })
-        } else {
-            Ok(DiscoveredWorkspaces {
-                entries: vec![pair],
-                ..DiscoveredWorkspaces::default()
-            })
-        }
-    }
-}
-
-fn tick(fx: &Fixture, dry_run: bool, replica: bool) -> SweepOutcome {
-    orbit_core::test_support::run_sweep_at(
-        &fx.runtime.global_root(),
-        SweepOptions {
-            dry_run,
-            ..SweepOptions::default()
-        },
-        RoutineMachineIdentity {
-            machine_id: "tick-machine".into(),
-            machine_name: "tick-host".into(),
-        },
-        &TickProvider {
-            runtime: fx.runtime.clone(),
-            replica,
-        },
-        Utc::now(),
-    )
-    .expect("the tick runs")
-}
-
-#[test]
 fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::clock_tick_settles_blocked_and_review_tasks_without_a_drain",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     let blocked = fx.add_task("Tick blocked", TaskStatus::Blocked, &[601]);
     let reviewed = fx.add_task("Tick reviewed", TaskStatus::Review, &[602]);
-    fx.forge.merge_recent(601, &blocked, BOT, &fx.base);
-    fx.forge.merge_recent(602, &reviewed, BOT, &fx.base);
-
+    fx.merge(601, &blocked, BOT, &fx.base.clone());
+    fx.merge(602, &reviewed, BOT, &fx.base.clone());
     let dry = tick(&fx, true, false);
     assert!(dry.external_merge_settlements.is_empty(), "{dry:?}");
-    assert_eq!(fx.status(&blocked), TaskStatus::Blocked);
-
+    fx.assert_status(&blocked, TaskStatus::Blocked, "dry tick settles nothing");
     let outcome = tick(&fx, false, false);
-    assert_eq!(fx.status(&blocked), TaskStatus::Done);
-    assert_eq!(fx.status(&reviewed), TaskStatus::Done);
+    fx.assert_done(&blocked, "tick blocked done");
+    fx.assert_done(&reviewed, "tick reviewed done");
     let mut settled: Vec<(&str, u64)> = outcome
         .external_merge_settlements
         .iter()
-        .map(|row| (row.task_id.as_str(), row.pr_number))
+        .map(|r| (r.task_id.as_str(), r.pr_number))
         .collect();
     settled.sort();
     let mut expected = vec![(blocked.as_str(), 601), (reviewed.as_str(), 602)];
@@ -1749,103 +880,53 @@ fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
         outcome
             .external_merge_settlements
             .iter()
-            .all(|row| row.source == "tick-workspace")
+            .all(|r| r.source == "tick-workspace"),
+        "tick source"
     );
     for task in [&blocked, &reviewed] {
-        let history = fx.runtime.get_task_history(task).unwrap();
-        let entry = history
-            .iter()
-            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
-            .expect("settled event");
-        assert_eq!(entry.to_status, Some(TaskStatus::Done));
-        assert!(entry.note.as_deref().unwrap().contains(MERGE_COMMIT));
+        fx.history_to(task, TaskStatus::Done, "tick history");
+        fx.note_has(task, &[MERGE_COMMIT], "tick note");
     }
 }
 
-#[test]
 fn clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     let live = fx.add_task("Tick live run", TaskStatus::InProgress, &[611]);
     let claimed = fx.add_task("Tick claimed", TaskStatus::Blocked, &[612]);
     fx.bind_live_run(&live);
     fx.claim(&claimed, "jrun-tick-claim");
-    fx.forge.merge_recent(611, &live, BOT, &fx.base);
-    fx.forge.merge_recent(612, &claimed, BOT, &fx.base);
-
+    fx.merge(611, &live, BOT, &fx.base.clone());
+    fx.merge(612, &claimed, BOT, &fx.base.clone());
     let outcome = tick(&fx, false, false);
     assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
-    assert_eq!(fx.status(&live), TaskStatus::InProgress);
-    assert_eq!(fx.status(&claimed), TaskStatus::Blocked);
-
-    // A follower (replica) host settles nothing even for an eligible task.
-    let eligible = fx.add_task("Tick follower", TaskStatus::Blocked, &[613]);
-    fx.forge.merge_recent(613, &eligible, BOT, &fx.base);
+    fx.assert_status(&live, TaskStatus::InProgress, "tick live guarded");
+    fx.assert_status(&claimed, TaskStatus::Blocked, "tick claimed guarded");
+    let eligible = fx.add_task("Tick follower", TaskStatus::Blocked, &[613]); // replica settles nothing
+    fx.merge(613, &eligible, BOT, &fx.base.clone());
     let replica = tick(&fx, false, true);
     assert!(replica.external_merge_settlements.is_empty(), "{replica:?}");
-    assert_eq!(fx.status(&eligible), TaskStatus::Blocked);
+    fx.assert_status(&eligible, TaskStatus::Blocked, "tick follower unsettled");
 }
 
-#[test]
 fn clock_tick_forge_failure_does_not_fail_the_tick() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::clock_tick_forge_failure_does_not_fail_the_tick",
-    ) {
-        return;
-    }
     let fx = Fixture::new();
     let task = fx.add_task("Tick forge down", TaskStatus::Blocked, &[621]);
-    fx.forge.merge_recent(621, &task, BOT, &fx.base);
-    fx.forge.0.lock().unwrap().fail_merged = true;
-
+    fx.merge(621, &task, BOT, &fx.base.clone());
+    fx.set_forge_down(true);
     let outcome = tick(&fx, false, false);
     assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
-    assert_eq!(fx.status(&task), TaskStatus::Blocked);
-
-    fx.forge.0.lock().unwrap().fail_merged = false;
+    fx.assert_status(&task, TaskStatus::Blocked, "forge down stays blocked");
+    fx.set_forge_down(false);
     let outcome = tick(&fx, false, false);
-    assert_eq!(outcome.external_merge_settlements.len(), 1);
-    assert_eq!(fx.status(&task), TaskStatus::Done);
-}
-
-fn settlement_git(repo: &Path, args: &[&str]) -> String {
-    let output = crate::git_test_support::command()
-        .args([
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-        ])
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_eq!(
+        outcome.external_merge_settlements.len(),
+        1,
+        "forge recovered settles one"
     );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
+    fx.assert_done(&task, "forge recovered done");
 }
 
-fn settlement_revision(repo: &Path, reference: &str) -> SourceRevision {
-    SourceRevision {
-        commit: settlement_git(repo, &["rev-parse", reference]),
-        tree: settlement_git(repo, &["rev-parse", &format!("{reference}^{{tree}}")]),
-    }
-}
-
-#[test]
 fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
-    if !super::dispatch_admission::isolated(
-        "task_external_merge::stopped_handoff_settles_a_deleted_branch_after_two_operator_updates",
-    ) {
-        return;
-    }
     for foreign in [false, true] {
         let fx = Fixture::with_config(
             "[workflow]\nbase_branch = \"release-landing\"\ndistributed_completion = \"done\"\n",
@@ -1855,86 +936,31 @@ fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
         let accepted = fx.runtime.accepted_task_handoff(&handoff.claim_id).unwrap();
         let candidate = &accepted.handoff.candidate;
         let remote = fx._root.path().join("remote.git");
-        settlement_git(
-            &repo,
-            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
-        );
+        let remote_str = remote.to_str().unwrap().to_string();
+        settlement_git(&repo, &["clone", "-q", "--bare", ".", &remote_str]);
         let mut head = candidate.candidate.commit.clone();
         for update in 1..=2 {
-            let base_tree = settlement_git(&remote, &["rev-parse", &format!("{LANDING}^{{tree}}")]);
-            let base = settlement_git(
-                &remote,
-                &[
-                    "commit-tree",
-                    &base_tree,
-                    "-p",
-                    LANDING,
-                    "-m",
-                    &format!("base update {update}"),
-                ],
-            );
-            settlement_git(
-                &remote,
-                &["update-ref", &format!("refs/heads/{LANDING}"), &base],
-            );
+            let msg = format!("base update {update}");
+            let base = commit_tree(&remote, &tree_of(&remote, LANDING), &[LANDING], &msg);
+            update_ref(&remote, &format!("refs/heads/{LANDING}"), &base);
             let tree = settlement_git(&remote, &["merge-tree", "--write-tree", &head, &base]);
-            head = settlement_git(
-                &remote,
-                &[
-                    "commit-tree",
-                    &tree,
-                    "-p",
-                    &head,
-                    "-p",
-                    &base,
-                    "-m",
-                    "operator base update",
-                ],
-            );
+            head = commit_tree(&remote, &tree, &[&head, &base], "operator base update");
         }
         if foreign {
-            let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
-            head = settlement_git(
-                &remote,
-                &[
-                    "commit-tree",
-                    &tree,
-                    "-p",
-                    &head,
-                    "-m",
-                    "foreign source commit",
-                ],
-            );
+            let tree = tree_of(&remote, &head);
+            head = commit_tree(&remote, &tree, &[&head], "foreign source commit");
         }
-        let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
-        let merge = settlement_git(
+        let merge = commit_tree(
             &remote,
-            &[
-                "commit-tree",
-                &tree,
-                "-p",
-                LANDING,
-                "-m",
-                "external squash merge",
-            ],
+            &tree_of(&remote, &head),
+            &[LANDING],
+            "external squash merge",
         );
-        settlement_git(
-            &remote,
-            &["update-ref", &format!("refs/heads/{LANDING}"), &merge],
-        );
-        settlement_git(&remote, &["update-ref", "refs/pull/4938/head", &head]);
-        settlement_git(
-            &remote,
-            &[
-                "update-ref",
-                "-d",
-                &format!("refs/heads/{}", candidate.source_branch),
-            ],
-        );
-        settlement_git(
-            &repo,
-            &["remote", "add", "origin", remote.to_str().unwrap()],
-        );
+        update_ref(&remote, &format!("refs/heads/{LANDING}"), &merge);
+        update_ref(&remote, "refs/pull/4938/head", &head);
+        let branch_ref = format!("refs/heads/{}", candidate.source_branch);
+        settlement_git(&remote, &["update-ref", "-d", &branch_ref]);
+        settlement_git(&repo, &["remote", "add", "origin", &remote_str]);
         let absent = crate::git_test_support::command()
             .args(["cat-file", "-e", &head])
             .current_dir(&repo)
@@ -1944,223 +970,52 @@ fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
             !absent.status.success(),
             "updated PR head starts outside the owner checkout"
         );
-        fx.forge.merge_recent(4938, &handoff.task, "alice", LANDING);
+        fx.merge(4938, &handoff.task, "alice", LANDING);
         {
             let mut state = fx.forge.0.lock().unwrap();
             state.recent[0].head_sha = head.clone();
             state.recent[0].merge_commit = merge.clone();
         }
-        let result = fx.runtime.settle_externally_merged_tasks();
+        let result = fx.settle_all();
         if foreign {
-            assert!(result.unwrap().is_empty());
-            let error = fx
-                .runtime
-                .settle_externally_merged_task(&handoff.task)
-                .unwrap_err();
-            assert!(error.to_string().contains("reconcile_review"), "{error}");
-            assert_eq!(fx.status(&handoff.task), TaskStatus::Review);
-            assert_eq!(
-                fx.claim_phase(&handoff.claim_id),
-                ExecutionClaimPhase::HandedOff
+            assert!(result.is_empty(), "foreign: settles nothing");
+            let error = fx.settle_err(&handoff.task, "foreign refuses");
+            assert!(error.contains("reconcile_review"), "{error}");
+            fx.assert_status(&handoff.task, TaskStatus::Review, "foreign stays review");
+            fx.assert_phase(
+                &handoff.claim_id,
+                ExecutionClaimPhase::HandedOff,
+                "foreign handed off",
             );
         } else {
-            assert_eq!(result.unwrap().len(), 1);
-            assert_eq!(fx.status(&handoff.task), TaskStatus::Done);
-            assert_eq!(
-                fx.claim_phase(&handoff.claim_id),
-                ExecutionClaimPhase::Landed
+            assert_eq!(result.len(), 1, "stopped settles one");
+            fx.assert_done(&handoff.task, "stopped done");
+            fx.assert_phase(
+                &handoff.claim_id,
+                ExecutionClaimPhase::Landed,
+                "stopped landed",
             );
             assert_eq!(
                 fx.runtime.landing_attempts().unwrap()[0].state,
-                LandingAttemptState::Merged
+                LandingAttemptState::Merged,
+                "stopped attempt merged"
             );
             assert_eq!(
                 fx.runtime.landing_start_requests().unwrap()[0].state,
-                LandingStartState::Completed
+                LandingStartState::Completed,
+                "stopped request completed"
             );
-            let history = fx.runtime.get_task_history(&handoff.task).unwrap();
             assert!(
-                history
+                fx.runtime
+                    .get_task_history(&handoff.task)
+                    .unwrap()
                     .iter()
-                    .any(|row| row.event == EXTERNAL_MERGE_SETTLED_EVENT
-                        && row.note.as_ref().is_some_and(|note| note.contains(&head)))
+                    .any(|r| r.event == EXTERNAL_MERGE_SETTLED_EVENT
+                        && r.note.as_ref().is_some_and(|n| n.contains(&head))),
+                "stopped history names head"
             );
         }
     }
-}
-
-/// GitHub mergeability answers a landing read can return.
-#[derive(Clone, Copy)]
-enum MergeabilityAnswer {
-    Unknown,
-    Conflicting,
-    Mergeable,
-}
-
-struct MergeabilityLandState {
-    pull: ForgePullRequest,
-    base: String,
-    answers: VecDeque<MergeabilityAnswer>,
-    repeat: MergeabilityAnswer,
-    reads: u32,
-    merges: Vec<(u64, String)>,
-    merged: Option<MergedPullRequest>,
-}
-
-/// An open delivery PR whose mergeability follows a scripted sequence.
-/// The last answer repeats once the sequence is exhausted. A forgotten
-/// virtual clock cannot spin: reads past the landing budget panic.
-struct MergeabilityLandForge(Mutex<MergeabilityLandState>);
-
-const LAND_PR: u64 = 8801;
-const LAND_HEAD: &str = "0dbd8e2000000000000000000000000000000000";
-const LAND_READ_CAP: u32 = 8;
-
-impl MergeabilityLandForge {
-    fn open(
-        task: &str,
-        base: &str,
-        answers: &[MergeabilityAnswer],
-        repeat: MergeabilityAnswer,
-    ) -> Self {
-        Self(Mutex::new(MergeabilityLandState {
-            pull: ForgePullRequest {
-                number: LAND_PR,
-                head_branch: format!("orbit/{task}-47642870"),
-                body: format!("Delivers {task}.\n\nOrbit run jrun-1"),
-                author: BOT.to_string(),
-            },
-            base: base.to_string(),
-            answers: VecDeque::from(answers.to_vec()),
-            repeat,
-            reads: 0,
-            merges: Vec::new(),
-            merged: None,
-        }))
-    }
-
-    fn reads(&self) -> u32 {
-        self.0.lock().unwrap().reads
-    }
-
-    fn merges(&self) -> Vec<(u64, String)> {
-        self.0.lock().unwrap().merges.clone()
-    }
-
-    fn next_answer(state: &mut MergeabilityLandState) -> MergeabilityAnswer {
-        state.reads += 1;
-        assert!(
-            state.reads <= LAND_READ_CAP,
-            "mergeability reads ran past the landing budget"
-        );
-        state.answers.pop_front().unwrap_or(state.repeat)
-    }
-
-    fn blockers(state: &MergeabilityLandState, conflicting: bool) -> PullRequestBlockers {
-        PullRequestBlockers {
-            pull: state.pull.clone(),
-            head_sha: LAND_HEAD.to_string(),
-            conflicting,
-            failed_required_checks: Vec::new(),
-            pending_required_checks: Vec::new(),
-            passed_required_checks: vec!["Test".to_string()],
-        }
-    }
-}
-
-impl TaskPrForge for MergeabilityLandForge {
-    fn open_pull_requests(&self, _: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        let state = self.0.lock().unwrap();
-        Ok(state
-            .merged
-            .is_none()
-            .then(|| state.pull.clone())
-            .into_iter()
-            .collect())
-    }
-
-    fn lease_pull_request(
-        &self,
-        _: &Path,
-        binding: &str,
-    ) -> Result<Option<LeasePullRequest>, OrbitError> {
-        let number: u64 = binding.trim_start_matches('#').parse().unwrap();
-        let state = self.0.lock().unwrap();
-        Ok(Some(LeasePullRequest {
-            number,
-            base_branch: state.base.clone(),
-            merged: state.merged.is_some(),
-        }))
-    }
-
-    fn pull_request_blockers(
-        &self,
-        _: &Path,
-        number: u64,
-    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let mut state = self.0.lock().unwrap();
-        if state.merged.is_some() || state.pull.number != number {
-            return Ok(None);
-        }
-        match Self::next_answer(&mut state) {
-            MergeabilityAnswer::Unknown => {
-                Err(OrbitError::PullRequestMergeabilityUnknown { number })
-            }
-            MergeabilityAnswer::Conflicting => Ok(Some(Self::blockers(&state, true))),
-            MergeabilityAnswer::Mergeable => Ok(Some(Self::blockers(&state, false))),
-        }
-    }
-
-    fn merge_pull_request(
-        &self,
-        _: &Path,
-        number: u64,
-        head_sha: &str,
-    ) -> Result<PullRequestMergeOutcome, OrbitError> {
-        let mut state = self.0.lock().unwrap();
-        state.merges.push((number, head_sha.to_string()));
-        let pull = state.pull.clone();
-        state.merged = Some(MergedPullRequest {
-            pull,
-            base_branch: state.base.clone(),
-            head_sha: head_sha.to_string(),
-            merge_commit: MERGE_COMMIT.to_string(),
-        });
-        Ok(PullRequestMergeOutcome::Merged {
-            merge_commit: MERGE_COMMIT.to_string(),
-        })
-    }
-
-    fn merged_pull_requests(&self, _: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().merged.clone().into_iter().collect())
-    }
-
-    fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
-        Ok(BOT.to_string())
-    }
-
-    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), OrbitError> {
-        Ok(())
-    }
-}
-
-/// A review task whose delivery PR answers `answers`, then `repeat`.
-/// The wait advances on a virtual clock so the 90-second budget does not sleep.
-fn mergeability_land(
-    answers: &[MergeabilityAnswer],
-    repeat: MergeabilityAnswer,
-) -> (Fixture, Arc<MergeabilityLandForge>, String) {
-    let mut fx = Fixture::new();
-    let task = fx.add_task("Mergeability land", TaskStatus::Review, &[LAND_PR]);
-    let forge = Arc::new(MergeabilityLandForge::open(
-        &task, &fx.base, answers, repeat,
-    ));
-    fx.runtime = fx.runtime.clone().with_task_pr_forge(forge.clone());
-    (fx, forge, task)
-}
-
-fn virtual_mergeability_wait() -> orbit_common::test_env::ScopedEnv {
-    orbit_common::test_env::scoped([("ORBIT_TEST_MERGEABILITY_WAIT", Some("virtual"))])
 }
 
 crate::scenario_table!(
@@ -2169,6 +1024,13 @@ crate::scenario_table!(
     land_refuses_unknown_mergeability_after_the_budget,
     land_refuses_a_conflicting_pull_request_immediately,
 );
+
+fn land_err(fx: &Fixture, task: &str, case: &str) -> String {
+    fx.runtime
+        .land_task_pull_request(task, Some("operator"))
+        .expect_err(case)
+        .to_string()
+}
 
 fn land_waits_out_unknown_mergeability_then_merges() {
     let _wait = virtual_mergeability_wait();
@@ -2189,28 +1051,34 @@ fn land_waits_out_unknown_mergeability_then_merges() {
         started.elapsed() < Duration::from_secs(5),
         "the budget advanced without sleeping"
     );
-    assert_eq!(landed.pull_request, LAND_PR);
-    assert_eq!(landed.merge_commit, MERGE_COMMIT);
-    assert_eq!(landed.status, TaskStatus::Done);
+    assert_eq!(
+        (landed.pull_request, &landed.merge_commit, landed.status),
+        (LAND_PR, &MERGE_COMMIT.to_string(), TaskStatus::Done),
+        "landed identity"
+    );
     assert!(landed.settlement_pending.is_none(), "{landed:?}");
     assert_eq!(forge.reads(), 3, "two unknown reads, then one mergeable");
-    assert_eq!(forge.merges(), vec![(LAND_PR, LAND_HEAD.to_string())]);
-    assert_eq!(fx.status(&task), TaskStatus::Done);
+    assert_eq!(
+        forge.merges(),
+        vec![(LAND_PR, LAND_HEAD.to_string())],
+        "land merges once"
+    );
+    fx.assert_done(&task, "land waits done");
 }
 
 fn land_refuses_unknown_mergeability_after_the_budget() {
     let _wait = virtual_mergeability_wait();
     let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Unknown);
     let started = Instant::now();
-    let error = fx
-        .runtime
-        .land_task_pull_request(&task, Some("operator"))
-        .expect_err("the budget refuses a pull request that stays unknown");
+    let message = land_err(
+        &fx,
+        &task,
+        "the budget refuses a pull request that stays unknown",
+    );
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the budget advanced without sleeping"
     );
-    let message = error.to_string();
     assert!(
         message.contains("task_landing_refused")
             && message.contains(&format!("pull request #{LAND_PR} mergeability is unknown")),
@@ -2221,7 +1089,7 @@ fn land_refuses_unknown_mergeability_after_the_budget() {
         forge.merges().is_empty(),
         "unknown mergeability never merges"
     );
-    assert_eq!(fx.status(&task), TaskStatus::Review);
+    fx.assert_status(&task, TaskStatus::Review, "budget refusal stays review");
 }
 
 fn land_refuses_a_conflicting_pull_request_immediately() {
@@ -2231,15 +1099,11 @@ fn land_refuses_a_conflicting_pull_request_immediately() {
         MergeabilityAnswer::Mergeable,
     );
     let started = Instant::now();
-    let error = fx
-        .runtime
-        .land_task_pull_request(&task, Some("operator"))
-        .expect_err("a conflict is a refusal");
+    let message = land_err(&fx, &task, "a conflict is a refusal");
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "a conflict does not wait"
     );
-    let message = error.to_string();
     assert!(
         message.contains("task_landing_refused")
             && message.contains(&format!("pull request #{LAND_PR} conflicts with its base")),
@@ -2250,6 +1114,6 @@ fn land_refuses_a_conflicting_pull_request_immediately() {
         "a conflict is not the unknown-mergeability refusal: {message}"
     );
     assert_eq!(forge.reads(), 1, "a conflict is refused on the first read");
-    assert!(forge.merges().is_empty());
-    assert_eq!(fx.status(&task), TaskStatus::Review);
+    assert!(forge.merges().is_empty(), "conflict never merges");
+    fx.assert_status(&task, TaskStatus::Review, "conflict stays review");
 }

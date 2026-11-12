@@ -10,8 +10,8 @@ export function configureOperationsDrainControls(callbacks) {
   drainControlCallbacks = callbacks;
 }
 
-// Only All workspaces supplies an independent card scope. Concrete boards
-// keep their existing selected-workspace visit and host form.
+// All workspaces, and a follower chosen on an owner's concrete board, supply
+// an independent card scope. The owner's own host keeps the board's visit.
 function autoDrainControlScope(payload = operationsState.lastAutoDrain) {
   return drainControlCallbacks.scope?.(payload);
 }

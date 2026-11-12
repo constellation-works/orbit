@@ -187,6 +187,18 @@ impl OrbitRuntime {
             if let Some(reason) = operator_only_requeue(self, task) {
                 return Err(format!("{STEP} refused: {reason}"));
             }
+            // Before any forge effect: a requeue whose publication the next
+            // run cannot resume escalates for a discard instead.
+            if let Some(plan) = self
+                .unresumable_publication(task, request, header, STEP)
+                .map_err(|error| {
+                    format!(
+                        "{STEP} refused: the publication's source identity cannot be read ({error})"
+                    )
+                })?
+            {
+                return Ok(plan);
+            }
             let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
             let marker = format!("head={head_sha}");
             if history.iter().any(|entry| {

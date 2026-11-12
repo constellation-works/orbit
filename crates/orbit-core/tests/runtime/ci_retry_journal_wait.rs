@@ -44,6 +44,31 @@ fn partition_lock_target(root: &Path) -> PathBuf {
     panic!("task partition boundary exists after seeding");
 }
 
+/// The turnstile an exclusive contender holds from its first refused
+/// attempt until it takes the lock (`<lock>.turnstile` beside `<lock>`).
+fn queued_turnstile_path(target: &Path) -> PathBuf {
+    let file_name = target.file_name().unwrap().to_str().unwrap();
+    let lock_name = format!(".{file_name}.lock");
+    target.with_file_name(format!("{lock_name}.turnstile"))
+}
+
+/// Wait, bounded, until the exclusive contender has genuinely queued:
+/// its turnstile holder record appears only after its first `WouldBlock`
+/// and turnstile acquisition, so a thread that has not yet run (or has
+/// not yet attempted the lock) does not satisfy this observation.
+fn wait_for_queued_exclusive(target: &Path) {
+    let turnstile = queued_turnstile_path(target);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while orbit_common::fs::file_lock::read_file_lock_holder(&turnstile).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "exclusive contender never queued at {}",
+            turnstile.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn boundary_options() -> FileLockOptions {
     FileLockOptions {
         record_shared_holders: true,
@@ -80,6 +105,7 @@ impl Convoy {
             .unwrap();
         });
         ready.recv_timeout(Duration::from_secs(10)).unwrap();
+        let queue_target = target.clone();
         let admission = std::thread::spawn(move || {
             with_exclusive_file_lock_options(
                 &target,
@@ -92,8 +118,10 @@ impl Convoy {
             )
             .unwrap();
         });
-        // Let the admission reach the lock and queue behind the reader.
-        std::thread::sleep(Duration::from_millis(300));
+        // Do not assume the admission thread has run after a fixed delay:
+        // observe its turnstile holder, which exists only once it has
+        // attempted the lock, been refused, and queued behind the reader.
+        wait_for_queued_exclusive(&queue_target);
         Self {
             release: Some(release),
             holder: Some(holder),

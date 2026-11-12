@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/agents_fixture.rs"]
+mod agents_fixture;
 #[path = "../support/bound_server.rs"]
 mod bound_server;
 #[path = "../support/child_guard.rs"]

@@ -628,8 +628,8 @@ model = "fixture-b"
     );
     let (_model, draw) = low_draw(&workspace);
     assert!(
-        draw.source.contains("provider hold, none skipped")
-            && draw.source.contains("provider_unavailable claude"),
+        draw.source.as_str().contains("provider hold, none skipped")
+            && draw.source.as_str().contains("provider_unavailable claude"),
         "{}",
         draw.source
     );
@@ -679,9 +679,9 @@ model = "fixture-free"
         ["free_claude"]
     );
     assert!(
-        draw.source.contains("provider hold")
-            && draw.source.contains("provider_unavailable codex")
-            && draw.source.contains("held_codex"),
+        draw.source.as_str().contains("provider hold")
+            && draw.source.as_str().contains("provider_unavailable codex")
+            && draw.source.as_str().contains("held_codex"),
         "{}",
         draw.source
     );
@@ -839,7 +839,8 @@ model = "fixture-b"
         ["claude_b"]
     );
     assert!(
-        draw.source.contains("provider hold") && draw.source.contains("provider_capacity claude_a"),
+        draw.source.as_str().contains("provider hold")
+            && draw.source.as_str().contains("provider_capacity claude_a"),
         "{}",
         draw.source
     );
@@ -993,7 +994,7 @@ model = "fixture-c"
     assert_eq!(draw.crew, "codex_a", "{}", draw.source);
     assert_eq!(model, "fixture-a");
     assert!(
-        draw.source.contains("provider_capacity codex_b"),
+        draw.source.as_str().contains("provider_capacity codex_b"),
         "the hold lands on the crew the pilot drew: {}",
         draw.source
     );
@@ -1107,7 +1108,7 @@ model = "fixture-c"
             draw.source
         );
         assert!(
-            draw.source.contains("provider_capacity codex_b"),
+            draw.source.as_str().contains("provider_capacity codex_b"),
             "{}",
             draw.source
         );

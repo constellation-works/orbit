@@ -18,6 +18,7 @@
 //! it never signals, cancels, or reassigns a child, because a running leaf is
 //! held by its own detached run, not by this ceiling.
 
+use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
@@ -163,6 +164,62 @@ impl OrbitRuntime {
             )?,
         }
         outcome
+    }
+
+    /// Record the paired resize audit for a ceiling retuned inside a window
+    /// extension's transaction, which cannot reuse [`Self::set_drain_worker_limit`]
+    /// without reopening a second, separately authorized transaction.
+    ///
+    /// Both records carry the extension's `request_id` (also named as
+    /// `parent_request_id`/`initiating_request_id`) and its `requested_at`, so a
+    /// client joining by request id finds the initiating extension and its
+    /// actor/source/reason alongside the resize request and completion.
+    pub(super) fn record_combined_drain_worker_limit_audit(
+        &self,
+        change: &DrainWorkerLimitChange,
+        request_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        requested_at: DateTime<Utc>,
+    ) -> Result<(), OrbitError> {
+        self.record_pipeline_audit(
+            WORKER_LIMIT_REQUEST_AUDIT,
+            Some(&change.run_id),
+            Some(actor),
+            AuditEventStatus::Success,
+            json!({
+                "request_id": request_id,
+                "parent_request_id": request_id,
+                "initiating_request_id": request_id,
+                "run_id": change.run_id,
+                "job_id": change.job_id,
+                "requested_max_active_leaf_runs": change.max_active_leaf_runs,
+                "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
+                "reason": reason,
+                "actor": actor,
+                "source": source,
+                "requested_at": requested_at.to_rfc3339(),
+            }),
+            None,
+        )?;
+        self.record_drain_control_completion(
+            WORKER_LIMIT_COMPLETION_AUDIT,
+            Some(&change.run_id),
+            request_id,
+            change.outcome.as_str(),
+            json!({
+                "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
+                "max_active_leaf_runs": change.max_active_leaf_runs,
+                "revision": change.revision,
+                "parent_request_id": request_id,
+                "initiating_request_id": request_id,
+                "actor": actor,
+                "source": source,
+                "reason": reason,
+            }),
+            None,
+        )
     }
 
     fn apply_drain_worker_limit(
