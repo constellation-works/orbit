@@ -170,6 +170,17 @@ macro_rules! review_methods {
             note: &str,
         ) -> Result<(), OrbitError>;
 
+        /// [ORB-24233] Record a completion hold on the task of a live landing
+        /// attempt: `history` (a `completion_held` entry) and the system
+        /// `comment`, written through that attempt's claim. The owner store
+        /// admits this only while the claim is handed off to the live attempt.
+        fn record_handoff_landing_completion_hold(
+            &self,
+            handoff_id: &str,
+            history: &orbit_types::task::TaskHistoryEntry,
+            comment: &str,
+        ) -> Result<(), OrbitError>;
+
         // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
 
         /// The machine this runtime executes on, as the

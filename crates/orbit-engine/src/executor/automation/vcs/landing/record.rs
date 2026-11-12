@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingStep, HandoffLandingUpdate, RuntimeHost};
 
 use super::super::completion_hold::{
-    ChangedPaths, evaluate_completion_hold, record_completion_hold,
+    ChangedPaths, evaluate_completion_hold, record_landing_completion_hold,
 };
 use super::super::pr::diagnostics;
 use super::super::pr::{PrMergeState, PullRequestStatus};
@@ -256,7 +256,7 @@ pub(super) fn completion_hold_stop<H: RuntimeHost + ?Sized>(
     else {
         return Ok(None);
     };
-    record_completion_hold(host, std::slice::from_ref(&context.task_id), &hold)?;
+    record_landing_completion_hold(host, &context.handoff_id, &context.task_id, &hold)?;
     let reason = format!(
         "{}; the owner's landing stopped before merging anything, so the candidate \
          stays in review for a person to approve",

@@ -463,6 +463,14 @@ pub enum ClaimMutation {
         event: String,
         note: String,
     },
+    /// [ORB-24233] Record a `completion_held` hold on the task of a live
+    /// landing attempt: the history entry carrying the hold decision and one
+    /// system comment. Changes no status and no claim authority.
+    RecordLandingCompletionHold {
+        handoff_id: String,
+        history: orbit_types::task::TaskHistoryEntry,
+        comment: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {

@@ -59,6 +59,8 @@ impl TaskCommitBoundary {
         // A steering snapshot changes only the claim's own record, so it
         // writes no task history event.
         let mut history_event = true;
+        // System comments a landing completion hold writes beside its history.
+        let mut landing_comments: Vec<String> = Vec::new();
         let mut handoff_effects = ClaimCommitEffects::default();
         hold_step(DECISION_STEP, || -> Result<(), OrbitError> {
             match mutation {
@@ -659,6 +661,28 @@ impl TaskCommitBoundary {
                         });
                     history_event = false;
                 }
+                ClaimMutation::RecordLandingCompletionHold {
+                    handoff_id,
+                    history,
+                    comment,
+                } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || state.landing_invalidated
+                    {
+                        return Err(invalid("current operator landing context required"));
+                    }
+                    if history.event != orbit_types::workflow::COMPLETION_HELD_EVENT {
+                        return Err(invalid("unsupported landing completion hold event"));
+                    }
+                    if comment.trim().is_empty() {
+                        return Err(invalid("landing completion hold requires a comment"));
+                    }
+                    self.check_live_landing_attempt(auth, handoff_id)?;
+                    params.append_history.push(history.clone());
+                    landing_comments.push(comment.clone());
+                    history_event = false;
+                }
                 ClaimMutation::CompleteLanding {
                     handoff_id,
                     evidence: proof,
@@ -849,7 +873,7 @@ impl TaskCommitBoundary {
                 .filter(|_| !auth.operator)
                 .map(|run| (claim.claim_id.clone(), run)),
             census: None,
-            observation_comments: Vec::new(),
+            observation_comments: landing_comments,
         };
         effects
             .replacements

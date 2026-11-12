@@ -359,6 +359,15 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::record_handoff_landing_history(self, handoff_id, event, note)
     }
 
+    fn record_handoff_landing_completion_hold(
+        &self,
+        handoff_id: &str,
+        history: &orbit_types::task::TaskHistoryEntry,
+        comment: &str,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::record_handoff_landing_completion_hold(self, handoff_id, history, comment)
+    }
+
     fn local_machine_id(&self) -> Option<String> {
         self.automation_machine_identity().map(str::to_string)
     }
