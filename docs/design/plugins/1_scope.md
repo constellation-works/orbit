@@ -577,6 +577,25 @@ The rule runs at `orbit plugin validate`, registration (against a synthetic work
 call time (against the real one). An `fs` grant therefore cannot reopen `bin/`,
 `plugins/.grants`, another plugin's tree, workspace control files or Git hooks.
 
+**Exact-file write admission.** `permissions.fs.write_files` requests writes to
+existing regular files, separately from directory roots in `fs.write`. It uses the
+same templates, `fs` consent (including scoped `fs=<root>` grants), digest binding,
+certification and upgrade re-consent. Omit the list when unused; empty, missing or
+non-file paths refuse rather than materialize a file or grant its parent. The exact
+file must be user-owned, have one hard link, and have no group/other write bits.
+Its physical path may not traverse symbolic links or unsafe directories; use the
+physical spelling (for example `/private/tmp` rather than macOS's `/tmp` alias).
+Orbit opens each component without following links and validates the opened file,
+then repeats admission before spawning. Protected install, Orbit state and workspace
+metadata boundaries apply to exact files too. A scoped grant covers a requested file
+only when it names that file or an ancestor directory; a descendant never grants a
+directory beneath the file. File replacement/creation and atomic rename require a
+separate directory capability. macOS emits a literal file rule and Linux binds the
+existing inode; neither turns the request into a parent-directory grant. Existing
+platform scratch permissions remain unchanged. Adding a file or changing its resolved
+config destination requires re-consent; old manifests omit this field and retain their
+previous permissions and digest representation.
+
 ### 4.2 Execution protocol
 
 `exec` backend — one process per call, current dir = caller cwd. The inherited baseline
@@ -840,6 +859,7 @@ reliability view.
 |---|---|---|---|
 | (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the shared Landlock host table; the default credential paths (`~/.config/gh`, `~/.ssh`, …) and the unreadable trees below get no grant, carved out of the host grants as well as the granted roots | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
+| `permissions.fs.write_files` | `fs` | Each admitted existing regular file, never its parent | `(allow file-write* (literal …))` |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only. The plugin write boundary handles standalone truncate and requires Landlock ABI 3 even if no write path is granted; older kernels refuse the spawn | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
 | `network: loopback` | `network` | TCP left open (Landlock has no address filter) | `(deny network*)` then loopback re-allows |

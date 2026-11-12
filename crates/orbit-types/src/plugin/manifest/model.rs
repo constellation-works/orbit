@@ -236,11 +236,14 @@ pub struct PluginFsPermissions {
     pub read: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write: Vec<String>,
+    /// Existing, user-owned regular files only; never grants their parent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_files: Vec<String>,
 }
 
 impl PluginFsPermissions {
     fn is_empty(&self) -> bool {
-        self.read.is_empty() && self.write.is_empty()
+        self.read.is_empty() && self.write.is_empty() && self.write_files.is_empty()
     }
 }
 

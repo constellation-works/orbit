@@ -31,6 +31,9 @@ pub struct PluginSandboxProfile {
     /// is never created as a directory, and so neither platform widens a
     /// leaf grant into its parent tree.
     pub write_files: Vec<PathBuf>,
+    /// Manifest requests are strict: unlike optional host store files, they
+    /// must still be safe and present immediately before the child starts.
+    pub(crate) manifest_write_files: Vec<PathBuf>,
     /// Roots beneath which the host may materialize an absent granted write
     /// directory: the selected workspace, this plugin's state tree, and every
     /// directory the host itself added to [`Self::write`] for the
@@ -169,6 +172,13 @@ impl Sandbox for PluginSandboxProfile {
     /// `sandbox-exec` on macOS. Anywhere else the only way to run is the
     /// `unsandboxed` grant; there is no unconfined fallback (§4.9).
     fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        for file in &self.manifest_write_files {
+            // Brokered profiles may remove a requested file. Never validate
+            // or restore a capability the calling agent did not retain.
+            if self.write_files.contains(file) {
+                super::write_file::validate(file)?;
+            }
+        }
         // A plugin's state is host-owned and always readable to that plugin,
         // even without an fs.write grant. Materialize it before any backend
         // launch so its parent never has to be created inside the sandbox.

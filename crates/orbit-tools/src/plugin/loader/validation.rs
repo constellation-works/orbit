@@ -125,32 +125,63 @@ pub fn refuse_covering_fs_write_roots(
     let workspace_root = workspace_root.unwrap_or(validation_workspace);
     let vars = spec.template_vars(Some(workspace_root));
     let roots = render_fs_roots(spec, &vars)?;
-    for (index, absolute) in roots.write.iter().enumerate() {
-        let field = format!("spec.permissions.fs.write[{index}]");
-        if let Some(protected) = fs_write_root_covers(
-            absolute,
-            &spec.plugin_root,
-            &spec.global_root,
-            &spec.state_dir,
-            Some(workspace_root),
-        ) {
-            return Err(PluginManifestError::new(
-                field,
-                format!(
-                    "'{}' grants write access to the {protected}; a plugin cannot request \
+    for (kind, paths, declared, exact_file) in [
+        ("write", &roots.write, &spec.permissions.fs.write, false),
+        (
+            "write_files",
+            &roots.write_files,
+            &spec.permissions.fs.write_files,
+            true,
+        ),
+    ] {
+        for (index, absolute) in paths.iter().enumerate() {
+            let field = format!("spec.permissions.fs.{kind}[{index}]");
+            let check = if exact_file {
+                fs_write_file_covers
+            } else {
+                fs_write_root_covers
+            };
+            if let Some(protected) = check(
+                absolute,
+                &spec.plugin_root,
+                &spec.global_root,
+                &spec.state_dir,
+                Some(workspace_root),
+            ) {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!(
+                        "'{}' grants write access to the {protected}; a plugin cannot request \
                      writes to its own install tree or anywhere beneath Orbit's global root \
                      except its own plugin state tree, or to workspace metadata `.orbit` / `.git`",
-                    spec.permissions
-                        .fs
-                        .write
-                        .get(index)
-                        .map(String::as_str)
-                        .unwrap_or("")
-                ),
-            ));
+                        declared.get(index).map(String::as_str).unwrap_or("")
+                    ),
+                ));
+            }
         }
     }
     Ok(())
+}
+
+/// Exact file writes cannot target any file in the install tree, even
+/// when a source tree is being validated outside the global install root.
+pub fn fs_write_file_covers(
+    write: &Path,
+    plugin_root: &Path,
+    global_root: &Path,
+    plugin_state: &Path,
+    workspace_root: Option<&Path>,
+) -> Option<&'static str> {
+    if physical_with_missing_tail(write).starts_with(physical_with_missing_tail(plugin_root)) {
+        return Some("plugin install root");
+    }
+    fs_write_root_covers(
+        write,
+        plugin_root,
+        global_root,
+        plugin_state,
+        workspace_root,
+    )
 }
 
 /// Whether `write` reaches a host path a plugin must not modify. Equality

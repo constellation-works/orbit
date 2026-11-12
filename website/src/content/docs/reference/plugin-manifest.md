@@ -241,6 +241,27 @@ tools the backend needs to call. Orbit-reserved `ORBIT_*` variables cannot be
 requested through `env_pass`. A request is never a grant. `sandbox: none`
 requires explicit `unsandboxed` consent.
 
+Use `permissions.fs.write_files` for an existing file that the backend must
+modify without opening its parent directory:
+
+```yaml
+permissions:
+  fs:
+    write_files: ["{{config.runtime_file}}"]
+```
+
+This list uses the same path templates and `fs` consent as directory writes.
+Each file must already exist at a physical path, be owned by the current user,
+have one hard link, and have no group/other write access. Symbolic links,
+missing files, directories and unsafe ancestors are refused; Orbit does not
+create or widen the file grant. Install trees, protected Orbit state and
+workspace metadata remain protected. A scoped `fs=<root>` grant must cover the
+file itself or an ancestor directory. Adding a file or changing its configured
+destination requires consent again. Linux binds the existing inode and macOS
+uses a literal file rule; neither grants sibling files. Existing platform
+scratch permissions still apply. Omit `write_files` when unused. File creation
+or replacement by rename needs an appropriate `fs.write` directory grant.
+
 Callbacks use `orbit tool run <tool>` (including derived plugin spellings) or
 MCP `tools/call` through `orbit mcp serve`. Other Orbit CLI commands are refused
 for a plugin child. The effective callback allowance is bounded by the

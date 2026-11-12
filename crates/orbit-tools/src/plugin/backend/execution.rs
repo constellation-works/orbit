@@ -102,6 +102,17 @@ impl PluginBackendSpec {
         } else {
             Vec::new()
         };
+        let scoped_files = if self.granted(PluginGrant::Fs) {
+            scope_fs_files(
+                &roots.write_files,
+                &self.permissions.fs.write_files,
+                granted_roots.as_deref(),
+                "spec.permissions.fs.write_files",
+                &mut dropped,
+            )
+        } else {
+            Vec::new()
+        };
         for root in &dropped {
             tracing::warn!(
                 target: "orbit.tools.plugin",
@@ -117,8 +128,17 @@ impl PluginBackendSpec {
         // only shrink a tree, but the granted side supplies the path when it
         // is the narrower one, so this is the last point at which a protected
         // path could reach the profile.
-        for root in &scoped_write {
-            if let Some(protected) = super::super::loader::fs_write_root_covers(
+        for (root, exact_file) in scoped_write
+            .iter()
+            .map(|root| (root, false))
+            .chain(scoped_files.iter().map(|root| (root, true)))
+        {
+            let check = if exact_file {
+                super::super::loader::fs_write_file_covers
+            } else {
+                super::super::loader::fs_write_root_covers
+            };
+            if let Some(protected) = check(
                 &root.path,
                 &self.plugin_root,
                 &self.global_root,
@@ -137,7 +157,12 @@ impl PluginBackendSpec {
             }
         }
         let mut write: Vec<PathBuf> = scoped_write.into_iter().map(|root| root.path).collect();
-        let mut write_files = Vec::new();
+        let manifest_write_files: Vec<PathBuf> =
+            scoped_files.into_iter().map(|root| root.path).collect();
+        for file in &manifest_write_files {
+            super::write_file::validate(file)?;
+        }
+        let mut write_files = manifest_write_files.clone();
         // The write directories the *host itself* adds for a grant, as opposed
         // to the ones the manifest asked for above. They are also exactly the
         // `orbit_tools` half of the materialization roots below: one list
@@ -246,6 +271,7 @@ impl PluginBackendSpec {
             state_dir: self.state_dir.clone(),
             write,
             write_files,
+            manifest_write_files,
             // The whole host-materialized prefix set, stated once: the
             // selected workspace, this plugin's own state tree, and every
             // directory the host itself put in `write` just above. Nothing
@@ -328,6 +354,13 @@ impl PluginBackendSpec {
             &self.permissions.fs.write,
             Some(&granted),
             "spec.permissions.fs.write",
+            &mut dropped,
+        );
+        scope_fs_files(
+            &roots.write_files,
+            &self.permissions.fs.write_files,
+            Some(&granted),
+            "spec.permissions.fs.write_files",
             &mut dropped,
         );
         dropped

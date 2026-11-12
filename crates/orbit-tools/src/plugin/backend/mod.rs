@@ -34,6 +34,7 @@ mod execution;
 mod model;
 mod programs;
 mod sandbox;
+mod write_file;
 
 pub use self::brokered::*;
 pub use self::model::*;
