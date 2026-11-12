@@ -104,8 +104,19 @@ function renderRank(payload, onCount) {
     const ladder = ladderModel(payload, rows);
     nodes.push(summaryNode(payload, rows, ladder));
     nodes.push(ladderNode(payload, ladder));
-    if (ladder.pending.length) nodes.push(pendingNode(payload, ladder.pending));
-    nodes.push(notScoredNode(payload));
+    // Not ranked and Not scored share one row on a wide screen and stack
+    // below the pair breakpoint (css/agents.css); with no unranked models
+    // Not scored stands alone at full width, leaving no empty half column.
+    const notScored = notScoredNode(payload);
+    if (ladder.pending.length) {
+      const notRanked = pendingNode(payload, ladder.pending);
+      const pair = el("div", { class: "agents-rank-pair" }, [notRanked, notScored]);
+      pair.dataset.key = "rank-pair";
+      pair.dataset.hash = JSON.stringify([notRanked.dataset.hash, notScored.dataset.hash]);
+      nodes.push(pair);
+    } else {
+      nodes.push(notScored);
+    }
     nodes.push(rankFrontierNode(payload, rows));
   }
   nodes.push(howNode(payload));
