@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-02
+last_validated: 2026-11-12
 ---
 
 # Orbit Configuration
@@ -86,7 +86,7 @@ repairs doctor checks, restarts services, edits config or reads credentials.
 Doctor warnings/errors qualify on first sight; log signatures require three
 distinct events across two completed collection windows on the same host within
 fourteen days. Signatures remove volatile IDs, SHAs, home paths, ports and times.
-An update, source-lag or drift signature keeps its target version or commit.
+An update or source-lag signature keeps its target version or commit.
 The owner searches open tasks, tasks closed within 30 days and open frictions,
 comments new counts on a covering task, and retains rejected mappings without
 refiling them. It files at most five tasks per pass.
@@ -98,9 +98,10 @@ trails the workspace integration branch, `orbit update --preflight`, and
 `orbit migrate --dry-run` for each workspace on the host, plus doctor's
 `retired-config-keys` findings. It does not install, apply migrations, adopt
 generation authority, or remove retired keys. An available update, a lagging
-source commit, a pending migration, an authority gap those commands report, and
-a follower on a different build than the owner become human-crew chores. The
-report's `version` object and `migrations` array hold those results.
+source commit, a pending migration, and an authority gap those commands report
+become human-crew chores. The report's `version` object and `migrations` array
+hold the owner host's results. A follower on a different build is not one of
+those chores: this pass cannot read that host.
 
 **Service configuration.** There is no `host_health.units` config key. The
 source of service names is the host's installed service-manager configuration:
@@ -121,20 +122,14 @@ configured service metadata and log access; unsupported collection is not
 reported healthy.
 
 **Follower collection.** Doctor is host-local; passing a remote workspace does
-not run it on that host. To monitor a follower, the operator creates a collector
-variant in the **owner's** `.orbit/auto_tasks/`, using the shipped collection and
-report instructions. Give it a unique name such as `host-health-collector-build`,
-tags `host-health-collector` and `no-diff-expected`, the explicit role
-`collector-only`, the target's stable machine ID, and an earlier weekly schedule.
-Preparation must pin its `required_machine` to that target, and that follower
-must already be pulling work from the owner. Do not enable an owner aggregator
-on a replica. A collector files nothing; it returns its two artifacts through
-`task_artifacts` in claimed mode. The owner reads completed collector-task
-artifacts, verifies their machine identity, and imports each host/window once.
-Reports over 8 days old or absent are coverage gaps; the previous host cursor
-is retained. Without configured collectors the shipped pass covers its owner
-only. Collector variants are operator-managed definitions; copy future collection
-contract changes deliberately.
+not run it on that host. Preparation accepts `required_machine` only for the
+workspace owner. An entry that names a follower is refused, and writing that
+machine ID into the instructions does not pin the task there. Automatically
+pinned follower collectors are unavailable. Do not add a collector definition
+that asks preparation to set `required_machine` to a follower, and do not enable
+the owner aggregator on a replica. The shipped pass covers its owner only.
+Every other host is missing coverage: the pass reports that gap and does not
+treat it as healthy, as zero findings, or as version drift.
 
 **Routes and resolution.** A verified Orbit code/default defect becomes an agent
 bug with file/function evidence quoted at the inspected commit. Host, credential,

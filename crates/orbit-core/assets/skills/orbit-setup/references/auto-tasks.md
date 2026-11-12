@@ -627,10 +627,13 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   executable path, SHA-256 and any recorded local-candidate source commit,
   `orbit update --check`, how far that commit trails the workspace integration
   branch, `orbit update --preflight`, `orbit migrate --dry-run` for each
-  workspace (`orbit workspace list --all`), and doctor's `retired-config-keys` findings. The owner compares
-  follower versions from collector reports and files a different build as
-  drift. It files standing doctor, migration, update and drift findings and
-  recurring log errors, and routes operator fixes to the human crew with
+  workspace (`orbit workspace list --all`), and doctor's `retired-config-keys`
+  findings. The pass covers the owner host only. Preparation records
+  `required_machine` for that owner and refuses any other machine, so
+  automatically pinned follower collectors are unavailable and every other host
+  is missing coverage, not a drift finding. It files standing doctor, migration
+  and update findings and recurring log errors, and routes operator fixes to
+  the human crew with
   runnable `## Resolve` steps that name the install-type command or the
   printed migrate remediation. It never installs, confirms a migration, adopts
   authority, or removes retired keys.
