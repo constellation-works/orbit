@@ -534,7 +534,6 @@
         "federated/probe/tests/session.rs::peer_requests_are_answered_before_correlating_the_actual_call_response",
         "federated/probe/tests/session.rs::peer_traffic_and_blocked_peer_replies_preserve_the_call_deadline_and_unknown_outcome",
         "federated/probe/tests/session.rs::replies_without_usable_structured_content_are_unknown_outcomes",
-        "federated/probe/tests/session.rs::unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal",
         "remote/tests/proxy.rs::a_client_running_as_an_agent_never_propagates_operator"
       ]
     },
