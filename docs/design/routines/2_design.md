@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-11
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -30,11 +30,18 @@ decides whether that pass fires work. The OS clock is host-local infrastructure,
 routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults to a
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
-`orbit clock status` reports configured cadence, native-manager enabled state,
-and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
-without that scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
-restarts the timer, and verifies the resulting deadline.
+`orbit clock status` reports configured cadence, native-manager enabled state, and whether an
+enabled Linux clock is schedulable. An enabled systemd timer is schedulable when it is loaded and
+active and either has a finite next trigger, or is waiting on its in-flight tick: systemd assigns
+no next elapse until the paired oneshot finishes, so an active timer with an unknown next elapse
+counts as healthy while its service is `activating` or `active` with no service-health issue, and
+it reports the effective cadence. Any other enabled timer is `unhealthy` and has no effective
+cadence: an inactive timer, or an active timer with no finite trigger whose service is not
+running, reports the diagnostic that it is not active with a finite future trigger. A service-health
+issue (a tick past its deadline, a failed most recent tick, or a missing finite `TimeoutStartSec` or
+`KillMode=mixed`) makes it `unhealthy` even when the timer has a finite trigger. The recovery is
+`orbit clock enable`, which rewrites a stale installed systemd timer if needed, restarts the timer,
+and verifies the resulting deadline.
 A disabled but active systemd timer is also `unhealthy`: status shows its runtime activity
 and any future trigger, and `orbit clock pause` stops and verifies it.
 An installed unit that still invokes `orbit sweep`, or one whose program path has moved or
@@ -49,8 +56,9 @@ it preserves routine cursors, fire history, and per-routine pauses, and a delibe
 `orbit clock tick` (or its `orbit sweep` compatibility alias) is still available. `enable`
 resumes with the configured cadence, while
 `set --cadence-seconds N` atomically rewrites the host setting and reloads the existing
-unit identity. Linux installation, cadence changes, and enablement verify an active timer
-with a finite next trigger after native commands complete. A failed verification is an
+unit identity. Linux installation, cadence changes, and enablement verify, after native commands
+complete, that the timer is schedulable under the status rules above (a finite next trigger, or an
+in-flight tick). A failed verification is an
 actionable error rather than a claim that the clock is active. launchd and systemd user managers are
 the supported platforms; there is no resident Orbit daemon ([Host-local sweep clock configuration](./4_decisions.md#host-local-sweep-clock-configuration)).
 
@@ -134,9 +142,9 @@ Core owns one projection of a routine status row, its fire records and the
 `GET /api/routines` and the MCP `orbit.routine.control` list each select the
 fields they render from it. Core also owns one clock-health classification,
 which each surface names in its own vocabulary: `orbit clock status` reads any
-reported health issue as `unhealthy`, while the dashboard's `health` stays
-`healthy` for an enabled clock with a future trigger and reports an enabled
-clock without one as `missed`. Dashboard and MCP routine toggles and trigger
+reported health issue as `unhealthy`, while the dashboard's `health` is
+`healthy` for an enabled clock that is schedulable (including one whose tick is in flight and has
+no known next trigger yet) and reports an enabled clock that is not schedulable as `missed`. Dashboard and MCP routine toggles and trigger
 edits (`set_trigger`) run the same Core selection (owner-only refusal, name
 lookup, source workspace, target); the dashboard keeps its own authorization,
 audit rows and error codes. A trigger edit compares the observed trigger,
@@ -338,10 +346,11 @@ a certified `description` or `criteria` change queues a fresh routine pilot for 
 for all material fields, stale-source checks during apply, limits and rollback.
 
 Inspect `orbit routine list`, `orbit routine show <name> --format json`, and
-`orbit clock tick --dry-run --format json` before setting `enabled: true`.
-The seed resolves the name, owner and branch, starts disabled, and evaluates as
-`disabled` until opted in; an empty eligible inventory is `fresh` (or
-`debouncing` while pending material settles). The existing
+`orbit clock tick --dry-run --format json` before setting `enabled: true` on a routine seeded
+disabled. The seed resolves the name, owner and branch. A newly initialized workspace starts
+`task_pilot.yaml` with `enabled: true` [ORB-22802]; setting `enabled: false` makes it evaluate as
+`disabled`. An empty eligible inventory is `fresh` (or `debouncing` while pending material
+settles). The existing
 [routine seed boundary fixture](../../../crates/orbit-cli/tests/workspace/routine_state_seed.rs)
 exercises that configuration through init, show and dry-run tick.
 Explicit `orbit run task-pilot <id>` remains independent of this scheduled gate.
@@ -390,8 +399,10 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
-and `task_publication.yaml` with workspace-unique names and `enabled: false`.
+`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`,
+`task_publication.yaml` and `crew_memory_dream.yaml` with workspace-unique names. Three ship
+`enabled: true`: `task_pilot.yaml` and `worktree_gc.yaml` [ORB-22802], and `crew_memory_dream.yaml`
+[ORB-23115]. The others ship `enabled: false`.
 [ORB-22844] retired `finding_verification.yaml`, `pilot_warning_triage.yaml`,
 `evolution_pass.yaml` and `ux-rules.yaml` (templates under `routines/retired/`).
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
@@ -417,8 +428,9 @@ prepare/apply drift contract is `[workflow.task_pilot_freshness]` in `config.tom
 overridable by the routine's optional `trigger.state.freshness` block [ORB-13638].
 The first routine pilot is automatic. After it, a certified description or acceptance-criteria edit queues a fresh routine pilot for a proposed or backlog task unless a live execution claim or an unresolved failed pilot holds the task; edits to other material and policy changes never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
-`enabled` field controls scheduled capability in the workspace; the performance
-refresh is the single seeded-enabled exception described above.
+`enabled` field controls scheduled capability in the workspace. The seeded values above apply only
+when a definition is first written: re-init and `workspace sync` keep an existing workspace's
+`enabled` value.
 
 `worktree_gc.yaml` uses `missed_run: catch_up_once`, so a gap in that hourly backstop runs one make-up GC instead of dropping the slots. Other seeded routines keep their own `missed_run` policy.
 
@@ -448,7 +460,8 @@ the upgrade unable to converge: the retired default kept failing to load on ever
 tick while `workspace sync` demanded a manual move that changed nothing. So
 provenance is byte-exact first and shape-aware second. A file that differs from a
 template *this or a prior release shipped for that stem* only in fields the
-operator owns — `enabled`, the retired `hosts:` key — is still Orbit's. The
+operator owns — `enabled`, the retired `hosts:` key — or in comments, is still Orbit's. The
+comparison reads the parsed definition's template-owned fields, so comments never reach it. The
 shipped historical shapes are `assets/routines/retired/` (defaults this Orbit no
 longer ships) and `assets/routines/superseded/` (earlier shapes of defaults it
 still ships); retiring a default or changing a template's fields adds an entry to
@@ -459,12 +472,15 @@ one of them in the same change. The consequences:
   to `.retired-managed/routines/` first, so nothing the operator wrote is lost.
 - A stale shipped default matching a superseded shape is refreshed onto the
   current template **with its `enabled` setting carried over**, so convergence
-  never silently switches off a routine an operator opted into. A cron
+  never silently switches off a routine an operator opted into. The refresh
+  writes the current template's bytes, so an operator's comments and the retired
+  `hosts:` key in that file are not carried over. A cron
   `task_pilot.yaml` refreshed onto the state form takes this host as its owner;
   a recorded binding that already names an owner keeps it, exactly as a
   recorded name is kept [ORB-12745].
-- A current-shape default whose only difference is a lifecycle setting is adopted
-  in place — recorded as Orbit's without being rewritten.
+- A current-shape default whose only differences are lifecycle settings (`enabled`,
+  the retired `hosts:` key) or comments is adopted in place — recorded as Orbit's
+  without being rewritten, so an operator's comment survives.
 - A default a prior release wrote without recording it in the manifest is adopted
   the same way when it carries the name this workspace seeds. An operator's own
   routine wearing a bundled filename declares its own name, so it is still
@@ -479,8 +495,9 @@ one of them in the same change. The consequences:
   recorded digest proves Orbit wrote those exact bytes; anything else is the
   operator's own file, preserved in place and reported with the step that
   clears it.
-- Any other difference — cadence, target, policy, description, an added comment —
-  is a local edit: preserved, reported, never rewritten.
+- Any other difference — cadence, target, policy or description — is a local edit:
+  preserved, reported, never rewritten. A comment is not a routine field, so adding
+  one does not make a file a local edit; the bullets above say what happens to it.
 
 `orbit doctor` classifies routine provenance through the same helper, so
 `--fix-stale-artifacts` and `workspace sync` never disagree about whether a

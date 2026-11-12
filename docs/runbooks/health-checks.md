@@ -498,12 +498,16 @@ prints a single `sweep.no_workspace_loaded` row naming this binary's version and
 load error. Partial load errors still print one `load error […]` line per workspace and
 exit 0. An unconfigured host (no registered workspaces) remains a clean no-op.
 
-On Linux, a healthy enabled status includes an active timer, a finite next systemd trigger,
-and an effective cadence. `clock: unhealthy` with an inactive effective cadence means the
-timer is enabled but elapsed, unscheduled, inactive, or could not be probed. Inspect the
-printed diagnostic, then run `orbit clock enable`: it rewrites stale installed service and
-timer files if needed, restarts the timer even when it is already enabled, and returns success
-only after verifying a finite next trigger. (`orbit clock enable` resumes a paused clock;
+On Linux, a healthy enabled status has an effective cadence. That means an active timer with a
+finite next systemd trigger, or an active timer whose tick is in flight (systemd assigns no next
+trigger until the oneshot finishes) while its service is `activating` or `active` with no
+service-health issue. `clock: unhealthy` with an inactive effective cadence means the timer is
+enabled but elapsed, unscheduled, inactive, or could not be probed, or its service reports a
+health issue: a tick past its deadline, a failed most recent tick, or a missing finite
+`TimeoutStartSec` or `KillMode=mixed`. Inspect the printed diagnostic, then run `orbit clock
+enable`: it rewrites stale installed service and timer files if needed, restarts the timer even
+when it is already enabled, and returns success only after verifying that the timer is
+schedulable under the same rules. (`orbit clock enable` resumes a paused clock;
 `orbit clock repair` only repoints a unit whose program moved, and never resumes one.) If that verification fails, inspect the
 `systemctl --user status` and `journalctl --user` commands in the error rather than repeating
 enable. The generated timer schedules its first sweep from every timer activation and then
