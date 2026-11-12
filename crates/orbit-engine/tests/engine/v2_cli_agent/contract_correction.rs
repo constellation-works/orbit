@@ -53,9 +53,17 @@ impl orbit_engine::test_support::NullRuntimeHost for CorrectionHost {
         _: &Value,
         _: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "delivery_sentinel");
-        *self.delivered.lock().unwrap() += 1;
-        Ok(json!({}))
+        match action {
+            "delivery_sentinel" => {
+                *self.delivered.lock().unwrap() += 1;
+                Ok(json!({}))
+            }
+            "contract_recovery" => Ok(json!({})),
+            _ => Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "unexpected deterministic action".to_string(),
+            }),
+        }
     }
 }
 
@@ -100,6 +108,17 @@ fn run_implementer_envelopes(
     corrected: &Value,
     corrected_exit: u8,
 ) -> Run {
+    run_implementer_envelopes_with_recovery(label, first, corrected, corrected_exit, false, None)
+}
+
+fn run_implementer_envelopes_with_recovery(
+    label: &str,
+    first: &Value,
+    corrected: &Value,
+    corrected_exit: u8,
+    with_recovery: bool,
+    recovered_first: Option<&Value>,
+) -> Run {
     let fixture = tempfile::tempdir().unwrap();
     let state = fixture.path().join("state");
     fs::create_dir(&state).unwrap();
@@ -115,10 +134,15 @@ fn run_implementer_envelopes(
          exit {corrected_exit}\n\
          else\n\
          echo filed >> \"$state/side-effects\"\n\
+         if [ \"$n\" -ge 3 ]; then\n\
+         cat <<'PAYLOAD'\n{recovered_first}\nPAYLOAD\n\
+         else\n\
          cat <<'PAYLOAD'\n{first}\nPAYLOAD\n\
+         fi\n\
          fi\n",
         state = state.display(),
         first = envelope_payload(first),
+        recovered_first = envelope_payload(recovered_first.unwrap_or(first)),
         corrected = envelope_payload(corrected),
         corrected_exit = corrected_exit,
     );
@@ -146,6 +170,19 @@ fn run_implementer_envelopes(
     .spec;
     if let JobV2StepBody::Target(target) = &mut job.steps[0].body {
         target.activity_name = Some("agent_implement".into());
+    }
+    if with_recovery {
+        job.steps[0].recovery_activity = Some("contract_recovery".into());
+        job.steps[0].resolved_recovery_activity = Some(ActivityV2 {
+            description: String::new(),
+            input_schema_json: Value::Null,
+            output_schema_json: Value::Null,
+            fs_profile: None,
+            spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                action: "contract_recovery".into(),
+                config: Value::Null,
+            }),
+        });
     }
     let outcome = execute_job_with_resume(
         &job,
@@ -342,6 +379,77 @@ fn a_failed_correction_keeps_the_refusal_and_its_invocation_trace() {
                 "the original and the failed correction are each persisted once"
             );
             assert_eq!(corrections(&run), [("task_artifacts", "requested")]);
+        },
+    );
+}
+
+#[test]
+fn failed_correction_invocations_are_persisted_once_across_step_recovery() {
+    git_fixture::isolated(
+        module_path!(),
+        "failed_correction_invocations_are_persisted_once_across_step_recovery",
+        || {
+            let first = json!({ "task_artifacts": ["code-org-scan.json"] });
+            let failed = json!({
+                "schemaVersion": 1,
+                "status": "failed",
+                "result": {},
+                "error": {"code": "correction_failed", "message": "could not restate the envelope"},
+            });
+            let run = run_implementer_envelopes_with_recovery(
+                "correction-failed-recovery",
+                &success_envelope(&first),
+                &failed,
+                1,
+                true,
+                Some(&success_envelope(&json!({
+                    "task_artifacts": [{
+                        "path": "code-org-scan.json",
+                        "source_path": ".orbit/tmp/code-org-scan.json",
+                    }],
+                }))),
+            );
+
+            assert!(run.outcome.success, "{:?}", run.outcome);
+            assert_eq!(
+                run.invocations, 3,
+                "the post-recovery implementer succeeds once"
+            );
+            assert_eq!(
+                run.side_effects, 2,
+                "the recovered attempt is a new implementation"
+            );
+            assert_eq!(
+                run.delivered, 1,
+                "delivery follows the recovered implementation"
+            );
+            assert_eq!(
+                run.traces,
+                [false, true, false],
+                "the failed correction and post-recovery implementation are persisted once"
+            );
+            assert_eq!(
+                run.events
+                    .iter()
+                    .filter(|event| matches!(
+                        event.kind,
+                        V2AuditEventKind::StepRecoveryAttempted { .. }
+                    ))
+                    .count(),
+                1,
+                "the failed correction enters recovery once"
+            );
+            assert_eq!(
+                run.events
+                    .iter()
+                    .filter(|event| matches!(
+                        event.kind,
+                        V2AuditEventKind::StepPostRecoveryAttempt { .. }
+                    ))
+                    .count(),
+                1,
+                "the implementer is rerun once after recovery"
+            );
         },
     );
 }
