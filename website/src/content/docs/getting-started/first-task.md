@@ -38,9 +38,13 @@ Open it, read the description, criteria, and **Context files** tab, and click
 ask your agent to fix it first.
 
 The **Context files** tab lists the files and directories the task expects to
-change. Orbit locks those paths for the run. By default, Markdown paths take
-no lock when the task also names other files; a task whose context is only
-Markdown still locks those files. Overlapping tasks wait on any locked path.
+change. Orbit locks those paths for the run. The built-in default unlocks only
+Markdown paths when the task also names other files, while on a freshly
+initialised machine, `orbit init` seeds JSON, TXT, Markdown, `mod.rs`, and TOML
+paths to skip locks too; a task whose context is only unlocked files still
+locks those files (see
+[What `orbit init` seeds](../../reference/config/#what-orbit-init-seeds)).
+Overlapping tasks wait on any locked path.
 
 ![Task cards showing a proposed task with Approve, an in-progress task with View run, and backlog tasks with Ship.](../../../assets/dashboard/dashboard-approve-ship.png)
 
@@ -50,11 +54,14 @@ own.
 
 ## 3. Ship it
 
-Click **Ship** on the task. Orbit locks its context paths for the run. By
-default, Markdown paths take no lock when the task also names other files; a
-task whose context is only Markdown still locks those files. Orbit gives the
-task an isolated worktree and runs an agent in the sandbox to plan, execute,
-and check the change. Click **View run** to follow each step live. A second agent reviews
+Click **Ship** on the task. Orbit locks its context paths for the run. The
+built-in default unlocks only Markdown paths when the task also names other
+files, while on a freshly initialised machine, `orbit init` seeds JSON, TXT,
+Markdown, `mod.rs`, and TOML paths to skip locks too; a task whose context is
+only unlocked files still locks those files (see
+[What `orbit init` seeds](../../reference/config/#what-orbit-init-seeds)). Orbit
+gives the task an isolated worktree and runs an agent in the sandbox to plan,
+execute, and check the change. Click **View run** to follow each step live. A second agent reviews
 the change only when review is on. The built-in `review.timing` is `off`.
 `orbit workspace init` on a pull-request workspace, the default, sets it to
 `before_landing` when `luna`, `haiku`, or `muse-spark` is enabled, and to
@@ -117,10 +124,13 @@ With a context declared, `orbit task add` prints only the new task ID (with
 none, it first warns that the task holds no file lock). `--title` and
 `--complexity` are required. `--context` names the files and directories the
 task expects to change; `--allow-missing-context` covers a file the task will
-create, as here. Orbit locks those paths. By default, Markdown paths take no
-lock when the task also names other files; a task whose context is only
-Markdown still locks those files. An overlapping task waits on any locked
-path. It is a starting point, not a limit: a
+create, as here. Orbit locks those paths. The built-in default unlocks only
+Markdown paths when the task also names other files, while on a freshly
+initialised machine, `orbit init` seeds JSON, TXT, Markdown, `mod.rs`, and TOML
+paths to skip locks too; a task whose context is only unlocked files still
+locks those files (see
+[What `orbit init` seeds](../../reference/config/#what-orbit-init-seeds)). An
+overlapping task waits on any locked path. It is a starting point, not a limit: a
 run that changes other files still delivers, Orbit adds them to the task's
 context, and the run is recorded as a footprint miss. See
 [how a delivery window starts tasks](../../how-to/continuous-delivery/#3-check-what-will-actually-start).

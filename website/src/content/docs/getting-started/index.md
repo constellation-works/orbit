@@ -91,13 +91,17 @@ SSH, run `orbit web connect <ssh-host>`. See
    files a task with acceptance criteria. The task appears in **Tasks** under
    **Awaiting approval**.
 2. **Click Approve.** The task moves to the backlog.
-3. **Click Ship.** Orbit locks the task's context paths for the run. By
-   default, Markdown paths take no lock when the task also names other files; a
-   task whose context is only Markdown still locks those paths. Orbit runs an
-   agent in an isolated worktree to plan, execute, and check the change. A
-   second agent reviews it when `review.timing` is on. A new pull-request
-   workspace sets that to `before_landing` if `luna`, `haiku`, or `muse-spark`
-   is enabled, and to `off` otherwise. Follow the run from **View run**.
+3. **Click Ship.** Orbit locks the task's context paths for the run. The
+   built-in default unlocks only Markdown paths when the task also names other
+   files, while on a freshly initialised machine, `orbit init` seeds JSON, TXT,
+   Markdown, `mod.rs`, and TOML paths to skip locks too; a task whose context is
+   only unlocked files still locks those paths (see
+   [What `orbit init` seeds](../reference/config/#what-orbit-init-seeds)). Orbit
+   runs an agent in an isolated worktree to plan, execute, and check the
+   change. A second agent reviews it when `review.timing` is on. A new
+   pull-request workspace sets that to `before_landing` if `luna`, `haiku`, or
+   `muse-spark` is enabled, and to `off` otherwise. Follow the run from **View
+   run**.
 4. **Review the pull request.** The run stops with the task in `review` and
    the pull request open. Merge it on GitHub. Then click **Approve** on the
    task, or let Orbit close it: a later `orbit run auto` delivery window
