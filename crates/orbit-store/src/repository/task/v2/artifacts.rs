@@ -172,15 +172,18 @@ impl TaskV2Store {
     ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        let bundle = match self.bundle_store.read_bundle_lightweight(id) {
-            Ok(bundle) => bundle,
+        // Only the manifest is returned, so read it alone: assembling the
+        // whole bundle would parse the envelope, bodies, events and comments
+        // on every call, which grows with the task's history.
+        let manifest = match self.bundle_store.read_artifact_manifest(id) {
+            Ok(manifest) => manifest,
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
                 ..
             }) => return Ok(None),
             Err(err) => return Err(err),
         };
-        let Some(manifest) = bundle.artifact_manifest else {
+        let Some(manifest) = manifest else {
             return Ok(Some(Vec::new()));
         };
         let mut files = manifest.files;
