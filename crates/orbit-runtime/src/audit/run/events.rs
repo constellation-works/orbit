@@ -112,16 +112,29 @@ impl RuntimeKernel {
         run: &JobRun,
         page: RunEventsPage<'_>,
     ) -> Result<RunEventsPageResult, OrbitError> {
+        self.run_events_page_in_workspace(&self.workspace_id()?, &run.run_id, page)
+    }
+
+    /// [`Self::run_events_page`] for a run this host's store records under
+    /// `workspace_id`, which need not be this runtime's workspace nor one
+    /// still registered on the host. The caller has already established
+    /// that the run exists there; this read never writes.
+    pub fn run_events_page_in_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        page: RunEventsPage<'_>,
+    ) -> Result<RunEventsPageResult, OrbitError> {
         match page {
             RunEventsPage::Forward {
                 kind,
                 offset,
                 limit,
-            } => self.forward_run_events(&run.run_id, kind, offset, limit),
+            } => self.forward_run_events(workspace_id, run_id, kind, offset, limit),
             RunEventsPage::Tail { offset, limit } => {
                 let filter = V2AuditEventFilter {
-                    workspace_id: self.workspace_id()?,
-                    run_id: Some(run.run_id.clone()),
+                    workspace_id: workspace_id.to_string(),
+                    run_id: Some(run_id.to_string()),
                     source: Some(RUN_EVENTS_SOURCE.to_string()),
                     limit: Some(limit),
                     offset: Some(offset),
@@ -145,6 +158,7 @@ impl RuntimeKernel {
 
     fn forward_run_events(
         &self,
+        workspace_id: &str,
         run_id: &str,
         kind: Option<&str>,
         offset: usize,
@@ -155,10 +169,16 @@ impl RuntimeKernel {
         // budget and reads payload text only for rows the event_type column
         // cannot reject.
         if let Some(kind) = kind {
-            return self.forward_kind_filtered_run_events(run_id, kind, offset, limit);
+            return self.forward_kind_filtered_run_events(
+                workspace_id,
+                run_id,
+                kind,
+                offset,
+                limit,
+            );
         }
         let rows = self.list_v2_audit_events(V2AuditEventFilter {
-            workspace_id: String::new(),
+            workspace_id: workspace_id.to_string(),
             run_id: Some(run_id.to_string()),
             source: Some(RUN_EVENTS_SOURCE.to_string()),
             limit: Some(limit),
@@ -175,6 +195,7 @@ impl RuntimeKernel {
 
     fn forward_kind_filtered_run_events(
         &self,
+        workspace_id: &str,
         run_id: &str,
         kind: &str,
         offset: usize,
@@ -189,7 +210,7 @@ impl RuntimeKernel {
             past_scan_limit,
         } = self.v2_audit_store()?.list_v2_audit_kind_forward_payloads(
             &V2AuditKindForwardQuery {
-                workspace_id: &self.workspace_id()?,
+                workspace_id,
                 run_id,
                 source: RUN_EVENTS_SOURCE,
                 canonical_event_type: event_type_for_body_kind(kind),

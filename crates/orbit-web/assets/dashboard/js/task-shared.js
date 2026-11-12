@@ -2,7 +2,7 @@
 // The modules split out of tasks.js import this one, and it imports none of
 // them, so they share state and re-render the list without import cycles.
 
-import { clockStamp, el, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
+import { clockStamp, el, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -202,9 +202,18 @@ export function taskWorkspacePath(task, path) {
 
 // The dashboard address of run `runId` in the task's own workspace, so an
 // aggregate view or a task pinned from another workspace opens the run where it
-// lives. A task with no known workspace falls back to the selected one.
+// lives. A task with no known workspace falls back to the selected one. The
+// task's bound run opens on the host its recorded execution machine names when
+// the host file registers that machine, not on whichever host is selected; the
+// host finds the run's records under whatever workspace id it keeps them.
 export function taskRunHref(task, runId) {
-  return runHref(runId, task && task.workspace_id ? { workspace: task.workspace_id } : {});
+  const scope = task && task.workspace_id ? { workspace: task.workspace_id } : {};
+  const machine = task && String(task.job_run_id || "") === String(runId) ? task.job_run_machine : null;
+  if (machine && machine.machine_id) {
+    const host = getRegisteredHosts().find((row) => row.machine_id === machine.machine_id);
+    if (host) scope.host = host.name;
+  }
+  return runHref(runId, scope);
 }
 
 export function taskMutationPath(task, suffix = "") {

@@ -1804,3 +1804,189 @@ fn pull_budget_tracks_allocator_through_launch_review_and_settlement() {
         },
     );
 }
+
+/// [ORB-24160] A pull follower's claimed leaf stays in the host store under
+/// its workspace id after that workspace is removed from the host. Run detail
+/// and run events, asked with the dashboard's selected workspace or with the
+/// removed id, find it there with its steps and events instead of answering
+/// "run not found".
+#[test]
+fn a_run_recorded_under_an_unregistered_workspace_opens_with_steps_and_events() {
+    isolated(
+        "runs::a_run_recorded_under_an_unregistered_workspace_opens_with_steps_and_events",
+        || {
+            const REMOVED: &str = "ws_removed_follower";
+            let fixture = Fixture::new();
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let now = Utc::now();
+            let run = JobRun {
+                build: None,
+                run_id: "jrun-20261018-1135-c1".into(),
+                job_id: "task_claimed_pr_pipeline".into(),
+                attempt: 1,
+                state: JobRunState::Success,
+                scheduled_at: now,
+                created_at: now,
+                started_at: Some(now),
+                finished_at: Some(now),
+                duration_ms: Some(1_000),
+                pid: None,
+                pid_start_time: None,
+                input: None,
+                retry_source_run_id: None,
+                knowledge_metrics: None,
+                resolved_crew: None,
+                crew_model: None,
+                steps: Vec::new(),
+                executed_on: None,
+            };
+            store
+                .upsert_job_run_for_workspace(REMOVED, &run, None)
+                .unwrap();
+            let step = JobRunStep {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "implement".into(),
+                started_at: Some(now),
+                finished_at: Some(now),
+                duration_ms: Some(1_000),
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Success,
+                error_code: None,
+                failure_code: None,
+                error_message: None,
+            };
+            store
+                .upsert_job_run_step_for_workspace(REMOVED, &run.run_id, &step)
+                .unwrap();
+            for index in 0..3 {
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: REMOVED.into(),
+                        event_id: format!("leaf-{index}"),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "activity_started".into(),
+                        ts: now + chrono::Duration::seconds(index),
+                        run_id: run.run_id.clone(),
+                        agent_identity: "fixture".into(),
+                        parent_event_id: None,
+                        workspace_path: None,
+                        payload_json: json!({"event_id": format!("leaf-{index}"), "body_kind": "activity_started"}).to_string(),
+                    })
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            for workspace in ["ws_http_fixture", REMOVED] {
+                let detail =
+                    json_ok(server.get(&format!("/api/runs/{}?workspace={workspace}", run.run_id)));
+                assert_eq!(detail["run"]["run_id"], run.run_id, "{workspace}: {detail}");
+                assert_eq!(detail["run"]["state"], "success", "{workspace}: {detail}");
+                assert_eq!(
+                    detail["recorded_workspace"],
+                    json!({"workspace_id": REMOVED, "registered": false}),
+                    "{workspace}: {detail}"
+                );
+                let steps = detail["steps"].as_array().unwrap();
+                assert_eq!(steps.len(), 1, "{workspace}: {detail}");
+                assert_eq!(steps[0]["target_id"], "implement", "{workspace}: {detail}");
+                let events = json_ok(server.get(&format!(
+                    "/api/runs/{}/events?tail=true&workspace={workspace}",
+                    run.run_id
+                )));
+                assert_eq!(events["total"], 3, "{workspace}: {events}");
+                assert_eq!(
+                    events["events"][2]["event_id"], "leaf-2",
+                    "{workspace}: {events}"
+                );
+                let forward = json_ok(server.get(&format!(
+                    "/api/runs/{}/events?workspace={workspace}",
+                    run.run_id
+                )));
+                assert_eq!(
+                    forward.as_array().map(Vec::len),
+                    Some(3),
+                    "{workspace}: {forward}"
+                );
+                assert_eq!(forward[2]["event_id"], "leaf-2", "{workspace}: {forward}");
+                let logs = json_ok(server.get(&format!(
+                    "/api/runs/{}/logs?workspace={workspace}",
+                    run.run_id
+                )));
+                assert_eq!(logs, json!([]), "{workspace}: {logs}");
+            }
+        },
+    );
+}
+
+/// [ORB-24160] A run this host's store does not hold, which a task binds to
+/// another machine, is refused with a 404 that names the holding host and
+/// why the run cannot be shown here, not a bare "run not found".
+#[test]
+fn a_run_held_on_another_host_is_refused_naming_that_host() {
+    isolated(
+        "runs::a_run_held_on_another_host_is_refused_naming_that_host",
+        || {
+            use orbit_store::contracts::TaskDocumentUpdateParams;
+            use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+            let fixture = Fixture::new();
+            let task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Claimed elsewhere".into(),
+                    description: "a follower ran it".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            let documents = orbit_store::compose::workspace_coordinated_backends(
+                TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap(),
+                fixture.runtime.workspace_id().unwrap(),
+                fixture.runtime.sqlite_store().unwrap(),
+            )
+            .unwrap()
+            .task
+            .document;
+            documents
+                .update_task_document(
+                    &task.id,
+                    TaskDocumentUpdateParams {
+                        actor: "fixture".into(),
+                        job_run_id: Some(Some("jrun-held-c1".into())),
+                        job_run_machine: Some(Some(orbit_types::task::ExecutionLocation {
+                            machine_id: "hm_follower_mini".into(),
+                            machine_name: Some("follower-mini".into()),
+                        })),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let server = fixture.server(false);
+            let response = server.get("/api/runs/jrun-held-c1?workspace=ws_http_fixture");
+            assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+            let body: Value = response.json().unwrap();
+            assert_eq!(body["code"], "run_held_elsewhere", "{body}");
+            let message = body["error"].as_str().unwrap();
+            assert!(message.contains("follower-mini"), "names the host: {body}");
+            assert!(
+                message.contains("held in that host's store"),
+                "says why: {body}"
+            );
+            assert_eq!(body["holder"]["machine_id"], "hm_follower_mini", "{body}");
+            assert_eq!(body["holder"]["task_id"], task.id.as_str(), "{body}");
+
+            // With no task naming it, the run is simply absent.
+            let unknown = server.get("/api/runs/jrun-nowhere-c1?workspace=ws_http_fixture");
+            assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+            let unknown: Value = unknown.json().unwrap();
+            assert_eq!(
+                unknown["error"], "run not found: jrun-nowhere-c1",
+                "{unknown}"
+            );
+            assert!(unknown.get("code").is_none(), "{unknown}");
+        },
+    );
+}
