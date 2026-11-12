@@ -31,6 +31,7 @@ import {
   armCards, armEvidenceCard, forestCard, cumulativeCard, complexityCard, crewCard,
 } from './experiment-readout.js';
 import { draftActions, draftStartRenderState, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
+import { lifecycleControl, lifecycleRenderState } from './experiment-lifecycle.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -231,7 +232,7 @@ export function renderExperiments() {
   }
   const root = el("div", { class: "ex-view" }, nodes);
   root.dataset.key = `experiments-${lastPayload.kind}`;
-  root.dataset.hash = JSON.stringify([lastPayload, lastPayload.kind === "detail" ? readoutView() : null, draft, draftStartRenderState()]);
+  root.dataset.hash = JSON.stringify([lastPayload, lastPayload.kind === "detail" ? readoutView() : null, draft, draftStartRenderState(), lifecycleRenderState()]);
   syncNodes(body, [root]);
   applyDetailTab();
 }
@@ -554,6 +555,7 @@ function headerCard(experiment, view, primary) {
         ["Health", readout ? healthLink(readout) : pendingFact(view)],
       ].filter(Boolean)),
       concludeMenu(experiment, verdict),
+      lifecycleControl(experiment, experiment.authoring, fetchAndRenderExperiments),
     ]),
     draftActions(experiment, experiment.authoring),
   ]);

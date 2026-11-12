@@ -336,6 +336,9 @@ textarea.exf-control { resize: vertical; min-height: 56px; }
 .exf-confirm-facts { display: grid; gap: 4px; margin: 0; }
 .exf-confirm-facts > div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; font: 12.5px var(--font-sans); }
 .exf-confirm-facts dt { color: var(--fg-mute); }
+/* Pause and Resume sit in the decision band; the confirmation opens below its button. */
+.exl-lifecycle { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.exl-confirm-group { width: min(100%, 360px); }
 .exf-confirm-facts dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
 .exf-draft-actions { display: flex; flex-direction: column; gap: 8px; }
 

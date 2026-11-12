@@ -333,3 +333,114 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
         },
     );
 }
+
+/// Pause and resume from the dashboard: an operator moves a running
+/// experiment to paused and back through core, each change recording its
+/// event with actor `dashboard` and the reason; a session without operator
+/// authority is refused before anything changes; and a change the state does
+/// not allow is core's refusal, leaving the experiment as it was.
+#[test]
+fn experiment_pause_and_resume_routes_are_operator_only_and_record_core_events() {
+    isolated(
+        "experiments::experiment_pause_and_resume_routes_are_operator_only_and_record_core_events",
+        || {
+            let fixture = Fixture::new();
+            let config = fixture.work.join("config.toml");
+            let mut text = fs::read_to_string(&config).unwrap_or_default();
+            text.push_str("\n[experiments]\nenabled = true\n");
+            fs::write(&config, text).unwrap();
+
+            let id = {
+                let server = fixture.server(true);
+                let mut body = draft();
+                body["primary_metric"] = json!("first_pass_acceptance");
+                let created = json_ok(server.send("POST", &route(""), body));
+                let id = created["id"].as_str().expect("experiment id").to_string();
+                let started = json_ok(server.send(
+                    "POST",
+                    &route(&format!("/{id}/start")),
+                    json!({ "reason": "go" }),
+                ));
+                assert_eq!(started["status"], json!("running"), "{started}");
+                id
+            };
+            let one = route(&format!("/{id}"));
+            let pause = route(&format!("/{id}/pause"));
+            let resume = route(&format!("/{id}/resume"));
+
+            {
+                let agent = fixture.server(false);
+                for (path, operation) in
+                    [(&pause, "experiment.pause"), (&resume, "experiment.resume")]
+                {
+                    let denied = error_code(
+                        agent.send("POST", path, json!({ "reason": "sneak" })),
+                        403,
+                        "authorization_denied",
+                    );
+                    assert_eq!(denied["operation"], json!(operation), "{path}: {denied}");
+                }
+            }
+
+            let server = fixture.server(true);
+            let list = json_ok(server.get(LIST));
+            for action in ["pause", "resume"] {
+                assert_eq!(
+                    list["authoring"][action]["authorized"],
+                    json!(true),
+                    "{list}"
+                );
+            }
+
+            let refused = refusal(
+                server.send("POST", &resume, json!({ "reason": "early" })),
+                400,
+            );
+            assert_eq!(
+                refused,
+                "cannot resume experiment `trial`: it is running, and only a paused experiment can resume"
+            );
+
+            let paused =
+                json_ok(server.send("POST", &pause, json!({ "reason": "hold for review" })));
+            assert_eq!(paused["status"], json!("paused"), "{paused}");
+
+            let refused = refusal(
+                server.send("POST", &pause, json!({ "reason": "again" })),
+                400,
+            );
+            assert_eq!(
+                refused,
+                "cannot pause experiment `trial`: it is paused, and only a running experiment can pause"
+            );
+            assert_eq!(json_ok(server.get(&one))["status"], json!("paused"));
+
+            let resumed = json_ok(server.send("POST", &resume, json!({ "reason": "review done" })));
+            assert_eq!(resumed["status"], json!("running"), "{resumed}");
+
+            let shown = json_ok(server.get(&one));
+            let summary = shown["events"]
+                .as_array()
+                .expect("events")
+                .iter()
+                .map(|event| {
+                    (
+                        event["kind"].as_str().unwrap_or_default(),
+                        event["actor"].as_str().unwrap_or_default(),
+                        event["reason"].as_str().unwrap_or_default(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                summary,
+                [
+                    ("created", "dashboard", "first draft"),
+                    ("started", "dashboard", "go"),
+                    ("paused", "dashboard", "hold for review"),
+                    ("resumed", "dashboard", "review done"),
+                ],
+                "one event per accepted change, refusals record none: {shown}"
+            );
+        },
+    );
+}

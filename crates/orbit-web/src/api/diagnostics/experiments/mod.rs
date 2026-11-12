@@ -4,14 +4,15 @@
 //! returns the JSON `orbit.experiment.readout` returns plus `cumulative`, and
 //! `POST /diagnostics/experiments/{id}/conclude` records an operator's decision
 //! through the same `change_experiment` path as the CLI. The list and the
-//! detail carry `authoring` for the operator's create, edit and start routes
-//! in [`authoring`].
+//! detail carry `authoring` for the operator's create, edit, start, pause and
+//! resume routes in [`authoring`].
 
 mod authoring;
 mod cumulative;
 
 pub(in crate::api) use authoring::{
-    diagnostics_experiment_create, diagnostics_experiment_start, diagnostics_experiment_update,
+    diagnostics_experiment_create, diagnostics_experiment_pause, diagnostics_experiment_resume,
+    diagnostics_experiment_start, diagnostics_experiment_update,
 };
 
 use axum::extract::rejection::JsonRejection;
