@@ -176,6 +176,30 @@ for every pair of models.
 
 Bands are displayed as shared ranks: `1=`, `1=`, `3`.
 
+**Unequal measure coverage.** A model's score is comparable with another's only when both
+were scored on the same measures. A model with no reviewed deliveries (or fewer than
+`review_min_support`) has review outcome unmeasured, so its 20 weight points leave its
+denominator and its score rests on the measures it does have. Its escaped-regression
+expectation comes from whole-window fleet rates, so a model whose tasks sit in an era with
+few recorded regressions reads as a large favourable residual on a thin base (ORB-24203:
+gpt-6-sol, 117 tasks all before the first reviewed delivery, scored 115.8 on 35 of 55
+measured weight points and held band 1 alone). Rows are therefore compared as follows:
+
+- The **top band** draws only from eligible models at the board's best-covered measured
+  weight (`weights_measured`, the largest among eligible rows). A model below that weight
+  cannot hold band 1, whatever its score, and its row carries `top_band_ineligible_reason`
+  naming the measures it was not scored on and its measured weight. It is still banded
+  and ranked below, by the same `P(above > it)` rule, so the MVP is always a model scored
+  on the full set.
+- Lower bands take the remaining models in score order by the same rule; a partly
+  measured model can share a band or rank below a fully measured one.
+- Each row exposes `weights_measured` and the per-measure `status`, so a consumer can show
+  the evidence behind a score.
+- The denominator is unchanged: an unmeasured measure still leaves it (§4.3, ORB-23838).
+  The gate is a rule about who may hold the top band, not a change to any score. The
+  era bias in the escaped-regression expectation is not corrected here; the gate keeps
+  such a score from deciding the top rank until the expectation is era-matched.
+
 The 95% threshold is **adopted** (Daniel, 2026-11-10 · [ORB-23839]); R2's 80% rule
 is superseded but kept legible here and in the decisions record. The [ORB-23304]
 readout found band-membership changes in 14 of 96 one-at-a-time ±50% weight
