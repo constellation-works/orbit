@@ -102,6 +102,19 @@ fn exact_remote(
     Ok(())
 }
 
+/// The stop for a prerequisite evidence read that could not be read
+/// conclusively (for example the attempt is still running, was superseded, or
+/// did not fail). The stop is deliberate, so it is held rather than recorded
+/// as a run failure; other read failures keep their class.
+fn unreadable_prerequisite_evidence_stop(pr: &str, error: &OrbitError) -> OrbitError {
+    let stop = stopped_by(pr, &error.to_string(), error);
+    if matches!(error, OrbitError::WorkflowEvidenceUnavailable(_)) {
+        hold_auto_fix_stop(stop, DeliveryRefusal::CheckEvidenceInconclusive)
+    } else {
+        stop
+    }
+}
+
 /// Observe a durable reservation on every poll, even CLEAN. On a fresh
 /// failed prerequisite or zero-job workflow, obtain complete typed evidence
 /// before admission.
@@ -201,7 +214,12 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             DeliveryRefusal::CompletionBudgetExpired,
         ));
     }
-    let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms})).map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
+    let response = host
+        .run_private_vcs_operation(
+            operations::CI_PREREQUISITE_EVIDENCE,
+            json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms}),
+        )
+        .map_err(|error| unreadable_prerequisite_evidence_stop(pr, &error))?;
     if response.get("evidence") == Some(&Value::Null) {
         return Ok(InfrastructureStep::None);
     }

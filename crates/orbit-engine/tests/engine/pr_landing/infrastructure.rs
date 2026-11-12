@@ -797,6 +797,76 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
     );
 }
 
+/// A prerequisite read that cannot yet prove its evidence (the attempt is still
+/// running or was superseded) is a deliberate hold: the PR stays open, the task
+/// stays in review, and the run is refused rather than failed.
+#[test]
+fn missing_required_prerequisite_holds_unreadable_evidence() {
+    isolated(
+        "infrastructure::missing_required_prerequisite_holds_unreadable_evidence",
+        |sandbox| {
+            for case in ["running", "superseded"] {
+                in_fresh_row(sandbox, |row| {
+                    tracing::info!(case, "prerequisite evidence hold");
+                    let fx = fixture_with_workflow(row);
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    action(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    )
+                    .unwrap();
+                    setup(&fx, "positive");
+                    match case {
+                        "running" => update(&fx, "run-before", |value| {
+                            value["status"] = json!("in_progress");
+                        }),
+                        "superseded" => update(&fx, "runs-before", |value| {
+                            value["total_count"] = json!(2);
+                            let mut second = value["workflow_runs"][0].clone();
+                            second["id"] = json!(701);
+                            value["workflow_runs"].as_array_mut().unwrap().push(second);
+                        }),
+                        _ => unreachable!(),
+                    }
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let error = super::complete_with_logical_clock(&host, &input).expect_err(case);
+                    let message = error.to_string();
+                    assert!(
+                        matches!(
+                            &error,
+                            orbit_common::OrbitError::DeliveryRefused {
+                                refusal: orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive,
+                                ..
+                            }
+                        ),
+                        "{case}: unreadable prerequisite evidence must hold, not fail: {message}"
+                    );
+                    assert!(message.contains("auto_fix_stopped"), "{case}: {message}");
+                    assert!(
+                        message.contains("workflow prerequisite evidence is unavailable"),
+                        "{case}: {message}"
+                    );
+                    assert!(fx.merge_requests().is_empty());
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+                    assert!(pr_auto_fix_attempts(&host.history(TASK_ID), PR_NUMBER).is_empty());
+                    assert_eq!(
+                        fs::read_to_string(fx.forge.join("calls"))
+                            .unwrap()
+                            .lines()
+                            .filter(|line| *line == "run rerun")
+                            .count(),
+                        0,
+                        "{case} must authorize no rerun"
+                    );
+                });
+            }
+        },
+    );
+}
+
 mod bounds;
 mod failed_workflow;
 mod provider_fields;
