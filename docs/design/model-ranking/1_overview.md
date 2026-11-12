@@ -1,15 +1,15 @@
 ---
 title: Model Ranking — Overview
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-10
+last_updated: 2026-11-11
+last_validated: 2026-11-11
 status: Accepted
 stage: building
 next: "R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run"
 feature: model-ranking
 doc_role: overview
 type: design
-summary: "Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by cost. CI and recovery measures are not yet scored."
+summary: "Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by score. Cost breaks exact score ties. CI and recovery measures are not yet scored."
 tags: [model-ranking, agent-scorecards]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
@@ -52,7 +52,8 @@ Daniel asked for one holistic ranking inside Orbit itself.
 - **Noise units.** Each measure is divided by a frozen estimate of its sampling noise, so
   measures with different units add up fairly.
 - **Tie bands.** Models whose scores aren't distinguishable share a band. Within a band,
-  the cheaper model (cost per task for its tier mix) is listed first.
+  rows follow descending score; cost and model name break exact score ties without moving
+  models across the boundary.
 - **Cost is never scored.** Cost, tokens and time are shown, and a score-against-cost chart
   per tier makes the trade-off visible for pool decisions.
 
@@ -64,7 +65,7 @@ Daniel asked for one holistic ranking inside Orbit itself.
 | Roles | orchestrator, implementer, reviewer, pilot | implementer only; the other roles keep their boards |
 | Terms | landed, first-pass accepts, rejects, repairs, rework, escaped regressions | escaped regressions, review outcome, CI failures, final recoveries, rework, tool-call errors |
 | Comparison | actual − expected per tier | the same, then divided by each measure's noise scale |
-| Output | strict rank with one-sided smoothing | score, interval, tie band; cost orders within a band |
+| Output | strict rank with one-sided smoothing | score, interval, tie band; score orders within a band, with cost used for exact score ties |
 | Window | 30 days ending now (or `--until`) | 30 days ending at a settled cutoff (default 14 days before `until`) |
 
 **Built so far.** R1 records implementer-caused CI failures by cause and the fault of each

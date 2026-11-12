@@ -1,7 +1,7 @@
 //! The board (§4.3–§4.5): pool crews by model, take each model's composite,
 //! shrink it toward the other eligible models, bootstrap it within tiers
 //! for the interval and the paired probabilities, band it and order each
-//! band by cost.
+//! band by score, then cost and model name for exact score ties.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ pub(super) const MIN_ELIGIBLE_MODELS: usize = 3;
 /// A model starts a new band when the one above beats it at least this
 /// often.
 pub(super) const BAND_PROBABILITY: f64 = 0.95;
-/// Cost coverage below which a model is ordered by score in its band.
+/// Cost coverage below which cost is unknown when breaking exact score ties.
 pub(super) const MIN_COST_COVERAGE: f64 = 0.8;
 pub(super) const INTERVAL: (f64, f64) = (10.0, 90.0);
 
@@ -296,8 +296,8 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
         .iter()
         .map(|placed| placed.score().unwrap_or(f64::NEG_INFINITY))
         .collect();
-    // Cheapest first; a model without cost coverage follows the priced
-    // ones in score order.
+    // Cost breaks exact score ties only. A model without enough cost
+    // coverage follows priced models on an exact tie.
     let cost_keys: Vec<(bool, Option<f64>)> = placed
         .iter()
         .map(|placed| {
@@ -308,6 +308,17 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
     let by_score = |a: &usize, b: &usize| {
         scores[*b]
             .total_cmp(&scores[*a])
+            .then_with(|| rows[*a].model.cmp(&rows[*b].model))
+    };
+    let by_exact_score_tie = |a: &usize, b: &usize| {
+        let (a_unknown, a_ratio) = cost_keys[*a];
+        let (b_unknown, b_ratio) = cost_keys[*b];
+        a_unknown
+            .cmp(&b_unknown)
+            .then_with(|| match (a_ratio, b_ratio) {
+                (Some(a), Some(b)) => a.total_cmp(&b),
+                _ => Ordering::Equal,
+            })
             .then_with(|| rows[*a].model.cmp(&rows[*b].model))
     };
     let mut ranked = eligible_rows.clone();
@@ -332,15 +343,9 @@ pub(super) fn compute(rows: &[ModelRow], scales: &[Option<f64>; MEASURE_COUNT]) 
             // models share the band above it.
             let rank = band_index + 1;
             band.sort_by(|a, b| {
-                let (a_unknown, a_ratio) = cost_keys[*a];
-                let (b_unknown, b_ratio) = cost_keys[*b];
-                a_unknown
-                    .cmp(&b_unknown)
-                    .then_with(|| match (a_ratio, b_ratio) {
-                        (Some(a), Some(b)) => a.total_cmp(&b),
-                        _ => Ordering::Equal,
-                    })
-                    .then_with(|| by_score(a, b))
+                scores[*b]
+                    .total_cmp(&scores[*a])
+                    .then_with(|| by_exact_score_tie(a, b))
             });
             for &index in &band {
                 placed[index].band = Some(rank);

@@ -1,8 +1,8 @@
 ---
 title: Model Ranking — Decisions
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-09
+last_updated: 2026-11-11
+last_validated: 2026-11-11
 status: Accepted
 feature: model-ranking
 doc_role: decisions
@@ -99,36 +99,38 @@ superseded R2 rule, and the R3 sensitivity evidence stands as the reason for the
 - Cost: a shared first place is a less satisfying headline, and the MVP note must handle
   co-leaders.
 
-## Cost orders a tie band and is never scored
+## Score orders a tie band; cost breaks exact score ties
 
-**Recorded:** 2026-11 · [ORB-23297]
+**Recorded:** 2026-11 · [ORB-23297]; updated 2026-11 · [ORB-24118]
 
 ### Context
 
 The scorecard records
 [Cost is shown, never scored](../agent-scorecards/4_decisions.md#cost-is-shown-never-scored):
 cost is a trade-off that pool weights make, and one weight for it would hide a cheap model's
-lower quality inside a high score. Daniel wanted cost to count, because on the hard tier
-Grok took about 3× the cost and time of other models. He also judged that discounting
-performance by cost would be unfair, and that all else being equal the cheaper model should
-be preferred.
+lower quality inside a high score. The original ranking rule used cost to order a tie band.
+Daniel later confirmed that this made the row order look like a routing recommendation even
+though band membership means the models' scores are not distinguishable.
 
 ### Decision
 
-Cost, tokens and time are never score terms. Within a tie band, models are listed cheapest
-first by tier-adjusted cost per task (list price). Cost never moves a model across a band
-boundary. A per-tier score-against-cost chart marks the models no other model beats on both
-score and cost. That chart, not the ranking, is the input for pool weights. This amends the
-scorecard decision for the ranking only. The scorecard boards are unchanged.
+Cost, tokens and time are never score terms. Within a tie band, models are listed by score,
+highest first. Exact score ties use tier-adjusted cost per task (list price), cheapest first,
+then model name. Cost stays visible on each row but row order is no longer a cost or routing
+recommendation. Cost never moves a model across a band boundary. A per-tier
+score-against-cost chart marks the models no other model beats on both score and cost. That
+chart, not the ranking, is the input for pool weights. This amends the scorecard decision
+for the ranking only. The scorecard boards are unchanged.
 
 ### Consequences
 
 - The part of a model's extra cost that comes from thrashing (retries, rework, recoveries,
-  tool errors) is already scored under reliability. Only the price of equally good work is
-  left to the tie-break and the chart.
+  tool errors) is already scored under reliability. Cost only breaks exact score ties and
+  remains visible for the score-against-cost chart.
 - A model that is better but more expensive still ranks above a cheaper, weaker one.
-- Cost: cost only matters within a band, so a model that costs 3× as much and is barely
-  better still leads. Acting on that is a routing decision.
+- Cost: even a small score difference puts the higher-scoring model first inside a band.
+  Operators should read cost on each row and make routing decisions from the full quality
+  and cost trade-off, not the row order.
 
 ## Reviewers and pilots stay on their own boards
 
@@ -215,8 +217,9 @@ muse-spark and gemini-flash truly belong in one tier only".
 A model is eligible with at least 30 implemented tasks and at least one assessed
 tier with at least 5 tasks. An eligible model spanning exactly one assessed tier
 is flagged single-tier, naming the tier (for example `single tier: hard`), in the
-rank row, the CLI text and JSON output, and the dashboard Rank table. Scoring,
-shrinkage, the within-tier bootstrap, bands and cost ordering are unchanged.
+  rank row, the CLI text and JSON output, and the dashboard Rank table. Scoring,
+  shrinkage and the within-tier bootstrap are unchanged; bands and score-first row ordering
+  continue to apply.
 
 ### Consequences
 

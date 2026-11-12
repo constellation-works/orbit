@@ -17,7 +17,7 @@ populations. Do not quote one as the other.
 | Command | `orbit agents rank` | `orbit agents scorecard --role <role>` |
 | One row per | Model, with every crew and recorded effort level that ran it pooled | Model and recorded effort, labelled `model @ effort` |
 | Population | Implementer work only | The selected role: `implementers`, `reviewers` or `pilots` |
-| Ordering | Tie bands on a qualified board, cheapest first inside a band | Ranked rows, then below-support or unjudged rows without a rank |
+| Ordering | Tie bands on a qualified board, highest score first within each band; cost and model name break exact score ties | Ranked rows, then below-support or unjudged rows without a rank |
 
 A pooled ranking row still names its contributing crews and, in JSON, an
 `effort_split` of completed implementation invocations by recorded effort.
@@ -147,8 +147,11 @@ range, printed as `P10-P90`. Overlapping intervals are consistent with
 a shared band; the paired probability, not the interval overlap alone,
 decides the band. An ineligible row has no interval.
 
-Within a band, models are ordered cheapest first by cost evidence, not
-by score. The JSON `cost` object reports:
+Within each band, models are ordered by score, highest first. When scores
+are exactly equal, known cost ratios sort cheapest first, then model name;
+unknown costs follow priced rows and sort by model name. Cost remains
+visible per row, and band order is no longer a cost recommendation. The
+JSON `cost` object reports:
 
 - `per_task`: the model's recorded cost per priced task;
 - `expected_per_task`: the fleet's cost per task on the same tier mix;
@@ -157,9 +160,10 @@ by score. The JSON `cost` object reports:
 - `coverage`: the share of the model's tasks with a recorded cost;
 - `cost_unknown`: true when coverage is below 0.8 or no ratio exists.
 
-A model with unknown cost follows the priced models in its band, in
-score order. Cost never enters the score; it only orders a tie. A
-cheaper model in a lower band has not beaten the band above it.
+Cost never enters the score and never changes band membership. A model
+with a higher score can appear before a cheaper model in the same band;
+the row order does not make it a routing recommendation. A cheaper model
+in a lower band has not beaten the band above it.
 
 ## Verify before quoting JSON
 
@@ -231,8 +235,9 @@ board's window is chosen. Do not teach or script any other spelling.
    crew's configuration or effort choice.
 3. Prefer a model in a higher band over one in a lower band only when
    the board is qualified and both are eligible. Within a band, treat
-   the models as indistinguishable on quality and reliability and let
-   the cost order inform the choice.
+   the models as indistinguishable on quality and reliability. Read each
+   row's cost as a visible trade-off; the within-band row order is not a
+   cost recommendation.
 4. When the preferred model is ineligible, unmeasured on the measures
    that matter, or absent, say the evidence is insufficient rather
    than substituting its score. Fall back to the workspace's configured
