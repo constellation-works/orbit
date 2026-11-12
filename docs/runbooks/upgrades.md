@@ -1094,14 +1094,16 @@ effort from the redacted argv of the run's `cli.invocation.started` audit event 
 model, launched within a minute of the invocation's end minus its duration: `--effort X`,
 `--reasoning-effort X` or `model_reasoning_effort="X"`, and the provider default when the argv
 carries no effort flag. An invocation with no matching launch, or whose matching launches
-disagree or carry an unreadable effort, stays `unknown`; effort is never taken from crew
-configuration. The crew recorded is the run's resolved crew for the run's executor invocation
+disagree or carry an unreadable effort, leaves its stored identity unrecorded (stays `unknown`
+in the store). On scorecards, effort is never taken from bare crew configuration, but an explicit
+crew label (`<crew>@<effort>`) serves as a final read-time fallback when no recorded identity
+exists. The crew recorded is the run's resolved crew for the run's executor invocation
 and absent otherwise. Each backfilled identity carries a `backfill` provenance (source event
 type, matched event ids, time recorded) in its stored record. Existing identities are never
 changed, so a rerun changes nothing. Run it on any host, owner or follower, against its own
 store; attempts a follower ran have no invocation on the owner.
 
-A run whose invocation never completed has no invocation to carry an identity. The same command records one row per `cli.invocation.started` event of that run, stamped with the event's time, when the launch's causal links name its step (its parent `activity.started`, whose parent is the `step.started`; a run-level activity such as `final_recovery` by its own name) or, without them, exactly one `step.started`/`step.finished` interval contains the launch, and the event names a provider. Each launch is its own row. A dispatch-time row already covering that launch — the same run, step, provider and model, within a minute of the closest launch, including one whose effort cannot be read — is left as it is, so a record written at dispatch is not duplicated. An unreadable launch can own that row and is never given an inferred effort; a later readable launch of the same step is recorded from its own evidence. A rerun records nothing new. The report says how many launch records it wrote and how many launches it left unrecorded because no single step contained them, because the launch named no provider, or because that launch's recorded effort and argv disagreed or its effort could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
+A run whose invocation never completed has no invocation to carry an identity. The same command records one row per `cli.invocation.started` event of that run, stamped with the event's time, when the launch's causal links name its step (its parent `activity.started`, whose parent is the `step.started`; a run-level activity such as `final_recovery` by its own name) or, without them, exactly one `step.started`/`step.finished` interval contains the launch, and the event names a provider. Each launch is its own row. A dispatch-time row already covering that launch — the same run, step, provider and model, within a minute of the closest launch, including one whose effort cannot be read — is left as it is, so a record written at dispatch is not duplicated. An unreadable launch can own that row and is never given an inferred effort; a later readable launch of the same step is recorded from its own evidence. A rerun records nothing new. The report says how many launch records it wrote and how many launches it left unrecorded because neither causal links nor a single step interval proved them, because the launch named no provider, or because that launch's recorded effort and argv disagreed or its effort could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
 
 `--backfill-claimed-effort` runs on a pull follower. It applies pending migrations like
 `--confirm`, then reports to the owner the reasoning effort of each claimed leaf this host
@@ -1119,7 +1121,8 @@ outcome (`recorded`, `replayed`, `conflict`, `effort_unknown`, `no_leaf_run`,
 it unread (`owner_unsupported`): upgrade the owner and run it again. Attempts stay
 `effort unknown` on the owner when this follower holds no matching invocation or launch record
 of the leaf, no longer holds its run record, the claim settled before the owner kept
-settlement records, or the follower never runs this backfill.
+settlement records, or the follower never runs this backfill (unless an explicit `<crew>@<effort>`
+label supplies the effort on scorecards).
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace
